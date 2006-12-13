@@ -41,11 +41,12 @@
 	<depend>zaptel</depend>
 	<depend>tonezone</depend>
 	<use>pri</use>
+	<use>ss7</use>
  ***/
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48372 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <string.h>
@@ -69,6 +70,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48372 $")
 
 #ifdef HAVE_PRI
 #include <libpri.h>
+#endif
+
+#ifdef HAVE_SS7
+#include <libss7.h>
 #endif
 
 #include "asterisk/lock.h"
@@ -158,6 +163,9 @@ static const char tdesc[] = "Zapata Telephony Driver"
 #ifdef HAVE_PRI
                " w/PRI"
 #endif
+#ifdef HAVEL_LIBSS7
+	       "w/SS7"
+#endif
 ;
 
 static const char config[] = "zapata.conf";
@@ -178,6 +186,7 @@ static const char config[] = "zapata.conf";
 #define SIG_FXOGS	ZT_SIG_FXOGS
 #define SIG_FXOKS	ZT_SIG_FXOKS
 #define SIG_PRI		ZT_SIG_CLEAR
+#define SIG_SS7		(0x1000000 | ZT_SIG_CLEAR)
 #define	SIG_SF		ZT_SIG_SF
 #define SIG_SFWINK 	(0x0100000 | ZT_SIG_SF)
 #define SIG_SF_FEATD	(0x0200000 | ZT_SIG_SF)
@@ -329,8 +338,6 @@ static int gendigittimeout = 8000;
 /*! \brief How long to wait for an extra digit, if there is an ambiguous match */
 static int matchdigittimeout = 3000;
 
-static int usecnt = 0;
-
 /*! \brief Protect the interface list (of zt_pvt's) */
 AST_MUTEX_DEFINE_STATIC(iflock);
 
@@ -403,6 +410,40 @@ static inline int zt_wait_event(int fd)
 struct zt_pvt;
 
 static int ringt_base = DEFAULT_RINGT;
+
+#ifdef HAVE_SS7
+
+#define LINKSTATE_INALARM	(1 << 0)
+#define LINKSTATE_STARTING	(1 << 1)
+#define LINKSTATE_UP		(1 << 2)
+#define LINKSTATE_DOWN		(1 << 3)
+
+struct zt_ss7 {
+	pthread_t master;						/*!< Thread of master */
+	ast_mutex_t lock;
+	int fds[NUM_DCHANS];
+	int numsigchans;
+	int linkstate[NUM_DCHANS];
+	int numchans;
+	int type;
+	enum {
+		LINKSET_STATE_DOWN = 0,
+		LINKSET_STATE_UP
+	} state;
+	struct ss7 *ss7;
+	struct zt_pvt *pvts[MAX_CHANNELS];				/*!< Member channel pvt structs */
+};
+
+static struct zt_ss7 linksets[NUM_SPANS];
+
+static int cur_ss7type = -1;
+static int cur_linkset = -1;
+static int cur_pointcode = -1;
+static int cur_cicbeginswith = -1;
+static int cur_adjpointcode = -1;
+static int cur_networkindicator = -1;
+static int cur_defaultdpc = -1;
+#endif /* HAVE_SS7 */
 
 #ifdef HAVE_PRI
 
@@ -491,6 +532,7 @@ static struct zt_distRings drings;
 
 struct distRingData {
 	int ring[3];
+	int range;
 };
 struct ringContextData {
 	char contextData[AST_MAX_CONTEXT];
@@ -599,6 +641,10 @@ static struct zt_pvt {
 	unsigned int usedistinctiveringdetection:1;
 	unsigned int zaptrcallerid:1;			/*!< should we use the callerid from incoming call on zap transfer or not */
 	unsigned int transfertobusy:1;			/*!< allow flash-transfers to busy channels */
+	/* Channel state or unavilability flags */
+	unsigned int inservice:1;
+	unsigned int locallyblocked:1;
+	unsigned int remotelyblocked:1;
 #if defined(HAVE_PRI)
 	unsigned int alerting:1;
 	unsigned int alreadyhungup:1;
@@ -694,6 +740,12 @@ static struct zt_pvt {
 #endif	
 	int polarity;
 	int dsp_features;
+#ifdef HAVE_SS7
+	struct zt_ss7 *ss7;
+	struct isup_call *ss7call;
+	int transcap;
+	int cic;							/*!< CIC associated with channel */
+#endif
 	char begindigit;
 } *iflist = NULL, *ifend = NULL;
 
@@ -761,6 +813,30 @@ static inline int pri_grab(struct zt_pvt *pvt, struct zt_pri *pri)
 }
 #endif
 
+#ifdef HAVE_SS7
+static inline void ss7_rel(struct zt_ss7 *ss7)
+{
+	ast_mutex_unlock(&ss7->lock);
+}
+
+static inline int ss7_grab(struct zt_pvt *pvt, struct zt_ss7 *pri)
+{
+	int res;
+	/* Grab the lock first */
+	do {
+		res = ast_mutex_trylock(&pri->lock);
+		if (res) {
+			ast_mutex_unlock(&pvt->lock);
+			/* Release the lock and try again */
+			usleep(1);
+			ast_mutex_lock(&pvt->lock);
+		}
+	} while (res);
+	/* Then break the poll */
+	pthread_kill(pri->master, SIGURG);
+	return 0;
+}
+#endif
 #define NUM_CADENCE_MAX 25
 static int num_cadence = 4;
 static int user_has_defined_cadences = 0;
@@ -836,16 +912,32 @@ static void wakeup_sub(struct zt_pvt *p, int a, void *pri)
 #endif			
 }
 
-#ifdef HAVE_PRI
-static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, struct zt_pri *pri)
-#else
-static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, void *pri)
-#endif
+static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, void *data)
 {
-	/* We must unlock the PRI to avoid the possibility of a deadlock */
 #ifdef HAVE_PRI
-	if (pri)
-		ast_mutex_unlock(&pri->lock);
+	struct zt_pri *pri = (struct zt_pri*) data;
+#endif
+#ifdef HAVE_SS7
+	struct zt_ss7 *ss7 = (struct zt_ss7*) data;
+#endif
+	/* We must unlock the PRI to avoid the possibility of a deadlock */
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
+	if (data) {
+		switch (p->sig) {
+#ifdef HAVE_PRI
+		case SIG_PRI:
+			ast_mutex_unlock(&pri->lock);
+			break;
+#endif
+#ifdef HAVE_SS7
+		case SIG_SS7:
+			ast_mutex_unlock(&ss7->lock);
+			break;
+#endif
+		default:
+			break;
+		}
+	}
 #endif		
 	for (;;) {
 		if (p->owner) {
@@ -861,9 +953,24 @@ static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, void *pri)
 		} else
 			break;
 	}
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
+	if (data) {
+		switch (p->sig) {
 #ifdef HAVE_PRI
-	if (pri)
-		ast_mutex_lock(&pri->lock);
+		case SIG_PRI:
+			ast_mutex_lock(&pri->lock);
+			break;
+#endif
+#ifdef HAVE_SS7
+		case SIG_SS7:
+			ast_mutex_lock(&ss7->lock);
+			break;
+#endif
+		default:
+			break;
+		}
+	}
+
 #endif		
 }
 
@@ -875,7 +982,8 @@ static void swap_subs(struct zt_pvt *p, int a, int b)
 	int tinthreeway;
 	struct ast_channel *towner;
 
-	ast_log(LOG_DEBUG, "Swapping %d and %d\n", a, b);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Swapping %d and %d\n", a, b);
 
 	tchan = p->subs[a].chan;
 	towner = p->subs[a].owner;
@@ -995,7 +1103,8 @@ static int unalloc_sub(struct zt_pvt *p, int x)
 		ast_log(LOG_WARNING, "Trying to unalloc the real channel %d?!?\n", p->channel);
 		return -1;
 	}
-	ast_log(LOG_DEBUG, "Released sub %d of channel %d\n", x, p->channel);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Released sub %d of channel %d\n", x, p->channel);
 	if (p->subs[x].zfd > -1) {
 		zt_close(p->subs[x].zfd);
 	}
@@ -1050,7 +1159,8 @@ static int zt_digit_begin(struct ast_channel *chan, char digit)
 				ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", pvt->span);
 		} else if (strlen(pvt->dialdest) < sizeof(pvt->dialdest) - 1) {
 			int res;
-			ast_log(LOG_DEBUG, "Queueing digit '%c' since setup_ack not yet received\n", digit);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Queueing digit '%c' since setup_ack not yet received\n", digit);
 			res = strlen(pvt->dialdest);
 			pvt->dialdest[res++] = digit;
 			pvt->dialdest[res] = '\0';
@@ -1074,7 +1184,8 @@ static int zt_digit_begin(struct ast_channel *chan, char digit)
 		else
 			pvt->dialing = 1;
 	} else {
-		ast_log(LOG_DEBUG, "Started VLDTMF digit '%c'\n", digit);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Started VLDTMF digit '%c'\n", digit);
 		pvt->dialing = 1;
 		pvt->begindigit = digit;
 	}
@@ -1109,7 +1220,8 @@ static int zt_digit_end(struct ast_channel *chan, char digit)
 
 	if (pvt->begindigit) {
 		x = -1;
-		ast_log(LOG_DEBUG, "Ending VLDTMF digit '%c'\n", digit);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Ending VLDTMF digit '%c'\n", digit);
 		res = ioctl(pvt->subs[SUB_REAL].zfd, ZT_SENDTONE, &x);
 		pvt->dialing = 0;
 		pvt->begindigit = 0;
@@ -1223,6 +1335,8 @@ static char *zap_sig2str(int sig)
 		return "FXO Kewlstart";
 	case SIG_PRI:
 		return "PRI Signalling";
+	case SIG_SS7:
+		return "SS7 Signalling";
 	case SIG_SF:
 		return "SF (Tone) Signalling Immediate";
 	case SIG_SFWINK:
@@ -1281,7 +1395,8 @@ static int conf_add(struct zt_pvt *p, struct zt_subchannel *c, int index, int sl
 		p->confno = zi.confno;
 	}
 	memcpy(&c->curconf, &zi, sizeof(c->curconf));
-	ast_log(LOG_DEBUG, "Added %d to conference %d/%d\n", c->zfd, c->curconf.confmode, c->curconf.confno);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Added %d to conference %d/%d\n", c->zfd, c->curconf.confmode, c->curconf.confno);
 	return 0;
 }
 
@@ -1313,7 +1428,8 @@ static int conf_del(struct zt_pvt *p, struct zt_subchannel *c, int index)
 		ast_log(LOG_WARNING, "Failed to drop %d from conference %d/%d\n", c->zfd, c->curconf.confmode, c->curconf.confno);
 		return -1;
 	}
-	ast_log(LOG_DEBUG, "Removed %d from conference %d/%d\n", c->zfd, c->curconf.confmode, c->curconf.confno);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Removed %d from conference %d/%d\n", c->zfd, c->curconf.confmode, c->curconf.confno);
 	memcpy(&c->curconf, &zi, sizeof(c->curconf));
 	return 0;
 }
@@ -1427,7 +1543,8 @@ static int update_conf(struct zt_pvt *p)
 		   Kill it. */
 		p->confno = -1;
 	}
-	ast_log(LOG_DEBUG, "Updated conferencing on %d, with %d conference users\n", p->channel, needconf);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Updated conferencing on %d, with %d conference users\n", p->channel, needconf);
 	return 0;
 }
 
@@ -1438,15 +1555,17 @@ static void zt_enable_ec(struct zt_pvt *p)
 	if (!p)
 		return;
 	if (p->echocanon) {
-		ast_log(LOG_DEBUG, "Echo cancellation already on\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Echo cancellation already on\n");
 		return;
 	}
 	if (p->digital) {
-		ast_log(LOG_DEBUG, "Echo cancellation isn't required on digital connection\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Echo cancellation isn't required on digital connection\n");
 		return;
 	}
 	if (p->echocancel) {
-		if (p->sig == SIG_PRI) {
+		if ((p->sig == SIG_PRI) || (p->sig == SIG_SS7)) {
 			x = 1;
 			res = ioctl(p->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &x);
 			if (res)
@@ -1458,10 +1577,13 @@ static void zt_enable_ec(struct zt_pvt *p)
 			ast_log(LOG_WARNING, "Unable to enable echo cancellation on channel %d\n", p->channel);
 		else {
 			p->echocanon = 1;
-			ast_log(LOG_DEBUG, "Enabled echo cancellation on channel %d\n", p->channel);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Enabled echo cancellation on channel %d\n", p->channel);
 		}
-	} else
-		ast_log(LOG_DEBUG, "No echo cancellation requested\n");
+	} else {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "No echo cancellation requested\n");
+	}
 }
 
 static void zt_train_ec(struct zt_pvt *p)
@@ -1474,10 +1596,13 @@ static void zt_train_ec(struct zt_pvt *p)
 		if (res)
 			ast_log(LOG_WARNING, "Unable to request echo training on channel %d\n", p->channel);
 		else {
-			ast_log(LOG_DEBUG, "Engaged echo training on channel %d\n", p->channel);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Engaged echo training on channel %d\n", p->channel);
 		}
-	} else
-		ast_log(LOG_DEBUG, "No echo training requested\n");
+	} else {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "No echo training requested\n");
+	}
 }
 
 static void zt_disable_ec(struct zt_pvt *p)
@@ -1489,8 +1614,10 @@ static void zt_disable_ec(struct zt_pvt *p)
 		res = ioctl(p->subs[SUB_REAL].zfd, ZT_ECHOCANCEL, &x);
 		if (res)
 			ast_log(LOG_WARNING, "Unable to disable echo cancellation on channel %d\n", p->channel);
-		else
-			ast_log(LOG_DEBUG, "disabled echo cancellation on channel %d\n", p->channel);
+		else {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "disabled echo cancellation on channel %d\n", p->channel);
+		}
 	}
 	p->echocanon = 0;
 }
@@ -1572,7 +1699,8 @@ static int set_actual_txgain(int fd, int chan, float gain, int law)
 	g.chan = chan;
 	res = ioctl(fd, ZT_GETGAINS, &g);
 	if (res) {
-		ast_log(LOG_DEBUG, "Failed to read gains: %s\n", strerror(errno));
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Failed to read gains: %s\n", strerror(errno));
 		return res;
 	}
 
@@ -1590,7 +1718,8 @@ static int set_actual_rxgain(int fd, int chan, float gain, int law)
 	g.chan = chan;
 	res = ioctl(fd, ZT_GETGAINS, &g);
 	if (res) {
-		ast_log(LOG_DEBUG, "Failed to read gains: %s\n", strerror(errno));
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Failed to read gains: %s\n", strerror(errno));
 		return res;
 	}
 
@@ -1648,7 +1777,7 @@ static inline int zt_confmute(struct zt_pvt *p, int muted)
 {
 	int x, y, res;
 	x = muted;
-	if (p->sig == SIG_PRI) {
+	if ((p->sig == SIG_PRI) || (p->sig == SIG_SS7)) {
 		y = 1;
 		res = ioctl(p->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &y);
 		if (res)
@@ -1875,7 +2004,8 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 			if (c) {
 				p->dop.op = ZT_DIAL_OP_REPLACE;
 				snprintf(p->dop.dialstr, sizeof(p->dop.dialstr), "Tw%s", c);
-				ast_log(LOG_DEBUG, "FXO: setup deferred dialstring: %s\n", c);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "FXO: setup deferred dialstring: %s\n", c);
 			} else {
 				p->dop.dialstr[0] = '\0';
 			}
@@ -1967,7 +2097,8 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 #ifdef HAVE_PRI
 		}
 #endif
-		ast_log(LOG_DEBUG, "Dialing '%s'\n", c);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Dialing '%s'\n", c);
 		p->dop.op = ZT_DIAL_OP_REPLACE;
 
 		c += p->stripmsd;
@@ -2042,8 +2173,10 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 				ast_mutex_unlock(&p->lock);
 				return -1;
 			}
-		} else
-			ast_log(LOG_DEBUG, "Deferring dialing...\n");
+		} else {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Deferring dialing...\n");
+		}
 		p->dialing = 1;
 		if (ast_strlen_zero(c))
 			p->dialednone = 1;
@@ -2054,14 +2187,47 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		ast_setstate(ast, AST_STATE_UP);
 		break;		
 	case SIG_PRI:
+	case SIG_SS7:
 		/* We'll get it in a moment -- but use dialdest to store pre-setup_ack digits */
 		p->dialdest[0] = '\0';
 		break;
 	default:
-		ast_log(LOG_DEBUG, "not yet implemented\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "not yet implemented\n");
 		ast_mutex_unlock(&p->lock);
 		return -1;
 	}
+#ifdef HAVE_SS7
+	if (p->ss7) {
+		c = strchr(dest, '/');
+		if (c)
+			c++;
+		else
+			c = dest;
+
+		if (!p->hidecallerid) {
+			l = ast->cid.cid_num;
+		} else {
+			l = NULL;
+		}
+
+		ss7_grab(p, p->ss7);
+		p->digital = IS_DIGITAL(ast->transfercapability);
+		p->ss7call = isup_new_call(p->ss7->ss7);
+
+		if (!p->ss7call) {
+			ss7_rel(p->ss7);
+			ast_mutex_unlock(&p->lock);
+			ast_log(LOG_ERROR, "Unable to allocate new SS7 call!\n");
+			return -1;
+		}
+
+		isup_init_call(p->ss7->ss7, p->ss7call, p->cic, c + p->stripmsd, l);
+
+		isup_iam(p->ss7->ss7, p->ss7call);
+		ss7_rel(p->ss7);
+	}
+#endif /* HAVE_SS7 */
 #ifdef HAVE_PRI
 	if (p->pri) {
 		struct pri_sr *sr;
@@ -2128,10 +2294,13 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		}
 		if (p->bearer || (mysig == SIG_FXSKS)) {
 			if (p->bearer) {
-				ast_log(LOG_DEBUG, "Oooh, I have a bearer on %d (%d:%d)\n", PVT_TO_CHANNEL(p->bearer), p->bearer->logicalspan, p->bearer->channel);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Oooh, I have a bearer on %d (%d:%d)\n", PVT_TO_CHANNEL(p->bearer), p->bearer->logicalspan, p->bearer->channel);
 				p->bearer->call = p->call;
-			} else
-				ast_log(LOG_DEBUG, "I'm being setup with no bearer right now...\n");
+			} else {
+				if (option_debug)
+					ast_log(LOG_DEBUG, "I'm being setup with no bearer right now...\n");
+			}
 			pri_set_crv(p->pri->pri, p->call, p->channel, 0);
 		}
 		p->digital = IS_DIGITAL(ast->transfercapability);
@@ -2312,21 +2481,24 @@ static int zap_send_keypad_facility_exec(struct ast_channel *chan, void *data)
 	char *digits = (char *) data;
 
 	if (ast_strlen_zero(digits)) {
-		ast_log(LOG_DEBUG, "No digit string sent to application!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "No digit string sent to application!\n");
 		return -1;
 	}
 
 	p = (struct zt_pvt *)chan->tech_pvt;
 
 	if (!p) {
-		ast_log(LOG_DEBUG, "Unable to find technology private\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Unable to find technology private\n");
 		return -1;
 	}
 
 	ast_mutex_lock(&p->lock);
 
 	if (!p->pri || !p->call) {
-		ast_log(LOG_DEBUG, "Unable to find pri or call on channel!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Unable to find pri or call on channel!\n");
 		ast_mutex_unlock(&p->lock);
 		return -1;
 	}
@@ -2335,7 +2507,8 @@ static int zap_send_keypad_facility_exec(struct ast_channel *chan, void *data)
 		pri_keypad_facility(p->pri->pri, p->call, digits);
 		pri_rel(p->pri);
 	} else {
-		ast_log(LOG_DEBUG, "Unable to grab pri to send keypad facility!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Unable to grab pri to send keypad facility!\n");
 		ast_mutex_unlock(&p->lock);
 		return -1;
 	}
@@ -2445,7 +2618,7 @@ static int zt_hangup(struct ast_channel *ast)
 	
 	index = zt_get_index(ast, p, 1);
 
-	if (p->sig == SIG_PRI) {
+	if ((p->sig == SIG_PRI) || (p->sig == SIG_SS7)) {
 		x = 1;
 		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
 	}
@@ -2468,8 +2641,9 @@ static int zt_hangup(struct ast_channel *ast)
 	if (p->exten)
 		p->exten[0] = '\0';
 
-	ast_log(LOG_DEBUG, "Hangup: channel: %d index = %d, normal = %d, callwait = %d, thirdcall = %d\n",
-		p->channel, index, p->subs[SUB_REAL].zfd, p->subs[SUB_CALLWAIT].zfd, p->subs[SUB_THREEWAY].zfd);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Hangup: channel: %d index = %d, normal = %d, callwait = %d, thirdcall = %d\n",
+			p->channel, index, p->subs[SUB_REAL].zfd, p->subs[SUB_CALLWAIT].zfd, p->subs[SUB_THREEWAY].zfd);
 	p->ignoredtmf = 0;
 	
 	if (index > -1) {
@@ -2486,27 +2660,32 @@ static int zt_hangup(struct ast_channel *ast)
 		zt_setlinear(p->subs[index].zfd, 0);
 		if (index == SUB_REAL) {
 			if ((p->subs[SUB_CALLWAIT].zfd > -1) && (p->subs[SUB_THREEWAY].zfd > -1)) {
-				ast_log(LOG_DEBUG, "Normal call hung up with both three way call and a call waiting call in place?\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Normal call hung up with both three way call and a call waiting call in place?\n");
 				if (p->subs[SUB_CALLWAIT].inthreeway) {
 					/* We had flipped over to answer a callwait and now it's gone */
-					ast_log(LOG_DEBUG, "We were flipped over to the callwait, moving back and unowning.\n");
+					if (option_debug)
+						ast_log(LOG_DEBUG, "We were flipped over to the callwait, moving back and unowning.\n");
 					/* Move to the call-wait, but un-own us until they flip back. */
 					swap_subs(p, SUB_CALLWAIT, SUB_REAL);
 					unalloc_sub(p, SUB_CALLWAIT);
 					p->owner = NULL;
 				} else {
 					/* The three way hung up, but we still have a call wait */
-					ast_log(LOG_DEBUG, "We were in the threeway and have a callwait still.  Ditching the threeway.\n");
+					if (option_debug)
+						ast_log(LOG_DEBUG, "We were in the threeway and have a callwait still.  Ditching the threeway.\n");
 					swap_subs(p, SUB_THREEWAY, SUB_REAL);
 					unalloc_sub(p, SUB_THREEWAY);
 					if (p->subs[SUB_REAL].inthreeway) {
 						/* This was part of a three way call.  Immediately make way for
 						   another call */
-						ast_log(LOG_DEBUG, "Call was complete, setting owner to former third call\n");
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Call was complete, setting owner to former third call\n");
 						p->owner = p->subs[SUB_REAL].owner;
 					} else {
 						/* This call hasn't been completed yet...  Set owner to NULL */
-						ast_log(LOG_DEBUG, "Call was incomplete, setting owner to NULL\n");
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Call was incomplete, setting owner to NULL\n");
 						p->owner = NULL;
 					}
 					p->subs[SUB_REAL].inthreeway = 0;
@@ -2526,11 +2705,13 @@ static int zt_hangup(struct ast_channel *ast)
 				if (p->subs[SUB_REAL].inthreeway) {
 					/* This was part of a three way call.  Immediately make way for
 					   another call */
-					ast_log(LOG_DEBUG, "Call was complete, setting owner to former third call\n");
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Call was complete, setting owner to former third call\n");
 					p->owner = p->subs[SUB_REAL].owner;
 				} else {
 					/* This call hasn't been completed yet...  Set owner to NULL */
-					ast_log(LOG_DEBUG, "Call was incomplete, setting owner to NULL\n");
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Call was incomplete, setting owner to NULL\n");
 					p->owner = NULL;
 				}
 				p->subs[SUB_REAL].inthreeway = 0;
@@ -2599,6 +2780,23 @@ static int zt_hangup(struct ast_channel *ast)
 		if (res < 0) 
 			ast_log(LOG_WARNING, "Unable to set law on channel %d to default\n", p->channel);
 		/* Perform low level hangup if no owner left */
+#ifdef HAVE_SS7
+		if (p->ss7) {
+			if (p->ss7call) {
+				if (!ss7_grab(p, p->ss7)) {
+					if (!p->alreadyhungup) {
+						isup_rel(p->ss7->ss7, p->ss7call, ast->hangupcause ? ast->hangupcause : -1);
+						ss7_rel(p->ss7);
+						p->alreadyhungup = 1;
+					} else
+						ast_log(LOG_WARNING, "Trying to hangup twice!\n");
+				} else {
+					ast_log(LOG_WARNING, "Unable to grab SS7 on CIC %d\n", p->cic);
+					res = -1;
+				}
+			}
+		}
+#endif
 #ifdef HAVE_PRI
 		if (p->pri) {
 #ifdef SUPPORT_USERUSER
@@ -2609,7 +2807,8 @@ static int zt_hangup(struct ast_channel *ast)
 			if (p->call && (!p->bearer || (p->bearer->call == p->call))) {
 				if (!pri_grab(p, p->pri)) {
 					if (p->alreadyhungup) {
-						ast_log(LOG_DEBUG, "Already hungup...  Calling hangup once, and clearing call\n");
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Already hungup...  Calling hangup once, and clearing call\n");
 
 #ifdef SUPPORT_USERUSER
 						pri_call_set_useruser(p->call, useruser);
@@ -2622,7 +2821,8 @@ static int zt_hangup(struct ast_channel *ast)
 					} else {
 						const char *cause = pbx_builtin_getvar_helper(ast,"PRI_CAUSE");
 						int icause = ast->hangupcause ? ast->hangupcause : -1;
-						ast_log(LOG_DEBUG, "Not yet hungup...  Calling hangup once with icause, and clearing call\n");
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Not yet hungup...  Calling hangup once with icause, and clearing call\n");
 
 #ifdef SUPPORT_USERUSER
 						pri_call_set_useruser(p->call, useruser);
@@ -2646,13 +2846,14 @@ static int zt_hangup(struct ast_channel *ast)
 				}
 			} else {
 				if (p->bearer)
-					ast_log(LOG_DEBUG, "Bearer call is %p, while ours is still %p\n", p->bearer->call, p->call);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Bearer call is %p, while ours is still %p\n", p->bearer->call, p->call);
 				p->call = NULL;
 				res = 0;
 			}
 		}
 #endif
-		if (p->sig && (p->sig != SIG_PRI))
+		if (p->sig && ((p->sig != SIG_PRI) && (p->sig != SIG_SS7)))
 			res = zt_set_hook(p->subs[SUB_REAL].zfd, ZT_ONHOOK);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Unable to hangup line %s\n", ast->name);
@@ -2664,7 +2865,8 @@ static int zt_hangup(struct ast_channel *ast)
 			res = ioctl(p->subs[SUB_REAL].zfd, ZT_GET_PARAMS, &par);
 			if (!res) {
 #if 0
-				ast_log(LOG_DEBUG, "Hanging up channel %d, offhook = %d\n", p->channel, par.rxisoffhook);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Hanging up channel %d, offhook = %d\n", p->channel, par.rxisoffhook);
 #endif
 				/* If they're off hook, try playing congestion */
 				if ((par.rxisoffhook) && (!(p->radio || (p->oprmode < 0))))
@@ -2703,13 +2905,14 @@ static int zt_hangup(struct ast_channel *ast)
 		update_conf(p);
 		reset_conf(p);
 		/* Restore data mode */
-		if (p->sig == SIG_PRI) {
+		if ((p->sig == SIG_PRI) || (p->sig == SIG_SS7)) {
 			x = 0;
 			ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
 		}
 #ifdef HAVE_PRI
 		if (p->bearer) {
-			ast_log(LOG_DEBUG, "Freeing up bearer channel %d\n", p->bearer->channel);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Freeing up bearer channel %d\n", p->bearer->channel);
 			/* Free up the bearer channel as well, and
 			   don't use its file descriptor anymore */
 			update_conf(p->bearer);
@@ -2729,8 +2932,6 @@ static int zt_hangup(struct ast_channel *ast)
 	p->oprmode = 0;
 	ast->tech_pvt = NULL;
 	ast_mutex_unlock(&p->lock);
-	ast_atomic_fetchadd_int(&usecnt, -1);
-	ast_update_use_count();
 	if (option_verbose > 2) 
 		ast_verbose( VERBOSE_PREFIX_3 "Hungup '%s'\n", ast->name);
 
@@ -2793,7 +2994,8 @@ static int zt_answer(struct ast_channel *ast)
 	case SIG_FXOGS:
 	case SIG_FXOKS:
 		/* Pick up the line */
-		ast_log(LOG_DEBUG, "Took %s off hook\n", ast->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Took %s off hook\n", ast->name);
 		if (p->hanguponpolarityswitch) {
 			gettimeofday(&p->polaritydelaytv, NULL);
 		}
@@ -2802,7 +3004,8 @@ static int zt_answer(struct ast_channel *ast)
 		p->dialing = 0;
 		if ((index == SUB_REAL) && p->subs[SUB_THREEWAY].inthreeway) {
 			if (oldstate == AST_STATE_RINGING) {
-				ast_log(LOG_DEBUG, "Finally swapping real and threeway\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Finally swapping real and threeway\n");
 				tone_zone_play_tone(p->subs[SUB_THREEWAY].zfd, -1);
 				swap_subs(p, SUB_THREEWAY, SUB_REAL);
 				p->owner = p->subs[SUB_REAL].owner;
@@ -2822,6 +3025,18 @@ static int zt_answer(struct ast_channel *ast)
 			pri_rel(p->pri);
 		} else {
 			ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->span);
+			res = -1;
+		}
+		break;
+#endif
+#ifdef HAVE_SS7
+	case SIG_SS7:
+		if (!ss7_grab(p, p->ss7)) {
+			p->proceeding = 1;
+			res = isup_anm(p->ss7->ss7, p->ss7call);
+			ss7_rel(p->ss7);
+		} else {
+			ast_log(LOG_WARNING, "Unable to grab SS7 on span %d\n", p->span);
 			res = -1;
 		}
 		break;
@@ -2861,7 +3076,8 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 			ast_log(LOG_WARNING, "No index in TXGAIN?\n");
 			return -1;
 		}
-		ast_log(LOG_DEBUG, "Setting actual tx gain on %s to %f\n", chan->name, p->txgain + (float) *scp);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Setting actual tx gain on %s to %f\n", chan->name, p->txgain + (float) *scp);
 		return set_actual_txgain(p->subs[index].zfd, 0, p->txgain + (float) *scp, p->law);
 	case AST_OPTION_RXGAIN:
 		scp = (signed char *) data;
@@ -2870,7 +3086,8 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 			ast_log(LOG_WARNING, "No index in RXGAIN?\n");
 			return -1;
 		}
-		ast_log(LOG_DEBUG, "Setting actual rx gain on %s to %f\n", chan->name, p->rxgain + (float) *scp);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Setting actual rx gain on %s to %f\n", chan->name, p->rxgain + (float) *scp);
 		return set_actual_rxgain(p->subs[index].zfd, 0, p->rxgain + (float) *scp, p->law);
 	case AST_OPTION_TONE_VERIFY:
 		if (!p->dsp)
@@ -2878,15 +3095,18 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 		cp = (char *) data;
 		switch (*cp) {
 		case 1:
-			ast_log(LOG_DEBUG, "Set option TONE VERIFY, mode: MUTECONF(1) on %s\n",chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Set option TONE VERIFY, mode: MUTECONF(1) on %s\n",chan->name);
 			ast_dsp_digitmode(p->dsp,DSP_DIGITMODE_MUTECONF | p->dtmfrelax);  /* set mute mode if desired */
 			break;
 		case 2:
-			ast_log(LOG_DEBUG, "Set option TONE VERIFY, mode: MUTECONF/MAX(2) on %s\n",chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Set option TONE VERIFY, mode: MUTECONF/MAX(2) on %s\n",chan->name);
 			ast_dsp_digitmode(p->dsp,DSP_DIGITMODE_MUTECONF | DSP_DIGITMODE_MUTEMAX | p->dtmfrelax);  /* set mute mode if desired */
 			break;
 		default:
-			ast_log(LOG_DEBUG, "Set option TONE VERIFY, mode: OFF(0) on %s\n",chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Set option TONE VERIFY, mode: OFF(0) on %s\n",chan->name);
 			ast_dsp_digitmode(p->dsp,DSP_DIGITMODE_DTMF | p->dtmfrelax);  /* set mute mode if desired */
 			break;
 		}
@@ -2896,14 +3116,16 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 		cp = (char *) data;
 		p->mate = 0;
 		if (!*cp) { /* turn it off */
-			ast_log(LOG_DEBUG, "Set option TDD MODE, value: OFF(0) on %s\n",chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Set option TDD MODE, value: OFF(0) on %s\n",chan->name);
 			if (p->tdd)
 				tdd_free(p->tdd);
 			p->tdd = 0;
 			break;
 		}
-		ast_log(LOG_DEBUG, "Set option TDD MODE, value: %s(%d) on %s\n",
-			(*cp == 2) ? "MATE" : "ON", (int) *cp, chan->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Set option TDD MODE, value: %s(%d) on %s\n",
+				(*cp == 2) ? "MATE" : "ON", (int) *cp, chan->name);
 		zt_disable_ec(p);
 		/* otherwise, turn it on */
 		if (!p->didtdd) { /* if havent done it yet */
@@ -2932,20 +3154,23 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 				fds[0].revents = 0;
 				res = poll(fds, 1, -1);
 				if (!res) {
-					ast_log(LOG_DEBUG, "poll (for write) ret. 0 on channel %d\n", p->channel);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "poll (for write) ret. 0 on channel %d\n", p->channel);
 					continue;
 				}
 				/* if got exception */
 				if (fds[0].revents & POLLPRI)
 					return -1;
 				if (!(fds[0].revents & POLLOUT)) {
-					ast_log(LOG_DEBUG, "write fd not ready on channel %d\n", p->channel);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "write fd not ready on channel %d\n", p->channel);
 					continue;
 				}
 				res = write(fd, buf, size);
 				if (res != size) {
 					if (res == -1) return -1;
-					ast_log(LOG_DEBUG, "Write returned %d (%s) on channel %d\n", res, strerror(errno), p->channel);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Write returned %d (%s) on channel %d\n", res, strerror(errno), p->channel);
 					break;
 				}
 				len -= size;
@@ -2968,18 +3193,21 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 		if (!p->dsp)
 			break;
 		cp = (char *) data;
-		ast_log(LOG_DEBUG, "Set option RELAX DTMF, value: %s(%d) on %s\n",
-			*cp ? "ON" : "OFF", (int) *cp, chan->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Set option RELAX DTMF, value: %s(%d) on %s\n",
+				*cp ? "ON" : "OFF", (int) *cp, chan->name);
 		ast_dsp_digitmode(p->dsp, ((*cp) ? DSP_DIGITMODE_RELAXDTMF : DSP_DIGITMODE_DTMF) | p->dtmfrelax);
 		break;
 	case AST_OPTION_AUDIO_MODE:  /* Set AUDIO mode (or not) */
 		cp = (char *) data;
 		if (!*cp) {		
-			ast_log(LOG_DEBUG, "Set option AUDIO MODE, value: OFF(0) on %s\n", chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Set option AUDIO MODE, value: OFF(0) on %s\n", chan->name);
 			x = 0;
 			zt_disable_ec(p);
 		} else {		
-			ast_log(LOG_DEBUG, "Set option AUDIO MODE, value: ON(1) on %s\n", chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Set option AUDIO MODE, value: ON(1) on %s\n", chan->name);
 			x = 1;
 		}
 		if (ioctl(p->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &x) == -1)
@@ -2998,16 +3226,19 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 			pp->oprmode = oprmode->mode;
 			p->oprmode = -oprmode->mode;
 		}
-		ast_log(LOG_DEBUG, "Set Operator Services mode, value: %d on %s/%s\n",
-			oprmode->mode, chan->name,oprmode->peer->name);;
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Set Operator Services mode, value: %d on %s/%s\n",
+				oprmode->mode, chan->name,oprmode->peer->name);
 		break;
 	case AST_OPTION_ECHOCAN:
 		cp = (char *) data;
 		if (*cp) {
-			ast_log(LOG_DEBUG, "Enabling echo cancelation on %s\n", chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Enabling echo cancelation on %s\n", chan->name);
 			zt_enable_ec(p);
 		} else {
-			ast_log(LOG_DEBUG, "Disabling echo cancelation on %s\n", chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Disabling echo cancelation on %s\n", chan->name);
 			zt_disable_ec(p);
 		}
 		break;
@@ -3058,7 +3289,8 @@ static void zt_unlink(struct zt_pvt *slave, struct zt_pvt *master, int needlock)
 		if (master->slaves[x]) {
 			if (!slave || (master->slaves[x] == slave)) {
 				/* Take slave out of the conference */
-				ast_log(LOG_DEBUG, "Unlinking slave %d from %d\n", master->slaves[x]->channel, master->channel);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Unlinking slave %d from %d\n", master->slaves[x]->channel, master->channel);
 				conf_del(master, &master->slaves[x]->subs[SUB_REAL], SUB_REAL);
 				conf_del(master->slaves[x], &master->subs[SUB_REAL], SUB_REAL);
 				master->slaves[x]->master = NULL;
@@ -3114,7 +3346,8 @@ static void zt_link(struct zt_pvt *slave, struct zt_pvt *master) {
 		ast_log(LOG_WARNING, "Replacing master %d with new master, %d\n", slave->master->channel, master->channel);
 	slave->master = master;
 	
-	ast_log(LOG_DEBUG, "Making %d slave to master %d at %d\n", slave->channel, master->channel, x);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Making %d slave to master %d at %d\n", slave->channel, master->channel, x);
 }
 
 static void disable_dtmf_detect(struct zt_pvt *p)
@@ -3277,8 +3510,9 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 			nothingok = 0;
 		}
 	}
-	ast_log(LOG_DEBUG, "master: %d, slave: %d, nothingok: %d\n",
-		master ? master->channel : 0, slave ? slave->channel : 0, nothingok);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "master: %d, slave: %d, nothingok: %d\n",
+			master ? master->channel : 0, slave ? slave->channel : 0, nothingok);
 	if (master && slave) {
 		/* Stop any tones, or play ringtone as appropriate.  If they're bridged
 		   in an active threeway call with a channel that is ringing, we should
@@ -3288,11 +3522,13 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		    p1->subs[SUB_REAL].owner && 
 		    p1->subs[SUB_REAL].inthreeway && 
 		    (p1->subs[SUB_REAL].owner->_state == AST_STATE_RINGING)) {
-			ast_log(LOG_DEBUG, "Playing ringback on %s since %s is in a ringing three-way\n", c0->name, c1->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Playing ringback on %s since %s is in a ringing three-way\n", c0->name, c1->name);
 			tone_zone_play_tone(p0->subs[oi0].zfd, ZT_TONE_RINGTONE);
 			os1 = p1->subs[SUB_REAL].owner->_state;
 		} else {
-			ast_log(LOG_DEBUG, "Stopping tones on %d/%d talking to %d/%d\n", p0->channel, oi0, p1->channel, oi1);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Stopping tones on %d/%d talking to %d/%d\n", p0->channel, oi0, p1->channel, oi1);
 			tone_zone_play_tone(p0->subs[oi0].zfd, -1);
 		}
 		if ((oi0 == SUB_THREEWAY) && 
@@ -3300,11 +3536,13 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		    p0->subs[SUB_REAL].owner && 
 		    p0->subs[SUB_REAL].inthreeway && 
 		    (p0->subs[SUB_REAL].owner->_state == AST_STATE_RINGING)) {
-			ast_log(LOG_DEBUG, "Playing ringback on %s since %s is in a ringing three-way\n", c1->name, c0->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Playing ringback on %s since %s is in a ringing three-way\n", c1->name, c0->name);
 			tone_zone_play_tone(p1->subs[oi1].zfd, ZT_TONE_RINGTONE);
 			os0 = p0->subs[SUB_REAL].owner->_state;
 		} else {
-			ast_log(LOG_DEBUG, "Stopping tones on %d/%d talking to %d/%d\n", p1->channel, oi1, p0->channel, oi0);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Stopping tones on %d/%d talking to %d/%d\n", p1->channel, oi1, p0->channel, oi0);
 			tone_zone_play_tone(p1->subs[oi0].zfd, -1);
 		}
 		if ((oi0 == SUB_REAL) && (oi1 == SUB_REAL)) {
@@ -3377,8 +3615,9 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		    (t1 != p1->subs[SUB_REAL].inthreeway) ||
 		    (oi0 != i0) ||
 		    (oi1 != i1)) {
-			ast_log(LOG_DEBUG, "Something changed out on %d/%d to %d/%d, returning -3 to restart\n",
-				op0->channel, oi0, op1->channel, oi1);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Something changed out on %d/%d to %d/%d, returning -3 to restart\n",
+					op0->channel, oi0, op1->channel, oi1);
 			res = AST_BRIDGE_RETRY;
 			goto return_from_bridge;
 		}
@@ -3396,7 +3635,8 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 
 		who = ast_waitfor_n(priority ? c0_priority : c1_priority, 2, &timeoutms);
 		if (!who) {
-			ast_log(LOG_DEBUG, "Ooh, empty read...\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Ooh, empty read...\n");
 			continue;
 		}
 		f = ast_read(who);
@@ -3447,7 +3687,8 @@ static int zt_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 	struct zt_pvt *p = newchan->tech_pvt;
 	int x;
 	ast_mutex_lock(&p->lock);
-	ast_log(LOG_DEBUG, "New owner for channel %d is %s\n", p->channel, newchan->name);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "New owner for channel %d is %s\n", p->channel, newchan->name);
 	if (p->owner == oldchan) {
 		p->owner = newchan;
 	}
@@ -3566,8 +3807,9 @@ static int attempt_transfer(struct zt_pvt *p)
 		/* Tell the caller not to hangup */
 		return 1;
 	} else {
-		ast_log(LOG_DEBUG, "Neither %s nor %s are in a bridge, nothing to transfer\n",
-					p->subs[SUB_REAL].owner->name, p->subs[SUB_THREEWAY].owner->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Neither %s nor %s are in a bridge, nothing to transfer\n",
+						p->subs[SUB_REAL].owner->name, p->subs[SUB_THREEWAY].owner->name);
 		p->subs[SUB_THREEWAY].owner->_softhangup |= AST_SOFTHANGUP_DEV;
 		return -1;
 	}
@@ -3643,11 +3885,13 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 	} else
 		res = zt_get_event(p->subs[index].zfd);
 
-	ast_log(LOG_DEBUG, "Got event %s(%d) on channel %d (index %d)\n", event2str(res), res, p->channel, index);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Got event %s(%d) on channel %d (index %d)\n", event2str(res), res, p->channel, index);
 
 	if (res & (ZT_EVENT_PULSEDIGIT | ZT_EVENT_DTMFUP)) {
 		p->pulsedial =  (res & ZT_EVENT_PULSEDIGIT) ? 1 : 0;
-		ast_log(LOG_DEBUG, "Detected %sdigit '%c'\n", p->pulsedial ? "pulse ": "", res & 0xff);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Detected %sdigit '%c'\n", p->pulsedial ? "pulse ": "", res & 0xff);
 #ifdef HAVE_PRI
 		if (!p->proceeding && p->sig == SIG_PRI && p->pri && p->pri->overlapdial) {
 			/* absorb event */
@@ -3664,7 +3908,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 	}
 
 	if (res & ZT_EVENT_DTMFDOWN) {
-		ast_log(LOG_DEBUG, "DTMF Down '%c'\n", res & 0xff);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "DTMF Down '%c'\n", res & 0xff);
 		/* Mute conference */
 		zt_confmute(p, 1);
 		p->subs[index].f.frametype = AST_FRAME_DTMF_BEGIN;
@@ -3691,7 +3936,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			if (p->inalarm) break;
 			if ((p->radio || (p->oprmode < 0))) break;
 			if (ioctl(p->subs[index].zfd,ZT_DIALING,&x) == -1) {
-				ast_log(LOG_DEBUG, "ZT_DIALING ioctl failed on %s\n",ast->name);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "ZT_DIALING ioctl failed on %s\n",ast->name);
 				return NULL;
 			}
 			if (!x) { /* if not still dialing in driver */
@@ -3718,7 +3964,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 					}
 					if (ast->_state == AST_STATE_DIALING) {
 						if ((p->callprogress & 1) && CANPROGRESSDETECT(p) && p->dsp && p->outgoing) {
-							ast_log(LOG_DEBUG, "Done dialing, but waiting for progress detection before doing more...\n");
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Done dialing, but waiting for progress detection before doing more...\n");
 						} else if (p->confirmanswer || (!p->dialednone && ((mysig == SIG_EM) || (mysig == SIG_EM_E1) ||  (mysig == SIG_EMWINK) || (mysig == SIG_FEATD) || (mysig == SIG_FEATDMF_TA) || (mysig == SIG_FEATDMF) || (mysig == SIG_E911) || (mysig == SIG_FGC_CAMA) || (mysig == SIG_FGC_CAMAMF) || (mysig == SIG_FEATB) || (mysig == SIG_SF) || (mysig == SIG_SFWINK) || (mysig == SIG_SF_FEATD) || (mysig == SIG_SF_FEATDMF) || (mysig == SIG_SF_FEATB)))) {
 							ast_setstate(ast, AST_STATE_RINGING);
 						} else if (!p->answeronpolarityswitch) {
@@ -3760,7 +4007,7 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 								"Alarm: %s\r\n"
 								"Channel: %d\r\n",
 								alarm2str(res), p->channel);
-#ifdef HAVE_LIBPRI
+#ifdef HAVE_PRI
 			if (!p->pri || !p->pri->pri || pri_get_timer(p->pri->pri, PRI_TIMER_T309) < 0) {
 				/* fall through intentionally */
 			} else {
@@ -3836,14 +4083,16 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 							return NULL;
 						}
 						mssinceflash = ast_tvdiff_ms(ast_tvnow(), p->flashtime);
-						ast_log(LOG_DEBUG, "Last flash was %d ms ago\n", mssinceflash);
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Last flash was %d ms ago\n", mssinceflash);
 						if (mssinceflash < MIN_MS_SINCE_FLASH) {
 							/* It hasn't been long enough since the last flashook.  This is probably a bounce on 
 							   hanging up.  Hangup both channels now */
 							if (p->subs[SUB_THREEWAY].owner)
 								ast_queue_hangup(p->subs[SUB_THREEWAY].owner);
 							p->subs[SUB_THREEWAY].owner->_softhangup |= AST_SOFTHANGUP_DEV;
-							ast_log(LOG_DEBUG, "Looks like a bounced flash, hanging up both calls on %d\n", p->channel);
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Looks like a bounced flash, hanging up both calls on %d\n", p->channel);
 							ast_mutex_unlock(&p->subs[SUB_THREEWAY].owner->lock);
 						} else if ((ast->pbx) || (ast->_state == AST_STATE_UP)) {
 							if (p->transfer) {
@@ -3951,7 +4200,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 					p->subs[index].f.subclass = AST_CONTROL_ANSWER;
 					/* Make sure it stops ringing */
 					zt_set_hook(p->subs[index].zfd, ZT_OFFHOOK);
-					ast_log(LOG_DEBUG, "channel %d answered\n", p->channel);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "channel %d answered\n", p->channel);
 					if (p->cidspill) {
 						/* Cancel any running CallerID spill */
 						free(p->cidspill);
@@ -3971,7 +4221,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 							p->dop.dialstr[0] = '\0';
 							return NULL;
 						} else {
-							ast_log(LOG_DEBUG, "Sent FXO deferred digit string: %s\n", p->dop.dialstr);
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Sent FXO deferred digit string: %s\n", p->dop.dialstr);
 							p->subs[index].f.frametype = AST_FRAME_NULL;
 							p->subs[index].f.subclass = 0;
 							p->dialing = 1;
@@ -3986,7 +4237,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 					ast->rings = 1;
 					p->subs[index].f.frametype = AST_FRAME_CONTROL;
 					p->subs[index].f.subclass = AST_CONTROL_OFFHOOK;
-					ast_log(LOG_DEBUG, "channel %d picked up\n", p->channel);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "channel %d picked up\n", p->channel);
 					return &p->subs[index].f;
 				case AST_STATE_UP:
 					/* Make sure it stops ringing */
@@ -4016,9 +4268,10 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 
 				/* If we get a ring then we cannot be in 
 				 * reversed polarity. So we reset to idle */
-				ast_log(LOG_DEBUG, "Setting IDLE polarity due "
-					"to ring. Old polarity was %d\n", 
-					p->polarity);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Setting IDLE polarity due "
+						"to ring. Old polarity was %d\n", 
+						p->polarity);
 				p->polarity = POLARITY_IDLE;
 
 				/* Fall through */
@@ -4128,8 +4381,9 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			case SIG_FXOLS:
 			case SIG_FXOGS:
 			case SIG_FXOKS:
-				ast_log(LOG_DEBUG, "Winkflash, index: %d, normal: %d, callwait: %d, thirdcall: %d\n",
-					index, p->subs[SUB_REAL].zfd, p->subs[SUB_CALLWAIT].zfd, p->subs[SUB_THREEWAY].zfd);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Winkflash, index: %d, normal: %d, callwait: %d, thirdcall: %d\n",
+						index, p->subs[SUB_REAL].zfd, p->subs[SUB_CALLWAIT].zfd, p->subs[SUB_THREEWAY].zfd);
 				p->callwaitcas = 0;
 
 				if (index != SUB_REAL) {
@@ -4142,7 +4396,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 					swap_subs(p, SUB_REAL, SUB_CALLWAIT);
 					tone_zone_play_tone(p->subs[SUB_REAL].zfd, -1);
 					p->owner = p->subs[SUB_REAL].owner;
-					ast_log(LOG_DEBUG, "Making %s the new owner\n", p->owner->name);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Making %s the new owner\n", p->owner->name);
 					if (p->owner->_state == AST_STATE_RINGING) {
 						ast_setstate(p->owner, AST_STATE_UP);
 						p->subs[SUB_REAL].needanswer = 1;
@@ -4182,8 +4437,9 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 						if (!((ast->pbx) ||
 						      (ast->_state == AST_STATE_UP) ||
 						      (ast->_state == AST_STATE_RING))) {
-							ast_log(LOG_DEBUG, "Flash when call not up or ringing\n");
-								goto winkflashdone;
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Flash when call not up or ringing\n");
+							goto winkflashdone;
 						}
 						if (alloc_sub(p, SUB_THREEWAY)) {
 							ast_log(LOG_WARNING, "Unable to allocate three-way subchannel\n");
@@ -4264,7 +4520,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 							p->subs[otherindex].needunhold = 1;
 							p->owner = p->subs[SUB_REAL].owner;
 							if (ast->_state == AST_STATE_RINGING) {
-								ast_log(LOG_DEBUG, "Enabling ringtone on real and threeway\n");
+								if (option_debug)
+									ast_log(LOG_DEBUG, "Enabling ringtone on real and threeway\n");
 								res = tone_zone_play_tone(p->subs[SUB_REAL].zfd, ZT_TONE_RINGTONE);
 								res = tone_zone_play_tone(p->subs[SUB_THREEWAY].zfd, ZT_TONE_RINGTONE);
 							}
@@ -4294,15 +4551,18 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			case SIG_SF_FEATD:
 			case SIG_FXSLS:
 			case SIG_FXSGS:
-				if (p->dialing)
-					ast_log(LOG_DEBUG, "Ignoring wink on channel %d\n", p->channel);
-				else
-					ast_log(LOG_DEBUG, "Got wink in weird state %d on channel %d\n", ast->_state, p->channel);
+				if (option_debug) {
+					if (p->dialing)
+						ast_log(LOG_DEBUG, "Ignoring wink on channel %d\n", p->channel);
+					else
+						ast_log(LOG_DEBUG, "Got wink in weird state %d on channel %d\n", ast->_state, p->channel);
+				}
 				break;
 			case SIG_FEATDMF_TA:
 				switch (p->whichwink) {
 				case 0:
-					ast_log(LOG_DEBUG, "ANI2 set to '%d' and ANI is '%s'\n", p->owner->cid.cid_ani2, p->owner->cid.cid_ani);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "ANI2 set to '%d' and ANI is '%s'\n", p->owner->cid.cid_ani2, p->owner->cid.cid_ani);
 					snprintf(p->dop.dialstr, sizeof(p->dop.dialstr), "M*%d%s#", p->owner->cid.cid_ani2, p->owner->cid.cid_ani);
 					break;
 				case 1:
@@ -4328,8 +4588,10 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 					ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
 					p->dop.dialstr[0] = '\0';
 					return NULL;
-				} else 
-					ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
+				} else {
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
+				}
 				p->dop.dialstr[0] = '\0';
 				break;
 			default:
@@ -4356,8 +4618,10 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 					ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
 					p->dop.dialstr[0] = '\0';
 					return NULL;
-				} else 
-					ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
+				} else {
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
+				}
 				p->dop.dialstr[0] = '\0';
 				p->dop.op = ZT_DIAL_OP_REPLACE;
 				break;
@@ -4369,7 +4633,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			case SIG_FEATB:
 			case SIG_SF_FEATDMF:
 			case SIG_SF_FEATB:
-				ast_log(LOG_DEBUG, "Got hook complete in MF FGD, waiting for wink now on channel %d\n",p->channel);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Got hook complete in MF FGD, waiting for wink now on channel %d\n",p->channel);
 				break;
 			default:
 				break;
@@ -4387,13 +4652,16 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 				if (p->answeronpolarityswitch &&
 				    ((ast->_state == AST_STATE_DIALING) ||
 					 (ast->_state == AST_STATE_RINGING))) {
-					ast_log(LOG_DEBUG, "Answering on polarity switch!\n");
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Answering on polarity switch!\n");
 					ast_setstate(p->owner, AST_STATE_UP);
 					if (p->hanguponpolarityswitch) {
 						gettimeofday(&p->polaritydelaytv, NULL);
 					}
-				} else
-					ast_log(LOG_DEBUG, "Ignore switch to REVERSED Polarity on channel %d, state %d\n", p->channel, ast->_state);
+				} else {
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Ignore switch to REVERSED Polarity on channel %d, state %d\n", p->channel, ast->_state);
+				}
 			} 
 			/* Removed else statement from here as it was preventing hangups from ever happening*/
 			/* Added AST_STATE_RING in if statement below to deal with calling party hangups that take place when ringing */
@@ -4402,24 +4670,30 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			       (p->polarity == POLARITY_REV) &&
 				((ast->_state == AST_STATE_UP) || (ast->_state == AST_STATE_RING)) ) {
                                 /* Added log_debug information below to provide a better indication of what is going on */
-				ast_log(LOG_DEBUG, "Polarity Reversal event occured - DEBUG 1: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %d\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Polarity Reversal event occured - DEBUG 1: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %d\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
 			
 				if (ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) > p->polarityonanswerdelay) {
-					ast_log(LOG_DEBUG, "Polarity Reversal detected and now Hanging up on channel %d\n", p->channel);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Polarity Reversal detected and now Hanging up on channel %d\n", p->channel);
 					ast_softhangup(p->owner, AST_SOFTHANGUP_EXPLICIT);
 					p->polarity = POLARITY_IDLE;
 				} else {
-					ast_log(LOG_DEBUG, "Polarity Reversal detected but NOT hanging up (too close to answer event) on channel %d, state %d\n", p->channel, ast->_state);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Polarity Reversal detected but NOT hanging up (too close to answer event) on channel %d, state %d\n", p->channel, ast->_state);
 				}
 			} else {
 				p->polarity = POLARITY_IDLE;
-				ast_log(LOG_DEBUG, "Ignoring Polarity switch to IDLE on channel %d, state %d\n", p->channel, ast->_state);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Ignoring Polarity switch to IDLE on channel %d, state %d\n", p->channel, ast->_state);
 			}
                      	/* Added more log_debug information below to provide a better indication of what is going on */
-			ast_log(LOG_DEBUG, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %d\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %d\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
 			break;
 		default:
-			ast_log(LOG_DEBUG, "Dunno what to do with event %d on channel %d\n", res, p->channel);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Dunno what to do with event %d on channel %d\n", res, p->channel);
 	}
 	return &p->subs[index].f;
 }
@@ -4460,7 +4734,8 @@ static struct ast_frame *__zt_exception(struct ast_channel *ast)
 		/* Switch to real if there is one and this isn't something really silly... */
 		if ((res != ZT_EVENT_RINGEROFF) && (res != ZT_EVENT_RINGERON) &&
 			(res != ZT_EVENT_HOOKCOMPLETE)) {
-			ast_log(LOG_DEBUG, "Restoring owner of channel %d on event %d\n", p->channel, res);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Restoring owner of channel %d on event %d\n", p->channel, res);
 			p->owner = p->subs[SUB_REAL].owner;
 			if (p->owner && ast_bridged_channel(p->owner))
 				ast_queue_control(p->owner, AST_CONTROL_UNHOLD);
@@ -4519,7 +4794,10 @@ static struct ast_frame *__zt_exception(struct ast_channel *ast)
 		f = &p->subs[index].f;
 		return f;
 	}
-	if (!(p->radio || (p->oprmode < 0))) ast_log(LOG_DEBUG, "Exception on %d, channel %d\n", ast->fds[0],p->channel);
+	if (!(p->radio || (p->oprmode < 0))) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Exception on %d, channel %d\n", ast->fds[0],p->channel);
+	}
 	/* If it's not us, return NULL immediately */
 	if (ast != p->owner) {
 		ast_log(LOG_WARNING, "We're %s, not %s\n", ast->name, p->owner->name);
@@ -4662,7 +4940,8 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 		p->subs[index].f.frametype = AST_FRAME_CONTROL;
 		p->subs[index].f.subclass = AST_CONTROL_HOLD;
 		ast_mutex_unlock(&p->lock);
-		ast_log(LOG_DEBUG, "Sending hold on '%s'\n", ast->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Sending hold on '%s'\n", ast->name);
 		return &p->subs[index].f;
 	}	
 	
@@ -4672,7 +4951,8 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 		p->subs[index].f.frametype = AST_FRAME_CONTROL;
 		p->subs[index].f.subclass = AST_CONTROL_UNHOLD;
 		ast_mutex_unlock(&p->lock);
-		ast_log(LOG_DEBUG, "Sending unhold on '%s'\n", ast->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Sending unhold on '%s'\n", ast->name);
 		return &p->subs[index].f;
 	}	
 	
@@ -4717,7 +4997,8 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 		return f;
 	}
 	if (res != (p->subs[index].linear ? READ_SIZE * 2 : READ_SIZE)) {
-		ast_log(LOG_DEBUG, "Short read (%d/%d), must be an event...\n", res, p->subs[index].linear ? READ_SIZE * 2 : READ_SIZE);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Short read (%d/%d), must be an event...\n", res, p->subs[index].linear ? READ_SIZE * 2 : READ_SIZE);
 		f = __zt_exception(ast);
 		ast_mutex_unlock(&p->lock);
 		return f;
@@ -4727,7 +5008,8 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 
 		c = tdd_feed(p->tdd,readbuf,READ_SIZE);
 		if (c < 0) {
-			ast_log(LOG_DEBUG,"tdd_feed failed\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG,"tdd_feed failed\n");
 			ast_mutex_unlock(&p->lock);
 			return NULL;
 		}
@@ -4775,7 +5057,8 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 	p->subs[index].f.offset = AST_FRIENDLY_OFFSET;
 	p->subs[index].f.data = p->subs[index].buffer + AST_FRIENDLY_OFFSET/2;
 #if 0
-	ast_log(LOG_DEBUG, "Read %d of voice on %s\n", p->subs[index].f.datalen, ast->name);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Read %d of voice on %s\n", p->subs[index].f.datalen, ast->name);
 #endif	
 	if (p->dialing || /* Transmitting something */
 	   (index && (ast->_state != AST_STATE_UP)) || /* Three-way or callwait that isn't up */
@@ -4816,9 +5099,11 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 	} else 
 		f = &p->subs[index].f; 
 	if (f && (f->frametype == AST_FRAME_DTMF)) {
-		ast_log(LOG_DEBUG, "DTMF digit: %c on %s\n", f->subclass, ast->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "DTMF digit: %c on %s\n", f->subclass, ast->name);
 		if (p->confirmanswer) {
-			ast_log(LOG_DEBUG, "Confirm answer on %s!\n", ast->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Confirm answer on %s!\n", ast->name);
 			/* Upon receiving a DTMF digit, consider this an answer confirmation instead
 			   of a DTMF digit */
 			p->subs[index].f.frametype = AST_FRAME_CONTROL;
@@ -4828,7 +5113,8 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 			p->confirmanswer = 0;
 		} else if (p->callwaitcas) {
 			if ((f->subclass == 'A') || (f->subclass == 'D')) {
-				ast_log(LOG_DEBUG, "Got some DTMF, but it's for the CAS\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Got some DTMF, but it's for the CAS\n");
 				if (p->cidspill)
 					free(p->cidspill);
 				send_cwcidspill(p);
@@ -4854,10 +5140,14 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 							ast_log(LOG_WARNING, "Failed to async goto '%s' into fax of '%s'\n", ast->name, target_context);
 					} else
 						ast_log(LOG_NOTICE, "Fax detected, but no fax extension\n");
-				} else
-					ast_log(LOG_DEBUG, "Already in a fax extension, not redirecting\n");
-			} else
-					ast_log(LOG_DEBUG, "Fax already handled\n");
+				} else {
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Already in a fax extension, not redirecting\n");
+				}
+			} else {
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Fax already handled\n");
+			}
 			zt_confmute(p, 0);
 			p->subs[index].f.frametype = AST_FRAME_NULL;
 			p->subs[index].f.subclass = 0;
@@ -5005,7 +5295,8 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 	int func = ZT_FLASH;
 	ast_mutex_lock(&p->lock);
 	index = zt_get_index(chan, p, 0);
-	ast_log(LOG_DEBUG, "Requested indication %d on channel %s\n", condition, chan->name);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Requested indication %d on channel %s\n", condition, chan->name);
 	if (index == SUB_REAL) {
 		switch (condition) {
 		case AST_CONTROL_BUSY:
@@ -5042,7 +5333,19 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 				}
 				p->alerting = 1;
 			}
+
 #endif
+#ifdef HAVE_SS7
+			if ((!p->alerting) && (p->sig == SIG_SS7) && p->ss7 && !p->outgoing && (chan->_state != AST_STATE_UP)) {
+				if (p->ss7->ss7) {
+					ss7_grab(p, p->ss7);
+					isup_cpg(p->ss7->ss7, p->ss7call, CPG_EVENT_ALERTING);
+					p->alerting = 1;
+					ss7_rel(p->ss7);
+				}
+			}
+#endif
+
 			res = tone_zone_play_tone(p->subs[index].zfd, ZT_TONE_RINGTONE);
 			if (chan->_state != AST_STATE_UP) {
 				if ((chan->_state != AST_STATE_RING) ||
@@ -5053,7 +5356,8 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 			}
 			break;
 		case AST_CONTROL_PROCEEDING:
-			ast_log(LOG_DEBUG,"Received AST_CONTROL_PROCEEDING on %s\n",chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG,"Received AST_CONTROL_PROCEEDING on %s\n",chan->name);
 #ifdef HAVE_PRI
 			if (!p->proceeding && p->sig==SIG_PRI && p->pri && !p->outgoing) {
 				if (p->pri->pri) {		
@@ -5067,11 +5371,23 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 				p->proceeding = 1;
 			}
 #endif
+#ifdef HAVE_SS7
+			if (!p->proceeding && p->sig==SIG_SS7 && p->ss7 && !p->outgoing) {
+				if (p->ss7->ss7) {
+					ss7_grab(p, p->ss7);
+					isup_acm(p->ss7->ss7, p->ss7call);
+					p->proceeding = 1;
+					ss7_rel(p->ss7);
+
+				}
+			}
+#endif
 			/* don't continue in ast_indicate */
 			res = 0;
 			break;
 		case AST_CONTROL_PROGRESS:
-			ast_log(LOG_DEBUG,"Received AST_CONTROL_PROGRESS on %s\n",chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG,"Received AST_CONTROL_PROGRESS on %s\n",chan->name);
 #ifdef HAVE_PRI
 			p->digital = 0;	/* Digital-only calls isn't allows any inband progress messages */
 			if (!p->progress && p->sig==SIG_PRI && p->pri && !p->outgoing) {
@@ -5084,6 +5400,17 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 						ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->span);
 				}
 				p->progress = 1;
+			}
+#endif
+#ifdef HAVE_SS7
+			if (!p->progress && p->sig==SIG_SS7 && p->ss7 && !p->outgoing) {
+				if (p->ss7->ss7) {
+					ss7_grab(p, p->ss7);
+					isup_cpg(p->ss7->ss7, p->ss7call, CPG_EVENT_INBANDINFO);
+					p->progress = 1;
+					ss7_rel(p->ss7);
+
+				}
 			}
 #endif
 			/* don't continue in ast_indicate */
@@ -5253,7 +5580,8 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 #endif
 	if (features) {
 		if (i->dsp) {
-			ast_log(LOG_DEBUG, "Already have a dsp on %s?\n", tmp->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Already have a dsp on %s?\n", tmp->name);
 		} else {
 			if (i->channel != CHAN_PSEUDO)
 				i->dsp = ast_dsp_new();
@@ -5263,7 +5591,7 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 				i->dsp_features = features & ~DSP_PROGRESS_TALK;
 #ifdef HAVE_PRI
 				/* We cannot do progress detection until receives PROGRESS message */
-				if (i->outgoing && (i->sig == SIG_PRI)) {
+				if (i->outgoing && ((i->sig == SIG_PRI) || (i->sig == SIG_SS7))) {
 					/* Remember requested DSP features, don't treat
 					   talking as ANSWER */
 					features = 0;
@@ -5326,7 +5654,7 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 #endif
 	tmp->cid.cid_pres = i->callingpres;
 	tmp->cid.cid_ton = i->cid_ton;
-#ifdef HAVE_PRI
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
 	tmp->transfercapability = transfercapability;
 	pbx_builtin_setvar_helper(tmp, "TRANSFERCAPABILITY", ast_transfercapability2str(transfercapability));
 	if (transfercapability & PRI_TRANS_CAP_DIGITAL)
@@ -5350,9 +5678,6 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 		}
 	}
 
-	ast_atomic_fetchadd_int(&usecnt, 1);
-	ast_update_use_count();
-	
 	return tmp;
 }
 
@@ -5449,7 +5774,8 @@ static void *ss_thread(void *data)
 				timeout = gendigittimeout;
 			res = ast_waitfordigit(chan, timeout);
 			if (res < 0) {
-				ast_log(LOG_DEBUG, "waitfordigit returned < 0...\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "waitfordigit returned < 0...\n");
 				ast_hangup(chan);
 				return NULL;
 			} else if (res) {
@@ -5477,7 +5803,8 @@ static void *ss_thread(void *data)
 				ast_log(LOG_WARNING, "PBX exited non-zero!\n");
 			}
 		} else {
-			ast_log(LOG_DEBUG, "No such possible extension '%s' in context '%s'\n", exten, chan->context);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "No such possible extension '%s' in context '%s'\n", exten, chan->context);
 			chan->hangupcause = AST_CAUSE_UNALLOCATED;
 			ast_hangup(chan);
 			p->exten[0] = '\0';
@@ -5596,7 +5923,8 @@ static void *ss_thread(void *data)
 					}
 					res = ast_waitfordigit(chan, timeout);
 					if (res < 0) {
-						ast_log(LOG_DEBUG, "waitfordigit returned < 0...\n");
+						if (option_debug)
+							ast_log(LOG_DEBUG, "waitfordigit returned < 0...\n");
 						ast_hangup(chan);
 						return NULL;
 					} else if (res) {
@@ -5614,7 +5942,8 @@ static void *ss_thread(void *data)
 			ast_hangup(chan);
 			return NULL;
 		} else if (res < 0) {
-			ast_log(LOG_DEBUG, "Got hung up before digits finished\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Got hung up before digits finished\n");
 			ast_hangup(chan);
 			return NULL;
 		}
@@ -5771,7 +6100,8 @@ static void *ss_thread(void *data)
 				res = ast_waitfordigit(chan, timeout);
 			timeout = 0;
 			if (res < 0) {
-				ast_log(LOG_DEBUG, "waitfordigit returned < 0...\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "waitfordigit returned < 0...\n");
 				res = tone_zone_play_tone(p->subs[index].zfd, -1);
 				ast_hangup(chan);
 				return NULL;
@@ -5828,7 +6158,8 @@ static void *ss_thread(void *data)
 					timeout = matchdigittimeout;
 				}
 			} else if (res == 0) {
-				ast_log(LOG_DEBUG, "not enough digits (and no ambiguous match)...\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "not enough digits (and no ambiguous match)...\n");
 				res = tone_zone_play_tone(p->subs[index].zfd, ZT_TONE_CONGESTION);
 				zt_wait_event(p->subs[index].zfd);
 				ast_hangup(chan);
@@ -5864,7 +6195,8 @@ static void *ss_thread(void *data)
 					}
 					zt_enable_ec(p);
 					if (ast_pickup_call(chan)) {
-						ast_log(LOG_DEBUG, "No call pickup possible...\n");
+						if (option_debug)
+							ast_log(LOG_DEBUG, "No call pickup possible...\n");
 						res = tone_zone_play_tone(p->subs[index].zfd, ZT_TONE_CONGESTION);
 						zt_wait_event(p->subs[index].zfd);
 					}
@@ -6052,7 +6384,8 @@ static void *ss_thread(void *data)
 						res = 0;
 					ast_frfree(f);
 					if (res) {
-						ast_log(LOG_DEBUG, "Got ring!\n");
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Got ring!\n");
 						res = 0;
 						break;
 					}
@@ -6072,7 +6405,8 @@ static void *ss_thread(void *data)
 				else if (smdi_msg->type == 'N')
 					pbx_builtin_setvar_helper(chan, "_SMDI_VM_TYPE", "u");
 
-				ast_log(LOG_DEBUG, "Recieved SMDI message on %s\n", chan->name);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Recieved SMDI message on %s\n", chan->name);
 			} else {
 				ast_log(LOG_WARNING, "SMDI enabled but no SMDI message present\n");
 			}
@@ -6089,8 +6423,9 @@ static void *ss_thread(void *data)
 			if (p->cid_signalling == CID_SIG_DTMF) {
 				int i = 0;
 				cs = NULL;
-				ast_log(LOG_DEBUG, "Receiving DTMF cid on "
-					"channel %s\n", chan->name);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Receiving DTMF cid on "
+						"channel %s\n", chan->name);
 				zt_setlinear(p->subs[index].zfd, 0);
 				res = 2000;
 				for (;;) {
@@ -6105,7 +6440,8 @@ static void *ss_thread(void *data)
 					f = ast_read(chan);
 					if (f->frametype == AST_FRAME_DTMF) {
 						dtmfbuf[i++] = f->subclass;
-						ast_log(LOG_DEBUG, "CID got digit '%c'\n", f->subclass);
+						if (option_debug)
+							ast_log(LOG_DEBUG, "CID got digit '%c'\n", f->subclass);
 						res = 2000;
 					}
 					ast_frfree(f);
@@ -6116,10 +6452,12 @@ static void *ss_thread(void *data)
 				dtmfbuf[i] = '\0';
 				zt_setlinear(p->subs[index].zfd, p->subs[index].linear);
 				/* Got cid and ring. */
-				ast_log(LOG_DEBUG, "CID got string '%s'\n", dtmfbuf);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "CID got string '%s'\n", dtmfbuf);
 				callerid_get_dtmf(dtmfbuf, dtmfcid, &flags);
-				ast_log(LOG_DEBUG, "CID is '%s', flags %d\n", 
-					dtmfcid, flags);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "CID is '%s', flags %d\n", 
+						dtmfcid, flags);
 				/* If first byte is NULL, we have no cid */
 				if (!ast_strlen_zero(dtmfcid)) 
 					number = dtmfcid;
@@ -6283,17 +6621,26 @@ static void *ss_thread(void *data)
 						if (option_verbose > 2)
 							/* this only shows up if you have n of the dring patterns filled in */
 							ast_verbose( VERBOSE_PREFIX_3 "Detected ring pattern: %d,%d,%d\n",curRingData[0],curRingData[1],curRingData[2]);
-	
 						for (counter = 0; counter < 3; counter++) {
 							/* Check to see if the rings we received match any of the ones in zapata.conf for this
 							channel */
 							distMatches = 0;
 							for (counter1 = 0; counter1 < 3; counter1++) {
-								if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1]+10) && curRingData[counter1] >=
-								(p->drings.ringnum[counter].ring[counter1]-10)) {
+								ast_verbose( VERBOSE_PREFIX_3 "Ring pattern check range: %d\n", p->drings.ringnum[counter].range);
+								if (p->drings.ringnum[counter].ring[counter1] == -1) {
+									ast_verbose( VERBOSE_PREFIX_3 "Pattern ignore (-1) detected, so matching pattern %d regardless.\n",
+									curRingData[counter1]);
+									distMatches++;
+								}
+								else if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range) &&
+								    curRingData[counter1] >= (p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range)) {
+									ast_verbose( VERBOSE_PREFIX_3 "Ring pattern matched in range: %d to %d\n",
+									(p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range),
+									(p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range));
 									distMatches++;
 								}
 							}
+
 							if (distMatches == 3) {
 								/* The ring matches, set the context to whatever is for distinctive ring.. */
 								ast_copy_string(p->context, p->drings.ringContext[counter].contextData, sizeof(p->context));
@@ -6465,8 +6812,17 @@ static void *ss_thread(void *data)
 								p->drings.ringnum[counter].ring[2]);
 						distMatches = 0;
 						for (counter1 = 0; counter1 < 3; counter1++) {
-							if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1]+10) && curRingData[counter1] >=
-							(p->drings.ringnum[counter].ring[counter1]-10)) {
+							ast_verbose( VERBOSE_PREFIX_3 "Ring pattern check range: %d\n", p->drings.ringnum[counter].range);
+							if (p->drings.ringnum[counter].ring[counter1] == -1) {
+								ast_verbose( VERBOSE_PREFIX_3 "Pattern ignore (-1) detected, so matching pattern %d regardless.\n",
+								curRingData[counter1]);
+								distMatches++;
+							}
+							else if (curRingData[counter1] <= (p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range) &&
+							    curRingData[counter1] >= (p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range)) {
+								ast_verbose( VERBOSE_PREFIX_3 "Ring pattern matched in range: %d to %d\n",
+								(p->drings.ringnum[counter].ring[counter1] - p->drings.ringnum[counter].range),
+								(p->drings.ringnum[counter].ring[counter1] + p->drings.ringnum[counter].range));
 								distMatches++;
 							}
 						}
@@ -6685,6 +7041,7 @@ static int handle_init_event(struct zt_pvt *i, int event)
 			zt_set_hook(i->subs[SUB_REAL].zfd, ZT_ONHOOK);
 			break;
 		case SIG_PRI:
+		case SIG_SS7:
 			zt_disable_ec(i);
 			res = tone_zone_play_tone(i->subs[SUB_REAL].zfd, -1);
 			break;
@@ -6737,7 +7094,8 @@ static void *do_monitor(void *data)
 		ast_log(LOG_WARNING, "Unable to set cancel type to asynchronous\n");
 		return NULL;
 	}
-	ast_log(LOG_DEBUG, "Monitor starting...\n");
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Monitor starting...\n");
 #endif
 	for (;;) {
 		/* Lock the interface list */
@@ -6803,7 +7161,8 @@ static void *do_monitor(void *data)
 							res = ast_app_has_voicemail(last->mailbox, NULL);
 							if (last->msgstate != res) {
 								int x;
-								ast_log(LOG_DEBUG, "Message status for %s changed from %d to %d on %d\n", last->mailbox, last->msgstate, res, last->channel);
+								if (option_debug)
+									ast_log(LOG_DEBUG, "Message status for %s changed from %d to %d on %d\n", last->mailbox, last->msgstate, res, last->channel);
 								x = ZT_FLUSH_BOTH;
 								res2 = ioctl(last->subs[SUB_REAL].zfd, ZT_FLUSH, &x);
 								if (res2)
@@ -6972,8 +7331,9 @@ static int pri_resolve_span(int *span, int channel, int offset, struct zt_spanin
 		} else {
 			if (si->totalchans == 31) { /* if it's an E1 */
 				pris[*span].dchannels[0] = 16 + offset;
-			} else {
-				pris[*span].dchannels[0] = 24 + offset;
+			} else { /* T1 or BRI: D Channel is the last Channel */
+				pris[*span].dchannels[0] = 
+					si->totalchans + offset;
 			}
 			pris[*span].dchanavail[0] |= DCHAN_PROVISIONED;
 			pris[*span].offset = offset;
@@ -7058,6 +7418,31 @@ static int pri_create_spanmap(int span, int trunkgroup, int logicalspan)
 }
 
 #endif
+
+#ifdef HAVE_SS7
+
+static unsigned int parse_pointcode(char *pcstring)
+{
+	unsigned int code1, code2, code3;
+	int numvals;
+
+	numvals = sscanf(pcstring, "%d.%d.%d", &code1, &code2, &code3);
+	if (numvals == 1)
+		return code1;
+	if (numvals == 3)
+		return (code1 << 16) | (code2 << 8) | code3;
+
+	return 0;
+}
+
+static struct zt_ss7 * ss7_resolve_linkset(int linkset)
+{
+	if ((linkset < 0) || (linkset >= NUM_SPANS))
+		return NULL;
+	else
+		return &linksets[linkset - 1];
+}
+#endif /* HAVE_SS7 */
 
 static struct zt_pvt *mkintf(int channel, int signalling, int outsignalling, int radio, struct zt_pri *pri, int reloading)
 {
@@ -7152,6 +7537,35 @@ static struct zt_pvt *mkintf(int channel, int signalling, int outsignalling, int
 					return NULL;
 				}
 			}
+#ifdef HAVE_SS7
+			if (signalling == SIG_SS7) {
+				struct zt_ss7 *ss7;
+				int clear = 0;
+				if (ioctl(tmp->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &clear)) {
+					ast_log(LOG_ERROR, "Unable to set clear mode on clear channel %d of span %d: %s\n", channel, p.spanno, strerror(errno));
+					destroy_zt_pvt(&tmp);
+					return NULL;
+				}
+
+				ss7 = ss7_resolve_linkset(cur_linkset);
+				if (!ss7) {
+					ast_log(LOG_ERROR, "Unable to find linkset %d\n", cur_linkset);
+					destroy_zt_pvt(&tmp);
+					return NULL;
+				}
+				if (cur_cicbeginswith < 0) {
+					ast_log(LOG_ERROR, "Need to set cicbeginswith for the channels!\n");
+					destroy_zt_pvt(&tmp);
+					return NULL;
+				}
+
+				tmp->cic = cur_cicbeginswith++;
+
+				tmp->ss7 = ss7;
+				tmp->ss7call = NULL;
+				ss7->pvts[ss7->numchans++] = tmp;
+			}
+#endif
 #ifdef HAVE_PRI
 			if ((signalling == SIG_PRI) || (signalling == SIG_GR303FXOKS) || (signalling == SIG_GR303FXSKS)) {
 				int offset;
@@ -7440,7 +7854,7 @@ static struct zt_pvt *mkintf(int channel, int signalling, int outsignalling, int
 				ast_dsp_digitmode(tmp->dsp, DSP_DIGITMODE_DTMF | tmp->dtmfrelax);
 			update_conf(tmp);
 			if (!here) {
-				if (signalling != SIG_PRI)
+				if ((signalling != SIG_PRI) && (signalling != SIG_SS7))
 					/* Hang it up to be sure it's good */
 					zt_set_hook(tmp->subs[SUB_REAL].zfd, ZT_ONHOOK);
 			}
@@ -7465,7 +7879,13 @@ static struct zt_pvt *mkintf(int channel, int signalling, int outsignalling, int
 		tmp->answeronpolarityswitch = answeronpolarityswitch;
 		tmp->hanguponpolarityswitch = hanguponpolarityswitch;
 		tmp->sendcalleridafter = sendcalleridafter;
-
+		if (!here) {
+			tmp->locallyblocked = tmp->remotelyblocked = 0;
+			if ((signalling == SIG_PRI) || (signalling == SIG_SS7))
+				tmp->inservice = 0;
+			else /* We default to in service on protocols that don't have a reset */
+				tmp->inservice = 1;
+		}
 	}
 	if (tmp && !here) {
 		/* nothing on the iflist */
@@ -7542,6 +7962,9 @@ static inline int available(struct zt_pvt *p, int channelmatch, int groupmatch, 
 	/* If guard time, definitely not */
 	if (p->guardtime && (time(NULL) < p->guardtime)) 
 		return 0;
+
+	if (p->locallyblocked || p->remotelyblocked)
+		return 0;
 		
 	/* If no owner definitely available */
 	if (!p->owner) {
@@ -7549,6 +7972,15 @@ static inline int available(struct zt_pvt *p, int channelmatch, int groupmatch, 
 		/* Trust PRI */
 		if (p->pri) {
 			if (p->resetting || p->call)
+				return 0;
+			else
+				return 1;
+		}
+#endif
+#ifdef HAVE_SS7
+		/* Trust SS7 */
+		if (p->ss7) {
+			if (p->ss7call)
 				return 0;
 			else
 				return 1;
@@ -7583,7 +8015,8 @@ static inline int available(struct zt_pvt *p, int channelmatch, int groupmatch, 
 					return 1;
 #endif
 			} else if (par.rxisoffhook) {
-				ast_log(LOG_DEBUG, "Channel %d off hook, can't use\n", p->channel);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Channel %d off hook, can't use\n", p->channel);
 				/* Not available when the other end is off hook */
 				return 0;
 			}
@@ -7667,8 +8100,9 @@ static int pri_find_empty_chan(struct zt_pri *pri, int backwards)
 		if (!backwards && (x >= pri->numchans))
 			break;
 		if (pri->pvts[x] && !pri->pvts[x]->inalarm && !pri->pvts[x]->owner) {
-			ast_log(LOG_DEBUG, "Found empty available channel %d/%d\n", 
-				pri->pvts[x]->logicalspan, pri->pvts[x]->prioffset);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Found empty available channel %d/%d\n", 
+					pri->pvts[x]->logicalspan, pri->pvts[x]->prioffset);
 			return x;
 		}
 		if (backwards)
@@ -7820,8 +8254,10 @@ static struct ast_channel *zt_request(const char *type, int format, void *data, 
 						ast_log(LOG_NOTICE, "Failed to allocate place holder pseudo channel!\n");
 						p = NULL;
 						break;
-					} else
-						ast_log(LOG_DEBUG, "Allocated placeholder pseudo channel\n");
+					} else {
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Allocated placeholder pseudo channel\n");
+					}
 					p->pri = pri;
 				}
 			}
@@ -7901,6 +8337,495 @@ next:
 	return tmp;
 }
 
+#ifdef HAVE_SS7
+static int zt_setlaw(int zfd, int law);
+
+static int ss7_find_cic(struct zt_ss7 *linkset, int cic)
+{
+	int i;
+	int winner = -1;
+	for (i = 0; i < linkset->numchans; i++) {
+		if (linkset->pvts[i] && (linkset->pvts[i]->cic == cic)) {
+			winner = i;
+		}
+	}
+	return winner;
+}
+
+static inline void ss7_block_cics(struct zt_ss7 *linkset, int startcic, int endcic, unsigned char state[], int block)
+{
+	int i;
+
+	for (i = 0; i < linkset->numchans; i++) {
+		if (linkset->pvts[i] && ((linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic))) {
+			if (state) {
+				if (state[i])
+					linkset->pvts[i]->remotelyblocked = block;
+			} else
+				linkset->pvts[i]->remotelyblocked = block;
+		}
+	}
+}
+
+static void ss7_inservice(struct zt_ss7 *linkset, int startcic, int endcic)
+{
+	int i;
+
+	for (i = 0; i < linkset->numchans; i++) {
+		if (linkset->pvts[i] && (linkset->pvts[i]->cic >= startcic) && (linkset->pvts[i]->cic <= endcic))
+			linkset->pvts[i]->inservice = 1;
+	}
+}
+
+static void ss7_reset_linkset(struct zt_ss7 *linkset)
+{
+	int i, startcic = -1, endcic;
+
+	if (linkset->numchans <= 0)
+		return;
+
+	startcic = linkset->pvts[0]->cic;
+
+	for (i = 0; i < linkset->numchans; i++) {
+		if (linkset->pvts[i+1] && ((linkset->pvts[i+1]->cic - linkset->pvts[i]->cic) == 1) && (linkset->pvts[i]->cic - startcic < 31)) {
+			continue;
+		} else {
+			endcic = linkset->pvts[i]->cic;
+			ast_verbose("Resetting CICs %d to %d\n", startcic, endcic);
+			isup_grs(linkset->ss7, startcic, endcic);
+
+			if (linkset->pvts[i+1])
+				startcic = linkset->pvts[i+1]->cic;
+		}
+	}
+}
+
+static void zt_loopback(struct zt_pvt *p, int enable)
+{
+	if (ioctl(p->subs[SUB_REAL].zfd, ZT_LOOPBACK, &enable)) {
+		ast_log(LOG_WARNING, "Unable to set loopback on channel %d\n", p->channel);
+		return;
+	}
+}
+
+static void ss7_start_call(struct zt_pvt *p, struct zt_ss7 *linkset)
+{
+	struct ss7 *ss7 = linkset->ss7;
+	int res;
+	int law = 1;
+	struct ast_channel *c;
+
+	if (ioctl(p->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &law) == -1)
+		ast_log(LOG_WARNING, "Unable to set audio mode on channel %d to %d\n", p->channel, law);
+	
+	if (linkset->type == SS7_ITU)
+		law = ZT_LAW_ALAW;
+	else
+		law = ZT_LAW_MULAW;
+
+	res = zt_setlaw(p->subs[SUB_REAL].zfd, law);
+	if (res < 0) 
+		ast_log(LOG_WARNING, "Unable to set law on channel %d\n", p->channel);
+	
+	p->proceeding = 1;
+	isup_acm(ss7, p->ss7call);
+
+	ast_mutex_unlock(&linkset->lock);
+	c = zt_new(p, AST_STATE_RING, 1, SUB_REAL, law, 0);
+	ast_mutex_lock(&linkset->lock);
+	if (c)
+		ast_verbose(VERBOSE_PREFIX_3 "Accepting call to '%s' on CIC %d\n", p->exten, p->cic);
+	else
+		ast_log(LOG_WARNING, "Unable to start PBX on CIC %d\n", p->cic);
+}
+
+static void *ss7_linkset(void *data)
+{
+	int res, i;
+	struct timeval *next = NULL, tv;
+	struct zt_ss7 *linkset = (struct zt_ss7 *) data;
+	struct ss7 *ss7 = linkset->ss7;
+	ss7_event *e = NULL;
+	struct zt_pvt *p;
+	int chanpos;
+	pthread_attr_t attr;
+	struct pollfd pollers[NUM_DCHANS];
+	int cic;
+	int nextms = 0;
+
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+	ss7_start(ss7);
+
+	while(1) {
+		ast_mutex_lock(&linkset->lock);
+		if ((next = ss7_schedule_next(ss7))) {
+			gettimeofday(&tv, NULL);
+			tv.tv_sec = next->tv_sec - tv.tv_sec;
+			tv.tv_usec = next->tv_usec - tv.tv_usec;
+			if (tv.tv_usec < 0) {
+				tv.tv_usec += 1000000;
+				tv.tv_sec -= 1;
+			}
+			if (tv.tv_sec < 0) {
+				tv.tv_sec = 0;
+				tv.tv_usec = 0;
+			}
+			nextms = tv.tv_sec * 1000;
+			nextms += tv.tv_usec / 1000;
+		}
+		ast_mutex_unlock(&linkset->lock);
+
+		for (i = 0; i < linkset->numsigchans; i++) {
+			pollers[i].fd = linkset->fds[i];
+			pollers[i].events = POLLIN | POLLOUT | POLLPRI;
+			pollers[i].revents = 0;
+		}
+
+		res = poll(pollers, linkset->numsigchans, nextms);
+		if ((res < 0) && (errno != EINTR)) {
+			ast_log(LOG_ERROR, "poll(%s)\n", strerror(errno));
+		} else if (!res) {
+			ast_mutex_lock(&linkset->lock);
+			ss7_schedule_run(ss7);
+			ast_mutex_unlock(&linkset->lock);
+			continue;
+		}
+
+		ast_mutex_lock(&linkset->lock);
+		for (i = 0; i < linkset->numsigchans; i++) {
+			if (pollers[i].revents & POLLPRI) {
+				int x;
+				if (ioctl(pollers[i].fd, ZT_GETEVENT, &x)) {
+					ast_log(LOG_ERROR, "Error in exception retrieval!\n");
+				}
+				switch (x) {
+				case ZT_EVENT_OVERRUN:
+					ast_log(LOG_DEBUG, "Overrun detected!\n");
+					break;
+				case ZT_EVENT_BADFCS:
+					ast_log(LOG_DEBUG, "Bad FCS\n");
+					break;
+				case ZT_EVENT_ABORT:
+					ast_log(LOG_DEBUG, "HDLC Abort\n");
+					break;
+				case ZT_EVENT_ALARM:
+					ast_log(LOG_ERROR, "Alarm on link!\n");
+					linkset->linkstate[i] |= (LINKSTATE_DOWN | LINKSTATE_INALARM);
+					linkset->linkstate[i] &= ~LINKSTATE_UP;
+					ss7_link_alarm(ss7, pollers[i].fd);
+					break;
+				case ZT_EVENT_NOALARM:
+					ast_log(LOG_ERROR, "Alarm cleared on link\n");
+					linkset->linkstate[i] &= ~(LINKSTATE_INALARM | LINKSTATE_DOWN);
+					linkset->linkstate[i] |= LINKSTATE_STARTING;
+					ss7_link_noalarm(ss7, pollers[i].fd);
+					break;
+				default:
+					ast_log(LOG_ERROR, "Got exception %d!\n", x);
+					break;
+				}
+			}
+
+			if (pollers[i].revents & POLLIN)
+				res = ss7_read(ss7, pollers[i].fd);
+			if (pollers[i].revents & POLLOUT) {
+				res = ss7_write(ss7, pollers[i].fd);
+				if (res < 0) {
+					ast_log(LOG_ERROR, "Error in write %s", strerror(errno));
+				}
+			}
+		}
+
+#if 0
+		if (res < 0)
+			exit(-1);
+#endif
+
+		while ((e = ss7_check_event(ss7))) {
+			switch (e->e) {
+			case SS7_EVENT_UP:
+				ast_verbose("--- SS7 Up ---\n");
+				if (linkset->state != LINKSET_STATE_UP)
+					ss7_reset_linkset(linkset);
+				linkset->state = LINKSET_STATE_UP;
+				break;
+			case SS7_EVENT_DOWN:
+				ast_verbose("--- SS7 Down ---\n");
+				linkset->state = LINKSET_STATE_DOWN;
+				for (i = 0; i < linkset->numchans; i++) {
+					struct zt_pvt *p = linkset->pvts[i];
+					if (p)
+						p->inalarm = 1;
+				}
+				break;
+			case MTP2_LINK_UP:
+				ast_log(LOG_DEBUG, "MTP2 link up\n");
+				break;
+			case ISUP_EVENT_CPG:
+				chanpos = ss7_find_cic(linkset, e->cpg.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "CPG on unconfigured CIC %d\n", e->cpg.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_mutex_lock(&p->lock);
+				switch (e->cpg.event) {
+				case CPG_EVENT_ALERTING:
+					p->alerting = 1;
+					p->subs[SUB_REAL].needringing = 1;
+					break;
+				case CPG_EVENT_PROGRESS:
+				case CPG_EVENT_INBANDINFO:
+					{
+						struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_PROGRESS, };
+						ast_log(LOG_DEBUG, "Queuing frame PROGRESS on CIC %d\n", p->cic);
+						zap_queue_frame(p, &f, ss7);
+						p->progress = 1;
+					}
+					break;
+				default:
+					ast_log(LOG_DEBUG, "Do not handle CPG with event type 0x%x\n", e->cpg.event);
+				}
+
+				ast_mutex_unlock(&p->lock);
+				break;
+			case ISUP_EVENT_RSC:
+				ast_verbose("Resetting CIC %d\n", e->rsc.cic);
+				chanpos = ss7_find_cic(linkset, e->rsc.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "RSC on unconfigured CIC %d\n", e->rsc.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_mutex_lock(&p->lock);
+				p->inservice = 1;
+				p->remotelyblocked = 0;
+				ast_mutex_unlock(&p->lock);
+				isup_rlc(ss7, e->rsc.call);
+				break;
+			case ISUP_EVENT_GRS:
+				ast_log(LOG_DEBUG, "Got Reset for CICs %d to %d: Acknowledging\n", e->grs.startcic, e->grs.endcic);
+				isup_gra(ss7, e->grs.startcic, e->grs.endcic);
+				ss7_block_cics(linkset, e->grs.startcic, e->grs.endcic, NULL, 0);
+				break;
+			case ISUP_EVENT_GRA:
+				ast_verbose("Got reset acknowledgement from CIC %d to %d.\n", e->gra.startcic, e->gra.endcic);
+				ss7_inservice(linkset, e->gra.startcic, e->gra.endcic);
+				ss7_block_cics(linkset, e->gra.startcic, e->gra.endcic, e->gra.status, 1);
+				break;
+			case ISUP_EVENT_IAM:
+				ast_log(LOG_DEBUG, "Got IAM for CIC %d and number %s\n", e->iam.cic, e->iam.called_party_num);
+				chanpos = ss7_find_cic(linkset, e->iam.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "IAM on unconfigured CIC %d\n", e->iam.cic);
+					isup_rel(ss7, e->iam.call, -1);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_mutex_lock(&p->lock);
+				if (p->owner) {
+					if (p->ss7call == e->iam.call) {
+						ast_mutex_unlock(&p->lock);
+						ast_log(LOG_WARNING, "Duplicate IAM requested on CIC %d\n", e->iam.cic);
+						break;
+					} else {
+						ast_mutex_unlock(&p->lock);
+						ast_log(LOG_WARNING, "Ring requested on CIC %d already in use!\n", e->iam.cic);
+						break;
+					}
+				}
+
+				p->ss7call = e->iam.call;
+
+				if (p->use_callerid)
+					ast_copy_string(p->cid_num, e->iam.calling_party_num, sizeof(p->cid_num));
+				else
+					p->cid_num[0] = 0;
+
+				if (p->immediate) {
+					p->exten[0] = 's';
+					p->exten[1] = '\0';
+				} else if (!ast_strlen_zero(e->iam.called_party_num)) {
+					char *st;
+					ast_copy_string(p->exten, e->iam.called_party_num, sizeof(p->exten));
+					st = strchr(p->exten, '#');
+					if (st)
+						*st = '\0';
+				} else
+					p->exten[0] = '\0';
+
+				/* Need to fill these fields */
+				p->cid_ani[0] = '\0';
+				p->cid_name[0] = '\0';
+				p->cid_ton = 0;
+				/* Set DNID */
+				if (!ast_strlen_zero(e->iam.called_party_num))
+					ast_copy_string(p->dnid, e->iam.called_party_num, sizeof(p->exten));
+
+				if (ast_exists_extension(NULL, p->context, p->exten, 1, p->cid_num)) {
+
+					if (e->iam.cot_check_required) {
+						zt_loopback(p, 1);
+					} else
+						ss7_start_call(p, linkset);
+				} else {
+					ast_log(LOG_DEBUG, "Call on CIC for unconfigured extension %s\n", p->exten);
+					isup_rel(ss7, e->iam.call, -1);
+				}
+				ast_mutex_unlock(&p->lock);
+				break;
+			case ISUP_EVENT_COT:
+				chanpos = ss7_find_cic(linkset, e->cot.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "COT on unconfigured CIC %d\n", e->cot.cic);
+					isup_rel(ss7, e->cot.call, -1);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+
+				zt_loopback(p, 0);
+				
+				ss7_start_call(p, linkset);
+				break;
+			case ISUP_EVENT_REL:
+				chanpos = ss7_find_cic(linkset, e->rel.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "REL on unconfigured CIC %d\n", e->rel.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_mutex_lock(&p->lock);
+				if (p->owner)
+					ast_queue_hangup(p->owner);
+				else
+					ast_log(LOG_WARNING, "REL on channel (CIC %d) without owner!\n", p->cic);
+
+				isup_rlc(ss7, e->rel.call);
+				p->ss7call = NULL;
+
+				ast_mutex_unlock(&p->lock);
+				break;
+			case ISUP_EVENT_ACM:
+				chanpos = ss7_find_cic(linkset, e->acm.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "ACM on unconfigured CIC %d\n", e->acm.cic);
+					isup_rel(ss7, e->acm.call, -1);
+					break;
+				} else {
+					struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_PROCEEDING, };
+
+					p = linkset->pvts[chanpos];
+
+					ast_log(LOG_DEBUG, "Queueing frame from SS7_EVENT_ACM on CIC %d\n", p->cic);
+
+					ast_mutex_lock(&p->lock);
+					zap_queue_frame(p, &f, linkset);
+					p->proceeding = 1;
+
+					ast_mutex_unlock(&p->lock);
+				}
+				break;
+			case ISUP_EVENT_CGB:
+				ss7_block_cics(linkset, e->cgb.startcic, e->cgb.endcic, e->cgb.status, 1);
+				isup_cgba(linkset->ss7, e->cgb.startcic, e->cgb.endcic, e->cgb.status);
+				break;
+			case ISUP_EVENT_CGU:
+				ss7_block_cics(linkset, e->cgu.startcic, e->cgu.endcic, e->cgb.status, 0);
+				isup_cgua(linkset->ss7, e->cgu.startcic, e->cgu.endcic, e->cgb.status);
+				break;
+			case ISUP_EVENT_BLO:
+				chanpos = ss7_find_cic(linkset, e->blo.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "BLO on unconfigured CIC %d\n", e->blo.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_log(LOG_DEBUG, "Blocking CIC %d\n", e->blo.cic);
+				ast_mutex_lock(&p->lock);
+				p->remotelyblocked = 1;
+				ast_mutex_unlock(&p->lock);
+				isup_bla(linkset->ss7, e->blo.cic);
+				break;
+			case ISUP_EVENT_UBL:
+				chanpos = ss7_find_cic(linkset, e->ubl.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "UBL on unconfigured CIC %d\n", e->ubl.cic);
+					break;
+				}
+				p = linkset->pvts[chanpos];
+				ast_log(LOG_DEBUG, "Unblocking CIC %d\n", e->ubl.cic);
+				ast_mutex_lock(&p->lock);
+				p->remotelyblocked = 0;
+				ast_mutex_unlock(&p->lock);
+				isup_uba(linkset->ss7, e->ubl.cic);
+				break;
+			case ISUP_EVENT_CON:
+			case ISUP_EVENT_ANM:
+				if (e->e == ISUP_EVENT_CON)
+					cic = e->con.cic;
+				else
+					cic = e->anm.cic;
+
+				chanpos = ss7_find_cic(linkset, cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "ANM/CON on unconfigured CIC %d\n", cic);
+					isup_rel(ss7, (e->e == ISUP_EVENT_ANM) ? e->anm.call : e->con.call, -1);
+					break;
+				} else {
+					p = linkset->pvts[chanpos];
+					ast_mutex_lock(&p->lock);
+					p->subs[SUB_REAL].needanswer = 1;
+					zt_enable_ec(p);
+					ast_mutex_unlock(&p->lock);
+				}
+				break;
+			case ISUP_EVENT_RLC:
+				chanpos = ss7_find_cic(linkset, e->rlc.cic);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "RLC on unconfigured CIC %d\n", e->rlc.cic);
+					break;
+				} else {
+					p = linkset->pvts[chanpos];
+					ast_mutex_lock(&p->lock);
+					p->ss7call = NULL;
+					ast_mutex_unlock(&p->lock);
+				}
+				break;
+			default:
+				ast_log(LOG_DEBUG, "Unknown event %s\n", ss7_event2str(e->e));
+				break;
+			}
+		}
+		ast_mutex_unlock(&linkset->lock);
+	}
+
+	return 0;
+}
+
+static void zt_ss7_message(struct ss7 *ss7, char *s)
+{
+	int i;
+
+	for (i = 0; i < NUM_SPANS; i++)
+		if (linksets[i].ss7 == ss7)
+			break;
+
+	ast_verbose("[%d] %s", i+1, s);
+}
+
+static void zt_ss7_error(struct ss7 *ss7, char *s)
+{
+	int i;
+
+	for (i = 0; i < NUM_SPANS; i++)
+		if (linksets[i].ss7 == ss7)
+			break;
+
+	ast_log(LOG_ERROR, "[%d] %s", i+1, s);
+}
+#endif /* HAVE_SS7 */
 
 #ifdef HAVE_PRI
 static struct zt_pvt *pri_find_crv(struct zt_pri *pri, int crv)
@@ -8007,9 +8932,10 @@ static int pri_fixup_principle(struct zt_pri *pri, int principle, q931_call *c)
 				zt_close(crv->subs[SUB_REAL].zfd);
 				pri->pvts[principle]->call = crv->call;
 				pri_assign_bearer(crv, pri, pri->pvts[principle]);
-				ast_log(LOG_DEBUG, "Assigning bearer %d/%d to CRV %d:%d\n",
-									pri->pvts[principle]->logicalspan, pri->pvts[principle]->prioffset,
-									pri->trunkgroup, crv->channel);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Assigning bearer %d/%d to CRV %d:%d\n",
+										pri->pvts[principle]->logicalspan, pri->pvts[principle]->prioffset,
+										pri->trunkgroup, crv->channel);
 				wakeup_sub(crv, SUB_REAL, pri);
 			}
 			return principle;
@@ -8747,7 +9673,8 @@ static void *pri_dchannel(void *vpri)
 								pri_assign_bearer(crv, pri, pri->pvts[chanpos]);
 								c = zt_new(crv, AST_STATE_RESERVED, 0, SUB_REAL, law, e->ring.ctype);
 								pri->pvts[chanpos]->owner = &inuse;
-								ast_log(LOG_DEBUG, "Started up crv %d:%d on bearer channel %d\n", pri->trunkgroup, crv->channel, crv->bearer->channel);
+								if (option_debug)
+									ast_log(LOG_DEBUG, "Started up crv %d:%d on bearer channel %d\n", pri->trunkgroup, crv->channel, crv->bearer->channel);
 							} else {
 								c = zt_new(pri->pvts[chanpos], AST_STATE_RESERVED, 0, SUB_REAL, law, e->ring.ctype);
 							}
@@ -8852,8 +9779,10 @@ static void *pri_dchannel(void *vpri)
 							zt_enable_ec(pri->pvts[chanpos]);
 							pri->pvts[chanpos]->subs[SUB_REAL].needringing = 1;
 							pri->pvts[chanpos]->alerting = 1;
-						} else
-							ast_log(LOG_DEBUG, "Deferring ringing notification because of extra digits to dial...\n");
+						} else {
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Deferring ringing notification because of extra digits to dial...\n");
+						}
 #ifdef PRI_PROGRESS_MASK
 						if (e->ringing.progressmask & PRI_PROG_INBAND_AVAILABLE) {
 #else
@@ -8905,8 +9834,9 @@ static void *pri_dchannel(void *vpri)
 						}
 						
 						ast_mutex_lock(&pri->pvts[chanpos]->lock);
-						ast_log(LOG_DEBUG, "Queuing frame from PRI_EVENT_PROGRESS on channel %d/%d span %d\n",
-								pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset,pri->span);
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Queuing frame from PRI_EVENT_PROGRESS on channel %d/%d span %d\n",
+									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset,pri->span);
 						zap_queue_frame(pri->pvts[chanpos], &f, pri);
 #ifdef PRI_PROGRESS_MASK
 						if (e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE) {
@@ -8931,8 +9861,9 @@ static void *pri_dchannel(void *vpri)
 						struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_PROCEEDING, };
 						
 						ast_mutex_lock(&pri->pvts[chanpos]->lock);
-						ast_log(LOG_DEBUG, "Queuing frame from PRI_EVENT_PROCEEDING on channel %d/%d span %d\n",
-								pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset,pri->span);
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Queuing frame from PRI_EVENT_PROCEEDING on channel %d/%d span %d\n",
+									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset,pri->span);
 						zap_queue_frame(pri->pvts[chanpos], &f, pri);
 #ifdef PRI_PROGRESS_MASK
 						if (e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE) {
@@ -8996,7 +9927,8 @@ static void *pri_dchannel(void *vpri)
 							pri->pvts[chanpos]->dsp_features = 0;
 						}
 						if (pri->pvts[chanpos]->realcall && (pri->pvts[chanpos]->realcall->sig == SIG_FXSKS)) {
-							ast_log(LOG_DEBUG, "Starting up GR-303 trunk now that we got CONNECT...\n");
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Starting up GR-303 trunk now that we got CONNECT...\n");
 							x = ZT_START;
 							res = ioctl(pri->pvts[chanpos]->subs[SUB_REAL].zfd, ZT_HOOK, &x);
 							if (res < 0) {
@@ -9011,11 +9943,14 @@ static void *pri_dchannel(void *vpri)
 							if (res < 0) {
 								ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", pri->pvts[chanpos]->channel);
 								pri->pvts[chanpos]->dop.dialstr[0] = '\0';
-							} else 
-								ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", pri->pvts[chanpos]->dop.dialstr);
+							} else {
+								if (option_debug)
+									ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", pri->pvts[chanpos]->dop.dialstr);
+							}
 							pri->pvts[chanpos]->dop.dialstr[0] = '\0';
 						} else if (pri->pvts[chanpos]->confirmanswer) {
-							ast_log(LOG_DEBUG, "Waiting on answer confirmation on channel %d!\n", pri->pvts[chanpos]->channel);
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Waiting on answer confirmation on channel %d!\n", pri->pvts[chanpos]->channel);
 						} else {
 							pri->pvts[chanpos]->subs[SUB_REAL].needanswer =1;
 							/* Enable echo cancellation if it's not on already */
@@ -9197,8 +10132,9 @@ static void *pri_dchannel(void *vpri)
 						if (pri->pvts[x] && pri->pvts[x]->resetting) {
 							chanpos = x;
 							ast_mutex_lock(&pri->pvts[chanpos]->lock);
-							ast_log(LOG_DEBUG, "Assuming restart ack is really for channel %d/%d span %d\n", pri->pvts[chanpos]->logicalspan, 
-									pri->pvts[chanpos]->prioffset, pri->span);
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Assuming restart ack is really for channel %d/%d span %d\n", pri->pvts[chanpos]->logicalspan, 
+										pri->pvts[chanpos]->prioffset, pri->span);
 							if (pri->pvts[chanpos]->realcall) 
 								pri_hangup_all(pri->pvts[chanpos]->realcall, pri);
 							else if (pri->pvts[chanpos]->owner) {
@@ -9231,6 +10167,7 @@ static void *pri_dchannel(void *vpri)
 							pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 						}
 						pri->pvts[chanpos]->resetting = 0;
+						pri->pvts[chanpos]->inservice = 1;
 						if (option_verbose > 2)
 							ast_verbose(VERBOSE_PREFIX_3 "B-channel %d/%d successfully restarted on span %d\n", pri->pvts[chanpos]->logicalspan, 
 									pri->pvts[chanpos]->prioffset, pri->span);
@@ -9252,7 +10189,8 @@ static void *pri_dchannel(void *vpri)
 						pri->pvts[chanpos]->setup_ack = 1;
 						/* Send any queued digits */
 						for (x = 0;x < strlen(pri->pvts[chanpos]->dialdest); x++) {
-							ast_log(LOG_DEBUG, "Sending pending digit '%c'\n", pri->pvts[chanpos]->dialdest[x]);
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Sending pending digit '%c'\n", pri->pvts[chanpos]->dialdest[x]);
 							pri_information(pri->pri, pri->pvts[chanpos]->call, 
 								pri->pvts[chanpos]->dialdest[x]);
 						}
@@ -9283,7 +10221,8 @@ static void *pri_dchannel(void *vpri)
 				}
 				break;
 			default:
-				ast_log(LOG_DEBUG, "Event: %d\n", e->e);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Event: %d\n", e->e);
 			}
 		}	
 		ast_mutex_unlock(&pri->lock);
@@ -9755,10 +10694,12 @@ static int action_zaprestart(struct mansession *s, struct message *m)
 
 static int zap_show_channels(int fd, int argc, char **argv)
 {
-#define FORMAT "%7s %-10.10s %-15.15s %-10.10s %-20.20s\n"
-#define FORMAT2 "%7s %-10.10s %-15.15s %-10.10s %-20.20s\n"
+#define FORMAT "%7s %-10.10s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s\n"
+#define FORMAT2 "%7s %-10.10s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s\n"
 	struct zt_pvt *tmp = NULL;
 	char tmps[20] = "";
+	char statestr[20] = "";
+	char blockstr[20] = "";
 	ast_mutex_t *lock;
 	struct zt_pvt *start;
 #ifdef HAVE_PRI
@@ -9794,9 +10735,9 @@ static int zap_show_channels(int fd, int argc, char **argv)
 
 	ast_mutex_lock(lock);
 #ifdef HAVE_PRI
-	ast_cli(fd, FORMAT2, pri ? "CRV" : "Chan", "Extension", "Context", "Language", "MOH Interpret");
+	ast_cli(fd, FORMAT2, pri ? "CRV" : "Chan", "Extension", "Context", "Language", "MOH Interpret", "Blocked", "State");
 #else
-	ast_cli(fd, FORMAT2, "Chan", "Extension", "Context", "Language", "MOH Interpret");
+	ast_cli(fd, FORMAT2, "Chan", "Extension", "Context", "Language", "MOH Interpret", "Blocked", "State");
 #endif	
 	
 	tmp = start;
@@ -9805,7 +10746,22 @@ static int zap_show_channels(int fd, int argc, char **argv)
 			snprintf(tmps, sizeof(tmps), "%d", tmp->channel);
 		} else
 			ast_copy_string(tmps, "pseudo", sizeof(tmps));
-		ast_cli(fd, FORMAT, tmps, tmp->exten, tmp->context, tmp->language, tmp->mohinterpret);
+
+		if (tmp->locallyblocked)
+			blockstr[0] = 'L';
+		else
+			blockstr[0] = ' ';
+
+		if (tmp->remotelyblocked)
+			blockstr[1] = 'R';
+		else
+			blockstr[1] = ' ';
+
+		blockstr[2] = '\0';
+
+		snprintf(statestr, sizeof(statestr), "%s", tmp->inservice ? "In Service" : "Out of Service");
+
+		ast_cli(fd, FORMAT, tmps, tmp->exten, tmp->context, tmp->language, tmp->mohinterpret, blockstr, statestr);
 		tmp = tmp->next;
 	}
 	ast_mutex_unlock(lock);
@@ -9899,6 +10855,11 @@ static int zap_show_channel(int fd, int argc, char **argv)
 				if (tmp->slaves[x])
 					ast_cli(fd, "Slave Channel: %d\n", tmp->slaves[x]->channel);
 			}
+#ifdef HAVE_SS7
+			if (tmp->ss7) {
+				ast_cli(fd, "CIC: %d\n", tmp->cic);
+			}
+#endif
 #ifdef HAVE_PRI
 			if (tmp->pri) {
 				ast_cli(fd, "PRI Flags: ");
@@ -10036,23 +10997,23 @@ static int zap_show_status(int fd, int argc, char *argv[]) {
 #undef FORMAT2
 }
 
-static char show_channels_usage[] =
+static const char show_channels_usage[] =
 	"Usage: zap show channels\n"
 	"	Shows a list of available channels\n";
 
-static char show_channel_usage[] =
+static const char show_channel_usage[] =
 	"Usage: zap show channel <chan num>\n"
 	"	Detailed information about a given channel\n";
 
-static char zap_show_status_usage[] =
+static const char zap_show_status_usage[] =
 	"Usage: zap show status\n"
 	"       Shows a list of Zaptel cards with status\n";
 
-static char destroy_channel_usage[] =
+static const char destroy_channel_usage[] =
 	"Usage: zap destroy channel <chan num>\n"
 	"	DON'T USE THIS UNLESS YOU KNOW WHAT YOU ARE DOING.  Immediately removes a given channel, whether it is in use or not\n";
 
-static char zap_restart_usage[] =
+static const char zap_restart_usage[] =
 	"Usage: zap restart\n"
 	"	Restarts the zaptel channels: destroys them all and then\n"
 	"	re-reads them from zapata.conf.\n"
@@ -10330,16 +11291,348 @@ static int __unload_module(void)
 		zt_close(pris[i].fds[i]);
 	}
 #endif
+#ifdef HAVE_SS7
+	for (i = 0; i < NUM_SPANS; i++) {
+		if (linksets[i].master && (linksets[i].master != AST_PTHREADT_NULL))
+			pthread_join(linksets[i].master, NULL);
+		zt_close(linksets[i].fds[i]);
+	}
+#endif /* HAVE_SS7 */
 	return 0;
 }
 
+#ifdef HAVE_SS7
+static int linkset_addsigchan(int sigchan)
+{
+	struct zt_ss7 *link;
+	int res;
+	int curfd;
+	ZT_PARAMS p;
+	ZT_BUFFERINFO bi;
+	struct zt_spaninfo si;
+
+
+	link = ss7_resolve_linkset(cur_linkset);
+	if (!link) {
+		ast_log(LOG_ERROR, "Invalid linkset number.  Must be between 1 and %d\n", NUM_SPANS + 1);
+		return -1;
+	}
+
+	if (cur_ss7type < 0) {
+		ast_log(LOG_ERROR, "Unspecified or invalid ss7type\n");
+		return -1;
+	}
+
+	if (!link->ss7)
+		link->ss7 = ss7_new(cur_ss7type);
+
+	if (!link->ss7) {
+		ast_log(LOG_ERROR, "Can't create new SS7!\n");
+		return -1;
+	}
+
+	link->type = cur_ss7type;
+
+	if (cur_pointcode < 0) {
+		ast_log(LOG_ERROR, "Unspecified pointcode!\n");
+		return -1;
+	} else
+		ss7_set_pc(link->ss7, cur_pointcode);
+
+	if (sigchan < 0) {
+		ast_log(LOG_ERROR, "Invalid sigchan!\n");
+		return -1;
+	} else {
+		if (link->numsigchans >= NUM_DCHANS) {
+			ast_log(LOG_ERROR, "Too many sigchans on linkset %d\n", cur_linkset);
+			return -1;
+		}
+		curfd = link->numsigchans;
+
+		link->fds[curfd] = open("/dev/zap/channel", O_RDWR, 0600);
+		if ((link->fds[curfd] < 0) || (ioctl(link->fds[curfd],ZT_SPECIFY,&sigchan) == -1)) {
+			ast_log(LOG_ERROR, "Unable to open SS7 sigchan %d (%s)\n", sigchan, strerror(errno));
+			return -1;
+		}
+		res = ioctl(link->fds[curfd], ZT_GET_PARAMS, &p);
+		if (res) {
+			zt_close(link->fds[curfd]);
+			link->fds[curfd] = -1;
+			ast_log(LOG_ERROR, "Unable to get parameters for sigchan %d (%s)\n", sigchan, strerror(errno));
+			return -1;
+		}
+		if ((p.sigtype != ZT_SIG_HDLCFCS) && (p.sigtype != ZT_SIG_HARDHDLC)) {
+			zt_close(link->fds[curfd]);
+			link->fds[curfd] = -1;
+			ast_log(LOG_ERROR, "sigchan %d is not in HDLC/FCS mode.  See /etc/zaptel.conf\n", sigchan);
+			return -1;
+		}
+
+		bi.txbufpolicy = ZT_POLICY_IMMEDIATE;
+		bi.rxbufpolicy = ZT_POLICY_IMMEDIATE;
+		bi.numbufs = 32;
+		bi.bufsize = 512;
+
+		if (ioctl(link->fds[curfd], ZT_SET_BUFINFO, &bi)) {
+			ast_log(LOG_ERROR, "Unable to set appropriate buffering on channel %d\n", sigchan);
+			zt_close(link->fds[curfd]);
+			link->fds[curfd] = -1;
+			return -1;
+		}
+
+		ss7_add_link(link->ss7, link->fds[curfd]);
+		link->numsigchans++;
+
+		memset(&si, 0, sizeof(si));
+		res = ioctl(link->fds[curfd], ZT_SPANSTAT, &si);
+		if (res) {
+			zt_close(link->fds[curfd]);
+			link->fds[curfd] = -1;
+			ast_log(LOG_ERROR, "Unable to get span state for sigchan %d (%s)\n", sigchan, strerror(errno));
+		}
+
+		if (!si.alarms) {
+			link->linkstate[curfd] = LINKSTATE_DOWN;
+			ss7_link_noalarm(link->ss7, link->fds[curfd]);
+		} else {
+			link->linkstate[curfd] = LINKSTATE_DOWN | LINKSTATE_INALARM;
+			ss7_link_alarm(link->ss7, link->fds[curfd]);
+		}
+	}
+
+	if (cur_adjpointcode < 0) {
+		ast_log(LOG_ERROR, "Unspecified adjpointcode!\n");
+		return -1;
+	} else {
+		ss7_set_adjpc(link->ss7, link->fds[curfd], cur_adjpointcode);
+	}
+
+	if (cur_defaultdpc < 0) {
+		ast_log(LOG_ERROR, "Unspecified defaultdpc!\n");
+		return -1;
+	} else {
+		ss7_set_default_dpc(link->ss7, cur_defaultdpc);
+	}
+
+	if (cur_networkindicator < 0) {
+		ast_log(LOG_ERROR, "Invalid networkindicator!\n");
+		return -1;
+	} else
+		ss7_set_network_ind(link->ss7, cur_networkindicator);
+
+	return 0;
+}
+
+static int handle_ss7_no_debug(int fd, int argc, char *argv[])
+{
+	int span;
+	if (argc < 5)
+		return RESULT_SHOWUSAGE;
+	span = atoi(argv[4]);
+	if ((span < 1) || (span > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[4], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+	if (!linksets[span-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", span);
+		return RESULT_SUCCESS;
+	}
+	if (linksets[span-1].ss7)
+		ss7_set_debug(linksets[span-1].ss7, 0);
+
+	ast_cli(fd, "Disabled debugging on linkset %d\n", span);
+	return RESULT_SUCCESS;
+}
+
+static int handle_ss7_debug(int fd, int argc, char *argv[])
+{
+	int span;
+	if (argc < 4)
+		return RESULT_SHOWUSAGE;
+	span = atoi(argv[3]);
+	if ((span < 1) || (span > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[4], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+	if (!linksets[span-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", span);
+		return RESULT_SUCCESS;
+	}
+	if (linksets[span-1].ss7)
+		ss7_set_debug(linksets[span-1].ss7, SS7_DEBUG_MTP2 | SS7_DEBUG_MTP3 | SS7_DEBUG_ISUP);
+
+	ast_cli(fd, "Enabled debugging on linkset %d\n", span);
+	return RESULT_SUCCESS;
+}
+
+static int handle_ss7_block_cic(int fd, int argc, char *argv[])
+{
+	int linkset, cic;
+	int blocked = -1, i;
+	if (argc == 5)
+		linkset = atoi(argv[3]);
+	else
+		return RESULT_SHOWUSAGE;
+
+	if ((linkset < 1) || (linkset > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[3], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+
+	if (!linksets[linkset-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", linkset);
+		return RESULT_SUCCESS;
+	}
+
+	cic = atoi(argv[4]);
+
+	if (cic < 1) {
+		ast_cli(fd, "Invalid CIC specified!\n");
+		return RESULT_SUCCESS;
+	}
+
+	for (i = 0; i < linksets[linkset-1].numchans; i++) {
+		if (linksets[linkset-1].pvts[i]->cic == cic) {
+			blocked = linksets[linkset-1].pvts[i]->locallyblocked;
+			if (!blocked) {
+				ast_mutex_lock(&linksets[linkset-1].pvts[i]->lock);
+				linksets[linkset-1].pvts[i]->locallyblocked = 1;
+				ast_mutex_unlock(&linksets[linkset-1].pvts[i]->lock);
+				ast_mutex_lock(&linksets[linkset-1].lock);
+				isup_blo(linksets[linkset-1].ss7, cic);
+				ast_mutex_unlock(&linksets[linkset-1].lock);
+			}
+		}
+	}
+
+	if (blocked < 0) {
+		ast_cli(fd, "Invalid CIC specified!\n");
+		return RESULT_SUCCESS;
+	}
+
+	if (!blocked)
+		ast_cli(fd, "Sent blocking request for linkset %d on CIC %d\n", linkset, cic);
+	else
+		ast_cli(fd, "CIC %d already locally blocked\n", cic);
+
+	return RESULT_SUCCESS;
+}
+
+static int handle_ss7_unblock_cic(int fd, int argc, char *argv[])
+{
+	int linkset, cic;
+	int i, blocked = -1;
+	if (argc == 5)
+		linkset = atoi(argv[3]);
+	else
+		return RESULT_SHOWUSAGE;
+
+	if ((linkset < 1) || (linkset > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[3], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+
+	if (!linksets[linkset-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", linkset);
+		return RESULT_SUCCESS;
+	}
+
+	cic = atoi(argv[4]);
+
+	if (cic < 1) {
+		ast_cli(fd, "Invalid CIC specified!\n");
+		return RESULT_SUCCESS;
+	}
+
+	for (i = 0; i < linksets[linkset-1].numchans; i++) {
+		if (linksets[linkset-1].pvts[i]->cic == cic) {
+			blocked = linksets[linkset-1].pvts[i]->locallyblocked;
+			if (blocked) {
+				ast_mutex_lock(&linksets[linkset-1].pvts[i]->lock);
+				linksets[linkset-1].pvts[i]->locallyblocked = 0;
+				ast_mutex_unlock(&linksets[linkset-1].pvts[i]->lock);
+				ast_mutex_lock(&linksets[linkset-1].lock);
+				isup_ubl(linksets[linkset-1].ss7, cic);
+				ast_mutex_unlock(&linksets[linkset-1].lock);
+			}
+		}
+	}
+
+	if (blocked > 0)
+		ast_cli(fd, "Sent unblocking request for linkset %d on CIC %d\n", linkset, cic);
+	return RESULT_SUCCESS;
+}
+
+static int handle_ss7_show_linkset(int fd, int argc, char *argv[])
+{
+	int linkset;
+	struct zt_ss7 *ss7;
+	if (argc < 4)
+		return RESULT_SHOWUSAGE;
+	linkset = atoi(argv[3]);
+	if ((linkset < 1) || (linkset > NUM_SPANS)) {
+		ast_cli(fd, "Invalid linkset %s.  Should be a number %d to %d\n", argv[4], 1, NUM_SPANS);
+		return RESULT_SUCCESS;
+	}
+	if (!linksets[linkset-1].ss7) {
+		ast_cli(fd, "No SS7 running on linkset %d\n", linkset);
+		return RESULT_SUCCESS;
+	}
+	if (linksets[linkset-1].ss7)
+		ss7 = &linksets[linkset-1];
+
+	ast_cli(fd, "SS7 linkset %d status: %s\n", linkset, (ss7->state == LINKSET_STATE_UP) ? "Up" : "Down");
+
+	return RESULT_SUCCESS;
+}
+
+static char ss7_debug_help[] = 
+	"Usage: ss7 debug linkset <linkset>\n"
+	"       Enables debugging on a given SS7 linkset\n";
+	
+static char ss7_no_debug_help[] = 
+	"Usage: ss7 no debug linkset <span>\n"
+	"       Disables debugging on a given SS7 linkset\n";
+
+static char ss7_block_cic_help[] = 
+	"Usage: ss7 block cic <linkset> <CIC>\n"
+	"       Sends a remote blocking request for the given CIC on the specified linkset\n";
+
+static char ss7_unblock_cic_help[] = 
+	"Usage: ss7 unblock cic <linkset> <CIC>\n"
+	"       Sends a remote unblocking request for the given CIC on the specified linkset\n";
+
+static char ss7_show_linkset_help[] = 
+	"Usage: ss7 show linkset <span>\n"
+	"       Shows the status of an SS7 linkset.\n";
+
+static struct ast_cli_entry zap_ss7_cli[] = {
+	{ { "ss7", "debug", "linkset", NULL }, handle_ss7_debug,
+	  "Enables SS7 debugging on a linkset", ss7_debug_help, NULL },
+	{ { "ss7", "no", "debug", "linkset", NULL }, handle_ss7_no_debug,
+	  "Disables SS7 debugging on a linkset", ss7_no_debug_help, NULL },
+	{ { "ss7", "block", "cic", NULL }, handle_ss7_block_cic,
+	  "Disables SS7 debugging on a linkset", ss7_block_cic_help, NULL },
+	{ { "ss7", "unblock", "cic", NULL }, handle_ss7_unblock_cic,
+	  "Disables SS7 debugging on a linkset", ss7_unblock_cic_help, NULL },
+	{ { "ss7", "show", "linkset", NULL }, handle_ss7_show_linkset,
+	  "Shows the status of a linkset", ss7_show_linkset_help, NULL },
+};
+#endif /* HAVE_SS7 */
+
 static int unload_module(void)
 {
-#ifdef HAVE_PRI		
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
 	int y;
+#endif
+#ifdef HAVE_PRI
 	for (y = 0; y < NUM_SPANS; y++)
 		ast_mutex_destroy(&pris[y].lock);
 #endif
+#ifdef HAVE_SS7
+	for (y = 0; y < NUM_SPANS; y++)
+		ast_mutex_destroy(&linksets[y].lock);
+#endif /* HAVE_SS7 */
 	return __unload_module();
 }
 
@@ -10466,6 +11759,21 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 			ast_copy_string(drings.ringContext[1].contextData,v->value,sizeof(drings.ringContext[1].contextData));
 		} else if (!strcasecmp(v->name, "dring3context")) {
 			ast_copy_string(drings.ringContext[2].contextData,v->value,sizeof(drings.ringContext[2].contextData));
+		} else if (!strcasecmp(v->name, "dring1range")) {
+			drings.ringnum[0].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[0].range == 0)
+				drings.ringnum[0].range = 10;
+		} else if (!strcasecmp(v->name, "dring2range")) {
+			drings.ringnum[1].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[1].range == 0)
+				drings.ringnum[1].range = 10;
+		} else if (!strcasecmp(v->name, "dring3range")) {
+			drings.ringnum[2].range = atoi(v->value);
+			/* 10 is a nice default. */
+			if (drings.ringnum[2].range == 0)
+				drings.ringnum[2].range = 10;
 		} else if (!strcasecmp(v->name, "dring1")) {
 			ringc = v->value;
 			sscanf(ringc, "%d,%d,%d", &drings.ringnum[0].ring[0], &drings.ringnum[0].ring[1], &drings.ringnum[0].ring[2]);
@@ -10762,6 +12070,11 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 					cur_radio = 0;
 					pritype = PRI_CPE;
 #endif
+#ifdef HAVE_SS7
+				} else if (!strcasecmp(v->value, "ss7")) {
+					cur_signalling = SIG_SS7;
+					cur_radio = 0;
+#endif
 				} else {
 					ast_log(LOG_ERROR, "Unknown signalling method '%s'\n", v->value);
 				}
@@ -10929,6 +12242,42 @@ static int process_zap(struct ast_variable *v, int reload, int skipchannels)
 				facilityenable = ast_true(v->value);
 #endif /* PRI_GETSET_TIMERS */
 #endif /* HAVE_PRI */
+#ifdef HAVE_SS7
+			} else if (!strcasecmp(v->name, "ss7type")) {
+				if (!strcasecmp(v->value, "itu")) {
+					cur_ss7type = SS7_ITU;
+				} else if (!strcasecmp(v->value, "ansi")) {
+					cur_ss7type = SS7_ANSI;
+				} else
+					ast_log(LOG_WARNING, "'%s' is an unknown ss7 switch type!\n", v->value);
+			} else if (!strcasecmp(v->name, "linkset")) {
+				cur_linkset = atoi(v->value);
+			} else if (!strcasecmp(v->name, "pointcode")) {
+				cur_pointcode = parse_pointcode(v->value);
+			} else if (!strcasecmp(v->name, "adjpointcode")) {
+				cur_adjpointcode = parse_pointcode(v->value);
+			} else if (!strcasecmp(v->name, "defaultdpc")) {
+				cur_defaultdpc = parse_pointcode(v->value);
+			} else if (!strcasecmp(v->name, "cicbeginswith")) {
+				cur_cicbeginswith = atoi(v->value);
+			} else if (!strcasecmp(v->name, "networkindicator")) {
+				if (!strcasecmp(v->value, "national"))
+					cur_networkindicator = SS7_NI_NAT;
+				else if (!strcasecmp(v->value, "national_spare"))
+					cur_networkindicator = SS7_NI_NAT_SPARE;
+				else if (!strcasecmp(v->value, "international"))
+					cur_networkindicator = SS7_NI_INT;
+				else if (!strcasecmp(v->value, "international_spare"))
+					cur_networkindicator = SS7_NI_INT_SPARE;
+				else
+					cur_networkindicator = -1;
+			} else if (!strcasecmp(v->name, "sigchan")) {
+				int sigchan, res;
+				sigchan = atoi(v->value);
+				res = linkset_addsigchan(sigchan);
+				if (res < 0)
+					return -1;
+#endif /* HAVE_SS7 */
 			} else if (!strcasecmp(v->name, "cadence")) {
 				/* setup to scan our argument */
 				int element_count, c[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
@@ -11209,6 +12558,19 @@ static int setup_zap(int reload)
 		}
 	}
 #endif
+#ifdef HAVE_SS7
+	if (!reload) {
+		for (x = 0; x < NUM_SPANS; x++) {
+			if (linksets[x].ss7) {
+				if (ast_pthread_create(&linksets[x].master, NULL, ss7_linkset, &linksets[x])) {
+					ast_log(LOG_ERROR, "Unable to start SS7 linkset on span %d\n", x + 1);
+					return -1;
+				} else if (option_verbose > 1)
+					ast_verbose(VERBOSE_PREFIX_2 "Starting SS7 linkset on span %d\n", x + 1);
+			}
+		}
+	}
+#endif
 	/* And start the monitor for the first time */
 	restart_monitor();
 	return 0;
@@ -11217,9 +12579,11 @@ static int setup_zap(int reload)
 static int load_module(void)
 {
 	int res;
+#if defined(HAVE_PRI) || defined(HAVE_SS7)
+	int y, i;
+#endif
 
 #ifdef HAVE_PRI
-	int y,i;
 	memset(pris, 0, sizeof(pris));
 	for (y = 0; y < NUM_SPANS; y++) {
 		ast_mutex_init(&pris[y].lock);
@@ -11233,6 +12597,17 @@ static int load_module(void)
 	ast_register_application(zap_send_keypad_facility_app, zap_send_keypad_facility_exec,
 			zap_send_keypad_facility_synopsis, zap_send_keypad_facility_descrip);
 #endif
+#ifdef HAVE_SS7
+	memset(linksets, 0, sizeof(linksets));
+	for (y = 0; y < NUM_SPANS; y++) {
+		ast_mutex_init(&linksets[y].lock);
+		linksets[y].master = AST_PTHREADT_NULL;
+		for (i = 0; i < NUM_DCHANS; i++)
+			linksets[y].fds[i] = -1;
+	}
+	ss7_set_error(zt_ss7_error);
+	ss7_set_message(zt_ss7_message);
+#endif /* HAVE_SS7 */
 	res = setup_zap(0);
 	/* Make sure we can register our Zap channel type */
 	if (res)
@@ -11247,6 +12622,10 @@ static int load_module(void)
 	ast_string_field_set(&inuse, name, "GR-303InUse");
 	ast_cli_register_multiple(zap_pri_cli, sizeof(zap_pri_cli) / sizeof(struct ast_cli_entry));
 #endif	
+#ifdef HAVE_SS7
+	ast_cli_register_multiple(zap_ss7_cli, sizeof(zap_ss7_cli) / sizeof(zap_ss7_cli[0]));
+#endif
+
 	ast_cli_register_multiple(zap_cli, sizeof(zap_cli) / sizeof(struct ast_cli_entry));
 	
 	memset(round_robin, 0, sizeof(round_robin));
@@ -11332,14 +12711,16 @@ static int zt_sendtext(struct ast_channel *c, const char *text)
 		fds[0].revents = 0;
 		res = poll(fds, 1, -1);
 		if (!res) {
-			ast_log(LOG_DEBUG, "poll (for write) ret. 0 on channel %d\n", p->channel);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "poll (for write) ret. 0 on channel %d\n", p->channel);
 			continue;
 		}
 		  /* if got exception */
 		if (fds[0].revents & POLLPRI)
 			return -1;
 		if (!(fds[0].revents & POLLOUT)) {
-			ast_log(LOG_DEBUG, "write fd not ready on channel %d\n", p->channel);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "write fd not ready on channel %d\n", p->channel);
 			continue;
 		}
 		res = write(fd, buf, size);
