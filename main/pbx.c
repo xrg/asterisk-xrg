@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <string.h>
@@ -104,6 +104,7 @@ AST_APP_OPTIONS(waitexten_opts, {
 });
 
 struct ast_context;
+struct ast_app;
 
 /*!
    \brief ast_exten: An extension
@@ -119,6 +120,7 @@ struct ast_exten {
 	const char *label;		/*!< Label */
 	struct ast_context *parent;	/*!< The context this extension belongs to  */
 	const char *app; 		/*!< Application to execute */
+	struct ast_app *cached_app;     /*!< Cached location of application */
 	void *data;			/*!< Data to use (arguments) */
 	void (*datad)(void *);		/*!< Data destructor */
 	struct ast_exten *peer;		/*!< Next higher priority with our extension */
@@ -175,7 +177,7 @@ struct ast_app {
 	int (*execute)(struct ast_channel *chan, void *data);
 	const char *synopsis;			/*!< Synopsis text for 'show applications' */
 	const char *description;		/*!< Description (help text) for 'show application &lt;name&gt;' */
-	AST_LIST_ENTRY(ast_app) list;		/*!< Next app in list */
+	AST_RWLIST_ENTRY(ast_app) list;		/*!< Next app in list */
 	struct module *module;			/*!< Module this app belongs to */
 	char name[0];				/*!< Name of the application */
 };
@@ -191,12 +193,14 @@ struct ast_state_cb {
 /*! \brief Structure for dial plan hints
 
   \note Hints are pointers from an extension in the dialplan to one or
-  more devices (tech/name) */
+  more devices (tech/name) 
+	- See \ref AstExtState
+*/
 struct ast_hint {
 	struct ast_exten *exten;	/*!< Extension */
 	int laststate; 			/*!< Last known state */
 	struct ast_state_cb *callbacks;	/*!< Callback list for this extension */
-	AST_LIST_ENTRY(ast_hint) list;	/*!< Pointer to next hint in list */
+	AST_RWLIST_ENTRY(ast_hint) list;/*!< Pointer to next hint in list */
 };
 
 static const struct cfextension_states {
@@ -225,7 +229,6 @@ static int pbx_builtin_ringing(struct ast_channel *, void *);
 static int pbx_builtin_progress(struct ast_channel *, void *);
 static int pbx_builtin_congestion(struct ast_channel *, void *);
 static int pbx_builtin_busy(struct ast_channel *, void *);
-static int pbx_builtin_setglobalvar(struct ast_channel *, void *);
 static int pbx_builtin_noop(struct ast_channel *, void *);
 static int pbx_builtin_gotoif(struct ast_channel *, void *);
 static int pbx_builtin_gotoiftime(struct ast_channel *, void *);
@@ -245,7 +248,7 @@ static int autofallthrough = 1;
 AST_MUTEX_DEFINE_STATIC(maxcalllock);
 static int countcalls = 0;
 
-static AST_LIST_HEAD_STATIC(acf_root, ast_custom_function);
+static AST_RWLIST_HEAD_STATIC(acf_root, ast_custom_function);
 
 /*! \brief Declaration of builtin applications */
 static struct pbx_builtin {
@@ -285,6 +288,9 @@ static struct pbx_builtin {
 	"    n - Don't answer the channel before playing the files.\n"
 	"    m - Only break if a digit hit matches a one digit\n"
 	"          extension in the destination context.\n"
+	"This application sets the following channel variable upon completion:\n"
+	" BACKGROUNDSTATUS    The status of the background attempt as a text string, one of\n"
+	"               SUCCESS | FAILED\n"
 	},
 
 	{ "Busy", pbx_builtin_busy,
@@ -301,6 +307,13 @@ static struct pbx_builtin {
 	"condition to the calling channel. If the optional timeout is specified, the\n"
 	"calling channel will be hung up after the specified number of seconds.\n"
 	"Otherwise, this application will wait until the calling channel hangs up.\n"
+	},
+
+	{ "ExecIfTime", pbx_builtin_execiftime,
+	"Conditional application execution based on the current time",
+	"  ExecIfTime(<times>|<weekdays>|<mdays>|<months>?appname[|appargs]):\n"
+	"This application will execute the specified dialplan application, with optional\n"
+	"arguments, if the current time matches the given time specification.\n"
 	},
 
 	{ "Goto", pbx_builtin_goto,
@@ -331,11 +344,14 @@ static struct pbx_builtin {
 	"in the dialplan if the current time matches the given time specification.\n"
 	},
 
-	{ "ExecIfTime", pbx_builtin_execiftime,
-	"Conditional application execution based on the current time",
-	"  ExecIfTime(<times>|<weekdays>|<mdays>|<months>?appname[|appargs]):\n"
-	"This application will execute the specified dialplan application, with optional\n"
-	"arguments, if the current time matches the given time specification.\n"
+	{ "ImportVar", pbx_builtin_importvar,
+	"Import a variable from a channel into a new variable",
+	"  ImportVar(newvar=channelname|variable): This application imports a variable\n"
+	"from the specified channel (as opposed to the current one) and stores it as\n"
+	"a variable in the current channel (the channel that is calling this\n"
+	"application). Variables created by this application have the same inheritance\n"
+	"properties as those created with the Set application. See the documentation for\n"
+	"Set for more information.\n"
 	},
 
 	{ "Hangup", pbx_builtin_hangup,
@@ -375,12 +391,10 @@ static struct pbx_builtin {
 	"tone to the user.\n"
 	},
 
-	{ "SayNumber", pbx_builtin_saynumber,
-	"Say Number",
-	"  SayNumber(digits[,gender]): This application will play the sounds that\n"
-	"correspond to the given number. Optionally, a gender may be specified.\n"
-	"This will use the language that is currently set for the channel. See the\n"
-	"LANGUAGE function for more information on setting the language for the channel.\n"
+	{ "SayAlpha", pbx_builtin_saycharacters,
+	"Say Alpha",
+	"  SayAlpha(string): This application will play the sounds that correspond to\n"
+	"the letters of the given string.\n"
 	},
 
 	{ "SayDigits", pbx_builtin_saydigits,
@@ -391,28 +405,18 @@ static struct pbx_builtin {
 	"the language for the channel.\n"
 	},
 
-	{ "SayAlpha", pbx_builtin_saycharacters,
-	"Say Alpha",
-	"  SayAlpha(string): This application will play the sounds that correspond to\n"
-	"the letters of the given string.\n"
+	{ "SayNumber", pbx_builtin_saynumber,
+	"Say Number",
+	"  SayNumber(digits[,gender]): This application will play the sounds that\n"
+	"correspond to the given number. Optionally, a gender may be specified.\n"
+	"This will use the language that is currently set for the channel. See the\n"
+	"LANGUAGE function for more information on setting the language for the channel.\n"
 	},
 
 	{ "SayPhonetic", pbx_builtin_sayphonetic,
 	"Say Phonetic",
 	"  SayPhonetic(string): This application will play the sounds from the phonetic\n"
 	"alphabet that correspond to the letters in the given string.\n"
-	},
-
-	{ "SetAMAFlags", pbx_builtin_setamaflags,
-	"Set the AMA Flags",
-	"  SetAMAFlags([flag]): This application will set the channel's AMA Flags for\n"
- 	"  billing purposes.\n"
-	},
-
-	{ "SetGlobalVar", pbx_builtin_setglobalvar,
-	"Set a global variable to a given value",
-	"  SetGlobalVar(variable=value): This application sets a given global variable to\n"
-	"the specified value.\n"
 	},
 
 	{ "Set", pbx_builtin_setvar,
@@ -429,14 +433,10 @@ static struct pbx_builtin {
 	"        (applies only to variables, not functions)\n"
 	},
 
-	{ "ImportVar", pbx_builtin_importvar,
-	"Import a variable from a channel into a new variable",
-	"  ImportVar(newvar=channelname|variable): This application imports a variable\n"
-	"from the specified channel (as opposed to the current one) and stores it as\n"
-	"a variable in the current channel (the channel that is calling this\n"
-	"application). Variables created by this application have the same inheritance\n"
-	"properties as those created with the Set application. See the documentation for\n"
-	"Set for more information.\n"
+	{ "SetAMAFlags", pbx_builtin_setamaflags,
+	"Set the AMA Flags",
+	"  SetAMAFlags([flag]): This application will set the channel's AMA Flags for\n"
+ 	"  billing purposes.\n"
 	},
 
 	{ "Wait", pbx_builtin_wait,
@@ -463,7 +463,7 @@ static struct pbx_builtin {
 static struct ast_context *contexts = NULL;
 AST_MUTEX_DEFINE_STATIC(conlock); 		/*!< Lock for the ast_context list */
 
-static AST_LIST_HEAD_STATIC(apps, ast_app);
+static AST_RWLIST_HEAD_STATIC(apps, ast_app);
 
 static AST_LIST_HEAD_STATIC(switches, ast_switch);
 
@@ -474,7 +474,7 @@ static int stateid = 1;
    function will take the locks in conlock/hints order, so any other
    paths that require both locks must also take them in that order.
 */
-static AST_LIST_HEAD_STATIC(hints, ast_hint);
+static AST_RWLIST_HEAD_STATIC(hints, ast_hint);
 struct ast_state_cb *statecbs = NULL;
 
 /*
@@ -522,12 +522,12 @@ struct ast_app *pbx_findapp(const char *app)
 {
 	struct ast_app *tmp;
 
-	AST_LIST_LOCK(&apps);
-	AST_LIST_TRAVERSE(&apps, tmp, list) {
+	AST_RWLIST_RDLOCK(&apps);
+	AST_RWLIST_TRAVERSE(&apps, tmp, list) {
 		if (!strcasecmp(tmp->name, app))
 			break;
 	}
-	AST_LIST_UNLOCK(&apps);
+	AST_RWLIST_UNLOCK(&apps);
 
 	return tmp;
 }
@@ -1096,9 +1096,12 @@ static char *substring(const char *value, int offset, int length, char *workspac
 	return ret;
 }
 
-/*! \brief  pbx_retrieve_variable: Support for Asterisk built-in variables and
-      functions in the dialplan
-  ---*/
+/*! \brief  Support for Asterisk built-in variables and functions in the dialplan
+
+\note	See also
+	- \ref AstVar	Channel variables
+	- \ref AstCauses The HANGUPCAUSE variable
+ */
 void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, char *workspace, int workspacelen, struct varshead *headp)
 {
 	const char not_found = '\0';
@@ -1208,36 +1211,6 @@ void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, c
 	}
 }
 
-/*! \brief CLI function to show installed custom functions
-    \addtogroup CLI_functions
- */
-static int handle_show_functions_deprecated(int fd, int argc, char *argv[])
-{
-	struct ast_custom_function *acf;
-	int count_acf = 0;
-	int like = 0;
-
-	if (argc == 4 && (!strcmp(argv[2], "like")) ) {
-		like = 1;
-	} else if (argc != 2) {
-		return RESULT_SHOWUSAGE;
-	}
-
-	ast_cli(fd, "%s Custom Functions:\n--------------------------------------------------------------------------------\n", like ? "Matching" : "Installed");
-
-	AST_LIST_LOCK(&acf_root);
-	AST_LIST_TRAVERSE(&acf_root, acf, acflist) {
-		if (!like || strstr(acf->name, argv[3])) {
-			count_acf++;
-			ast_cli(fd, "%-20.20s  %-35.35s  %s\n", acf->name, acf->syntax, acf->synopsis);
-		}
-	}
-	AST_LIST_UNLOCK(&acf_root);
-
-	ast_cli(fd, "%d %scustom functions installed.\n", count_acf, like ? "matching " : "");
-
-	return RESULT_SUCCESS;
-}
 static int handle_show_functions(int fd, int argc, char *argv[])
 {
 	struct ast_custom_function *acf;
@@ -1252,72 +1225,16 @@ static int handle_show_functions(int fd, int argc, char *argv[])
 
 	ast_cli(fd, "%s Custom Functions:\n--------------------------------------------------------------------------------\n", like ? "Matching" : "Installed");
 
-	AST_LIST_LOCK(&acf_root);
-	AST_LIST_TRAVERSE(&acf_root, acf, acflist) {
+	AST_RWLIST_RDLOCK(&acf_root);
+	AST_RWLIST_TRAVERSE(&acf_root, acf, acflist) {
 		if (!like || strstr(acf->name, argv[4])) {
 			count_acf++;
 			ast_cli(fd, "%-20.20s  %-35.35s  %s\n", acf->name, acf->syntax, acf->synopsis);
 		}
 	}
-	AST_LIST_UNLOCK(&acf_root);
+	AST_RWLIST_UNLOCK(&acf_root);
 
 	ast_cli(fd, "%d %scustom functions installed.\n", count_acf, like ? "matching " : "");
-
-	return RESULT_SUCCESS;
-}
-
-static int handle_show_function_deprecated(int fd, int argc, char *argv[])
-{
-	struct ast_custom_function *acf;
-	/* Maximum number of characters added by terminal coloring is 22 */
-	char infotitle[64 + AST_MAX_APP + 22], syntitle[40], destitle[40];
-	char info[64 + AST_MAX_APP], *synopsis = NULL, *description = NULL;
-	char stxtitle[40], *syntax = NULL;
-	int synopsis_size, description_size, syntax_size;
-
-	if (argc < 3)
-		return RESULT_SHOWUSAGE;
-
-	if (!(acf = ast_custom_function_find(argv[2]))) {
-		ast_cli(fd, "No function by that name registered.\n");
-		return RESULT_FAILURE;
-
-	}
-
-	if (acf->synopsis)
-		synopsis_size = strlen(acf->synopsis) + 23;
-	else
-		synopsis_size = strlen("Not available") + 23;
-	synopsis = alloca(synopsis_size);
-
-	if (acf->desc)
-		description_size = strlen(acf->desc) + 23;
-	else
-		description_size = strlen("Not available") + 23;
-	description = alloca(description_size);
-
-	if (acf->syntax)
-		syntax_size = strlen(acf->syntax) + 23;
-	else
-		syntax_size = strlen("Not available") + 23;
-	syntax = alloca(syntax_size);
-
-	snprintf(info, 64 + AST_MAX_APP, "\n  -= Info about function '%s' =- \n\n", acf->name);
-	term_color(infotitle, info, COLOR_MAGENTA, 0, 64 + AST_MAX_APP + 22);
-	term_color(stxtitle, "[Syntax]\n", COLOR_MAGENTA, 0, 40);
-	term_color(syntitle, "[Synopsis]\n", COLOR_MAGENTA, 0, 40);
-	term_color(destitle, "[Description]\n", COLOR_MAGENTA, 0, 40);
-	term_color(syntax,
-		   acf->syntax ? acf->syntax : "Not available",
-		   COLOR_CYAN, 0, syntax_size);
-	term_color(synopsis,
-		   acf->synopsis ? acf->synopsis : "Not available",
-		   COLOR_CYAN, 0, synopsis_size);
-	term_color(description,
-		   acf->desc ? acf->desc : "Not available",
-		   COLOR_CYAN, 0, description_size);
-
-	ast_cli(fd,"%s%s%s\n\n%s%s\n\n%s%s\n", infotitle, stxtitle, syntax, syntitle, synopsis, destitle, description);
 
 	return RESULT_SUCCESS;
 }
@@ -1386,14 +1303,14 @@ static char *complete_show_function(const char *line, const char *word, int pos,
 	int wordlen = strlen(word);
 
 	/* case-insensitive for convenience in this 'complete' function */
-	AST_LIST_LOCK(&acf_root);
-	AST_LIST_TRAVERSE(&acf_root, acf, acflist) {
+	AST_RWLIST_RDLOCK(&acf_root);
+	AST_RWLIST_TRAVERSE(&acf_root, acf, acflist) {
  		if (!strncasecmp(word, acf->name, wordlen) && ++which > state) {
  			ret = strdup(acf->name);
 			break;
 		}
 	}
-	AST_LIST_UNLOCK(&acf_root);
+	AST_RWLIST_UNLOCK(&acf_root);
 
 	return ret;
 }
@@ -1402,12 +1319,12 @@ struct ast_custom_function *ast_custom_function_find(const char *name)
 {
 	struct ast_custom_function *acf = NULL;
 
-	AST_LIST_LOCK(&acf_root);
-	AST_LIST_TRAVERSE(&acf_root, acf, acflist) {
+	AST_RWLIST_RDLOCK(&acf_root);
+	AST_RWLIST_TRAVERSE(&acf_root, acf, acflist) {
 		if (!strcmp(name, acf->name))
 			break;
 	}
-	AST_LIST_UNLOCK(&acf_root);
+	AST_RWLIST_UNLOCK(&acf_root);
 
 	return acf;
 }
@@ -1419,17 +1336,17 @@ int ast_custom_function_unregister(struct ast_custom_function *acf)
 	if (!acf)
 		return -1;
 
-	AST_LIST_LOCK(&acf_root);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&acf_root, cur, acflist) {
+	AST_RWLIST_WRLOCK(&acf_root);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&acf_root, cur, acflist) {
 		if (cur == acf) {
-			AST_LIST_REMOVE_CURRENT(&acf_root, acflist);
+			AST_RWLIST_REMOVE_CURRENT(&acf_root, acflist);
 			if (option_verbose > 1)
 				ast_verbose(VERBOSE_PREFIX_2 "Unregistered custom function %s\n", acf->name);
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
-	AST_LIST_UNLOCK(&acf_root);
+	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_UNLOCK(&acf_root);
 
 	return acf ? 0 : -1;
 }
@@ -1441,26 +1358,28 @@ int ast_custom_function_register(struct ast_custom_function *acf)
 	if (!acf)
 		return -1;
 
-	AST_LIST_LOCK(&acf_root);
+	AST_RWLIST_WRLOCK(&acf_root);
 
-	if (ast_custom_function_find(acf->name)) {
-		ast_log(LOG_ERROR, "Function %s already registered.\n", acf->name);
-		AST_LIST_UNLOCK(&acf_root);
-		return -1;
+	AST_RWLIST_TRAVERSE(&acf_root, cur, acflist) {
+		if (!strcmp(acf->name, cur->name)) {
+			ast_log(LOG_ERROR, "Function %s already registered.\n", acf->name);
+			AST_RWLIST_UNLOCK(&acf_root);
+			return -1;
+		}
 	}
 
 	/* Store in alphabetical order */
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&acf_root, cur, acflist) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&acf_root, cur, acflist) {
 		if (strcasecmp(acf->name, cur->name) < 0) {
-			AST_LIST_INSERT_BEFORE_CURRENT(&acf_root, acf, acflist);
+			AST_RWLIST_INSERT_BEFORE_CURRENT(&acf_root, acf, acflist);
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END
 	if (!cur)
-		AST_LIST_INSERT_TAIL(&acf_root, acf, acflist);
+		AST_RWLIST_INSERT_TAIL(&acf_root, acf, acflist);
 
-	AST_LIST_UNLOCK(&acf_root);
+	AST_RWLIST_UNLOCK(&acf_root);
 
 	if (option_verbose > 1)
 		ast_verbose(VERBOSE_PREFIX_2 "Registered custom function %s\n", acf->name);
@@ -1617,8 +1536,8 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 			if (isfunction) {
 				/* Evaluate function */
 				cp4 = ast_func_read(c, vars, workspace, VAR_BUF_SIZE) ? NULL : workspace;
-
-				ast_log(LOG_DEBUG, "Function result is '%s'\n", cp4 ? cp4 : "(null)");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Function result is '%s'\n", cp4 ? cp4 : "(null)");
 			} else {
 				/* Retrieve variable value */
 				pbx_retrieve_variable(c, vars, &cp4, workspace, VAR_BUF_SIZE, headp);
@@ -1685,7 +1604,8 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 			length = ast_expr(vars, cp2, count);
 
 			if (length) {
-				ast_log(LOG_DEBUG, "Expression result is '%s'\n", cp2);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Expression result is '%s'\n", cp2);
 				count -= length;
 				cp2 += length;
 			}
@@ -1749,7 +1669,9 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 			ast_mutex_unlock(&conlock);
 			return res;	/* the priority we were looking for */
 		} else {	/* spawn */
-			app = pbx_findapp(e->app);
+			if (!e->cached_app)
+				e->cached_app = pbx_findapp(e->app);
+			app = e->cached_app;
 			ast_mutex_unlock(&conlock);
 			if (!app) {
 				ast_log(LOG_WARNING, "No application '%s' for extension (%s, %s, %d)\n", e->app, context, exten, priority);
@@ -1764,7 +1686,8 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 			if (option_debug) {
 				char atmp[80];
 				char atmp2[EXT_DATA_SIZE+100];
-				ast_log(LOG_DEBUG, "Launching '%s'\n", app->name);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Launching '%s'\n", app->name);
 				snprintf(atmp, sizeof(atmp), "STACK-%s-%s-%d", context, exten, priority);
 				snprintf(atmp2, sizeof(atmp2), "%s(\"%s\", \"%s\") %s",
 					app->name, c->name, passdata, "in new stack");
@@ -1821,7 +1744,8 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 				ast_log(LOG_NOTICE, "No such label '%s' in extension '%s' in context '%s'\n", label, exten, context);
 			break;
 		default:
-			ast_log(LOG_DEBUG, "Shouldn't happen!\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Shouldn't happen!\n");
 		}
 
 		return (matching_action) ? 0 : -1;
@@ -1954,9 +1878,9 @@ void ast_hint_state_changed(const char *device)
 {
 	struct ast_hint *hint;
 
-	AST_LIST_LOCK(&hints);
+	AST_RWLIST_RDLOCK(&hints);
 
-	AST_LIST_TRAVERSE(&hints, hint, list) {
+	AST_RWLIST_TRAVERSE(&hints, hint, list) {
 		struct ast_state_cb *cblist;
 		char buf[AST_MAX_EXTENSION];
 		char *parse = buf;
@@ -1990,7 +1914,7 @@ void ast_hint_state_changed(const char *device)
 		hint->laststate = state;	/* record we saw the change */
 	}
 
-	AST_LIST_UNLOCK(&hints);
+	AST_RWLIST_UNLOCK(&hints);
 }
 
 /*! \brief  ast_extension_state_add: Add watcher for extension states */
@@ -2003,19 +1927,19 @@ int ast_extension_state_add(const char *context, const char *exten,
 
 	/* If there's no context and extension:  add callback to statecbs list */
 	if (!context && !exten) {
-		AST_LIST_LOCK(&hints);
+		AST_RWLIST_WRLOCK(&hints);
 
 		for (cblist = statecbs; cblist; cblist = cblist->next) {
 			if (cblist->callback == callback) {
 				cblist->data = data;
-				AST_LIST_UNLOCK(&hints);
+				AST_RWLIST_UNLOCK(&hints);
 				return 0;
 			}
 		}
 
 		/* Now insert the callback */
 		if (!(cblist = ast_calloc(1, sizeof(*cblist)))) {
-			AST_LIST_UNLOCK(&hints);
+			AST_RWLIST_UNLOCK(&hints);
 			return -1;
 		}
 		cblist->id = 0;
@@ -2025,7 +1949,7 @@ int ast_extension_state_add(const char *context, const char *exten,
 		cblist->next = statecbs;
 		statecbs = cblist;
 
-		AST_LIST_UNLOCK(&hints);
+		AST_RWLIST_UNLOCK(&hints);
 		return 0;
 	}
 
@@ -2039,22 +1963,22 @@ int ast_extension_state_add(const char *context, const char *exten,
 	}
 
 	/* Find the hint in the list of hints */
-	AST_LIST_LOCK(&hints);
+	AST_RWLIST_WRLOCK(&hints);
 
-	AST_LIST_TRAVERSE(&hints, hint, list) {
+	AST_RWLIST_TRAVERSE(&hints, hint, list) {
 		if (hint->exten == e)
 			break;
 	}
 
 	if (!hint) {
 		/* We have no hint, sorry */
-		AST_LIST_UNLOCK(&hints);
+		AST_RWLIST_UNLOCK(&hints);
 		return -1;
 	}
 
 	/* Now insert the callback in the callback list  */
 	if (!(cblist = ast_calloc(1, sizeof(*cblist)))) {
-		AST_LIST_UNLOCK(&hints);
+		AST_RWLIST_UNLOCK(&hints);
 		return -1;
 	}
 	cblist->id = stateid++;		/* Unique ID for this callback */
@@ -2064,7 +1988,7 @@ int ast_extension_state_add(const char *context, const char *exten,
 	cblist->next = hint->callbacks;
 	hint->callbacks = cblist;
 
-	AST_LIST_UNLOCK(&hints);
+	AST_RWLIST_UNLOCK(&hints);
 	return cblist->id;
 }
 
@@ -2077,7 +2001,7 @@ int ast_extension_state_del(int id, ast_state_cb_type callback)
 	if (!id && !callback)
 		return -1;
 
-	AST_LIST_LOCK(&hints);
+	AST_RWLIST_WRLOCK(&hints);
 
 	if (!id) {	/* id == 0 is a callback without extension */
 		for (p_cur = &statecbs; *p_cur; p_cur = &(*p_cur)->next) {
@@ -2086,7 +2010,7 @@ int ast_extension_state_del(int id, ast_state_cb_type callback)
 		}
 	} else { /* callback with extension, find the callback based on ID */
 		struct ast_hint *hint;
-		AST_LIST_TRAVERSE(&hints, hint, list) {
+		AST_RWLIST_TRAVERSE(&hints, hint, list) {
 			for (p_cur = &hint->callbacks; *p_cur; p_cur = &(*p_cur)->next) {
 				if ((*p_cur)->id == id)
 					break;
@@ -2101,7 +2025,7 @@ int ast_extension_state_del(int id, ast_state_cb_type callback)
 		free(cur);
 		ret = 0;
 	}
-	AST_LIST_UNLOCK(&hints);
+	AST_RWLIST_UNLOCK(&hints);
 	return ret;
 }
 
@@ -2113,12 +2037,12 @@ static int ast_add_hint(struct ast_exten *e)
 	if (!e)
 		return -1;
 
-	AST_LIST_LOCK(&hints);
+	AST_RWLIST_WRLOCK(&hints);
 
 	/* Search if hint exists, do nothing */
-	AST_LIST_TRAVERSE(&hints, hint, list) {
+	AST_RWLIST_TRAVERSE(&hints, hint, list) {
 		if (hint->exten == e) {
-			AST_LIST_UNLOCK(&hints);
+			AST_RWLIST_UNLOCK(&hints);
 			if (option_debug > 1)
 				ast_log(LOG_DEBUG, "HINTS: Not re-adding existing hint %s: %s\n", ast_get_extension_name(e), ast_get_extension_app(e));
 			return -1;
@@ -2129,15 +2053,15 @@ static int ast_add_hint(struct ast_exten *e)
 		ast_log(LOG_DEBUG, "HINTS: Adding hint %s: %s\n", ast_get_extension_name(e), ast_get_extension_app(e));
 
 	if (!(hint = ast_calloc(1, sizeof(*hint)))) {
-		AST_LIST_UNLOCK(&hints);
+		AST_RWLIST_UNLOCK(&hints);
 		return -1;
 	}
 	/* Initialize and insert new item at the top */
 	hint->exten = e;
 	hint->laststate = ast_extension_state2(e);
-	AST_LIST_INSERT_HEAD(&hints, hint, list);
+	AST_RWLIST_INSERT_HEAD(&hints, hint, list);
 
-	AST_LIST_UNLOCK(&hints);
+	AST_RWLIST_UNLOCK(&hints);
 	return 0;
 }
 
@@ -2147,15 +2071,15 @@ static int ast_change_hint(struct ast_exten *oe, struct ast_exten *ne)
 	struct ast_hint *hint;
 	int res = -1;
 
-	AST_LIST_LOCK(&hints);
-	AST_LIST_TRAVERSE(&hints, hint, list) {
+	AST_RWLIST_WRLOCK(&hints);
+	AST_RWLIST_TRAVERSE(&hints, hint, list) {
 		if (hint->exten == oe) {
 	    		hint->exten = ne;
 			res = 0;
 			break;
 		}
 	}
-	AST_LIST_UNLOCK(&hints);
+	AST_RWLIST_UNLOCK(&hints);
 
 	return res;
 }
@@ -2171,8 +2095,7 @@ static int ast_remove_hint(struct ast_exten *e)
 	if (!e)
 		return -1;
 
-	AST_LIST_LOCK(&hints);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&hints, hint, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&hints, hint, list) {
 		if (hint->exten == e) {
 			cbprev = NULL;
 			cblist = hint->callbacks;
@@ -2184,14 +2107,13 @@ static int ast_remove_hint(struct ast_exten *e)
 				free(cbprev);
 	    		}
 	    		hint->callbacks = NULL;
-			AST_LIST_REMOVE_CURRENT(&hints, list);
+			AST_RWLIST_REMOVE_CURRENT(&hints, list);
 	    		free(hint);
 	   		res = 0;
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
-	AST_LIST_UNLOCK(&hints);
+	AST_RWLIST_TRAVERSE_SAFE_END
 
 	return res;
 }
@@ -2345,7 +2267,8 @@ static int __ast_pbx_run(struct ast_channel *c)
 			if ((res = ast_spawn_extension(c, c->context, c->exten, c->priority, c->cid.cid_num))) {
 				/* Something bad happened, or a hangup has been requested. */
 				if (strchr("0123456789ABCDEF*#", res)) {
-					ast_log(LOG_DEBUG, "Oooh, got something to jump out with ('%c')!\n", res);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Oooh, got something to jump out with ('%c')!\n", res);
 					pos = 0;
 					dst_exten[pos++] = digit = res;
 					dst_exten[pos] = '\0';
@@ -2380,8 +2303,9 @@ static int __ast_pbx_run(struct ast_channel *c)
 				c->whentohangup = 0;
 				c->_softhangup &= ~AST_SOFTHANGUP_TIMEOUT;
 			} else if (c->_softhangup) {
-				ast_log(LOG_DEBUG, "Extension %s, priority %d returned normally even though call was hung up\n",
-					c->exten, c->priority);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Extension %s, priority %d returned normally even though call was hung up\n",
+						c->exten, c->priority);
 				error = 1;
 				break;
 			}
@@ -2893,11 +2817,11 @@ int ast_register_application(const char *app, int (*execute)(struct ast_channel 
 	char tmps[80];
 	int length;
 
-	AST_LIST_LOCK(&apps);
-	AST_LIST_TRAVERSE(&apps, tmp, list) {
+	AST_RWLIST_WRLOCK(&apps);
+	AST_RWLIST_TRAVERSE(&apps, tmp, list) {
 		if (!strcasecmp(app, tmp->name)) {
 			ast_log(LOG_WARNING, "Already have an application '%s'\n", app);
-			AST_LIST_UNLOCK(&apps);
+			AST_RWLIST_UNLOCK(&apps);
 			return -1;
 		}
 	}
@@ -2905,7 +2829,7 @@ int ast_register_application(const char *app, int (*execute)(struct ast_channel 
 	length = sizeof(*tmp) + strlen(app) + 1;
 
 	if (!(tmp = ast_calloc(1, length))) {
-		AST_LIST_UNLOCK(&apps);
+		AST_RWLIST_UNLOCK(&apps);
 		return -1;
 	}
 
@@ -2915,20 +2839,20 @@ int ast_register_application(const char *app, int (*execute)(struct ast_channel 
 	tmp->description = description;
 
 	/* Store in alphabetical order */
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&apps, cur, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&apps, cur, list) {
 		if (strcasecmp(tmp->name, cur->name) < 0) {
-			AST_LIST_INSERT_BEFORE_CURRENT(&apps, tmp, list);
+			AST_RWLIST_INSERT_BEFORE_CURRENT(&apps, tmp, list);
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END
 	if (!cur)
-		AST_LIST_INSERT_TAIL(&apps, tmp, list);
+		AST_RWLIST_INSERT_TAIL(&apps, tmp, list);
 
 	if (option_verbose > 1)
 		ast_verbose( VERBOSE_PREFIX_2 "Registered application '%s'\n", term_color(tmps, tmp->name, COLOR_BRCYAN, 0, sizeof(tmps)));
 
-	AST_LIST_UNLOCK(&apps);
+	AST_RWLIST_UNLOCK(&apps);
 
 	return 0;
 }
@@ -3021,86 +2945,16 @@ static char *complete_show_application(const char *line, const char *word, int p
 	int wordlen = strlen(word);
 
 	/* return the n-th [partial] matching entry */
-	AST_LIST_LOCK(&apps);
-	AST_LIST_TRAVERSE(&apps, a, list) {
+	AST_RWLIST_RDLOCK(&apps);
+	AST_RWLIST_TRAVERSE(&apps, a, list) {
 		if (!strncasecmp(word, a->name, wordlen) && ++which > state) {
 			ret = strdup(a->name);
 			break;
 		}
 	}
-	AST_LIST_UNLOCK(&apps);
+	AST_RWLIST_UNLOCK(&apps);
 
 	return ret;
-}
-
-static int handle_show_application_deprecated(int fd, int argc, char *argv[])
-{
-	struct ast_app *a;
-	int app, no_registered_app = 1;
-
-	if (argc < 3)
-		return RESULT_SHOWUSAGE;
-
-	/* ... go through all applications ... */
-	AST_LIST_LOCK(&apps);
-	AST_LIST_TRAVERSE(&apps, a, list) {
-		/* ... compare this application name with all arguments given
-		 * to 'show application' command ... */
-		for (app = 2; app < argc; app++) {
-			if (!strcasecmp(a->name, argv[app])) {
-				/* Maximum number of characters added by terminal coloring is 22 */
-				char infotitle[64 + AST_MAX_APP + 22], syntitle[40], destitle[40];
-				char info[64 + AST_MAX_APP], *synopsis = NULL, *description = NULL;
-				int synopsis_size, description_size;
-
-				no_registered_app = 0;
-
-				if (a->synopsis)
-					synopsis_size = strlen(a->synopsis) + 23;
-				else
-					synopsis_size = strlen("Not available") + 23;
-				synopsis = alloca(synopsis_size);
-
-				if (a->description)
-					description_size = strlen(a->description) + 23;
-				else
-					description_size = strlen("Not available") + 23;
-				description = alloca(description_size);
-
-				if (synopsis && description) {
-					snprintf(info, 64 + AST_MAX_APP, "\n  -= Info about application '%s' =- \n\n", a->name);
-					term_color(infotitle, info, COLOR_MAGENTA, 0, 64 + AST_MAX_APP + 22);
-					term_color(syntitle, "[Synopsis]\n", COLOR_MAGENTA, 0, 40);
-					term_color(destitle, "[Description]\n", COLOR_MAGENTA, 0, 40);
-					term_color(synopsis,
-									a->synopsis ? a->synopsis : "Not available",
-									COLOR_CYAN, 0, synopsis_size);
-					term_color(description,
-									a->description ? a->description : "Not available",
-									COLOR_CYAN, 0, description_size);
-
-					ast_cli(fd,"%s%s%s\n\n%s%s\n", infotitle, syntitle, synopsis, destitle, description);
-				} else {
-					/* ... one of our applications, show info ...*/
-					ast_cli(fd,"\n  -= Info about application '%s' =- \n\n"
-						"[Synopsis]\n  %s\n\n"
-						"[Description]\n%s\n",
-						a->name,
-						a->synopsis ? a->synopsis : "Not available",
-						a->description ? a->description : "Not available");
-				}
-			}
-		}
-	}
-	AST_LIST_UNLOCK(&apps);
-
-	/* we found at least one app? no? */
-	if (no_registered_app) {
-		ast_cli(fd, "Your application(s) is (are) not registered\n");
-		return RESULT_FAILURE;
-	}
-
-	return RESULT_SUCCESS;
 }
 
 static int handle_show_application(int fd, int argc, char *argv[])
@@ -3112,8 +2966,8 @@ static int handle_show_application(int fd, int argc, char *argv[])
 		return RESULT_SHOWUSAGE;
 
 	/* ... go through all applications ... */
-	AST_LIST_LOCK(&apps);
-	AST_LIST_TRAVERSE(&apps, a, list) {
+	AST_RWLIST_RDLOCK(&apps);
+	AST_RWLIST_TRAVERSE(&apps, a, list) {
 		/* ... compare this application name with all arguments given
 		 * to 'show application' command ... */
 		for (app = 3; app < argc; app++) {
@@ -3162,7 +3016,7 @@ static int handle_show_application(int fd, int argc, char *argv[])
 			}
 		}
 	}
-	AST_LIST_UNLOCK(&apps);
+	AST_RWLIST_UNLOCK(&apps);
 
 	/* we found at least one app? no? */
 	if (no_registered_app) {
@@ -3173,7 +3027,7 @@ static int handle_show_application(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-/*! \brief  handle_show_hints: CLI support for listing registred dial plan hints */
+/*! \brief  handle_show_hints: CLI support for listing registered dial plan hints */
 static int handle_show_hints(int fd, int argc, char *argv[])
 {
 	struct ast_hint *hint;
@@ -3181,14 +3035,15 @@ static int handle_show_hints(int fd, int argc, char *argv[])
 	int watchers;
 	struct ast_state_cb *watcher;
 
-	if (AST_LIST_EMPTY(&hints)) {
+	AST_RWLIST_RDLOCK(&hints);
+	if (AST_RWLIST_EMPTY(&hints)) {
 		ast_cli(fd, "There are no registered dialplan hints\n");
+		AST_RWLIST_UNLOCK(&hints);
 		return RESULT_SUCCESS;
 	}
 	/* ... we have hints ... */
 	ast_cli(fd, "\n    -= Registered Asterisk Dial Plan Hints =-\n");
-	AST_LIST_LOCK(&hints);
-	AST_LIST_TRAVERSE(&hints, hint, list) {
+	AST_RWLIST_TRAVERSE(&hints, hint, list) {
 		watchers = 0;
 		for (watcher = hint->callbacks; watcher; watcher = watcher->next)
 			watchers++;
@@ -3201,11 +3056,11 @@ static int handle_show_hints(int fd, int argc, char *argv[])
 	}
 	ast_cli(fd, "----------------\n");
 	ast_cli(fd, "- %d hints registered\n", num);
-	AST_LIST_UNLOCK(&hints);
+	AST_RWLIST_UNLOCK(&hints);
 	return RESULT_SUCCESS;
 }
 
-/*! \brief  handle_show_switches: CLI support for listing registred dial plan switches */
+/*! \brief  handle_show_switches: CLI support for listing registered dial plan switches */
 static int handle_show_switches(int fd, int argc, char *argv[])
 {
 	struct ast_switch *sw;
@@ -3227,77 +3082,6 @@ static int handle_show_switches(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-/*
- * 'show applications' CLI command implementation functions ...
- */
-static int handle_show_applications_deprecated(int fd, int argc, char *argv[])
-{
-	struct ast_app *a;
-	int like = 0, describing = 0;
-	int total_match = 0; 	/* Number of matches in like clause */
-	int total_apps = 0; 	/* Number of apps registered */
-
-	AST_LIST_LOCK(&apps);
-
-	if (AST_LIST_EMPTY(&apps)) {
-		ast_cli(fd, "There are no registered applications\n");
-		AST_LIST_UNLOCK(&apps);
-		return -1;
-	}
-
-	/* show applications like <keyword> */
-	if ((argc == 4) && (!strcmp(argv[2], "like"))) {
-		like = 1;
-	} else if ((argc > 3) && (!strcmp(argv[2], "describing"))) {
-		describing = 1;
-	}
-
-	/* show applications describing <keyword1> [<keyword2>] [...] */
-	if ((!like) && (!describing)) {
-		ast_cli(fd, "    -= Registered Asterisk Applications =-\n");
-	} else {
-		ast_cli(fd, "    -= Matching Asterisk Applications =-\n");
-	}
-
-	AST_LIST_TRAVERSE(&apps, a, list) {
-		int printapp = 0;
-		total_apps++;
-		if (like) {
-			if (strcasestr(a->name, argv[3])) {
-				printapp = 1;
-				total_match++;
-			}
-		} else if (describing) {
-			if (a->description) {
-				/* Match all words on command line */
-				int i;
-				printapp = 1;
-				for (i = 3; i < argc; i++) {
-					if (!strcasestr(a->description, argv[i])) {
-						printapp = 0;
-					} else {
-						total_match++;
-					}
-				}
-			}
-		} else {
-			printapp = 1;
-		}
-
-		if (printapp) {
-			ast_cli(fd,"  %20s: %s\n", a->name, a->synopsis ? a->synopsis : "<Synopsis not available>");
-		}
-	}
-	if ((!like) && (!describing)) {
-		ast_cli(fd, "    -= %d Applications Registered =-\n",total_apps);
-	} else {
-		ast_cli(fd, "    -= %d Applications Matching =-\n",total_match);
-	}
-
-	AST_LIST_UNLOCK(&apps);
-
-	return RESULT_SUCCESS;
-}
 static int handle_show_applications(int fd, int argc, char *argv[])
 {
 	struct ast_app *a;
@@ -3305,11 +3089,11 @@ static int handle_show_applications(int fd, int argc, char *argv[])
 	int total_match = 0; 	/* Number of matches in like clause */
 	int total_apps = 0; 	/* Number of apps registered */
 
-	AST_LIST_LOCK(&apps);
+	AST_RWLIST_RDLOCK(&apps);
 
-	if (AST_LIST_EMPTY(&apps)) {
+	if (AST_RWLIST_EMPTY(&apps)) {
 		ast_cli(fd, "There are no registered applications\n");
-		AST_LIST_UNLOCK(&apps);
+		AST_RWLIST_UNLOCK(&apps);
 		return -1;
 	}
 
@@ -3327,7 +3111,7 @@ static int handle_show_applications(int fd, int argc, char *argv[])
 		ast_cli(fd, "    -= Matching Asterisk Applications =-\n");
 	}
 
-	AST_LIST_TRAVERSE(&apps, a, list) {
+	AST_RWLIST_TRAVERSE(&apps, a, list) {
 		int printapp = 0;
 		total_apps++;
 		if (like) {
@@ -3362,16 +3146,9 @@ static int handle_show_applications(int fd, int argc, char *argv[])
 		ast_cli(fd, "    -= %d Applications Matching =-\n",total_match);
 	}
 
-	AST_LIST_UNLOCK(&apps);
+	AST_RWLIST_UNLOCK(&apps);
 
 	return RESULT_SUCCESS;
-}
-
-static char *complete_show_applications_deprecated(const char *line, const char *word, int pos, int state)
-{
-	static char* choices[] = { "like", "describing", NULL };
-
-	return (pos != 2) ? NULL : ast_cli_complete(word, choices, state);
 }
 
 static char *complete_show_applications(const char *line, const char *word, int pos, int state)
@@ -3413,7 +3190,9 @@ static char *complete_show_dialplan_context(const char *line, const char *word, 
 	return ret;
 }
 
+/*! \brief Counters for the show dialplan manager command */
 struct dialplan_counters {
+	int total_items;
 	int total_context;
 	int total_exten;
 	int total_prio;
@@ -3496,7 +3275,10 @@ static int show_dialplan_helper(int fd, const char *context, const char *exten, 
 			dpc->total_prio++;
 
 			/* write extension name and first peer */
-			snprintf(buf, sizeof(buf), "'%s' =>", ast_get_extension_name(e));
+			if (e->matchcid)
+				snprintf(buf, sizeof(buf), "'%s' (CID match '%s') => ", ast_get_extension_name(e), e->cidmatch);
+			else
+				snprintf(buf, sizeof(buf), "'%s' =>", ast_get_extension_name(e));
 
 			print_ext(e, buf2, sizeof(buf2));
 
@@ -3639,6 +3421,227 @@ static int handle_show_dialplan(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
+/*! \brief Send ack once */
+static void manager_dpsendack(struct mansession *s, struct message *m, int *sentack)
+{
+ 	if (*sentack)
+		return;
+	astman_send_listack(s, m, "DialPlan list will follow", "start");
+	*sentack = 1;
+	return;
+}
+
+/*! \brief Show dialplan extensions
+ * XXX this function is similar but not exactly the same as the CLI's
+ * show dialplan. Must check whether the difference is intentional or not.
+ */
+static int manager_show_dialplan_helper(struct mansession *s, struct message *m,
+	const char *actionidtext, const char *context, char *exten, struct dialplan_counters *dpc, struct ast_include *rinclude)
+{
+	struct ast_context *c;
+	int res=0, old_total_exten = dpc->total_exten;
+	int sentpositivemanagerack = 0;
+
+	if (ast_strlen_zero(exten))
+		exten = NULL;
+	if (ast_strlen_zero(context))
+		context = NULL;
+
+	if (option_debug > 2)
+		ast_log(LOG_DEBUG, "manager_show_dialplan: Context: -%s- Extension: -%s-\n", context, exten);
+
+	/* try to lock contexts */
+	if (ast_lock_contexts()) {
+		astman_send_error(s, m, "Failed to lock contexts\r\n");
+		ast_log(LOG_WARNING, "Failed to lock contexts list for manager: listdialplan\n");
+		return -1;
+	}
+
+	c = NULL;		/* walk all contexts ... */
+	while ( (c = ast_walk_contexts(c)) ) {
+		struct ast_exten *e;
+		struct ast_include *i;
+		struct ast_ignorepat *ip;
+
+		if (context && strcmp(ast_get_context_name(c), context) != 0)
+			continue;	/* not the name we want */
+
+		dpc->context_existence = 1;
+
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "manager_show_dialplan: Found Context: %s \n", ast_get_context_name(c));
+
+		if (ast_lock_context(c)) {	/* failed to lock */
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "manager_show_dialplan: Failed to lock context\n");
+			continue;
+		}
+
+		/* XXX note- an empty context is not printed */
+		e = NULL;		/* walk extensions in context  */
+		while ( (e = ast_walk_context_extensions(c, e)) ) {
+			struct ast_exten *p;
+
+			/* looking for extension? is this our extension? */
+			if (exten && !ast_extension_match(ast_get_extension_name(e), exten)) {
+				/* not the one we are looking for, continue */
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "manager_show_dialplan: Skipping extension %s\n", ast_get_extension_name(e));
+				continue;
+			}
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "manager_show_dialplan: Found Extension: %s \n", ast_get_extension_name(e));
+
+			dpc->extension_existence = 1;
+
+			/* may we print context info? */	
+			dpc->total_context++;
+			dpc->total_exten++;
+
+			p = NULL;		/* walk next extension peers */
+			while ( (p = ast_walk_extension_priorities(e, p)) ) {
+				int prio = ast_get_extension_priority(p);
+
+				dpc->total_prio++;
+				dpc->total_items++;
+				manager_dpsendack(s, m, &sentpositivemanagerack);
+				astman_append(s, "Event: ListDialplan\r\n%s", actionidtext);
+				astman_append(s, "Context: %s\r\nExtension: %s\r\n", ast_get_context_name(c), ast_get_extension_name(e) );
+
+				/* XXX maybe make this conditional, if p != e ? */
+				if (ast_get_extension_label(p))
+					astman_append(s, "ExtensionLabel: %s\r\n", ast_get_extension_label(p));
+
+				if (prio == PRIORITY_HINT) {
+					astman_append(s, "Priority: hint\r\nApplication: %s\r\n", ast_get_extension_app(p));
+				} else {
+					astman_append(s, "Priority: %d\r\nApplication: %s\r\nAppData: %s\r\n", prio, ast_get_extension_app(p), (char *) ast_get_extension_app_data(p));
+				}
+				astman_append(s, "Registrar: %s\r\n\r\n", ast_get_extension_registrar(e));
+			}
+		}
+
+		i = NULL;		/* walk included and write info ... */
+		while ( (i = ast_walk_context_includes(c, i)) ) {
+			if (exten) {
+				/* Check all includes for the requested extension */
+				manager_show_dialplan_helper(s, m, actionidtext, ast_get_include_name(i), exten, dpc, i);
+			} else {
+				dpc->total_items++;
+				manager_dpsendack(s, m, &sentpositivemanagerack);
+				astman_append(s, "Event: ListDialplan\r\n%s", actionidtext);
+				astman_append(s, "Context: %s\r\nIncludeContext: %s\r\nRegistrar: %s\r\n", ast_get_context_name(c), ast_get_include_name(i), ast_get_include_registrar(i));
+				astman_append(s, "\r\n");
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "manager_show_dialplan: Found Included context: %s \n", ast_get_include_name(i));
+			}
+		}
+
+		ip = NULL;	/* walk ignore patterns and write info ... */
+		while ( (ip = ast_walk_context_ignorepats(c, ip)) ) {
+			const char *ipname = ast_get_ignorepat_name(ip);
+			char ignorepat[AST_MAX_EXTENSION];
+
+			snprintf(ignorepat, sizeof(ignorepat), "_%s.", ipname);
+			if (!exten || ast_extension_match(ignorepat, exten)) {
+				dpc->total_items++;
+				manager_dpsendack(s, m, &sentpositivemanagerack);
+				astman_append(s, "Event: ListDialplan\r\n%s", actionidtext);
+				astman_append(s, "Context: %s\r\nIgnorePattern: %s\r\nRegistrar: %s\r\n", ast_get_context_name(c), ipname, ast_get_ignorepat_registrar(ip));
+				astman_append(s, "\r\n");
+			}
+		}
+		if (!rinclude) {
+			struct ast_sw *sw = NULL;
+			while ( (sw = ast_walk_context_switches(c, sw)) ) {
+				dpc->total_items++;
+				manager_dpsendack(s, m, &sentpositivemanagerack);
+				astman_append(s, "Event: ListDialplan\r\n%s", actionidtext);
+				astman_append(s, "Context: %s\r\nSwitch: %s/%s\r\nRegistrar: %s\r\n", ast_get_context_name(c), ast_get_switch_name(sw), ast_get_switch_data(sw), ast_get_switch_registrar(sw));	
+				astman_append(s, "\r\n");
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "manager_show_dialplan: Found Switch : %s \n", ast_get_switch_name(sw));
+			}
+		}
+
+		ast_unlock_context(c);
+	}
+	ast_unlock_contexts();
+
+	if (dpc->total_exten == old_total_exten) {
+		if (option_debug > 2)
+			ast_log(LOG_DEBUG, "manager_show_dialplan: Found nothing new\n");
+		/* Nothing new under the sun */
+		return -1;
+	} else {
+		return res;
+	}
+}
+
+/*! \brief  Manager listing of dial plan */
+static int manager_show_dialplan(struct mansession *s, struct message *m)
+{
+	char *exten = NULL, *context = NULL;
+	char *id = astman_get_header(m, "ActionID");
+	char idtext[256];
+	int res;
+
+	/* Variables used for different counters */
+	struct dialplan_counters counters;
+
+	if (id && !ast_strlen_zero(id))
+		snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", id);
+	else
+		idtext[0] = '\0';
+
+	memset(&counters, 0, sizeof(counters));
+
+	exten = astman_get_header(m, "Extension");
+	context = astman_get_header(m, "Context");
+	
+	res = manager_show_dialplan_helper(s, m, idtext, context, exten, &counters, NULL);
+
+	if (context && !counters.context_existence) {
+		char errorbuf[BUFSIZ];
+	
+		snprintf(errorbuf, sizeof(errorbuf), "Did not find context %s\r\n", context);
+		astman_send_error(s, m, errorbuf);
+		return 0;
+	}
+	if (exten && !counters.extension_existence) {
+		char errorbuf[BUFSIZ];
+
+		if (context)
+			snprintf(errorbuf, sizeof(errorbuf), "Did not find extension %s@%s\r\n", exten, context);
+		else
+			snprintf(errorbuf, sizeof(errorbuf), "Did not find extension %s in any context\r\n", exten);
+		astman_send_error(s, m, errorbuf);
+		return 0;
+	}
+
+	manager_event(EVENT_FLAG_CONFIG, "ShowDialPlanComplete",
+		"EventList: Complete\r\n"
+		"ListItems: %d\r\n"
+		"ListExtensions: %d\r\n"
+		"ListPriorities: %d\r\n"	
+		"ListContexts: %d\r\n"	
+		"%s"
+		"\r\n", counters.total_items, counters.total_exten, counters.total_prio, counters.total_context, idtext);
+
+	/* everything ok */
+	return 0;
+}
+
+static char mandescr_show_dialplan[] =
+"Description: Show dialplan contexts and extensions.\n"
+"Be aware that showing the full dialplan may take a lot of capacity\n"
+"Variables: \n"
+" ActionID: <id>		Action ID for this AMI transaction (optional)\n"
+" Extension: <extension>	Extension (Optional)\n"
+" Context: <context>		Context (Optional)\n"
+"\n";
+
+
 /*! \brief CLI support for listing global variables in a parseable way */
 static int handle_show_globals(int fd, int argc, char *argv[])
 {
@@ -3656,19 +3659,6 @@ static int handle_show_globals(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-/*! \brief  CLI support for setting global variables */
-static int handle_set_global_deprecated(int fd, int argc, char *argv[])
-{
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-
-	pbx_builtin_setvar_helper(NULL, argv[2], argv[3]);
-	ast_cli(fd, "\n    -- Global variable %s set to %s\n", argv[2], argv[3]);
-
-	return RESULT_SUCCESS;
-}
-
-
 static int handle_set_global(int fd, int argc, char *argv[])
 {
 	if (argc != 5)
@@ -3685,105 +3675,80 @@ static int handle_set_global(int fd, int argc, char *argv[])
 /*
  * CLI entries for upper commands ...
  */
-static struct ast_cli_entry cli_show_applications_deprecated = {
-	{ "show", "applications", NULL },
-	handle_show_applications_deprecated, NULL,
-	NULL, complete_show_applications_deprecated };
-
-static struct ast_cli_entry cli_show_functions_deprecated = {
-	{ "show", "functions", NULL },
-	handle_show_functions_deprecated, NULL,
-        NULL };
-
-static struct ast_cli_entry cli_show_switches_deprecated = {
-	{ "show", "switches", NULL },
-	handle_show_switches, NULL,
-        NULL };
-
-static struct ast_cli_entry cli_show_hints_deprecated = {
-	{ "show", "hints", NULL },
-	handle_show_hints, NULL,
-        NULL };
-
-static struct ast_cli_entry cli_show_globals_deprecated = {
-	{ "show", "globals", NULL },
-	handle_show_globals, NULL,
-        NULL };
-
-static struct ast_cli_entry cli_show_function_deprecated = {
-	{ "show" , "function", NULL },
-	handle_show_function_deprecated, NULL,
-        NULL, complete_show_function };
-
-static struct ast_cli_entry cli_show_application_deprecated = {
-	{ "show", "application", NULL },
-	handle_show_application_deprecated, NULL,
-        NULL, complete_show_application };
-
-static struct ast_cli_entry cli_show_dialplan_deprecated = {
-	{ "show", "dialplan", NULL },
-	handle_show_dialplan, NULL,
-        NULL, complete_show_dialplan_context };
-
-static struct ast_cli_entry cli_set_global_deprecated = {
-	{ "set", "global", NULL },
-	handle_set_global_deprecated, NULL,
-        NULL };
-
 static struct ast_cli_entry pbx_cli[] = {
 	{ { "core", "show", "applications", NULL },
 	handle_show_applications, "Shows registered dialplan applications",
-	show_applications_help, complete_show_applications, &cli_show_applications_deprecated },
+	show_applications_help, complete_show_applications },
 
 	{ { "core", "show", "functions", NULL },
 	handle_show_functions, "Shows registered dialplan functions",
-	show_functions_help, NULL, &cli_show_functions_deprecated },
+	show_functions_help },
 
 	{ { "core", "show", "switches", NULL },
 	handle_show_switches, "Show alternative switches",
-	show_switches_help, NULL, &cli_show_switches_deprecated },
+	show_switches_help },
 
 	{ { "core", "show", "hints", NULL },
 	handle_show_hints, "Show dialplan hints",
-	show_hints_help, NULL, &cli_show_hints_deprecated },
+	show_hints_help },
 
 	{ { "core", "show", "globals", NULL },
 	handle_show_globals, "Show global dialplan variables",
-	show_globals_help, NULL, &cli_show_globals_deprecated },
+	show_globals_help },
 
 	{ { "core", "show" , "function", NULL },
 	handle_show_function, "Describe a specific dialplan function",
-	show_function_help, complete_show_function, &cli_show_function_deprecated },
+	show_function_help, complete_show_function },
 
 	{ { "core", "show", "application", NULL },
 	handle_show_application, "Describe a specific dialplan application",
-	show_application_help, complete_show_application, &cli_show_application_deprecated },
+	show_application_help, complete_show_application },
 
 	{ { "core", "set", "global", NULL },
 	handle_set_global, "Set global dialplan variable",
-	set_global_help, NULL, &cli_set_global_deprecated },
+	set_global_help },
 
 	{ { "dialplan", "show", NULL },
 	handle_show_dialplan, "Show dialplan",
-	show_dialplan_help, complete_show_dialplan_context, &cli_show_dialplan_deprecated },
+	show_dialplan_help, complete_show_dialplan_context },
 };
+
+static void unreference_cached_app(struct ast_app *app)
+{
+	struct ast_context *context = NULL;
+	struct ast_exten *eroot = NULL, *e = NULL;
+
+	ast_lock_contexts();
+	while ((context = ast_walk_contexts(context))) {
+		while ((eroot = ast_walk_context_extensions(context, eroot))) {
+			while ((e = ast_walk_extension_priorities(eroot, e))) {
+				if (e->cached_app == app)
+					e->cached_app = NULL;
+			}
+		}
+	}
+	ast_unlock_contexts();
+
+	return;
+}
 
 int ast_unregister_application(const char *app)
 {
 	struct ast_app *tmp;
 
-	AST_LIST_LOCK(&apps);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&apps, tmp, list) {
+	AST_RWLIST_WRLOCK(&apps);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&apps, tmp, list) {
 		if (!strcasecmp(app, tmp->name)) {
-			AST_LIST_REMOVE_CURRENT(&apps, list);
+			unreference_cached_app(tmp);
+			AST_RWLIST_REMOVE_CURRENT(&apps, list);
 			if (option_verbose > 1)
 				ast_verbose( VERBOSE_PREFIX_2 "Unregistered application '%s'\n", tmp->name);
 			free(tmp);
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
-	AST_LIST_UNLOCK(&apps);
+	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_UNLOCK(&apps);
 
 	return tmp ? 0 : -1;
 }
@@ -3873,10 +3838,10 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, const char 
 	   other code paths that use this order
 	*/
 	ast_mutex_lock(&conlock);
-	AST_LIST_LOCK(&hints);
+	AST_RWLIST_WRLOCK(&hints);
 
 	/* preserve all watchers for hints associated with this registrar */
-	AST_LIST_TRAVERSE(&hints, hint, list) {
+	AST_RWLIST_TRAVERSE(&hints, hint, list) {
 		if (hint->callbacks && !strcmp(registrar, hint->exten->parent->registrar)) {
 			length = strlen(hint->exten->exten) + strlen(hint->exten->parent->name) + 2 + sizeof(*this);
 			if (!(this = ast_calloc(1, length)))
@@ -3895,7 +3860,8 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, const char 
 	tmp = *extcontexts;
 	if (registrar) {
 		/* XXX remove previous contexts from same registrar */
-		ast_log(LOG_DEBUG, "must remove any reg %s\n", registrar);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "must remove any reg %s\n", registrar);
 		__ast_context_destroy(NULL,registrar);
 		while (tmp) {
 			lasttmp = tmp;
@@ -3923,7 +3889,7 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, const char 
 	while ((this = AST_LIST_REMOVE_HEAD(&store, list))) {
 		exten = ast_hint_extension(NULL, this->context, this->exten);
 		/* Find the hint in the list of hints */
-		AST_LIST_TRAVERSE(&hints, hint, list) {
+		AST_RWLIST_TRAVERSE(&hints, hint, list) {
 			if (hint->exten == exten)
 				break;
 		}
@@ -3948,7 +3914,7 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, const char 
 		free(this);
 	}
 
-	AST_LIST_UNLOCK(&hints);
+	AST_RWLIST_UNLOCK(&hints);
 	ast_mutex_unlock(&conlock);
 
 	return;
@@ -4898,7 +4864,7 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	}
 
 	/* allocation of the cdr was successful */
-	ast_cdr_init(chan->cdr, chan);  /* initilize our channel's cdr */
+	ast_cdr_init(chan->cdr, chan);  /* initialize our channel's cdr */
 	ast_cdr_start(chan->cdr);       /* record the start and stop time */
 	ast_cdr_end(chan->cdr);
 	ast_cdr_failed(chan->cdr);      /* set the status to failed */
@@ -4936,7 +4902,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 					goto outgoing_exten_cleanup;
 				}
 				/* allocation of the cdr was successful */
-				ast_cdr_init(chan->cdr, chan);  /* initilize our channel's cdr */
+				ast_cdr_init(chan->cdr, chan);  /* initialize our channel's cdr */
 				ast_cdr_start(chan->cdr);
 			}
 			if (chan->_state == AST_STATE_UP) {
@@ -5108,7 +5074,7 @@ int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, 
 					goto outgoing_app_cleanup;
 				}
 				/* allocation of the cdr was successful */
-				ast_cdr_init(chan->cdr, chan);  /* initilize our channel's cdr */
+				ast_cdr_init(chan->cdr, chan);  /* initialize our channel's cdr */
 				ast_cdr_start(chan->cdr);
 			}
 			ast_set_variables(chan, vars);
@@ -5228,7 +5194,8 @@ void __ast_context_destroy(struct ast_context *con, const char *registrar)
 	for (tmp = contexts; tmp; ) {
 		struct ast_context *next;	/* next starting point */
 		for (; tmp; tmpl = tmp, tmp = tmp->next) {
-			ast_log(LOG_DEBUG, "check ctx %s %s\n", tmp->name, tmp->registrar);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "check ctx %s %s\n", tmp->name, tmp->registrar);
 			if ( (!registrar || !strcasecmp(registrar, tmp->registrar)) &&
 			     (!con || !strcasecmp(tmp->name, con->name)) )
 				break;	/* found it */
@@ -5236,7 +5203,8 @@ void __ast_context_destroy(struct ast_context *con, const char *registrar)
 		if (!tmp)	/* not found, we are done */
 			break;
 		ast_mutex_lock(&tmp->lock);
-		ast_log(LOG_DEBUG, "delete ctx %s %s\n", tmp->name, tmp->registrar);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "delete ctx %s %s\n", tmp->name, tmp->registrar);
 		next = tmp->next;
 		if (tmpl)
 			tmpl->next = next;
@@ -5284,12 +5252,14 @@ static void wait_for_hangup(struct ast_channel *chan, void *data)
 {
 	int res;
 	struct ast_frame *f;
+	double waitsec;
 	int waittime;
 
-	if (ast_strlen_zero(data) || (sscanf(data, "%d", &waittime) != 1) || (waittime < 0))
-		waittime = -1;
-	if (waittime > -1) {
-		ast_safe_sleep(chan, waittime * 1000);
+	if (ast_strlen_zero(data) || (sscanf(data, "%lg", &waitsec) != 1) || (waitsec < 0))
+		waitsec = -1;
+	if (waitsec > -1) {
+		waittime = waitsec * 1000.0;
+		ast_safe_sleep(chan, waittime);
 	} else do {
 		res = ast_waitfor(chan, -1);
 		if (res < 0)
@@ -5507,11 +5477,12 @@ static int pbx_builtin_execiftime(struct ast_channel *chan, void *data)
  */
 static int pbx_builtin_wait(struct ast_channel *chan, void *data)
 {
+	double s;
 	int ms;
 
 	/* Wait for "n" seconds */
-	if (data && (ms = atof(data)) > 0) {
-		ms *= 1000;
+	if (data && (s = atof(data)) > 0.0) {
+		ms = s*1000.0;
 		return ast_safe_sleep(chan, ms);
 	}
 	return 0;
@@ -5523,7 +5494,7 @@ static int pbx_builtin_wait(struct ast_channel *chan, void *data)
 static int pbx_builtin_waitexten(struct ast_channel *chan, void *data)
 {
 	int ms, res;
-	double sec;
+	double s;
 	struct ast_flags flags = {0};
 	char *opts[1] = { NULL };
 	char *parse;
@@ -5547,12 +5518,13 @@ static int pbx_builtin_waitexten(struct ast_channel *chan, void *data)
 		ast_indicate_data(chan, AST_CONTROL_HOLD, opts[0], strlen(opts[0]));
 
 	/* Wait for "n" seconds */
-	if (args.timeout && (sec = atof(args.timeout)) > 0.0)
-		ms = 1000 * sec;
+	if (args.timeout && (s = atof(args.timeout)) > 0)
+		 ms = s * 1000.0;
 	else if (chan->pbx)
 		ms = chan->pbx->rtimeout * 1000;
 	else
 		ms = 10000;
+
 	res = ast_waitfordigit(chan, ms);
 	if (!res) {
 		if (ast_exists_extension(chan, chan->context, chan->exten, chan->priority + 1, chan->cid.cid_num)) {
@@ -5580,6 +5552,7 @@ static int pbx_builtin_waitexten(struct ast_channel *chan, void *data)
 static int pbx_builtin_background(struct ast_channel *chan, void *data)
 {
 	int res = 0;
+	int mres = 0;
 	struct ast_flags flags = {0};
 	char *parse;
 	AST_DECLARE_APP_ARGS(args,
@@ -5616,7 +5589,7 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 	/* Answer if need be */
 	if (chan->_state != AST_STATE_UP) {
 		if (ast_test_flag(&flags, BACKGROUND_SKIP)) {
-			return 0;
+			goto done;
 		} else if (!ast_test_flag(&flags, BACKGROUND_NOANSWER)) {
 			res = ast_answer(chan);
 		}
@@ -5625,12 +5598,14 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 	if (!res) {
 		char *back = args.filename;
 		char *front;
+
 		ast_stopstream(chan);		/* Stop anything playing */
 		/* Stream the list of files */
 		while (!res && (front = strsep(&back, "&")) ) {
 			if ( (res = ast_streamfile(chan, front, args.lang)) ) {
 				ast_log(LOG_WARNING, "ast_streamfile failed on %s for %s\n", chan->name, (char*)data);
 				res = 0;
+				mres = 1;
 				break;
 			}
 			if (ast_test_flag(&flags, BACKGROUND_PLAYBACK)) {
@@ -5649,6 +5624,8 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 		chan->priority = 0;
 		res = 0;
 	}
+done:
+	pbx_builtin_setvar_helper(chan, "BACKGROUNDSTATUS", mres ? "FAILED" : "SUCCESS");
 	return res;
 }
 
@@ -5861,31 +5838,6 @@ int pbx_builtin_importvar(struct ast_channel *chan, void *data)
 	return(0);
 }
 
-/*! \todo XXX overwrites data ? */
-static int pbx_builtin_setglobalvar(struct ast_channel *chan, void *data)
-{
-	char *name;
-	char *stringp = data;
-	static int dep_warning = 0;
-
-	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Ignoring, since there is no variable to set\n");
-		return 0;
-	}
-
-	name = strsep(&stringp, "=");
-
-	if (!dep_warning) {
-		dep_warning = 1;
-		ast_log(LOG_WARNING, "SetGlobalVar is deprecated.  Please use Set(GLOBAL(%s)=%s) instead.\n", name, stringp);
-	}
-
-	/*! \todo XXX watch out, leading whitespace ? */
-	pbx_builtin_setvar_helper(NULL, name, stringp);
-
-	return(0);
-}
-
 static int pbx_builtin_noop(struct ast_channel *chan, void *data)
 {
 	return 0;
@@ -5929,7 +5881,8 @@ static int pbx_builtin_gotoif(struct ast_channel *chan, void *data)
 	branch = pbx_checkcondition(condition) ? branch1 : branch2;
 
 	if (ast_strlen_zero(branch)) {
-		ast_log(LOG_DEBUG, "Not taking any branch\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Not taking any branch\n");
 		return 0;
 	}
 
@@ -6008,6 +5961,9 @@ int load_pbx(void)
 			return -1;
 		}
 	}
+	
+	/* Register manager application */
+	ast_manager_register2("ShowDialPlan", EVENT_FLAG_CONFIG, manager_show_dialplan, "List dialplan", mandescr_show_dialplan);
 	return 0;
 }
 
