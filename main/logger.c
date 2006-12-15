@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47490 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <signal.h>
 #include <stdarg.h>
@@ -83,8 +83,11 @@ static int syslog_level_map[] = {
 
 static char dateformat[256] = "%b %e %T";		/* Original Asterisk Format */
 
+static char queue_log_name[256] = QUEUELOG;
+
 static int filesize_reload_needed = 0;
 static int global_logmask = -1;
+static int rotatetimestamp = 0;
 
 static struct {
 	unsigned int queue_log:1;
@@ -134,10 +137,10 @@ static int colors[] = {
 	COLOR_BRGREEN
 };
 
-AST_THREADSTORAGE(verbose_buf, verbose_buf_init);
+AST_THREADSTORAGE(verbose_buf);
 #define VERBOSE_BUF_INIT_SIZE   128
 
-AST_THREADSTORAGE(log_buf, log_buf_init);
+AST_THREADSTORAGE(log_buf);
 #define LOG_BUF_INIT_SIZE       128
 
 static int make_components(char *s, int lineno)
@@ -266,9 +269,9 @@ static struct logchannel *make_logchannel(char *channel, char *components, int l
 		}		  
 		
 		if(!ast_strlen_zero(hostname)) {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s.%s",(char *)ast_config_AST_LOG_DIR, channel, hostname);
+			snprintf(chan->filename, sizeof(chan->filename), "%s/%s.%s", ast_config_AST_LOG_DIR, channel, hostname);
 		} else {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s", (char *)ast_config_AST_LOG_DIR, channel);
+			snprintf(chan->filename, sizeof(chan->filename), "%s/%s", ast_config_AST_LOG_DIR, channel);
 		}
 		chan->fileptr = fopen(chan->filename, "a");
 		if (!chan->fileptr) {
@@ -336,6 +339,10 @@ static void init_logger_chain(void)
 		logfiles.queue_log = ast_true(s);
 	if ((s = ast_variable_retrieve(cfg, "general", "event_log")))
 		logfiles.event_log = ast_true(s);
+	if ((s = ast_variable_retrieve(cfg, "general", "queue_log_name")))
+		ast_copy_string(queue_log_name, s, sizeof(queue_log_name));
+	if ((s = ast_variable_retrieve(cfg, "general", "rotatetimestamp")))
+		rotatetimestamp = ast_true(s);
 
 	AST_LIST_LOCK(&logchannels);
 	var = ast_variable_browse(cfg, "logfiles");
@@ -388,7 +395,7 @@ int reload_logger(int rotate)
 		queue_rotate = 0;
 	qlog = NULL;
 
-	mkdir((char *)ast_config_AST_LOG_DIR, 0755);
+	mkdir(ast_config_AST_LOG_DIR, 0755);
 
 	AST_LIST_TRAVERSE(&logchannels, f, list) {
 		if (f->disabled) {
@@ -400,16 +407,19 @@ int reload_logger(int rotate)
 			f->fileptr = NULL;
 			if (rotate) {
 				ast_copy_string(old, f->filename, sizeof(old));
-	
-				for (x = 0; ; x++) {
-					snprintf(new, sizeof(new), "%s.%d", f->filename, x);
-					myf = fopen((char *)new, "r");
-					if (myf)
-						fclose(myf);
-					else
-						break;
-				}
-	    
+				
+				if (!rotatetimestamp) { 
+					for (x = 0; ; x++) {
+						snprintf(new, sizeof(new), "%s.%d", f->filename, x);
+						myf = fopen(new, "r");
+						if (myf)
+							fclose(myf);
+						else
+							break;
+					}
+				} else 
+					snprintf(new, sizeof(new), "%s.%ld", f->filename, (long)time(NULL));
+
 				/* do it */
 				if (rename(old,new))
 					fprintf(stderr, "Unable to rename file '%s' to '%s'\n", old, new);
@@ -422,16 +432,19 @@ int reload_logger(int rotate)
 	init_logger_chain();
 
 	if (logfiles.event_log) {
-		snprintf(old, sizeof(old), "%s/%s", (char *)ast_config_AST_LOG_DIR, EVENTLOG);
+		snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, EVENTLOG);
 		if (event_rotate) {
-			for (x=0;;x++) {
-				snprintf(new, sizeof(new), "%s/%s.%d", (char *)ast_config_AST_LOG_DIR, EVENTLOG,x);
-				myf = fopen((char *)new, "r");
-				if (myf) 	/* File exists */
-					fclose(myf);
-				else
-					break;
-			}
+			if (!rotatetimestamp) { 
+				for (x=0;;x++) {
+					snprintf(new, sizeof(new), "%s/%s.%d", ast_config_AST_LOG_DIR, EVENTLOG,x);
+					myf = fopen(new, "r");
+					if (myf) 	/* File exists */
+						fclose(myf);
+					else
+						break;
+				}
+			} else 
+				snprintf(new, sizeof(new), "%s/%s.%ld", ast_config_AST_LOG_DIR, EVENTLOG,(long)time(NULL));
 	
 			/* do it */
 			if (rename(old,new))
@@ -450,17 +463,20 @@ int reload_logger(int rotate)
 	}
 
 	if (logfiles.queue_log) {
-		snprintf(old, sizeof(old), "%s/%s", (char *)ast_config_AST_LOG_DIR, QUEUELOG);
+		snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, queue_log_name);
 		if (queue_rotate) {
-			for (x = 0; ; x++) {
-				snprintf(new, sizeof(new), "%s/%s.%d", (char *)ast_config_AST_LOG_DIR, QUEUELOG, x);
-				myf = fopen((char *)new, "r");
-				if (myf) 	/* File exists */
-					fclose(myf);
-				else
-					break;
-			}
+			if (!rotatetimestamp) { 
+				for (x = 0; ; x++) {
+					snprintf(new, sizeof(new), "%s/%s.%d", ast_config_AST_LOG_DIR, queue_log_name, x);
+					myf = fopen(new, "r");
+					if (myf) 	/* File exists */
+						fclose(myf);
+					else
+						break;
+				}
 	
+			} else 
+				snprintf(new, sizeof(new), "%s/%s.%ld", ast_config_AST_LOG_DIR, queue_log_name,(long)time(NULL));
 			/* do it */
 			if (rename(old, new))
 				ast_log(LOG_ERROR, "Unable to rename file '%s' to '%s'\n", old, new);
@@ -589,20 +605,20 @@ int init_logger(void)
 	/* register the logger cli commands */
 	ast_cli_register_multiple(cli_logger, sizeof(cli_logger) / sizeof(struct ast_cli_entry));
 
-	mkdir((char *)ast_config_AST_LOG_DIR, 0755);
+	mkdir(ast_config_AST_LOG_DIR, 0755);
   
 	/* create log channels */
 	init_logger_chain();
 
 	/* create the eventlog */
 	if (logfiles.event_log) {
-		mkdir((char *)ast_config_AST_LOG_DIR, 0755);
-		snprintf(tmp, sizeof(tmp), "%s/%s", (char *)ast_config_AST_LOG_DIR, EVENTLOG);
-		eventlog = fopen((char *)tmp, "a");
+		mkdir(ast_config_AST_LOG_DIR, 0755);
+		snprintf(tmp, sizeof(tmp), "%s/%s", ast_config_AST_LOG_DIR, EVENTLOG);
+		eventlog = fopen(tmp, "a");
 		if (eventlog) {
 			ast_log(LOG_EVENT, "Started Asterisk Event Logger\n");
 			if (option_verbose)
-				ast_verbose("Asterisk Event Logger Started %s\n",(char *)tmp);
+				ast_verbose("Asterisk Event Logger Started %s\n", tmp);
 		} else {
 			ast_log(LOG_ERROR, "Unable to create event log: %s\n", strerror(errno));
 			res = -1;
@@ -610,7 +626,7 @@ int init_logger(void)
 	}
 
 	if (logfiles.queue_log) {
-		snprintf(tmp, sizeof(tmp), "%s/%s", (char *)ast_config_AST_LOG_DIR, QUEUELOG);
+		snprintf(tmp, sizeof(tmp), "%s/%s", ast_config_AST_LOG_DIR, queue_log_name);
 		qlog = fopen(tmp, "a");
 		ast_queue_log("NONE", "NONE", "NONE", "QUEUESTART", "%s", "");
 	}
@@ -679,14 +695,14 @@ static void ast_log_vsyslog(int level, const char *file, int line, const char *f
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
 {
 	struct logchannel *chan;
-	struct ast_dynamic_str *buf;
+	struct ast_str *buf;
 	time_t t;
 	struct tm tm;
 	char date[256];
 
 	va_list ap;
 
-	if (!(buf = ast_dynamic_str_thread_get(&log_buf, LOG_BUF_INIT_SIZE)))
+	if (!(buf = ast_str_thread_get(&log_buf, LOG_BUF_INIT_SIZE)))
 		return;
 
 	if (AST_LIST_EMPTY(&logchannels))
@@ -698,7 +714,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 		if (level != __LOG_VERBOSE) {
 			int res;
 			va_start(ap, fmt);
-			res = ast_dynamic_str_thread_set_va(&buf, BUFSIZ, &log_buf, fmt, ap);
+			res = ast_str_set_va(&buf, BUFSIZ, fmt, ap); /* XXX BUFSIZ ? */
 			va_end(ap);
 			if (res != AST_DYNSTR_BUILD_FAILED) {
 				term_filter_escapes(buf->str);
@@ -759,7 +775,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 			if (level != __LOG_VERBOSE) {
 				int res;
 				sprintf(linestr, "%d", line);
-				ast_dynamic_str_thread_set(&buf, BUFSIZ, &log_buf,
+				ast_str_set(&buf, BUFSIZ,
 					"[%s] %s[%ld]: %s:%s %s: ",
 					date,
 					term_color(tmp1, levels[level], colors[level], 0, sizeof(tmp1)),
@@ -772,7 +788,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 				ast_console_puts_mutable(buf->str);
 				
 				va_start(ap, fmt);
-				res = ast_dynamic_str_thread_set_va(&buf, BUFSIZ, &log_buf, fmt, ap);
+				res = ast_str_set_va(&buf, BUFSIZ, fmt, ap);
 				va_end(ap);
 				if (res != AST_DYNSTR_BUILD_FAILED)
 					ast_console_puts_mutable(buf->str);
@@ -780,7 +796,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 		/* File channels */
 		} else if ((chan->logmask & (1 << level)) && (chan->fileptr)) {
 			int res;
-			ast_dynamic_str_thread_set(&buf, BUFSIZ, &log_buf, 
+			ast_str_set(&buf, BUFSIZ,
 				"[%s] %s[%ld] %s: ",
 				date, levels[level], (long)GETTID(), file);
 			res = fprintf(chan->fileptr, "%s", buf->str);
@@ -796,7 +812,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 				int res;
 				/* No error message, continue printing */
 				va_start(ap, fmt);
-				res = ast_dynamic_str_thread_set_va(&buf, BUFSIZ, &log_buf, fmt, ap);
+				res = ast_str_set_va(&buf, BUFSIZ, fmt, ap);
 				va_end(ap);
 				if (res != AST_DYNSTR_BUILD_FAILED) {
 					term_strip(buf->str, buf->str, buf->len);
@@ -827,13 +843,16 @@ void ast_backtrace(void)
 	if ((addresses = ast_calloc(MAX_BACKTRACE_FRAMES, sizeof(*addresses)))) {
 		count = backtrace(addresses, MAX_BACKTRACE_FRAMES);
 		if ((strings = backtrace_symbols(addresses, count))) {
-			ast_log(LOG_DEBUG, "Got %d backtrace record%c\n", count, count != 1 ? 's' : ' ');
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Got %d backtrace record%c\n", count, count != 1 ? 's' : ' ');
 			for (i=0; i < count ; i++) {
-				ast_log(LOG_DEBUG, "#%d: [%08X] %s\n", i, (unsigned int)addresses[i], strings[i]);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "#%d: [%08X] %s\n", i, (unsigned int)addresses[i], strings[i]);
 			}
 			free(strings);
 		} else {
-			ast_log(LOG_DEBUG, "Could not allocate memory for backtrace\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Could not allocate memory for backtrace\n");
 		}
 		free(addresses);
 	}
@@ -849,7 +868,7 @@ void ast_backtrace(void)
 void ast_verbose(const char *fmt, ...)
 {
 	struct verb *v;
-	struct ast_dynamic_str *buf;
+	struct ast_str *buf;
 	int res;
 	va_list ap;
 
@@ -867,11 +886,11 @@ void ast_verbose(const char *fmt, ...)
 		fmt = datefmt;
 	}
 
-	if (!(buf = ast_dynamic_str_thread_get(&verbose_buf, VERBOSE_BUF_INIT_SIZE)))
+	if (!(buf = ast_str_thread_get(&verbose_buf, VERBOSE_BUF_INIT_SIZE)))
 		return;
 
 	va_start(ap, fmt);
-	res = ast_dynamic_str_thread_set_va(&buf, 0, &verbose_buf, fmt, ap);
+	res = ast_str_set_va(&buf, 0, fmt, ap);
 	va_end(ap);
 
 	if (res == AST_DYNSTR_BUILD_FAILED)
