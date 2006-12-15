@@ -19,9 +19,30 @@
 /*!
  * \file threadstorage.h
  * \author Russell Bryant <russell@digium.com>
- *
  * \brief Definitions to aid in the use of thread local storage
-*/
+ *
+ * \arg \ref AstThreadStorage
+ */
+
+/*!
+ * \page AstThreadStorage The Asterisk Thread Storage API
+ *
+ *
+ * The POSIX threads (pthreads) API provides the ability to define thread
+ * specific data.  The functions and structures defined here are intended
+ * to centralize the code that is commonly used when using thread local
+ * storage.
+ *
+ * The motivation for using this code in Asterisk is for situations where
+ * storing data on a thread-specific basis can provide some amount of
+ * performance benefit.  For example, there are some call types in Asterisk
+ * where ast_frame structures must be allocated very rapidly (easily 50, 100,
+ * 200 times a second).  Instead of doing the equivalent of that many calls
+ * to malloc() and free() per second, thread local storage is used to keep a
+ * list of unused frame structures so that they can be continuously reused.
+ *
+ * - \ref threadstorage.h
+ */
 
 #ifndef ASTERISK_THREADSTORAGE_H
 #define ASTERISK_THREADSTORAGE_H
@@ -41,35 +62,51 @@ struct ast_threadstorage {
 	pthread_key_t key;
 	/*! The function that initializes the key */
 	void (*key_init)(void);
+	/*! Custom initialization function specific to the object */
+	int (*custom_init)(void *);
 };
 
 /*!
  * \brief Define a thread storage variable
  *
- * \arg name The name of the thread storage
- * \arg name_init This is a name used to create the function that gets called
- *      to initialize this thread storage. It can be anything since it will not
- *      be referred to anywhere else
+ * \arg name The name of the thread storage object
  *
  * This macro would be used to declare an instance of thread storage in a file.
  *
  * Example usage:
  * \code
- * AST_THREADSTORAGE(my_buf, my_buf_init);
+ * AST_THREADSTORAGE(my_buf);
  * \endcode
  */
-#define AST_THREADSTORAGE(name, name_init) \
-	AST_THREADSTORAGE_CUSTOM(name, name_init, ast_free) 
+#define AST_THREADSTORAGE(name) \
+	AST_THREADSTORAGE_CUSTOM(name, NULL, ast_free) 
 
-#define AST_THREADSTORAGE_CUSTOM(name, name_init, cleanup)  \
-static void name_init(void);                                \
-static struct ast_threadstorage name = {                    \
-	.once = PTHREAD_ONCE_INIT,                          \
-	.key_init = name_init,                              \
-};                                                          \
-static void name_init(void)                                 \
-{                                                           \
-	pthread_key_create(&(name).key, cleanup);           \
+/*!
+ * \brief Define a thread storage variable, with custom initialization and cleanup
+ *
+ * \arg name The name of the thread storage object
+ * \arg init This is a custom function that will be called after each thread specific
+ *           object is allocated, with the allocated block of memory passed
+ *           as the argument.
+ * \arg cleanup This is a custom function that will be called instead of ast_free
+ *              when the thread goes away.  Note that if this is used, it *MUST*
+ *              call free on the allocated memory.
+ *
+ * Example usage:
+ * \code
+ * AST_THREADSTORAGE_CUSTOM(my_buf, my_init, my_cleanup);
+ * \endcode
+ */
+#define AST_THREADSTORAGE_CUSTOM(name, c_init, c_cleanup) \
+static void init_##name(void);                            \
+static struct ast_threadstorage name = {                  \
+	.once = PTHREAD_ONCE_INIT,                        \
+	.key_init = init_##name,                          \
+	.custom_init = c_init,                            \
+};                                                        \
+static void init_##name(void)                             \
+{                                                         \
+	pthread_key_create(&(name).key, c_cleanup);       \
 }
 
 /*!
@@ -111,6 +148,10 @@ void *ast_threadstorage_get(struct ast_threadstorage *ts, size_t init_size),
 	if (!(buf = pthread_getspecific(ts->key))) {
 		if (!(buf = ast_calloc(1, init_size)))
 			return NULL;
+		if (ts->custom_init && ts->custom_init(buf)) {
+			free(buf);
+			return NULL;
+		}
 		pthread_setspecific(ts->key, buf);
 	}
 
@@ -118,14 +159,18 @@ void *ast_threadstorage_get(struct ast_threadstorage *ts, size_t init_size),
 }
 )
 
+void __ast_threadstorage_cleanup(void *);
+
 /*!
- * \brief A dynamic length string
+ * A dynamic length string. This is just a C string prefixed by a length
+ * field. len reflects the actual space allocated, while the string is
+ * NUL-terminated as a regular C string.
+ * One should never declare a variable with this type, but only a pointer
+ * to it, and use ast_dynamic_str_create() to initialize it.
  */
 struct ast_dynamic_str {
-	/* The current maximum length of the string */
-	size_t len;
-	/* The string buffer */
-	char str[0];
+	size_t len;	/*!< The current maximum length of the string */
+	char str[0];	/*!< The string buffer */
 };
 
 /*!
@@ -136,7 +181,7 @@ struct ast_dynamic_str {
  * \return This function returns a pointer to the dynamic string length.  The
  *         result will be NULL in the case of a memory allocation error.
  *
- * /note The result of this function is dynamically allocated memory, and must
+ * \note The result of this function is dynamically allocated memory, and must
  *       be free()'d after it is no longer needed.
  */
 AST_INLINE_API(
@@ -164,7 +209,7 @@ struct ast_dynamic_str * attribute_malloc ast_dynamic_str_create(size_t init_len
  *      current length may be bigger if previous operations in this thread have
  *      caused it to increase.
  *
- * \return This function will return the thread locally storaged dynamic string
+ * \return This function will return the thread locally stored dynamic string
  *         associated with the thread storage management variable passed as the
  *         first argument.
  *         The result will be NULL in the case of a memory allocation error.
@@ -220,7 +265,7 @@ enum {
  * \arg buf This is the address of a pointer to an ast_dynamic_str which should
  *      have been retrieved using ast_dynamic_str_thread_get.  It will need to
  *      be updated in the case that the buffer has to be reallocated to
- *      accomodate a longer string than what it currently has space for.
+ *      accommodate a longer string than what it currently has space for.
  * \arg max_len This is the maximum length to allow the string buffer to grow
  *      to.  If this is set to 0, then there is no maximum length.
  * \arg ts This is a pointer to the thread storage structure declared by using
@@ -291,6 +336,21 @@ enum {
  * ast_dynamic_str_thread_set_va except for an addition argument, append.
  * If append is non-zero, this will append to the current string instead of
  * writing over it.
+ *
+ * In the case that this function is called and the buffer was not large enough
+ * to hold the result, the partial write will be truncated, and the result
+ * AST_DYNSTR_BUILD_RETRY will be returned to indicate that the buffer size
+ * was increased, and the function should be called a second time.
+ *
+ * A return of AST_DYNSTR_BUILD_FAILED indicates a memory allocation error.
+ *
+ * A return value greater than or equal to zero indicates the number of
+ * characters that have been written, not including the terminating '\0'.
+ * In the append case, this only includes the number of characters appended.
+ *
+ * \note This function should never need to be called directly.  It should
+ *       through calling one of the other functions or macros defined in this
+ *       file.
  */
 int ast_dynamic_str_thread_build_va(struct ast_dynamic_str **buf, size_t max_len,
 	struct ast_threadstorage *ts, int append, const char *fmt, va_list ap);
@@ -378,7 +438,7 @@ int __attribute__ ((format (printf, 4, 5))) ast_dynamic_str_thread_append(
  *
  * \arg buf This is the address of a pointer to an ast_dynamic_str.  It will
  *      need to be updated in the case that the buffer has to be reallocated to
- *      accomodate a longer string than what it currently has space for.
+ *      accommodate a longer string than what it currently has space for.
  * \arg max_len This is the maximum length to allow the string buffer to grow
  *      to.  If this is set to 0, then there is no maximum length.
  *
@@ -402,7 +462,7 @@ int __attribute__ ((format (printf, 3, 4))) ast_dynamic_str_set(
 )
 
 /*!
- * \brief Append to a dynatic string
+ * \brief Append to a dynamic string
  *
  * The arguments, return values, and usage of this function are the same as
  * ast_dynamic_str_set().  However, this function appends to the string instead
