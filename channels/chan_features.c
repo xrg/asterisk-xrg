@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <string.h>
@@ -64,9 +64,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
 #include "asterisk/stringfields.h"
 
 static const char tdesc[] = "Feature Proxy Channel Driver";
-
-static int usecnt =0;
-AST_MUTEX_DEFINE_STATIC(usecnt_lock);
 
 #define IS_OUTBOUND(a,b) (a == b->chan ? 1 : 0)
 
@@ -209,7 +206,8 @@ static void swap_subs(struct feature_pvt *p, int a, int b)
 	int tinthreeway;
 	struct ast_channel *towner;
 
-	ast_log(LOG_DEBUG, "Swapping %d and %d\n", a, b);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Swapping %d and %d\n", a, b);
 
 	towner = p->subs[a].owner;
 	tinthreeway = p->subs[a].inthreeway;
@@ -464,7 +462,7 @@ static struct ast_channel *features_new(struct feature_pvt *p, int state, int in
 	for (x=1;x<4;x++) {
 		if (b2)
 			free(b2);
-		b2 = ast_safe_string_alloc("Feature/%s/%s-%d", p->tech, p->dest, x);
+		asprintf(&b2, "Feature/%s/%s-%d", p->tech, p->dest, x);
 		for (y=0;y<3;y++) {
 			if (y == index)
 				continue;
@@ -492,10 +490,6 @@ static struct ast_channel *features_new(struct feature_pvt *p, int state, int in
 	p->subs[index].owner = tmp;
 	if (!p->owner)
 		p->owner = tmp;
-	ast_mutex_lock(&usecnt_lock);
-	usecnt++;
-	ast_mutex_unlock(&usecnt_lock);
-	ast_update_use_count();
 	return tmp;
 }
 
@@ -535,7 +529,7 @@ static int features_show(int fd, int argc, char **argv)
 	return RESULT_SUCCESS;
 }
 
-static char show_features_usage[] = 
+static const char show_features_usage[] = 
 "Usage: feature show channels\n"
 "       Provides summary information on feature channels.\n";
 
