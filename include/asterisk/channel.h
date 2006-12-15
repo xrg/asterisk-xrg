@@ -81,7 +81,43 @@
 	\arg translate.h - Transcoding support functions
 	\arg \ref channel_drivers - Implemented channel drivers
 	\arg \ref Def_Frame Asterisk Multimedia Frames
+	\arg \ref Def_Bridge
 
+*/
+/*! \page Def_Bridge Asterisk Channel Bridges
+
+	In Asterisk, there's several media bridges. 
+
+	The Core bridge handles two channels (a "phone call") and bridge
+	them together.
+	
+	The conference bridge (meetme) handles several channels simultaneously
+	with the support of an external timer (zaptel timer). This is used
+	not only by the Conference application (meetme) but also by the
+	page application and the SLA system introduced in 1.4.
+	The conference bridge does not handle video.
+
+	When two channels of the same type connect, the channel driver
+	or the media subsystem used by the channel driver (i.e. RTP)
+	can create a native bridge without sending media through the
+	core.
+
+	Native briding can be disabled by a number of reasons,
+	like DTMF being needed by the core or codecs being incompatible
+	so a transcoding module is needed.
+
+References:
+        - ast_channel_early_bridge()
+        - ast_channel_bridge()
+	- app_meetme.c
+	- \ref AstRTPbridge
+        - ast_rtp_bridge() 
+	- \ref Def_Channel
+*/
+
+/*! \page AstFileDesc File descriptors 
+	Asterisk File descriptors are connected to each channel (see \ref Def_Channel)
+	in the \ref ast_channel structure.
 */
 
 #ifndef _ASTERISK_CHANNEL_H
@@ -138,6 +174,8 @@ enum ast_bridge_result {
 
 typedef unsigned long long ast_group_t;
 
+/*! \todo Add an explanation of an Asterisk generator 
+*/
 struct ast_generator {
 	void *(*alloc)(struct ast_channel *chan, void *params);
 	void (*release)(struct ast_channel *chan, void *data);
@@ -238,6 +276,9 @@ struct ast_channel_tech {
 	enum ast_bridge_result (* const bridge)(struct ast_channel *c0, struct ast_channel *c1, int flags,
 						struct ast_frame **fo, struct ast_channel **rc, int timeoutms);
 
+	/*! \brief Bridge two channels of the same type together (early) */
+	enum ast_bridge_result (* const early_bridge)(struct ast_channel *c0, struct ast_channel *c1);
+
 	/*! \brief Indicate a particular condition (e.g. AST_CONTROL_BUSY or AST_CONTROL_RINGING or AST_CONTROL_CONGESTION */
 	int (* const indicate)(struct ast_channel *c, int condition, const void *data, size_t datalen);
 
@@ -266,8 +307,8 @@ struct ast_channel_tech {
 	int (* func_channel_write)(struct ast_channel *chan, char *function, char *data, const char *value);
 };
 
-struct ast_channel_spy_list;
-struct ast_channel_whisper_buffer;
+struct ast_channel_spy_list;	/*!< \todo Add explanation here */
+struct ast_channel_whisper_buffer;	/*!< \todo Add explanation here */
 
 #define	DEBUGCHAN_FLAG  0x80000000
 #define	FRAMECOUNT_INC(x)	( ((x) & DEBUGCHAN_FLAG) | ((x++) & ~DEBUGCHAN_FLAG) )
@@ -333,8 +374,8 @@ struct ast_channel {
 		AST_STRING_FIELD(uniqueid);		/*!< Unique Channel Identifier */
 	);
 	
-	/*! \brief File descriptor for channel -- Drivers will poll on these file descriptors, so at least one must be non -1.  */
-	int fds[AST_MAX_FDS];			
+	/*! \brief File descriptor for channel -- Drivers will poll on these file descriptors, so at least one must be non -1.  See \ref AstFileDesc */
+	int fds[AST_MAX_FDS];	
 
 	void *music_state;				/*!< Music State*/
 	void *generatordata;				/*!< Current generator data if there is any */
@@ -348,12 +389,11 @@ struct ast_channel {
 	struct ast_channel *masqr;			/*!< Who we are masquerading as */
 	int cdrflags;					/*!< Call Detail Record Flags */
 
-	/*! \brief Whether or not we have been hung up...  Do not set this value
-	    directly, use ast_softhangup */
-	int _softhangup;
+	int _softhangup;				/*!< Whether or not we have been hung up...  Do not set this value
+	    							directly, use ast_softhangup() */
 	time_t	whentohangup;				/*!< Non-zero, set to actual time when channel is to be hung up */
 	pthread_t blocker;				/*!< If anyone is blocking, this is them */
-	ast_mutex_t lock;				/*!< Lock, can be used to lock a channel for some operations */
+	ast_mutex_t lock;				/*!< Lock, can be used to lock a channel for some operations - see ast_channel_lock() */
 	const char *blockproc;				/*!< Procedure causing blocking */
 
 	const char *appl;				/*!< Current application */
@@ -370,7 +410,7 @@ struct ast_channel {
 	int (*timingfunc)(void *data);
 	void *timingdata;
 
-	enum ast_channel_state _state;			/*!< State of line -- Don't write directly, use ast_setstate */
+	enum ast_channel_state _state;			/*!< State of line -- Don't write directly, use ast_setstate() */
 	int rings;					/*!< Number of rings so far */
 	struct ast_callerid cid;			/*!< Caller ID, name, presentation etc */
 	char dtmfq[AST_MAX_EXTENSION];			/*!< Any/all queued DTMF characters */
@@ -394,17 +434,16 @@ struct ast_channel {
 
 	struct ast_channel_monitor *monitor;		/*!< Channel monitoring */
 
-	/*! Track the read/written samples for monitor use */
-	unsigned long insmpl;
-	unsigned long outsmpl;
+	unsigned long insmpl;				/*!< Track the read/written samples for monitor use */
+	unsigned long outsmpl;				/*!< Track the read/written samples for monitor use */
 
-	/* Frames in/out counters. The high bit is a debug mask, so
-	 * the counter is only in the remaining bits
-	 */
-	unsigned int fin;
-	unsigned int fout;
+	unsigned int fin;				/*!< Frames in counters. The high bit is a debug mask, so
+	 						 * the counter is only in the remaining bits */
+	unsigned int fout;				/*!< Frames out counters. The high bit is a debug mask, so
+	 						 * the counter is only in the remaining bits */
 	int hangupcause;				/*!< Why is the channel hanged up. See causes.h */
-	struct varshead varshead;			/*!< A linked list for channel variables */
+	struct varshead varshead;			/*!< A linked list for channel variables 
+								(see \ref AstChanVar ) */
 	ast_group_t callgroup;				/*!< Call group for call pickups */
 	ast_group_t pickupgroup;			/*!< Pickup group - which calls groups can be picked up? */
 	unsigned int flags;				/*!< channel flags of AST_FLAG_ type */
@@ -486,6 +525,7 @@ enum {
 	AST_FEATURE_PARKCALL =     (1 << 5),
 };
 
+/*! \brief bridge configuration */
 struct ast_bridge_config {
 	struct ast_flags features_caller;
 	struct ast_flags features_callee;
@@ -502,17 +542,6 @@ struct ast_bridge_config {
 };
 
 struct chanmon;
-
-#define LOAD_OH(oh) {	\
-	oh.context = context; \
-	oh.exten = exten; \
-	oh.priority = priority; \
-	oh.cid_num = cid_num; \
-	oh.cid_name = cid_name; \
-	oh.account = account; \
-	oh.vars = vars; \
-	oh.parent_channel = NULL; \
-} 
 
 struct outgoing_helper {
 	const char *context;
@@ -639,7 +668,7 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *s
  * \param format requested channel format
  * \param data data to pass to the channel requester
  * \param timeout maximum amount of time to wait for an answer
- * \param reason why unsuccessful (if unsuceessful)
+ * \param reason why unsuccessful (if unsuccessful)
  * \param cidnum Caller-ID Number
  * \param cidname Caller-ID Name
  * \return Returns an ast_channel on success or no answer, NULL on failure.  Check the value of chan->_state
@@ -705,7 +734,7 @@ int ast_check_hangup(struct ast_channel *chan);
  * This function compares a offset from current time with the absolute time 
  * out on a channel (when to hang up). If the absolute time out on a channel
  * is earlier than current time plus the offset, it returns 1, if the two
- * time values are equal, it return 0, otherwise, it retturn -1.
+ * time values are equal, it return 0, otherwise, it return -1.
  */
 int ast_channel_cmpwhentohangup(struct ast_channel *chan, time_t offset);
 
@@ -744,7 +773,7 @@ int ast_call(struct ast_channel *chan, char *addr, int timeout);
 int ast_indicate(struct ast_channel *chan, int condition);
 
 /*! \brief Indicates condition of channel, with payload
- * \note Indicate a condition such as AST_CONTROL_BUSY, AST_CONTROL_RINGING, or AST_CONTROL_CONGESTION on a channel
+ * \note Indicate a condition such as AST_CONTROL_HOLD with payload being music on hold class
  * \param chan channel to change the indication
  * \param condition which condition to indicate on the channel
  * \param data pointer to payload data
@@ -762,7 +791,7 @@ int ast_indicate_data(struct ast_channel *chan, int condition, const void *data,
   \return Returns < 0 on  failure, 0 if nothing ever arrived, and the # of ms remaining otherwise */
 int ast_waitfor(struct ast_channel *chan, int ms);
 
-/*! \brief Wait for a specied amount of time, looking for hangups 
+/*! \brief Wait for a specified amount of time, looking for hangups 
  * \param chan channel to wait for
  * \param ms length of time in milliseconds to sleep
  * Waits for a specified amount of time, servicing the channel as required.
@@ -770,7 +799,7 @@ int ast_waitfor(struct ast_channel *chan, int ms);
  */
 int ast_safe_sleep(struct ast_channel *chan, int ms);
 
-/*! \brief Wait for a specied amount of time, looking for hangups and a condition argument 
+/*! \brief Wait for a specified amount of time, looking for hangups and a condition argument 
  * \param chan channel to wait for
  * \param ms length of time in milliseconds to sleep
  * \param cond a function pointer for testing continue condition
@@ -811,14 +840,12 @@ int ast_waitfor_n_fd(int *fds, int n, int *ms, int *exception);
 
 /*! \brief Reads a frame
  * \param chan channel to read a frame from
-	Read a frame.  
-	\return Returns a frame, or NULL on error.  If it returns NULL, you
-		best just stop reading frames and assume the channel has been
-		disconnected. */
+ * \return Returns a frame, or NULL on error.  If it returns NULL, you
+	best just stop reading frames and assume the channel has been
+	disconnected. */
 struct ast_frame *ast_read(struct ast_channel *chan);
 
 /*! \brief Reads a frame, returning AST_FRAME_NULL frame if audio. 
- * Read a frame. 
  	\param chan channel to read a frame from
 	\return  Returns a frame, or NULL on error.  If it returns NULL, you
 		best just stop reading frames and assume the channel has been
@@ -855,7 +882,7 @@ int ast_prod(struct ast_channel *chan);
 int ast_set_read_format(struct ast_channel *chan, int format);
 
 /*! \brief Sets write format on channel chan
- * Set write format for channel to whichever compoent of "format" is best. 
+ * Set write format for channel to whichever component of "format" is best. 
  * \param chan channel to change
  * \param format new format for writing
  * \return Returns 0 on success, -1 on failure
@@ -886,7 +913,20 @@ int ast_recvchar(struct ast_channel *chan, int timeout);
  */
 int ast_senddigit(struct ast_channel *chan, char digit);
 
+/*! \brief Send a DTMF digit to a channel
+ * Send a DTMF digit to a channel.
+ * \param chan channel to act upon
+ * \param digit the DTMF digit to send, encoded in ASCII
+ * \return Returns 0 on success, -1 on failure
+ */
 int ast_senddigit_begin(struct ast_channel *chan, char digit);
+/*! \brief Send a DTMF digit to a channel
+
+ * Send a DTMF digit to a channel.
+ * \param chan channel to act upon
+ * \param digit the DTMF digit to send, encoded in ASCII
+ * \return Returns 0 on success, -1 on failure
+ */
 int ast_senddigit_end(struct ast_channel *chan, char digit);
 
 /*! \brief Receives a text string from a channel
@@ -970,6 +1010,13 @@ int ast_readstring_full(struct ast_channel *c, char *s, int len, int timeout, in
  * \return Returns 0 on success and -1 if it could not be done */
 int ast_channel_make_compatible(struct ast_channel *c0, struct ast_channel *c1);
 
+/*! Bridge two channels together (early)
+ * \param c0 first channel to bridge
+ * \param c1 second channel to bridge
+ * Bridge two channels (c0 and c1) together early. This implies either side may not be answered yet.
+ * \return Returns 0 on success and -1 if it could not be done */
+int ast_channel_early_bridge(struct ast_channel *c0, struct ast_channel *c1);
+
 /*! Bridge two channels together 
  * \param c0 first channel to bridge
  * \param c1 second channel to bridge
@@ -1020,7 +1067,7 @@ char *ast_state2str(enum ast_channel_state);
  * \param transfercapability transfercapabilty to get the name of
  * Give a name to a transfercapbility
  * See above
- * Returns the text form of the binary transfer capbility
+ * Returns the text form of the binary transfer capbaility
  */
 char *ast_transfercapability2str(int transfercapability) attribute_const;
 
@@ -1071,7 +1118,6 @@ int ast_channel_sendurl(struct ast_channel *channel, const char *url);
    being DTMF-deferred */
 int ast_channel_defer_dtmf(struct ast_channel *chan);
 
-/*! Undeos a defer */
 /*! Undo defer.  ast_read will return any dtmf characters that were queued */
 void ast_channel_undefer_dtmf(struct ast_channel *chan);
 
@@ -1092,7 +1138,7 @@ int ast_shutting_down(void);
 /*! Activate a given generator */
 int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, void *params);
 
-/*! Deactive an active generator */
+/*! Deactivate an active generator */
 void ast_deactivate_generator(struct ast_channel *chan);
 
 void ast_set_callerid(struct ast_channel *chan, const char *cidnum, const char *cidname, const char *ani);
@@ -1138,7 +1184,7 @@ int ast_settimeout(struct ast_channel *c, int samples, int (*func)(void *data), 
 int ast_transfer(struct ast_channel *chan, char *dest);
 
 /*!	\brief  Start masquerading a channel
-	XXX This is a seriously wacked out operation.  We're essentially putting the guts of
+	XXX This is a seriously whacked out operation.  We're essentially putting the guts of
            the clone channel into the original channel.  Start by killing off the original
            channel's backend.   I'm not sure we're going to keep this function, because
            while the features are nice, the cost is very high in terms of pure nastiness. XXX
@@ -1337,7 +1383,7 @@ struct ast_variable *ast_channeltype_list(void);
   audio samples, and then to mix in audio from the whisper buffer if it
   is available.
 
-  Note: This function performs no locking; you must hold the channel's lock before
+  \note Note: This function performs no locking; you must hold the channel's lock before
   calling this function.
  */
 int ast_channel_whisper_start(struct ast_channel *chan);
