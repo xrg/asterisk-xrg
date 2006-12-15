@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <time.h>
 #include <string.h>
@@ -108,7 +108,7 @@ struct tdd_state *tdd_new(void)
 		tdd->fskd.hdlc = 0;         /* Async */
 		tdd->fskd.nbit = 5;         /* 5 bits */
 		tdd->fskd.nstop = 1.5;      /* 1.5 stop bits */
-		tdd->fskd.paridad = 0;      /* No parity */
+		tdd->fskd.parity = 0;       /* No parity */
 		tdd->fskd.bw=0;             /* Filter 75 Hz */
 		tdd->fskd.f_mark_idx = 0;   /* 1400 Hz */
 		tdd->fskd.f_space_idx = 1;  /* 1800 Hz */
@@ -157,15 +157,15 @@ int tdd_feed(struct tdd_state *tdd, unsigned char *ubuf, int len)
 	c = res = 0;
 	while (mylen >= 1320) { /* has to have enough to work on */
 		olen = mylen;
-		res = fsk_serie(&tdd->fskd, buf, &mylen, &b);
+		res = fsk_serial(&tdd->fskd, buf, &mylen, &b);
 		if (mylen < 0) {
-			ast_log(LOG_ERROR, "fsk_serie made mylen < 0 (%d) (olen was %d)\n", mylen, olen);
+			ast_log(LOG_ERROR, "fsk_serial made mylen < 0 (%d) (olen was %d)\n", mylen, olen);
 			free(obuf);
 			return -1;
 		}
 		buf += (olen - mylen);
 		if (res < 0) {
-			ast_log(LOG_NOTICE, "fsk_serie failed\n");
+			ast_log(LOG_NOTICE, "fsk_serial failed\n");
 			free(obuf);
 			return -1;
 		}
@@ -174,7 +174,8 @@ int tdd_feed(struct tdd_state *tdd, unsigned char *ubuf, int len)
 			if (b > 0x7f)
 				continue;
 			c = tdd_decode_baudot(tdd,b);
-			if ((c < 1) || (c > 126)) continue; /* if not valid */
+			if ((c < 1) || (c > 126))
+				continue; /* if not valid */
 			break;
 		}
 	}
@@ -261,7 +262,9 @@ int tdd_generate(struct tdd_state *tdd, unsigned char *buf, const char *str)
 	int bytes=0;
 	int i,x;
 	char	c;
+	/*! Baudot letters */
 	static unsigned char lstr[31] = "\000E\nA SIU\rDRJNFCKTZLWHYPQOBG\000MXV";
+	/*! Baudot figures */
 	static unsigned char fstr[31] = "\0003\n- \00787\r$4',!:(5\")2\0006019?&\000./;";
 	/* Initial carriers (real/imaginary) */
 	float cr = 1.0;
