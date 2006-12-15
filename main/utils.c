@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <ctype.h>
 #include <string.h>
@@ -65,9 +65,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
 static char base64[64];
 static char b2a[256];
 
-AST_THREADSTORAGE(inet_ntoa_buf, inet_ntoa_buf_init);
+AST_THREADSTORAGE(inet_ntoa_buf);
 
-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined( __NetBSD__ ) || defined(__APPLE__) || defined(__CYGWIN__)
+#if !defined(HAVE_GETHOSTBYNAME_R)
 
 #define ERANGE 34	/*!< duh? ERANGE value copied from web... */
 #undef gethostbyname
@@ -604,6 +604,21 @@ int ast_wait_for_input(int fd, int ms)
 	return poll(pfd, 1, ms);
 }
 
+/*!
+ * Try to write string, but wait no more than ms milliseconds before timing out.
+ *
+ * \note The code assumes that the file descriptor has NONBLOCK set,
+ * so there is only one system call made to do a write, unless we actually
+ * have a need to wait.  This way, we get better performance.
+ * If the descriptor is blocking, all assumptions on the guaranteed
+ * detail do not apply anymore.
+ * Also note that in the current implementation, the delay is per-write,
+ * so you still have no guarantees, anyways.
+ * Fortunately the routine is only used in a few places (cli.c, manager.c,
+ * res_agi.c) so it is reasonably easy to check how it behaves there.
+ *
+ * XXX We either need to fix the code, or fix the documentation.
+ */
 int ast_carefulwrite(int fd, char *s, int len, int timeoutms) 
 {
 	/* Try to write string, but wait no more than ms milliseconds
@@ -957,32 +972,47 @@ int ast_get_time_t(const char *src, time_t *dst, time_t _default, int *consumed)
 		return -1;
 }
 
-int ast_dynamic_str_thread_build_va(struct ast_dynamic_str **buf, size_t max_len,
+/*!
+ * core handler for dynamic strings.
+ * This is not meant to be called directly, but rather through the
+ * various wrapper macros
+ *	ast_dynamic_str_set(...)
+ *	ast_dynamic_str_append(...)
+ *	ast_dynamic_str_thread_set(...)
+ *	ast_dynamic_str_thread_append(...)
+ */
+int __ast_dyn_str_helper(struct ast_dynamic_str **buf, size_t max_len,
 	struct ast_threadstorage *ts, int append, const char *fmt, va_list ap)
 {
-	int res;
-	int offset = (append && (*buf)->len) ? strlen((*buf)->str) : 0;
+	int res, need;
+	int offset = (append && (*buf)->len) ? (*buf)->used : 0;
 
+	if (max_len < 0)
+		max_len = (*buf)->len;	/* don't exceed the allocated space */
+	/*
+	 * Ask vsnprintf how much space we need. Remember that vsnprintf
+	 * does not count the final '\0' so we must add 1.
+	 */
 	res = vsnprintf((*buf)->str + offset, (*buf)->len - offset, fmt, ap);
 
-	/* Check to see if there was not enough space in the string buffer to prepare
-	 * the string.  Also, if a maximum length is present, make sure the current
-	 * length is less than the maximum before increasing the size. */
-	if ((res + offset + 1) > (*buf)->len && (max_len ? ((*buf)->len < max_len) : 1)) {
-		/* Set the new size of the string buffer to be the size needed
-		 * to hold the resulting string (res) plus one byte for the
-		 * terminating '\0'.  If this size is greater than the max, set
-		 * the new length to be the maximum allowed. */
-		if (max_len)
-			(*buf)->len = ((res + offset + 1) < max_len) ? (res + offset + 1) : max_len;
-		else
-			(*buf)->len = res + offset + 1;
+	need = res + offset + 1;
+	/*
+	 * If there is not enough space and we are below the max length,
+	 * reallocate the buffer and return a message telling to retry.
+	 */
+	if (need > (*buf)->len && (max_len == 0 || (*buf)->len < max_len) ) {
+		if (max_len && max_len < need)	/* truncate as needed */
+			need = max_len;
 
-		if (!(*buf = ast_realloc(*buf, (*buf)->len + sizeof(*(*buf)))))
+		/* We can only realloc malloc'ed space. */
+		if ((*buf)->type != DS_MALLOC)
 			return AST_DYNSTR_BUILD_FAILED;
+		*buf = ast_realloc(*buf, need + sizeof(struct ast_dynamic_str));
+		if (*buf == NULL) /* XXX watch out, we leak memory here */
+			return AST_DYNSTR_BUILD_FAILED;
+		(*buf)->len = need;
 
-		if (append)
-			(*buf)->str[offset] = '\0';
+		(*buf)->str[offset] = '\0';	/* Truncate the partial write. */
 
 		if (ts)
 			pthread_setspecific(ts->key, *buf);
@@ -991,6 +1021,8 @@ int ast_dynamic_str_thread_build_va(struct ast_dynamic_str **buf, size_t max_len
 		 * vsnprintf() again. */
 		return AST_DYNSTR_BUILD_RETRY;
 	}
+	/* update space used, keep in mind the truncation */
+	(*buf)->used = (res + offset > (*buf)->len) ? (*buf)->len : res + offset;
 
 	return res;
 }
