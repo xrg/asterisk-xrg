@@ -24,7 +24,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44378 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +42,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44378 $")
 #include "asterisk/astobj.h"
 #include "asterisk/io.h"
 #include "asterisk/logger.h"
-#include "asterisk/utils.h"
 #include "asterisk/options.h"
 
 /* Message expiry time in milliseconds */
@@ -112,7 +111,8 @@ int ast_smdi_mwi_set(struct ast_smdi_interface *iface, const char *mailbox)
 	fclose(file);
 
 	ASTOBJ_UNLOCK(iface);
-	ast_log(LOG_DEBUG, "Sent MWI set message for %s on %s\n", mailbox, iface->name);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Sent MWI set message for %s on %s\n", mailbox, iface->name);
 	return 0;
 }
 
@@ -143,7 +143,8 @@ int ast_smdi_mwi_unset(struct ast_smdi_interface *iface, const char *mailbox)
 	fclose(file);
 
 	ASTOBJ_UNLOCK(iface);
-	ast_log(LOG_DEBUG, "Sent MWI unset message for %s on %s\n", mailbox, iface->name);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Sent MWI unset message for %s on %s\n", mailbox, iface->name);
 	return 0;
 }
 
@@ -412,7 +413,8 @@ static void *smdi_read(void *iface_p)
 				/* add the message to the message queue */
 				md_msg->timestamp = ast_tvnow();
 				ast_smdi_md_message_push(iface, md_msg);
-				ast_log(LOG_DEBUG, "Recieved SMDI MD message on %s\n", iface->name);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Recieved SMDI MD message on %s\n", iface->name);
 				
 				ASTOBJ_UNREF(md_msg, ast_smdi_md_message_destroy);
 
@@ -455,7 +457,8 @@ static void *smdi_read(void *iface_p)
 				/* add the message to the message queue */
 				mwi_msg->timestamp = ast_tvnow();
 				ast_smdi_mwi_message_push(iface, mwi_msg);
-				ast_log(LOG_DEBUG, "Recieved SMDI MWI message on %s\n", iface->name);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Recieved SMDI MWI message on %s\n", iface->name);
 				
 				ASTOBJ_UNREF(mwi_msg, ast_smdi_mwi_message_destroy);
 			} else {
