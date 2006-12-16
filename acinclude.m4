@@ -23,11 +23,11 @@ case ${withval} in
      USE_$1=no
      ;;
      y|ye|yes)
-     $1_MANDATORY="yes"
+     ac_mandatory_list="${ac_mandatory_list} $1"
      ;;
      *)
      $1_DIR="${withval}"
-     $1_MANDATORY="yes"
+     ac_mandatory_list="${ac_mandatory_list} $1"
      ;;
 esac
 ])
@@ -37,11 +37,71 @@ AC_SUBST([$1_INCLUDE])
 AC_SUBST([PBX_$1])
 ])
 
-# AST_EXT_LIB_CHECK([package symbol name], [package library name], [function to check], [package header], [additional LIB data])
+# Check whether any of the mandatory modules are not present, and
+# print error messages in case.
 
+AC_DEFUN([AST_CHECK_MANDATORY],
+[
+	AC_MSG_CHECKING([for mandatory modules: ${ac_mandatory_list}])
+	err=0;
+	for i in ${ac_mandatory_list}; do
+		eval "a=\${PBX_$i}"
+		if test "x${a}" = "x1" ; then continue; fi
+		if test ${err} = "0" ; then AC_MSG_RESULT(fail) ; fi
+		AC_MSG_RESULT()
+		eval "a=\${${i}_OPTION}"
+		AC_MSG_NOTICE([***])
+		AC_MSG_NOTICE([*** The $i installation appears to be missing or broken.])
+		AC_MSG_NOTICE([*** Either correct the installation, or run configure])
+		AC_MSG_NOTICE([*** including --without-${a}.])
+		err=1
+	done
+	if test $err = 1 ; then exit 1; fi
+	AC_MSG_RESULT(ok)
+])
+
+#-- The following two tests are only performed if PBX_$1 != 1,
+#   so you can use multiple tests and stop at the first matching one.
+#   On success, set PBX_$1 = 1, and also #define HAVE_$1 1
+#   and #define HAVE_$1_VERSION ${last_argument} so you can tell which
+#   test succeeded.
+#   They should be called after AST_EXT_LIB_SETUP($1, ...)
+
+# Check if a given macro is defined in a certain header.
+
+# AST_C_DEFINE_CHECK([package symbol name], [macro name], [header file], [version])
+AC_DEFUN([AST_C_DEFINE_CHECK],
+[
+    if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
+	AC_MSG_CHECKING([for $2 in $3])
+	saved_cppflags="${CPPFLAGS}"
+	if test "x${$1_DIR}" != "x"; then
+	    $1_INCLUDE= "-I${$1_DIR}/include"
+	fi
+	CPPFLAGS="${CPPFLAGS} ${$1_INCLUDE}"
+
+	AC_COMPILE_IFELSE(
+	    [ AC_LANG_PROGRAM( [#include <$3>], [int foo = $2;]) ],
+	    [   AC_MSG_RESULT(yes)
+		PBX_$1=1
+		AC_DEFINE([HAVE_$1], 1, [Define if your system has the $1 headers.])
+		AC_DEFINE([HAVE_$1_VERSION], $4, [Define $1 headers version])
+	    ],
+	    [       AC_MSG_RESULT(no) ] 
+	)
+	CPPFLAGS="${saved_cppflags}"
+    fi
+])
+
+
+# Check for existence of a given package ($1), either looking up a function
+# in a library, or, if no function is supplied, only check for the
+# existence of the header files.
+
+# AST_EXT_LIB_CHECK([package symbol name], [package library name], [function to check], [package header], [additional LIB data], [version])
 AC_DEFUN([AST_EXT_LIB_CHECK],
 [
-if test "${USE_$1}" != "no"; then
+if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
    pbxlibdir=""
    if test "x${$1_DIR}" != "x"; then
       if test -d ${$1_DIR}/lib; then
@@ -50,7 +110,12 @@ if test "${USE_$1}" != "no"; then
       	 pbxlibdir="-L${$1_DIR}"
       fi
    fi
-   AC_CHECK_LIB([$2], [$3], [AST_$1_FOUND=yes], [AST_$1_FOUND=no], ${pbxlibdir} $5)
+   pbxfuncname="$3"
+   if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
+      AST_$1_FOUND=yes
+   else
+      AC_CHECK_LIB([$2], [${pbxfuncname}], [AST_$1_FOUND=yes], [AST_$1_FOUND=no], ${pbxlibdir} $5)
+   fi
 
    if test "${AST_$1_FOUND}" = "yes"; then
       $1_LIB="-l$2 $5"
@@ -67,28 +132,17 @@ if test "${USE_$1}" != "no"; then
 	 fi
       fi
       if test "x${$1_HEADER_FOUND}" = "x0" ; then
-         if test ! -z "${$1_MANDATORY}" ;
-         then
-            AC_MSG_NOTICE( ***)
-            AC_MSG_NOTICE( *** It appears that you do not have the $2 development package installed.)
-            AC_MSG_NOTICE( *** Please install it to include ${$1_DESCRIP} support, or re-run configure)
-            AC_MSG_NOTICE( *** without explicitly specifying --with-${$1_OPTION})
-            exit 1
-         fi
          $1_LIB=""
          $1_INCLUDE=""
-         PBX_$1=0
       else
+         if test "x${pbxfuncname}" = "x" ; then		# only checking headers -> no library
+	    $1_LIB=""
+	 fi
          PBX_$1=1
-         AC_DEFINE_UNQUOTED([HAVE_$1], 1, [Define to indicate the ${$1_DESCRIP} library])
+         # XXX don't know how to evaluate the description (third argument) in AC_DEFINE_UNQUOTED
+         AC_DEFINE_UNQUOTED([HAVE_$1], 1, [Define this to indicate the ${$1_DESCRIP} library])
+	 AC_DEFINE_UNQUOTED([HAVE_$1_VERSION], [$6], [Define to indicate the ${$1_DESCRIP} library version])
       fi
-   elif test ! -z "${$1_MANDATORY}";
-   then
-      AC_MSG_NOTICE(***)
-      AC_MSG_NOTICE(*** The ${$1_DESCRIP} installation on this system appears to be broken.)
-      AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-      AC_MSG_NOTICE(*** without explicitly specifying --with-${$1_OPTION})
-      exit 1
    fi
 fi
 ])
@@ -142,13 +196,21 @@ if test "${HAS_PWLIB:-unset}" = "unset" ; then
           AC_PATH_PROG(PTLIB_CONFIG, ptlib-config, , /usr/local/share/pwlib/make)
         fi
         PWLIB_INCDIR="/usr/local/include"
-        PWLIB_LIBDIR="/usr/local/lib"
+        if test "x$LIB64" != "x"; then
+          PWLIB_LIBDIR="/usr/local/lib64"
+        else
+          PWLIB_LIBDIR="/usr/local/lib"
+        fi
       else
         AC_CHECK_FILE(/usr/include/ptlib.h, HAS_PWLIB=1, )
         if test "${HAS_PWLIB:-unset}" != "unset" ; then
           AC_PATH_PROG(PTLIB_CONFIG, ptlib-config, , /usr/share/pwlib/make)
           PWLIB_INCDIR="/usr/include"
-          PWLIB_LIBDIR="/usr/lib"
+          if test "x$LIB64" != "x"; then
+          	PWLIB_LIBDIR="/usr/lib64"
+          else
+	        PWLIB_LIBDIR="/usr/lib"
+	      fi
         fi
       fi
     fi
@@ -173,12 +235,20 @@ if test "${HAS_PWLIB:-unset}" != "unset" ; then
   if test "x$PWLIBDIR" = "x/usr" -o "x$PWLIBDIR" = "x/usr/"; then
     PWLIBDIR="/usr/share/pwlib"
     PWLIB_INCDIR="/usr/include"
-    PWLIB_LIBDIR="/usr/lib"
+    if test "x$LIB64" != "x"; then
+      PWLIB_LIBDIR="/usr/lib64"
+    else
+      PWLIB_LIBDIR="/usr/lib"
+    fi
   fi
   if test "x$PWLIBDIR" = "x/usr/local" -o "x$PWLIBDIR" = "x/usr/"; then
     PWLIBDIR="/usr/local/share/pwlib"
     PWLIB_INCDIR="/usr/local/include"
-    PWLIB_LIBDIR="/usr/local/lib"
+    if test "x$LIB64" != "x"; then
+      PWLIB_LIBDIR="/usr/local/lib64"
+    else
+      PWLIB_LIBDIR="/usr/local/lib"
+    fi
   fi
 
   if test "${PWLIB_INCDIR:-unset}" = "unset"; then
@@ -303,13 +373,21 @@ if test "${HAS_OPENH323:-unset}" = "unset" ; then
       if test "${HAS_OPENH323:-unset}" != "unset" ; then
         OPENH323DIR="/usr/local/share/openh323"
         OPENH323_INCDIR="/usr/local/include/openh323"
-        OPENH323_LIBDIR="/usr/local/lib"
+        if test "x$LIB64" != "x"; then
+          OPENH323_LIBDIR="/usr/local/lib64"
+        else
+          OPENH323_LIBDIR="/usr/local/lib"
+        fi
       else
         AC_CHECK_FILE(/usr/include/openh323/h323.h, HAS_OPENH323=1, )
         if test "${HAS_OPENH323:-unset}" != "unset" ; then
           OPENH323DIR="/usr/share/openh323"
           OPENH323_INCDIR="/usr/include/openh323"
-          OPENH323_LIBDIR="/usr/lib"
+          if test "x$LIB64" != "x"; then
+            OPENH323_LIBDIR="/usr/lib64"
+          else
+            OPENH323_LIBDIR="/usr/lib"
+          fi
         fi
       fi
     fi

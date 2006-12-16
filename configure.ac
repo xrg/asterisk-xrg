@@ -1,7 +1,13 @@
 w
 # Process this file with autoconf to produce a configure script.
+#
+# Make sure we use autoconf 2.60 to generate the "configure" script,
+# in case we want to commit it. Other than that, version 2.59 is
+# perfectly fine for our purposes, so people who want to modify
+# this file just have to remember to set the AC_PREREQ argument
+# to something that suits their needs.
 
-AC_PREREQ(2.60)
+AC_PREREQ(2.59)
 
 m4_define([PBX_VERSION],
           m4_bpatsubst(m4_esyscmd([build_tools/make_version .]),
@@ -20,7 +26,7 @@ AC_CONFIG_SRCDIR([main/asterisk.c])
 AC_CONFIG_HEADER(include/asterisk/autoconfig.h)
 
 AC_COPYRIGHT("Asterisk")
-AC_REVISION($Revision: 48279 $)
+AC_REVISION($Revision$)
 
 case "${host_os}" in
      freebsd*)
@@ -173,6 +179,7 @@ AC_SUBST(AST_DEVMODE)
 # by the --with option name, to make things easier for the users :-)
 
 AST_EXT_LIB_SETUP([ALSA], [Advanced Linux Sound Architecture], [asound])
+AST_EXT_LIB_SETUP([CAP], [POSIX 1.e capabilities], [cap])
 AST_EXT_LIB_SETUP([CURL], [cURL], [curl])
 AST_EXT_LIB_SETUP([CURSES], [curses], [curses])
 AST_EXT_LIB_SETUP([GNUTLS], [GNU TLS support (used for iksemel only)], [gnutls])
@@ -193,6 +200,7 @@ AST_EXT_LIB_SETUP([OSS], [Open Sound System], [oss])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
+AST_EXT_LIB_SETUP([SS7], [ISDN SS7], [ss7])
 AST_EXT_LIB_SETUP([PWLIB], [PWlib], [pwlib])
 AST_EXT_LIB_SETUP([OPENH323], [OpenH323], [h323])
 AST_EXT_LIB_SETUP([QT], [Qt], [qt])
@@ -262,6 +270,16 @@ AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
 AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
 
+# https support (in main/http.c) uses funopen on BSD systems,
+# fopencookie on linux
+AC_CHECK_FUNCS([funopen fopencookie])
+
+# some systems already have gethostbyname_r so we don't need to build ours in main/utils.c
+AC_CHECK_FUNCS([gethostbyname_r])
+
+AST_C_DEFINE_CHECK([PTHREAD_RWLOCK_INITIALIZER], [PTHREAD_RWLOCK_INITIALIZER], [pthread.h])
+AST_C_DEFINE_CHECK([PTHREAD_RWLOCK_PREFER_WRITER_NP], [PTHREAD_RWLOCK_PREFER_WRITER_NP], [pthread.h])
+
 AC_MSG_CHECKING(for compiler atomic operations)
 AC_LINK_IFELSE(
 AC_LANG_PROGRAM([], [int foo1; int foo2 = __sync_fetch_and_add(&foo1, 1);]),
@@ -308,23 +326,9 @@ AC_LINK_IFELSE(
 	AC_MSG_RESULT(no)
 )
 
-AC_MSG_CHECKING(for RTLD_NOLOAD)
-AC_LINK_IFELSE(
-	AC_LANG_PROGRAM([#include <dlfcn.h>],
-			[int foo = RTLD_NOLOAD;]),
-	AC_MSG_RESULT(yes)
-	AC_DEFINE([HAVE_RTLD_NOLOAD], 1, [Define to 1 if your system has a dynamic linker that supports RTLD_NOLOAD.]),
-	AC_MSG_RESULT(no)
-)
+AST_C_DEFINE_CHECK([RTLD_NOLOAD], [RTLD_NOLOAD], [dlfcn.h])
 
-AC_MSG_CHECKING(for IP_MTU_DISCOVER)
-AC_LINK_IFELSE(
-	AC_LANG_PROGRAM([#include <netinet/in.h>],
-			[int foo = IP_MTU_DISCOVER;]),
-	AC_MSG_RESULT(yes)
-	AC_DEFINE([HAVE_IP_MTU_DISCOVER], 1, [Define to 1 if your system has PMTU discovery on UDP sockets.]),
-	AC_MSG_RESULT(no)
-)
+AST_C_DEFINE_CHECK([IP_MTU_DISCOVER], [IP_MTU_DISCOVER], [netinet/in.h])
 
 AC_CHECK_HEADER([libkern/OSAtomic.h],
                 [AC_DEFINE_UNQUOTED([HAVE_OSX_ATOMICS], 1, [Define to 1 if OSX atomic operations are supported.])])
@@ -336,6 +340,10 @@ AC_CHECK_SIZEOF(int)
 AST_EXT_LIB_CHECK([ALSA], [asound], [snd_spcm_init], [alsa/asoundlib.h], [-lm -ldl])
 
 AST_EXT_LIB_CHECK([CURSES], [curses], [initscr], [curses.h])
+
+if test "x${host_os}" = "xlinux-gnu" ; then
+  AST_EXT_LIB_CHECK([CAP], [cap], [cap_from_text], [sys/capability.h])
+fi
 
 GSM_INTERNAL="yes"
 AC_SUBST(GSM_INTERNAL)
@@ -516,13 +524,6 @@ if test "${USE_IMAP_TK}" != "no"; then
       if test "${ac_cv_imap_tk2006}" = "yes"; then
          AC_DEFINE([HAVE_IMAP_TK2006], 1, [Define if your system has the UW IMAP Toolkit c-client library version 2006 or greater.])
       fi
-   elif test ! -z "${IMAP_TK_MANDATORY}"; then
-      AC_MSG_RESULT(no) 
-      AC_MSG_NOTICE(***)
-      AC_MSG_NOTICE(*** The UW IMAP Toolkit installation on this system appears to be broken.)
-      AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-      AC_MSG_NOTICE(*** including --without-imap.)
-      exit 1
    else
       AC_MSG_RESULT(no) 
    fi
@@ -562,13 +563,6 @@ if test "${USE_KDE}" != "no"; then
       fi
       PBX_KDE=1
       AC_DEFINE([HAVE_LIBKDE], 1, [Define if your system has the KDE libraries.])
-   elif test ! -z "${KDE_MANDATORY}"; then
-      AC_MSG_RESULT(no) 
-      AC_MSG_NOTICE(***)
-      AC_MSG_NOTICE(*** The KDE installation on this system appears to be broken.)
-      AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-      AC_MSG_NOTICE(*** including --without-kde.)
-      exit 1
    else
       AC_MSG_RESULT(no) 
    fi
@@ -600,11 +594,11 @@ if test "${USE_NETSNMP}" != "no"; then
    if test "x${NETSNMP_DIR}" != "x"; then
       AC_PATH_TOOL([NETSNMP_CONFIG], [net-snmp-config], No, [${NETSNMP_DIR}/bin])
       if test x"${NETSNMP_CONFIG}" = xNo; then
-         AC_MSG_NOTICE(***)
-         AC_MSG_NOTICE(*** net-snmp-config was not found in the path you specified:)
-         AC_MSG_NOTICE(*** ${NETSNMP_DIR}/bin)
-         AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-         AC_MSG_NOTICE(*** including --without-netsnmp)
+         AC_MSG_NOTICE([***])
+         AC_MSG_NOTICE([*** net-snmp-config was not found in the path you specified:])
+         AC_MSG_NOTICE([*** ${NETSNMP_DIR}/bin])
+         AC_MSG_NOTICE([*** Either correct the installation, or run configure])
+         AC_MSG_NOTICE([*** including --without-netsnmp])
          exit 1
       fi
    else
@@ -620,21 +614,7 @@ if test x"${NETSNMP_CONFIG}" != xNo; then
    if test "${ac_cv_lib_netsnmp_snmp_register_callback}" = "yes"; then
       NETSNMP_LIB="${NETSNMP_libs}"
       PBX_NETSNMP=1
-   elif test ! -z "${NETSNMP_MANDATORY}";
-   then
-      AC_MSG_NOTICE(***)
-      AC_MSG_NOTICE(*** The Net-SNMP installation on this system appears to be broken.)
-      AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-      AC_MSG_NOTICE(*** including --without-netsnmp)
-      exit 1
    fi
-elif test ! -z "${NETSNMP_MANDATORY}";
-then
-   AC_MSG_NOTICE(***)
-   AC_MSG_NOTICE(*** The Net-SNMP installation on this system appears to be broken.)
-   AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-   AC_MSG_NOTICE(*** including --without-netsnmp)
-   exit 1
 fi
 
 AST_EXT_LIB_CHECK([NEWT], [newt], [newtBell], [newt.h])
@@ -645,33 +625,21 @@ AST_EXT_LIB_CHECK([OGG], [ogg], [ogg_sync_init], [])
 
 AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
 
-PBX_OSS=0
-AC_CHECK_HEADER([linux/soundcard.h],
-	        [
-		PBX_OSS=1
-                AC_DEFINE_UNQUOTED([HAVE_OSS], 1, [Define to indicate the Open Sound System library])
-		])
-if test "$PBX_OSS" = "0"; then
-   AC_CHECK_HEADER([sys/soundcard.h],
-                   [
-		   PBX_OSS=1
-		   AC_DEFINE_UNQUOTED([HAVE_OSS], 1, [Define to indicate the Open Sound System library])
-		   ])
-fi
-if test "$PBX_OSS" = "0"; then
-   AST_EXT_LIB_CHECK([OSS], [ossaudio], [oss_ioctl_mixer], [soundcard.h])
-fi
+# possible places for oss definitions
+AST_EXT_LIB_CHECK([OSS], [ossaudio], [], [linux/soundcard.h])
+AST_EXT_LIB_CHECK([OSS], [ossaudio], [], [sys/soundcard.h])
+AST_EXT_LIB_CHECK([OSS], [ossaudio], [oss_ioctl_mixer], [soundcard.h])
 
 PG_CONFIG=No
 if test "${USE_PGSQL}" != "no"; then	
    if test "x${PGSQL_DIR}" != "x"; then
       AC_PATH_TOOL([PG_CONFIG], [pg_config], No, [${PGSQL_DIR}/bin])
       if test x"${PG_CONFIG}" = xNo; then
-         AC_MSG_NOTICE(***)
-         AC_MSG_NOTICE(*** pg_config was not found in the path you specified:)
-         AC_MSG_NOTICE(*** ${PGSQL_DIR}/bin)
-         AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-         AC_MSG_NOTICE(*** including --without-postgres)
+         AC_MSG_NOTICE([***])
+         AC_MSG_NOTICE([*** pg_config was not found in the path you specified:])
+         AC_MSG_NOTICE([*** ${PGSQL_DIR}/bin])
+         AC_MSG_NOTICE([*** Either correct the installation, or run configure])
+         AC_MSG_NOTICE([*** including --without-postgres])
          exit 1
       fi
    else
@@ -689,26 +657,14 @@ if test "${PG_CONFIG}" != No; then
       PGSQL_LIB="-L${PGSQL_libdir} -lpq -lz"
       PGSQL_INCLUDE="-I${PGSQL_includedir}"
       PBX_PGSQL=1
-   elif test ! -z "${PGSQL_MANDATORY}";
-   then
-      AC_MSG_NOTICE(***)
-      AC_MSG_NOTICE(*** The PostgreSQL installation on this system appears to be broken.)
-      AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-      AC_MSG_NOTICE(*** including --without-postgres)
-      exit 1
    fi
-elif test ! -z "${PGSQL_MANDATORY}";
-then
-   AC_MSG_NOTICE(***)
-   AC_MSG_NOTICE(*** The PostgreSQL installation on this system appears to be broken.)
-   AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-   AC_MSG_NOTICE(*** including --without-postgres)
-   exit 1
 fi
 
 AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_call], [libpri.h])
+
+AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_new], [libss7.h])
 
 if test "${USE_PWLIB}" != "no"; then
 	if test ! -z "${PWLIB_DIR}"; then
@@ -729,14 +685,6 @@ if test "${USE_PWLIB}" != "no"; then
 	fi
 fi
 
-if test "${USE_PWLIB}" != "no" -a "x${ac_cv_lib_PWLIB}" != "xyes" -a ! -z "${PWLIB_MANDATORY}"; then
-   AC_MSG_NOTICE(***)
-   AC_MSG_NOTICE(*** The PWLIB installation on this system appears to be broken.)
-   AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-   AC_MSG_NOTICE(*** including --without-pwlib)
-   exit 1
-fi
-
 if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 	if test ! -z "${OPENH323_DIR}"; then
 		OPENH323DIR="${OPENH323_DIR}"
@@ -753,14 +701,6 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 		[H323EndPoint ep = H323EndPoint();],
 		[${PWLIB_INCLUDE}], [${PWLIB_LIB}])
 fi
-if test "${USE_OPENH323}" != "no" -a "x${ac_cv_lib_OPENH323}" != "xyes" -a ! -z "${OPENH323_MANDATORY}"; then
-   AC_MSG_NOTICE(***)
-   AC_MSG_NOTICE(*** The OPENH323 installation on this system appears to be broken.)
-   AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-   AC_MSG_NOTICE(*** including --without-h323)
-   exit 1
-fi
-
 
 AC_LANG_PUSH(C++)
 
@@ -821,13 +761,6 @@ if test "${USE_QT}" != "no"; then
       PBX_QT=1
       AC_DEFINE([HAVE_QT], 1, [Define if your system has the Qt library])
       AC_PATH_TOOL(QTMOC, moc, No)
-   elif test ! -z "${QT_MANDATORY}"; 
-   then
-      AC_MSG_NOTICE(***)
-      AC_MSG_NOTICE(*** The Qt installation on this system appears to be broken.)
-      AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-      AC_MSG_NOTICE(*** including --without-qt.)
-      exit 1
    fi
 fi
 
@@ -868,7 +801,10 @@ if test "${host_os}" != "linux-gnu" ; then
   tonezone_extra="-lm"
 fi
 
-AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/tonezone.h], [${tonezone_extra}])
+# new tonezone, version 1.4.0
+AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/tonezone.h], [${tonezone_extra}], [140])
+# other case, old tonezone (0.80)
+AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/zaptel.h], [${tonezone_extra}], [80])
 
 AST_EXT_LIB_CHECK([VORBIS], [vorbis], [vorbis_info_init], [vorbis/codec.h], [-lm -lvorbisenc])
 
@@ -911,12 +847,6 @@ if test "${USE_VPB}" != "no"; then
 	fi
 	PBX_VPB=1
 	AC_DEFINE([HAVE_VPB], 1, [Define if your system has the VoiceTronix API libraries.])
-   elif test ! -z "${VPB_MANDATORY}"; then
-      AC_MSG_NOTICE(***)
-      AC_MSG_NOTICE(*** The VoiceTronix (vpb) installation on this system appears to be broken.)
-      AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-      AC_MSG_NOTICE(*** including --without-vpb.)
-      exit 1
    fi
 fi
 
@@ -924,41 +854,10 @@ AC_LANG_POP
 
 AST_EXT_LIB_CHECK([ZLIB], [z], [compress], [zlib.h])
 
-if test "${USE_ZAPTEL}" != "no"; then
-   AC_MSG_CHECKING(for ZT_TONE_DTMF_BASE in zaptel.h)
-   saved_cppflags="${CPPFLAGS}"
-   if test "x${ZAPTEL_DIR}" != "x"; then
-      CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
-   fi
-   AC_COMPILE_IFELSE(
-	[
-	AC_LANG_PROGRAM(
-	[#include <zaptel/zaptel.h>],
-	[int foo = ZT_TONE_DTMF_BASE;])
-	],
-	[	AC_MSG_RESULT(yes) 
-		ac_cv_zaptel_h="yes" 
-	],
-	[	AC_MSG_RESULT(no) 
-		ac_cv_zaptel_h="no" 
-	]
-	)
-   CPPFLAGS="${saved_cppflags}"
-   if test "${ac_cv_zaptel_h}" = "yes"; then
-	if test "${ZAPTEL_DIR}" != ""; then
-	   ZAPTEL_INCLUDE="-I${ZAPTEL_DIR}/include"
-	fi
-	PBX_ZAPTEL=1
-	AC_DEFINE([HAVE_ZAPTEL], 1, [Define if your system has the Zaptel headers.])
-   elif test ! -z "${ZAPTEL_MANDATORY}"; 
-   then
-      AC_MSG_NOTICE(***)
-      AC_MSG_NOTICE(*** The Zaptel installation on this system appears to be broken.)
-      AC_MSG_NOTICE(*** Either correct the installation, or run configure)
-      AC_MSG_NOTICE(*** including --without-zaptel.)
-      exit 1
-   fi
-fi
+# check for zaptel 1.4.0
+AST_C_DEFINE_CHECK([ZAPTEL], [ZT_TONE_DTMF_BASE], [zaptel/zaptel.h], [140])
+# or, try old zaptel (0.80 or so)
+AST_EXT_LIB_CHECK([ZAPTEL], [zaptel],, [zaptel.h],, [80])
 
 if test "${USE_ZAPTEL}" != "no"; then
    if test "${PBX_ZAPTEL}" != "1"; then
@@ -982,11 +881,11 @@ if test "${USE_ZAPTEL}" != "no"; then
 	)
       CPPFLAGS="${saved_cppflags}"
       if test "${ac_cv_zaptel_h}" = "yes"; then
-         AC_MSG_NOTICE(***)
-	 AC_MSG_NOTICE(*** The Zaptel installation on this system is too old)
-	 AC_MSG_NOTICE(*** to be useable with this version of Asterisk.)
-	 AC_MSG_NOTICE(*** Either upgrade your Zaptel installation, or run configure)
-	 AC_MSG_NOTICE(*** including --without-zaptel.)
+         AC_MSG_NOTICE([***])
+	 AC_MSG_NOTICE([*** The Zaptel installation on this system is too old])
+	 AC_MSG_NOTICE([*** to be useable with this version of Asterisk.])
+	 AC_MSG_NOTICE([*** Either upgrade your Zaptel installation, or run configure])
+	 AC_MSG_NOTICE([*** including --without-zaptel.])
 	 exit 1
       fi
    fi
@@ -1043,6 +942,8 @@ if test "${USE_CURL}" != "no"; then
 fi
 
 AC_CONFIG_FILES([build_tools/menuselect-deps makeopts channels/h323/Makefile])
+AST_CHECK_MANDATORY
+
 AC_OUTPUT
 
 if test "x${silent}" != "xyes" ; then
