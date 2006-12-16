@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47051 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <stdio.h>
@@ -57,20 +57,59 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47051 $")
 #define MAX_PREFIX 80
 #define DEFAULT_PREFIX "/asterisk"
 
-struct ast_http_server_instance {
-	FILE *f;
-	int fd;
-	struct sockaddr_in requestor;
-	ast_http_callback callback;
+/*!
+ * In order to have TLS/SSL support, we need the openssl libraries.
+ * Still we can decide whether or not to use them by commenting
+ * in or out the DO_SSL macro.
+ * TLS/SSL support is basically implemented by reading from a config file
+ * (currently http.conf) the names of the certificate and cipher to use,
+ * and then run ssl_setup() to create an appropriate SSL_CTX (ssl_ctx)
+ * If we support multiple domains, presumably we need to read multiple
+ * certificates.
+ * When we are requested to open a TLS socket, we run make_file_from_fd()
+ * on the socket, to do the necessary setup. At the moment the context's name
+ * is hardwired in the function, but we can certainly make it into an extra
+ * parameter to the function.
+ *
+ * We declare most of ssl support variables unconditionally,
+ * because their number is small and this simplifies the code.
+ */
+
+#if defined(HAVE_OPENSSL) && (defined(HAVE_FUNOPEN) || defined(HAVE_FOPENCOOKIE))
+#define	DO_SSL	/* comment in/out if you want to support ssl */
+#endif
+
+static struct tls_config http_tls_cfg;
+
+static void *httpd_helper_thread(void *arg);
+
+/*!
+ * we have up to two accepting threads, one for http, one for https
+ */
+static struct server_args http_desc = {
+	.accept_fd = -1,
+	.master = AST_PTHREADT_NULL,
+	.tls_cfg = NULL,
+	.poll_timeout = -1,
+	.name = "http server",
+	.accept_fn = server_root,
+	.worker_fn = httpd_helper_thread,
 };
 
-static struct ast_http_uri *uris;
+static struct server_args https_desc = {
+	.accept_fd = -1,
+	.master = AST_PTHREADT_NULL,
+	.tls_cfg = &http_tls_cfg,
+	.poll_timeout = -1,
+	.name = "https server",
+	.accept_fn = server_root,
+	.worker_fn = httpd_helper_thread,
+};
 
-static int httpfd = -1;
-static pthread_t master = AST_PTHREADT_NULL;
+static struct ast_http_uri *uris;	/*!< list of supported handlers */
+
+/* all valid URIs must be prepended by the string in prefix. */
 static char prefix[MAX_PREFIX];
-static int prefix_len = 0;
-static struct sockaddr_in oldsin;
 static int enablestatic=0;
 
 /*! \brief Limit the kinds of files we're willing to serve up */
@@ -98,17 +137,26 @@ static char *ftype2mtype(const char *ftype, char *wkspace, int wkspacelen)
 	return wkspace;
 }
 
-static char *static_callback(struct sockaddr_in *req, const char *uri, struct ast_variable *vars, int *status, char **title, int *contentlength)
+/* like ast_uri_decode, but replace '+' with ' ' */
+static char *uri_decode(char *buf)
 {
-	char result[4096];
-	char *c=result;
+	char *c;
+	ast_uri_decode(buf);
+	for (c = buf; *c; c++) {
+		if (*c == '+')
+			*c = ' ';
+	}
+	return buf;
+}
+static struct ast_str *static_callback(struct sockaddr_in *req, const char *uri, struct ast_variable *vars, int *status, char **title, int *contentlength)
+{
+	struct ast_str *result;
 	char *path;
 	char *ftype, *mtype;
 	char wkspace[80];
 	struct stat st;
 	int len;
 	int fd;
-	void *blob;
 
 	/* Yuck.  I'm not really sold on this, but if you don't deliver static content it makes your configuration 
 	   substantially more challenging, but this seems like a rather irritating feature creep on Asterisk. */
@@ -138,23 +186,22 @@ static char *static_callback(struct sockaddr_in *req, const char *uri, struct as
 	fd = open(path, O_RDONLY);
 	if (fd < 0)
 		goto out403;
-	
+
 	len = st.st_size + strlen(mtype) + 40;
-	
-	blob = malloc(len);
-	if (blob) {
-		c = blob;
-		sprintf(c, "Content-type: %s\r\n\r\n", mtype);
-		c += strlen(c);
-		*contentlength = read(fd, c, st.st_size);
-		if (*contentlength < 0) {
-			close(fd);
-			free(blob);
-			goto out403;
-		}
+	result = ast_str_create(len);
+	if (result == NULL)	/* XXX not really but... */
+		goto out403;
+
+	ast_str_append(&result, 0, "Content-type: %s\r\n\r\n", mtype);
+	*contentlength = read(fd, result->str + result->used, st.st_size);
+	if (*contentlength < 0) {
+		close(fd);
+		free(result);
+		goto out403;
 	}
+	result->used += *contentlength;
 	close(fd);
-	return blob;
+	return result;
 
 out404:
 	*status = 404;
@@ -168,41 +215,41 @@ out403:
 }
 
 
-static char *httpstatus_callback(struct sockaddr_in *req, const char *uri, struct ast_variable *vars, int *status, char **title, int *contentlength)
+static struct ast_str *httpstatus_callback(struct sockaddr_in *req, const char *uri, struct ast_variable *vars, int *status, char **title, int *contentlength)
 {
-	char result[4096];
-	size_t reslen = sizeof(result);
-	char *c=result;
+	struct ast_str *out = ast_str_create(512);
 	struct ast_variable *v;
 
-	ast_build_string(&c, &reslen,
+	if (out == NULL)
+		return out;
+
+	ast_str_append(&out, 0,
 		"\r\n"
 		"<title>Asterisk HTTP Status</title>\r\n"
 		"<body bgcolor=\"#ffffff\">\r\n"
 		"<table bgcolor=\"#f1f1f1\" align=\"center\"><tr><td bgcolor=\"#e0e0ff\" colspan=\"2\" width=\"500\">\r\n"
 		"<h2>&nbsp;&nbsp;Asterisk&trade; HTTP Status</h2></td></tr>\r\n");
 
-	ast_build_string(&c, &reslen, "<tr><td><i>Prefix</i></td><td><b>%s</b></td></tr>\r\n", prefix);
-	ast_build_string(&c, &reslen, "<tr><td><i>Bind Address</i></td><td><b>%s</b></td></tr>\r\n",
-			ast_inet_ntoa(oldsin.sin_addr));
-	ast_build_string(&c, &reslen, "<tr><td><i>Bind Port</i></td><td><b>%d</b></td></tr>\r\n",
-			ntohs(oldsin.sin_port));
-	ast_build_string(&c, &reslen, "<tr><td colspan=\"2\"><hr></td></tr>\r\n");
-	v = vars;
-	while(v) {
+	ast_str_append(&out, 0, "<tr><td><i>Prefix</i></td><td><b>%s</b></td></tr>\r\n", prefix);
+	ast_str_append(&out, 0, "<tr><td><i>Bind Address</i></td><td><b>%s</b></td></tr>\r\n",
+			ast_inet_ntoa(http_desc.oldsin.sin_addr));
+	ast_str_append(&out, 0, "<tr><td><i>Bind Port</i></td><td><b>%d</b></td></tr>\r\n",
+			ntohs(http_desc.oldsin.sin_port));
+	if (http_tls_cfg.enabled)
+		ast_str_append(&out, 0, "<tr><td><i>SSL Bind Port</i></td><td><b>%d</b></td></tr>\r\n",
+			ntohs(https_desc.oldsin.sin_port));
+	ast_str_append(&out, 0, "<tr><td colspan=\"2\"><hr></td></tr>\r\n");
+	for (v = vars; v; v = v->next) {
 		if (strncasecmp(v->name, "cookie_", 7))
-			ast_build_string(&c, &reslen, "<tr><td><i>Submitted Variable '%s'</i></td><td>%s</td></tr>\r\n", v->name, v->value);
-		v = v->next;
+			ast_str_append(&out, 0, "<tr><td><i>Submitted Variable '%s'</i></td><td>%s</td></tr>\r\n", v->name, v->value);
 	}
-	ast_build_string(&c, &reslen, "<tr><td colspan=\"2\"><hr></td></tr>\r\n");
-	v = vars;
-	while(v) {
+	ast_str_append(&out, 0, "<tr><td colspan=\"2\"><hr></td></tr>\r\n");
+	for (v = vars; v; v = v->next) {
 		if (!strncasecmp(v->name, "cookie_", 7))
-			ast_build_string(&c, &reslen, "<tr><td><i>Cookie '%s'</i></td><td>%s</td></tr>\r\n", v->name, v->value);
-		v = v->next;
+			ast_str_append(&out, 0, "<tr><td><i>Cookie '%s'</i></td><td>%s</td></tr>\r\n", v->name, v->value);
 	}
-	ast_build_string(&c, &reslen, "</table><center><font size=\"-1\"><i>Asterisk and Digium are registered trademarks of Digium, Inc.</i></font></center></body>\r\n");
-	return strdup(result);
+	ast_str_append(&out, 0, "</table><center><font size=\"-1\"><i>Asterisk and Digium are registered trademarks of Digium, Inc.</i></font></center></body>\r\n");
+	return out;
 }
 
 static struct ast_http_uri statusuri = {
@@ -219,10 +266,12 @@ static struct ast_http_uri staticuri = {
 	.has_subtree = 1,
 };
 	
-char *ast_http_error(int status, const char *title, const char *extra_header, const char *text)
+struct ast_str *ast_http_error(int status, const char *title, const char *extra_header, const char *text)
 {
-	char *c = NULL;
-	asprintf(&c,
+	struct ast_str *out = ast_str_create(512);
+	if (out == NULL)
+		return out;
+	ast_str_set(&out, 0,
 		"Content-type: text/html\r\n"
 		"%s"
 		"\r\n"
@@ -236,17 +285,26 @@ char *ast_http_error(int status, const char *title, const char *extra_header, co
 		"<address>Asterisk Server</address>\r\n"
 		"</body></html>\r\n",
 			(extra_header ? extra_header : ""), status, title, title, text);
-	return c;
+	return out;
 }
 
+/*! \brief 
+ * Link the new uri into the list. They are sorted by length of
+ * the string, not alphabetically. Duplicate entries are not replaced,
+ * but the insertion order (using <= and not just <) makes sure that
+ * more recent insertions hide older ones.
+ * On a lookup, we just scan the list and stop at the first matching entry.
+ */
 int ast_http_uri_link(struct ast_http_uri *urih)
 {
 	struct ast_http_uri *prev=uris;
-	if (!uris || strlen(uris->uri) <= strlen(urih->uri)) {
+	int len = strlen(urih->uri);
+
+	if (!uris || strlen(uris->uri) <= len ) {
 		urih->next = uris;
 		uris = urih;
 	} else {
-		while (prev->next && (strlen(prev->next->uri) > strlen(urih->uri)))
+		while (prev->next && strlen(prev->next->uri) > len)
 			prev = prev->next;
 		/* Insert it here */
 		urih->next = prev->next;
@@ -272,29 +330,25 @@ void ast_http_uri_unlink(struct ast_http_uri *urih)
 	}
 }
 
-static char *handle_uri(struct sockaddr_in *sin, char *uri, int *status, char **title, int *contentlength, struct ast_variable **cookies)
+static struct ast_str *handle_uri(struct sockaddr_in *sin, char *uri, int *status, char **title, int *contentlength, struct ast_variable **cookies)
 {
 	char *c;
-	char *turi;
-	char *params;
-	char *var;
-	char *val;
+	struct ast_str *out = NULL;
+	char *params = uri;
 	struct ast_http_uri *urih=NULL;
-	int len;
+	int l;
 	struct ast_variable *vars=NULL, *v, *prev = NULL;
-	
-	
-	params = strchr(uri, '?');
+
+	strsep(&params, "?");
+	/* Extract arguments from the request and store them in variables. */
 	if (params) {
-		*params = '\0';
-		params++;
-		while ((var = strsep(&params, "&"))) {
-			val = strchr(var, '=');
-			if (val) {
-				*val = '\0';
-				val++;
-				ast_uri_decode(val);
-			} else 
+		char *var, *val;
+
+		while ((val = strsep(&params, "&"))) {
+			var = strsep(&val, "=");
+			if (val)
+				uri_decode(val);
+			else 
 				val = "";
 			ast_uri_decode(var);
 			if ((v = ast_variable_new(var, val))) {
@@ -306,199 +360,293 @@ static char *handle_uri(struct sockaddr_in *sin, char *uri, int *status, char **
 			}
 		}
 	}
+	/*
+	 * Append the cookies to the variables (the only reason to have them
+	 * at the end is to avoid another pass of the cookies list to find
+	 * the tail).
+	 */
 	if (prev)
 		prev->next = *cookies;
 	else
 		vars = *cookies;
 	*cookies = NULL;
 	ast_uri_decode(uri);
-	if (!strncasecmp(uri, prefix, prefix_len)) {
-		uri += prefix_len;
-		if (!*uri || (*uri == '/')) {
-			if (*uri == '/')
-				uri++;
-			urih = uris;
-			while(urih) {
-				len = strlen(urih->uri);
-				if (!strncasecmp(urih->uri, uri, len)) {
-					if (!uri[len] || uri[len] == '/') {
-						turi = uri + len;
-						if (*turi == '/')
-							turi++;
-						if (!*turi || urih->has_subtree) {
-							uri = turi;
-							break;
-						}
-					}
-				}
-				urih = urih->next;
+
+	/* We want requests to start with the prefix and '/' */
+	l = strlen(prefix);
+	if (l && !strncasecmp(uri, prefix, l) && uri[l] == '/') {
+		uri += l + 1;
+		/* scan registered uris to see if we match one. */
+		for (urih = uris; urih; urih = urih->next) {
+			l = strlen(urih->uri);
+			c = uri + l;	/* candidate */
+			if (strncasecmp(urih->uri, uri, l) /* no match */
+			    || (*c && *c != '/')) /* substring */
+				continue;
+			if (*c == '/')
+				c++;
+			if (!*c || urih->has_subtree) {
+				uri = c;
+				break;
 			}
 		}
 	}
 	if (urih) {
-		c = urih->callback(sin, uri, vars, status, title, contentlength);
+		out = urih->callback(sin, uri, vars, status, title, contentlength);
 	} else if (ast_strlen_zero(uri) && ast_strlen_zero(prefix)) {
-		/* Special case: If no prefix, and no URI, send to /static/index.html */
-		c = ast_http_error(302, "Moved Temporarily", "Location: /static/index.html\r\n", "This is not the page you are looking for...");
+		/* Special case: no prefix, no URI, send to /static/index.html */
+		out = ast_http_error(302, "Moved Temporarily",
+			"Location: /static/index.html\r\n",
+			"This is not the page you are looking for...");
 		*status = 302;
 		*title = strdup("Moved Temporarily");
 	} else {
-		c = ast_http_error(404, "Not Found", NULL, "The requested URL was not found on this serer.");
+		out = ast_http_error(404, "Not Found", NULL,
+			"The requested URL was not found on this server.");
 		*status = 404;
 		*title = strdup("Not Found");
 	}
 	ast_variables_destroy(vars);
-	return c;
+	return out;
 }
 
-static void *ast_httpd_helper_thread(void *data)
+#ifdef DO_SSL
+#if defined(HAVE_FUNOPEN)
+#define HOOK_T int
+#define LEN_T int
+#else
+#define HOOK_T ssize_t
+#define LEN_T size_t
+#endif
+/*!
+ * replacement read/write functions for SSL support.
+ * We use wrappers rather than SSL_read/SSL_write directly so
+ * we can put in some debugging.
+ */
+static HOOK_T ssl_read(void *cookie, char *buf, LEN_T len)
+{
+	int i = SSL_read(cookie, buf, len-1);
+#if 0
+	if (i >= 0)
+		buf[i] = '\0';
+	ast_verbose("ssl read size %d returns %d <%s>\n", (int)len, i, buf);
+#endif
+	return i;
+}
+
+static HOOK_T ssl_write(void *cookie, const char *buf, LEN_T len)
+{
+#if 0
+	char *s = alloca(len+1);
+	strncpy(s, buf, len);
+	s[len] = '\0';
+	ast_verbose("ssl write size %d <%s>\n", (int)len, s);
+#endif
+	return SSL_write(cookie, buf, len);
+}
+
+static int ssl_close(void *cookie)
+{
+	close(SSL_get_fd(cookie));
+	SSL_shutdown(cookie);
+	SSL_free(cookie);
+	return 0;
+}
+#endif	/* DO_SSL */
+
+/*!
+ * creates a FILE * from the fd passed by the accept thread.
+ * This operation is potentially expensive (certificate verification),
+ * so we do it in the child thread context.
+ */
+static void *make_file_from_fd(void *data)
+{
+	struct server_instance *ser = data;
+
+	/*
+	 * open a FILE * as appropriate.
+	 */
+	if (!ser->parent->tls_cfg)
+		ser->f = fdopen(ser->fd, "w+");
+#ifdef DO_SSL
+	else if ( (ser->ssl = SSL_new(ser->parent->tls_cfg->ssl_ctx)) ) {
+		SSL_set_fd(ser->ssl, ser->fd);
+		if (SSL_accept(ser->ssl) == 0)
+			ast_verbose(" error setting up ssl connection");
+		else {
+#if defined(HAVE_FUNOPEN)	/* the BSD interface */
+			ser->f = funopen(ser->ssl, ssl_read, ssl_write, NULL, ssl_close);
+
+#elif defined(HAVE_FOPENCOOKIE)	/* the glibc/linux interface */
+			static const cookie_io_functions_t cookie_funcs = {
+				ssl_read, ssl_write, NULL, ssl_close
+			};
+			ser->f = fopencookie(ser->ssl, "w+", cookie_funcs);
+#else
+			/* could add other methods here */
+#endif
+		}
+		if (!ser->f)	/* no success opening descriptor stacking */
+			SSL_free(ser->ssl);
+	}
+#endif /* DO_SSL */
+
+	if (!ser->f) {
+		close(ser->fd);
+		ast_log(LOG_WARNING, "FILE * open failed!\n");
+		free(ser);
+		return NULL;
+	}
+	return ser->parent->worker_fn(ser);
+}
+
+static void *httpd_helper_thread(void *data)
 {
 	char buf[4096];
 	char cookie[4096];
-	char timebuf[256];
-	struct ast_http_server_instance *ser = data;
+	struct server_instance *ser = data;
 	struct ast_variable *var, *prev=NULL, *vars=NULL;
-	char *uri, *c, *title=NULL;
-	char *vname, *vval;
+	char *uri, *title=NULL;
 	int status = 200, contentlength = 0;
-	time_t t;
+	struct ast_str *out = NULL;
 
-	if (fgets(buf, sizeof(buf), ser->f)) {
-		/* Skip method */
-		uri = buf;
-		while(*uri && (*uri > 32))
-			uri++;
-		if (*uri) {
-			*uri = '\0';
-			uri++;
-		}
+	if (!fgets(buf, sizeof(buf), ser->f))
+		goto done;
 
-		/* Skip white space */
-		while (*uri && (*uri < 33))
-			uri++;
+	uri = ast_skip_nonblanks(buf);	/* Skip method */
+	if (*uri)
+		*uri++ = '\0';
 
-		if (*uri) {
-			c = uri;
-			while (*c && (*c > 32))
-				 c++;
-			if (*c) {
-				*c = '\0';
-			}
-		}
+	uri = ast_skip_blanks(uri);	/* Skip white space */
 
-		while (fgets(cookie, sizeof(cookie), ser->f)) {
-			/* Trim trailing characters */
-			while(!ast_strlen_zero(cookie) && (cookie[strlen(cookie) - 1] < 33)) {
-				cookie[strlen(cookie) - 1] = '\0';
-			}
-			if (ast_strlen_zero(cookie))
-				break;
-			if (!strncasecmp(cookie, "Cookie: ", 8)) {
-
-				/* TODO - The cookie parsing code below seems to work   
-				   in IE6 and FireFox 1.5.  However, it is not entirely 
-				   correct, and therefore may not work in all           
-				   circumstances.		                        
-				      For more details see RFC 2109 and RFC 2965        */
-			
-				/* FireFox cookie strings look like:                    
-				     Cookie: mansession_id="********"                   
-				   InternetExplorer's look like:                        
-				     Cookie: $Version="1"; mansession_id="********"     */
-				
-				/* If we got a FireFox cookie string, the name's right  
-				    after "Cookie: "                                    */
-                                vname = cookie + 8;
-				
-				/* If we got an IE cookie string, we need to skip to    
-				    past the version to get to the name                 */
-				if (*vname == '$') {
-					vname = strchr(vname, ';');
-					if (vname) { 
-						vname++;
-						if (*vname == ' ')
-							vname++;
-					}
-				}
-				
-				if (vname) {
-					vval = strchr(vname, '=');
-					if (vval) {
-						/* Ditch the = and the quotes */
-						*vval++ = '\0';
-						if (*vval)
-							vval++;
-						if (strlen(vval))
-							vval[strlen(vval) - 1] = '\0';
-						var = ast_variable_new(vname, vval);
-						if (var) {
-							if (prev)
-								prev->next = var;
-							else
-								vars = var;
-							prev = var;
-						}
-					}
-				}
-			}
-		}
-
-		if (*uri) {
-			if (!strcasecmp(buf, "get")) 
-				c = handle_uri(&ser->requestor, uri, &status, &title, &contentlength, &vars);
-			else 
-				c = ast_http_error(501, "Not Implemented", NULL, "Attempt to use unimplemented / unsupported method");\
-		} else 
-			c = ast_http_error(400, "Bad Request", NULL, "Invalid Request");
-
-		/* If they aren't mopped up already, clean up the cookies */
-		if (vars)
-			ast_variables_destroy(vars);
-
-		if (!c)
-			c = ast_http_error(500, "Internal Error", NULL, "Internal Server Error");
-		if (c) {
-			time(&t);
-			strftime(timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime(&t));
-			ast_cli(ser->fd, "HTTP/1.1 %d %s\r\n", status, title ? title : "OK");
-			ast_cli(ser->fd, "Server: Asterisk\r\n");
-			ast_cli(ser->fd, "Date: %s\r\n", timebuf);
-			ast_cli(ser->fd, "Connection: close\r\n");
-			if (contentlength) {
-				char *tmp;
-				tmp = strstr(c, "\r\n\r\n");
-				if (tmp) {
-					ast_cli(ser->fd, "Content-length: %d\r\n", contentlength);
-					write(ser->fd, c, (tmp + 4 - c));
-					write(ser->fd, tmp + 4, contentlength);
-				}
-			} else
-				ast_cli(ser->fd, "%s", c);
-			free(c);
-		}
-		if (title)
-			free(title);
+	if (*uri) {			/* terminate at the first blank */
+		char *c = ast_skip_nonblanks(uri);
+		if (*c)
+			*c = '\0';
 	}
-	fclose(ser->f);
+
+	/* process "Cookie: " lines */
+	while (fgets(cookie, sizeof(cookie), ser->f)) {
+		char *vname, *vval;
+		int l;
+
+		/* Trim trailing characters */
+		ast_trim_blanks(cookie);
+		if (ast_strlen_zero(cookie))
+			break;
+		if (strncasecmp(cookie, "Cookie: ", 8))
+			continue;
+
+		/* TODO - The cookie parsing code below seems to work   
+		   in IE6 and FireFox 1.5.  However, it is not entirely 
+		   correct, and therefore may not work in all           
+		   circumstances.		                        
+		      For more details see RFC 2109 and RFC 2965        */
+	
+		/* FireFox cookie strings look like:                    
+		     Cookie: mansession_id="********"                   
+		   InternetExplorer's look like:                        
+		     Cookie: $Version="1"; mansession_id="********"     */
+		
+		/* If we got a FireFox cookie string, the name's right  
+		    after "Cookie: "                                    */
+		vname = ast_skip_blanks(cookie + 8);
+			
+		/* If we got an IE cookie string, we need to skip to    
+		    past the version to get to the name                 */
+		if (*vname == '$') {
+			strsep(&vname, ";");
+			if (!vname)	/* no name ? */
+				continue;
+			vname = ast_skip_blanks(vname);
+		}
+		vval = strchr(vname, '=');
+		if (!vval)
+			continue;
+		/* Ditch the = and the quotes */
+		*vval++ = '\0';
+		if (*vval)
+			vval++;
+		if ( (l = strlen(vval)) )
+			vval[l - 1] = '\0';	/* trim trailing quote */
+		var = ast_variable_new(vname, vval);
+		if (var) {
+			if (prev)
+				prev->next = var;
+			else
+				vars = var;
+			prev = var;
+		}
+	}
+
+	if (!*uri)
+		out = ast_http_error(400, "Bad Request", NULL, "Invalid Request");
+	else if (strcasecmp(buf, "get")) 
+		out = ast_http_error(501, "Not Implemented", NULL,
+			"Attempt to use unimplemented / unsupported method");
+	else	/* try to serve it */
+		out = handle_uri(&ser->requestor, uri, &status, &title, &contentlength, &vars);
+
+	/* If they aren't mopped up already, clean up the cookies */
+	if (vars)
+		ast_variables_destroy(vars);
+
+	if (out == NULL)
+		out = ast_http_error(500, "Internal Error", NULL, "Internal Server Error");
+	if (out) {
+		time_t t = time(NULL);
+		char timebuf[256];
+
+		strftime(timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", gmtime(&t));
+		fprintf(ser->f, "HTTP/1.1 %d %s\r\n"
+				"Server: Asterisk\r\n"
+				"Date: %s\r\n"
+				"Connection: close\r\n",
+			status, title ? title : "OK", timebuf);
+		if (!contentlength) {	/* opaque body ? just dump it hoping it is properly formatted */
+			fprintf(ser->f, "%s", out->str);
+		} else {
+			char *tmp = strstr(out->str, "\r\n\r\n");
+
+			if (tmp) {
+				fprintf(ser->f, "Content-length: %d\r\n", contentlength);
+				/* first write the header, then the body */
+				fwrite(out->str, 1, (tmp + 4 - out->str), ser->f);
+				fwrite(tmp + 4, 1, contentlength, ser->f);
+			}
+		}
+		free(out);
+	}
+	if (title)
+		free(title);
+
+done:
+	if (ser->f)
+		fclose(ser->f);
 	free(ser);
 	return NULL;
 }
 
-static void *http_root(void *data)
+void *server_root(void *data)
 {
+	struct server_args *desc = data;
 	int fd;
 	struct sockaddr_in sin;
 	socklen_t sinlen;
-	struct ast_http_server_instance *ser;
+	struct server_instance *ser;
 	pthread_t launched;
 	pthread_attr_t attr;
 	
 	for (;;) {
-		int flags;
+		int i, flags;
 
-		ast_wait_for_input(httpfd, -1);
+		if (desc->periodic_fn)
+			desc->periodic_fn(desc);
+		i = ast_wait_for_input(desc->accept_fd, desc->poll_timeout);
+		if (i <= 0)
+			continue;
 		sinlen = sizeof(sin);
-		fd = accept(httpfd, (struct sockaddr *)&sin, &sinlen);
+		fd = accept(desc->accept_fd, (struct sockaddr *)&sin, &sinlen);
 		if (fd < 0) {
 			if ((errno != EAGAIN) && (errno != EINTR))
 				ast_log(LOG_WARNING, "Accept failed: %s\n", strerror(errno));
@@ -513,18 +661,14 @@ static void *http_root(void *data)
 		flags = fcntl(fd, F_GETFL);
 		fcntl(fd, F_SETFL, flags & ~O_NONBLOCK);
 		ser->fd = fd;
+		ser->parent = desc;
 		memcpy(&ser->requestor, &sin, sizeof(ser->requestor));
-		if ((ser->f = fdopen(ser->fd, "w+"))) {
-			pthread_attr_init(&attr);
-			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 			
-			if (ast_pthread_create_background(&launched, &attr, ast_httpd_helper_thread, ser)) {
-				ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
-				fclose(ser->f);
-				free(ser);
-			}
-		} else {
-			ast_log(LOG_WARNING, "fdopen failed!\n");
+		if (ast_pthread_create_background(&launched, &attr, make_file_from_fd, ser)) {
+			ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
 			close(ser->fd);
 			free(ser);
 		}
@@ -532,76 +676,106 @@ static void *http_root(void *data)
 	return NULL;
 }
 
-char *ast_http_setcookie(const char *var, const char *val, int expires, char *buf, size_t buflen)
+int ssl_setup(struct tls_config *cfg)
 {
-	char *c;
-	c = buf;
-	ast_build_string(&c, &buflen, "Set-Cookie: %s=\"%s\"; Version=\"1\"", var, val);
-	if (expires)
-		ast_build_string(&c, &buflen, "; Max-Age=%d", expires);
-	ast_build_string(&c, &buflen, "\r\n");
-	return buf;
+#ifndef DO_SSL
+	cfg->enabled = 0;
+	return 0;
+#else
+	if (!cfg->enabled)
+		return 0;
+	SSL_load_error_strings();
+	SSLeay_add_ssl_algorithms();
+	cfg->ssl_ctx = SSL_CTX_new( SSLv23_server_method() );
+	if (!ast_strlen_zero(cfg->certfile)) {
+		if (SSL_CTX_use_certificate_file(cfg->ssl_ctx, cfg->certfile, SSL_FILETYPE_PEM) == 0 ||
+		    SSL_CTX_use_PrivateKey_file(cfg->ssl_ctx, cfg->certfile, SSL_FILETYPE_PEM) == 0 ||
+		    SSL_CTX_check_private_key(cfg->ssl_ctx) == 0 ) {
+			ast_verbose("ssl cert error <%s>", cfg->certfile);
+			sleep(2);
+			cfg->enabled = 0;
+			return 0;
+		}
+	}
+	if (!ast_strlen_zero(cfg->cipher)) {
+		if (SSL_CTX_set_cipher_list(cfg->ssl_ctx, cfg->cipher) == 0 ) {
+			ast_verbose("ssl cipher error <%s>", cfg->cipher);
+			sleep(2);
+			cfg->enabled = 0;
+			return 0;
+		}
+	}
+	ast_verbose("ssl cert ok");
+	return 1;
+#endif
 }
 
-
-static void http_server_start(struct sockaddr_in *sin)
+/*!
+ * This is a generic (re)start routine for a TCP server,
+ * which does the socket/bind/listen and starts a thread for handling
+ * accept().
+ */
+void server_start(struct server_args *desc)
 {
 	int flags;
 	int x = 1;
 	
 	/* Do nothing if nothing has changed */
-	if (!memcmp(&oldsin, sin, sizeof(oldsin))) {
-		ast_log(LOG_DEBUG, "Nothing changed in http\n");
+	if (!memcmp(&desc->oldsin, &desc->sin, sizeof(desc->oldsin))) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Nothing changed in %s\n", desc->name);
 		return;
 	}
 	
-	memcpy(&oldsin, sin, sizeof(oldsin));
+	desc->oldsin = desc->sin;
 	
 	/* Shutdown a running server if there is one */
-	if (master != AST_PTHREADT_NULL) {
-		pthread_cancel(master);
-		pthread_kill(master, SIGURG);
-		pthread_join(master, NULL);
+	if (desc->master != AST_PTHREADT_NULL) {
+		pthread_cancel(desc->master);
+		pthread_kill(desc->master, SIGURG);
+		pthread_join(desc->master, NULL);
 	}
 	
-	if (httpfd != -1)
-		close(httpfd);
+	if (desc->accept_fd != -1)
+		close(desc->accept_fd);
 
 	/* If there's no new server, stop here */
-	if (!sin->sin_family)
+	if (desc->sin.sin_family == 0)
 		return;
-	
-	
-	httpfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (httpfd < 0) {
-		ast_log(LOG_WARNING, "Unable to allocate socket: %s\n", strerror(errno));
+
+	desc->accept_fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (desc->accept_fd < 0) {
+		ast_log(LOG_WARNING, "Unable to allocate socket for %s: %s\n",
+			desc->name, strerror(errno));
 		return;
 	}
 	
-	setsockopt(httpfd, SOL_SOCKET, SO_REUSEADDR, &x, sizeof(x));
-	if (bind(httpfd, (struct sockaddr *)sin, sizeof(*sin))) {
-		ast_log(LOG_NOTICE, "Unable to bind http server to %s:%d: %s\n",
-			ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port),
+	setsockopt(desc->accept_fd, SOL_SOCKET, SO_REUSEADDR, &x, sizeof(x));
+	if (bind(desc->accept_fd, (struct sockaddr *)&desc->sin, sizeof(desc->sin))) {
+		ast_log(LOG_NOTICE, "Unable to bind %s to %s:%d: %s\n",
+			desc->name,
+			ast_inet_ntoa(desc->sin.sin_addr), ntohs(desc->sin.sin_port),
 			strerror(errno));
-		close(httpfd);
-		httpfd = -1;
-		return;
+		goto error;
 	}
-	if (listen(httpfd, 10)) {
-		ast_log(LOG_NOTICE, "Unable to listen!\n");
-		close(httpfd);
-		httpfd = -1;
-		return;
+	if (listen(desc->accept_fd, 10)) {
+		ast_log(LOG_NOTICE, "Unable to listen for %s!\n", desc->name);
+		goto error;
 	}
-	flags = fcntl(httpfd, F_GETFL);
-	fcntl(httpfd, F_SETFL, flags | O_NONBLOCK);
-	if (ast_pthread_create_background(&master, NULL, http_root, NULL)) {
-		ast_log(LOG_NOTICE, "Unable to launch http server on %s:%d: %s\n",
-				ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port),
-				strerror(errno));
-		close(httpfd);
-		httpfd = -1;
+	flags = fcntl(desc->accept_fd, F_GETFL);
+	fcntl(desc->accept_fd, F_SETFL, flags | O_NONBLOCK);
+	if (ast_pthread_create_background(&desc->master, NULL, desc->accept_fn, desc)) {
+		ast_log(LOG_NOTICE, "Unable to launch %s on %s:%d: %s\n",
+			desc->name,
+			ast_inet_ntoa(desc->sin.sin_addr), ntohs(desc->sin.sin_port),
+			strerror(errno));
+		goto error;
 	}
+	return;
+
+error:
+	close(desc->accept_fd);
+	desc->accept_fd = -1;
 }
 
 static int __ast_http_load(int reload)
@@ -610,27 +784,58 @@ static int __ast_http_load(int reload)
 	struct ast_variable *v;
 	int enabled=0;
 	int newenablestatic=0;
-	struct sockaddr_in sin;
 	struct hostent *hp;
 	struct ast_hostent ahp;
 	char newprefix[MAX_PREFIX];
+	int have_sslbindaddr = 0;
 
-	memset(&sin, 0, sizeof(sin));
-	sin.sin_port = 8088;
+	/* default values */
+	memset(&http_desc.sin, 0, sizeof(http_desc.sin));
+	http_desc.sin.sin_port = htons(8088);
+
+	memset(&https_desc.sin, 0, sizeof(https_desc.sin));
+	https_desc.sin.sin_port = htons(8089);
 	strcpy(newprefix, DEFAULT_PREFIX);
 	cfg = ast_config_load("http.conf");
+
+	http_tls_cfg.enabled = 0;
+	if (http_tls_cfg.certfile)
+		free(http_tls_cfg.certfile);
+	http_tls_cfg.certfile = ast_strdup(AST_CERTFILE);
+	if (http_tls_cfg.cipher)
+		free(http_tls_cfg.cipher);
+	http_tls_cfg.cipher = ast_strdup("");
+
 	if (cfg) {
 		v = ast_variable_browse(cfg, "general");
 		while(v) {
 			if (!strcasecmp(v->name, "enabled"))
 				enabled = ast_true(v->value);
+			else if (!strcasecmp(v->name, "sslenable"))
+				http_tls_cfg.enabled = ast_true(v->value);
+			else if (!strcasecmp(v->name, "sslbindport"))
+				https_desc.sin.sin_port = htons(atoi(v->value));
+			else if (!strcasecmp(v->name, "sslcert")) {
+				free(http_tls_cfg.certfile);
+				http_tls_cfg.certfile = ast_strdup(v->value);
+			} else if (!strcasecmp(v->name, "sslcipher")) {
+				free(http_tls_cfg.cipher);
+				http_tls_cfg.cipher = ast_strdup(v->value);
+			}
 			else if (!strcasecmp(v->name, "enablestatic"))
 				newenablestatic = ast_true(v->value);
 			else if (!strcasecmp(v->name, "bindport"))
-				sin.sin_port = ntohs(atoi(v->value));
-			else if (!strcasecmp(v->name, "bindaddr")) {
+				http_desc.sin.sin_port = htons(atoi(v->value));
+			else if (!strcasecmp(v->name, "sslbindaddr")) {
 				if ((hp = ast_gethostbyname(v->value, &ahp))) {
-					memcpy(&sin.sin_addr, hp->h_addr, sizeof(sin.sin_addr));
+					memcpy(&https_desc.sin.sin_addr, hp->h_addr, sizeof(https_desc.sin.sin_addr));
+					have_sslbindaddr = 1;
+				} else {
+					ast_log(LOG_WARNING, "Invalid bind address '%s'\n", v->value);
+				}
+			} else if (!strcasecmp(v->name, "bindaddr")) {
+				if ((hp = ast_gethostbyname(v->value, &ahp))) {
+					memcpy(&http_desc.sin.sin_addr, hp->h_addr, sizeof(http_desc.sin.sin_addr));
 				} else {
 					ast_log(LOG_WARNING, "Invalid bind address '%s'\n", v->value);
 				}
@@ -647,14 +852,16 @@ static int __ast_http_load(int reload)
 		}
 		ast_config_destroy(cfg);
 	}
+	if (!have_sslbindaddr)
+		https_desc.sin.sin_addr = http_desc.sin.sin_addr;
 	if (enabled)
-		sin.sin_family = AF_INET;
-	if (strcmp(prefix, newprefix)) {
+		http_desc.sin.sin_family = https_desc.sin.sin_family = AF_INET;
+	if (strcmp(prefix, newprefix))
 		ast_copy_string(prefix, newprefix, sizeof(prefix));
-		prefix_len = strlen(prefix);
-	}
 	enablestatic = newenablestatic;
-	http_server_start(&sin);
+	server_start(&http_desc);
+	if (ssl_setup(https_desc.tls_cfg))
+		server_start(&https_desc);
 	return 0;
 }
 
@@ -665,12 +872,17 @@ static int handle_show_http(int fd, int argc, char *argv[])
 		return RESULT_SHOWUSAGE;
 	ast_cli(fd, "HTTP Server Status:\n");
 	ast_cli(fd, "Prefix: %s\n", prefix);
-	if (oldsin.sin_family)
-		ast_cli(fd, "Server Enabled and Bound to %s:%d\n\n",
-			ast_inet_ntoa(oldsin.sin_addr),
-			ntohs(oldsin.sin_port));
-	else
+	if (!http_desc.oldsin.sin_family)
 		ast_cli(fd, "Server Disabled\n\n");
+	else {
+		ast_cli(fd, "Server Enabled and Bound to %s:%d\n\n",
+			ast_inet_ntoa(http_desc.oldsin.sin_addr),
+			ntohs(http_desc.oldsin.sin_port));
+		if (http_tls_cfg.enabled)
+			ast_cli(fd, "HTTPS Server Enabled and Bound to %s:%d\n\n",
+				ast_inet_ntoa(https_desc.oldsin.sin_addr),
+				ntohs(https_desc.oldsin.sin_port));
+	}
 	ast_cli(fd, "Enabled URI's:\n");
 	urih = uris;
 	while(urih){
