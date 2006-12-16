@@ -181,6 +181,8 @@ endif
 
 ASTCFLAGS+=-pipe -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
+ASTCFLAGS+=-include $(ASTTOPDIR)/include/asterisk/autoconfig.h
+
 ifeq ($(AST_DEVMODE),yes)
   ASTCFLAGS+=-Werror -Wunused
 endif
@@ -334,6 +336,13 @@ include/asterisk/version.h:
 
 include/asterisk/buildopts.h: menuselect.makeopts
 	@build_tools/make_buildopts_h > $@.tmp
+	@if cmp -s $@.tmp $@ ; then : ; else \
+		mv $@.tmp $@ ; \
+	fi
+	@rm -f $@.tmp
+
+include/asterisk/build.h:
+	@build_tools/make_build_h > $@.tmp
 	@if cmp -s $@.tmp $@ ; then : ; else \
 		mv $@.tmp $@ ; \
 	fi
@@ -633,7 +642,7 @@ $(MOD_SUBDIRS_DEPEND):
 $(OTHER_SUBDIRS_DEPEND):
 	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" $(MAKE) --no-print-directory -C $(@:-depend=) depend
 
-depend: include/asterisk/version.h include/asterisk/buildopts.h defaults.h $(SUBDIRS_DEPEND)
+depend: include/asterisk/version.h include/asterisk/buildopts.h include/asterisk/build.h defaults.h $(SUBDIRS_DEPEND)
 
 sounds:
 	$(MAKE) -C sounds all
