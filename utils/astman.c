@@ -22,8 +22,6 @@
  *
  */
  
-#include "asterisk/autoconfig.h"
-
 #include <newt.h>
 #include <stdio.h>
 #include <sys/time.h>
@@ -40,8 +38,8 @@
 #include <stdlib.h>
 
 #include "asterisk/md5.h"
-#include "asterisk/manager.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/manager.h"
 
 #undef gethostbyname
 
@@ -224,7 +222,11 @@ static struct event {
 	{ "Status", event_status },
 	{ "Link", event_ignore },
 	{ "Unlink", event_ignore },
-	{ "StatusComplete", event_ignore }
+	{ "StatusComplete", event_ignore },
+	{ "Dial", event_ignore },
+	{ "PeerStatus", event_ignore },
+	{ "MessageWaiting", event_ignore },
+	{ "Newcallerid", event_ignore }
 };
 
 static int process_message(struct ast_mansession *s, struct message *m)
