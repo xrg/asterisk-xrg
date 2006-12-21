@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48379 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -153,7 +153,9 @@ enum {
 	/*! If set, the user is a shared line appearance trunk */
 	CONFFLAG_SLA_TRUNK = (1 << 26),
 	/*! If set, the user has put us on hold */
-	CONFFLAG_HOLD = (1 << 27)
+	CONFFLAG_HOLD = (1 << 27),
+	/*! If set, the user should continue in the dialplan if kicked out */
+	CONFFLAG_KICK_CONTINUE = (1 << 28)
 };
 
 enum {
@@ -166,6 +168,7 @@ AST_APP_OPTIONS(meetme_opts, {
 	AST_APP_OPTION('a', CONFFLAG_ADMIN ),
 	AST_APP_OPTION('b', CONFFLAG_AGI ),
 	AST_APP_OPTION('c', CONFFLAG_ANNOUNCEUSERCOUNT ),
+	AST_APP_OPTION('C', CONFFLAG_KICK_CONTINUE),
 	AST_APP_OPTION('D', CONFFLAG_DYNAMICPIN ),
 	AST_APP_OPTION('d', CONFFLAG_DYNAMIC ),
 	AST_APP_OPTION('E', CONFFLAG_EMPTYNOPIN ),
@@ -219,6 +222,7 @@ static const char *descrip =
 "             Default: conf-background.agi  (Note: This does not work with\n"
 "             non-Zap channels in the same conference)\n"
 "      'c' -- announce user(s) count on joining a conference\n"
+"      'C' -- continue in dialplan when kicked out of conference\n"
 "      'd' -- dynamically add conference\n"
 "      'D' -- dynamically add conference, prompting for a PIN\n"
 "      'e' -- select an empty conference\n"
@@ -360,7 +364,7 @@ struct ast_sla_station_box {
 	ASTOBJ_CONTAINER_COMPONENTS(struct ast_sla_station);
 };
 
-/*! SLA - Shared Line Apperance object. These consist of one trunk (outbound line)
+/*! SLA - Shared Line Appearance object. These consist of one trunk (outbound line)
 	and stations that receive incoming calls and place outbound calls over the trunk 
 */
 struct ast_sla {
@@ -651,6 +655,7 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 			if (option_verbose > 2)
 				ast_verbose(VERBOSE_PREFIX_3 "Created MeetMe conference %d for conference '%s'\n", cnf->zapconf, cnf->confno);
 			AST_LIST_INSERT_HEAD(&confs, cnf, list);
+			manager_event(EVENT_FLAG_CALL, "MeetmeStart", "Meetme: %s\r\n", cnf->confno);
 		} 
 	}
  cnfout:
@@ -824,7 +829,10 @@ static int meetme_cmd(int fd, int argc, char **argv)
 		return RESULT_SUCCESS;
 	} else 
 		return RESULT_SHOWUSAGE;
-	ast_log(LOG_DEBUG, "Cmdline: %s\n", cmdline);
+
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Cmdline: %s\n", cmdline);
+
 	admin_exec(NULL, cmdline);
 
 	return 0;
@@ -892,11 +900,11 @@ static char *complete_meetmecmd(const char *line, const char *word, int pos, int
 	return NULL;
 }
 	
-static char meetme_usage[] =
+static const char meetme_usage[] =
 "Usage: meetme (un)lock|(un)mute|kick|list [concise] <confno> <usernumber>\n"
 "       Executes a command for the conference or on a conferee\n";
 
-static char sla_show_usage[] =
+static const char sla_show_usage[] =
 "Usage: sla show\n"
 "       Lists status of all shared line appearances\n";
 
@@ -946,6 +954,7 @@ static int conf_free(struct ast_conference *conf)
 	int x;
 	
 	AST_LIST_REMOVE(&confs, conf, list);
+	manager_event(EVENT_FLAG_CALL, "MeetmeEnd", "Meetme: %s\r\n", conf->confno);
 
 	if (conf->recording == MEETME_RECORD_ACTIVE) {
 		conf->recording = MEETME_RECORD_TERMINATE;
@@ -1081,7 +1090,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	time(&user->jointime);
 
 	if (conf->locked && (!(confflags & CONFFLAG_ADMIN))) {
-		/* Sorry, but this confernce is locked! */	
+		/* Sorry, but this conference is locked! */	
 		if (!ast_streamfile(chan, "conf-locked", chan->language))
 			ast_waitstream(chan, "");
 		goto outrun;
@@ -1256,7 +1265,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	if (ztc.confmode) {
 		/* Whoa, already in a conference...  Retry... */
 		if (!retryzap) {
-			ast_log(LOG_DEBUG, "Zap channel is in a conference already, retrying with pseudo\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Zap channel is in a conference already, retrying with pseudo\n");
 			retryzap = 1;
 			goto zapretry;
 		}
@@ -1290,7 +1300,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		ast_mutex_unlock(&conf->playlock);
 		goto outrun;
 	}
-	ast_log(LOG_DEBUG, "Placed channel %s in ZAP conf %d\n", chan->name, conf->zapconf);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Placed channel %s in ZAP conf %d\n", chan->name, conf->zapconf);
 
 	if (!sent_event) {
 		manager_event(EVENT_FLAG_CALL, "MeetmeJoin", 
@@ -1399,9 +1410,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						if (!(confflags & CONFFLAG_QUIET))
 							if (!ast_streamfile(chan, "conf-leaderhasleft", chan->language))
 								ast_waitstream(chan, "");
-						if(confflags & CONFFLAG_MARKEDEXIT)
+						if (confflags & CONFFLAG_MARKEDEXIT) {
+							if (confflags & CONFFLAG_KICK_CONTINUE)
+								ret = 0;
 							break;
-						else {
+						} else {
 							ztc.confmode = ZT_CONF_CONF;
 							if (ioctl(fd, ZT_SETCONF, &ztc)) {
 								ast_log(LOG_WARNING, "Error setting conference\n");
@@ -1464,7 +1477,10 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			
 			/* Leave if the last marked user left */
 			if (currentmarked == 0 && lastmarked != 0 && (confflags & CONFFLAG_MARKEDEXIT)) {
-				ret = -1;
+				if (confflags & CONFFLAG_KICK_CONTINUE)
+					ret = 0;
+				else
+					ret = -1;
 				break;
 			}
 	
@@ -1522,7 +1538,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						close(fd);
 						using_pseudo = 0;
 					}
-					ast_log(LOG_DEBUG, "Ooh, something swapped out under us, starting over\n");
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Ooh, something swapped out under us, starting over\n");
 					retryzap = strcasecmp(c->tech->type, "Zap");
 					user->zapchannel = !retryzap;
 					goto zapretry;
@@ -1600,7 +1617,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					tmp[0] = f->subclass;
 					tmp[1] = '\0';
 					if (!ast_goto_if_exists(chan, exitcontext, tmp, 1)) {
-						ast_log(LOG_DEBUG, "Got DTMF %c, goto context %s\n", tmp[0], exitcontext);
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Got DTMF %c, goto context %s\n", tmp[0], exitcontext);
 						ret = 0;
 						ast_frfree(f);
 						break;
@@ -1908,8 +1926,8 @@ bailoutandtrynormal:
 				      "Uniqueid: %s\r\n"
 				      "Meetme: %s\r\n"
 				      "Usernum: %d\r\n"
-				      "CallerIDnum: %s\r\n"
-				      "CallerIDname: %s\r\n"
+				      "CallerIDNum: %s\r\n"
+				      "CallerIDName: %s\r\n"
 				      "Duration: %ld\r\n",
 				      chan->name, chan->uniqueid, conf->confno, 
 				      user->user_no,
@@ -2037,7 +2055,8 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 	if (!cnf) {
 		if (dynamic) {
 			/* No need to parse meetme.conf */
-			ast_log(LOG_DEBUG, "Building dynamic conference '%s'\n", confno);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Building dynamic conference '%s'\n", confno);
 			if (dynamic_pin) {
 				if (dynamic_pin[0] == 'q') {
 					/* Query the user to enter a PIN */
@@ -2073,7 +2092,8 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 				}
 			}
 			if (!var) {
-				ast_log(LOG_DEBUG, "%s isn't a valid conference\n", confno);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "%s isn't a valid conference\n", confno);
 			}
 			ast_config_destroy(cfg);
 		}
@@ -2296,10 +2316,12 @@ static int conf_exec(struct ast_channel *chan, void *data)
 					ast_waitstream(chan, "");
 			} else {
 				if (sscanf(confno, "%d", &confno_int) == 1) {
-					res = ast_streamfile(chan, "conf-enteringno", chan->language);
-					if (!res) {
-						ast_waitstream(chan, "");
-						res = ast_say_digits(chan, confno_int, "", chan->language);
+					if (!ast_test_flag(&confflags, CONFFLAG_QUIET)) {
+						res = ast_streamfile(chan, "conf-enteringno", chan->language);
+						if (!res) {
+							ast_waitstream(chan, "");
+							res = ast_say_digits(chan, confno_int, "", chan->language);
+						}
 					}
 				} else {
 					ast_log(LOG_ERROR, "Could not scan confno '%s'\n", confno);
@@ -2852,7 +2874,7 @@ static void *recordthread(void *args)
 			break;
 		}
 		if (!s && cnf->recordingfilename && (cnf->recordingfilename != oldrecordingfilename)) {
-			s = ast_writefile(cnf->recordingfilename, cnf->recordingformat, NULL, flags, 0, 0644);
+			s = ast_writefile(cnf->recordingfilename, cnf->recordingformat, NULL, flags, 0, AST_FILE_MODE);
 			oldrecordingfilename = cnf->recordingfilename;
 		}
 		
@@ -2919,7 +2941,8 @@ static int slastate(const char *data)
 	struct ast_conference *conf;
 	struct ast_sla *sla, *sla2;
 
-	ast_log(LOG_DEBUG, "asked for sla state for '%s'\n", data);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "asked for sla state for '%s'\n", data);
 
 	/* Find conference */
 	AST_LIST_LOCK(&confs);
@@ -2937,7 +2960,8 @@ static int slastate(const char *data)
 
 	ASTOBJ_UNREF(sla2, sla_destroy);
 
-	ast_log(LOG_DEBUG, "for '%s' conf = %p, sla = %p\n", data, conf, sla);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "for '%s' conf = %p, sla = %p\n", data, conf, sla);
 
 	if (!conf && !sla)
 		return AST_DEVICE_INVALID;

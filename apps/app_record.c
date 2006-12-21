@@ -27,7 +27,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46200 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -265,7 +265,7 @@ static int record_exec(struct ast_channel *chan, void *data)
 		
 		
 	flags = option_append ? O_CREAT|O_APPEND|O_WRONLY : O_CREAT|O_TRUNC|O_WRONLY;
-	s = ast_writefile( tmp, ext, NULL, flags , 0, 0644);
+	s = ast_writefile( tmp, ext, NULL, flags , 0, AST_FILE_MODE);
 		
 	if (!s) {
 		ast_log(LOG_WARNING, "Could not create file %s\n", filename);
@@ -335,7 +335,8 @@ static int record_exec(struct ast_channel *chan, void *data)
 		ast_frfree(f);
 	}
 	if (!f) {
-		ast_log(LOG_DEBUG, "Got hangup\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Got hangup\n");
 		res = -1;
 	}
 			

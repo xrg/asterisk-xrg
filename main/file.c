@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47701 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <errno.h>
@@ -156,7 +156,8 @@ int ast_writestream(struct ast_filestream *fs, struct ast_frame *f)
 			if (!fs->vfs && fs->filename) {
 				const char *type = ast_getformatname(f->subclass & ~0x1);
 				fs->vfs = ast_writefile(fs->filename, type, NULL, fs->flags, 0, fs->mode);
-				ast_log(LOG_DEBUG, "Opened video output file\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Opened video output file\n");
 			}
 			if (fs->vfs)
 				return ast_writestream(fs->vfs, f);
@@ -213,7 +214,7 @@ static int copy(const char *infile, const char *outfile)
 		ast_log(LOG_WARNING, "Unable to open %s in read-only mode\n", infile);
 		return -1;
 	}
-	if ((ofd = open(outfile, O_WRONLY | O_TRUNC | O_CREAT, 0600)) < 0) {
+	if ((ofd = open(outfile, O_WRONLY | O_TRUNC | O_CREAT, AST_FILE_MODE)) < 0) {
 		ast_log(LOG_WARNING, "Unable to open %s in write-only mode\n", outfile);
 		close(ifd);
 		return -1;
@@ -785,8 +786,10 @@ int ast_streamfile(struct ast_channel *chan, const char *filename, const char *p
 	fs = ast_openstream(chan, filename, preflang);
 	if (fs)
 		vfs = ast_openvstream(chan, filename, preflang);
-	if (vfs)
-		ast_log(LOG_DEBUG, "Ooh, found a video stream, too, format %s\n", ast_getformatname(vfs->fmt->format));
+	if (vfs) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Ooh, found a video stream, too, format %s\n", ast_getformatname(vfs->fmt->format));
+	}
 	if (fs){
 		if (ast_applystream(chan, fs))
 			return -1;
@@ -1115,12 +1118,11 @@ int ast_waitstream_exten(struct ast_channel *c, const char *context)
  * Return 0 if success, -1 if error, digit if interrupted by a digit.
  * If digits == "" then we can simply check for non-zero.
  */
-int ast_stream_and_wait(struct ast_channel *chan, const char *file,
-	const char *language, const char *digits)
+int ast_stream_and_wait(struct ast_channel *chan, const char *file, const char *digits)
 {
         int res = 0;
         if (!ast_strlen_zero(file)) {
-                res =  ast_streamfile(chan, file, language);
+                res = ast_streamfile(chan, file, chan->language);
                 if (!res)
                         res = ast_waitstream(chan, digits);
         }
@@ -1154,19 +1156,14 @@ static int show_file_formats(int fd, int argc, char *argv[])
 #undef FORMAT2
 }
 
-char show_file_formats_usage[] = 
+static const char show_file_formats_usage[] = 
 "Usage: core show file formats\n"
 "       Displays currently registered file formats (if any)\n";
-
-struct ast_cli_entry cli_show_file_formats_deprecated = {
-	{ "show", "file", "formats" },
-	show_file_formats, NULL,
-	NULL };
 
 struct ast_cli_entry cli_file[] = {
 	{ { "core", "show", "file", "formats" },
 	show_file_formats, "Displays file formats",
-	show_file_formats_usage, NULL, &cli_show_file_formats_deprecated },
+	show_file_formats_usage },
 };
 
 int ast_file_init(void)

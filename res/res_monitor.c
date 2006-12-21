@@ -25,7 +25,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46778 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46778 $")
 #include "asterisk/app.h"
 #include "asterisk/utils.h"
 #include "asterisk/config.h"
+#include "asterisk/options.h"
 
 AST_MUTEX_DEFINE_STATIC(monitorlock);
 
@@ -196,7 +197,7 @@ int ast_monitor_start(	struct ast_channel *chan, const char *format_spec,
 		}
 		if (!(monitor->read_stream = ast_writefile(monitor->read_filename,
 						monitor->format, NULL,
-						O_CREAT|O_TRUNC|O_WRONLY, 0, 0644))) {
+						O_CREAT|O_TRUNC|O_WRONLY, 0, AST_FILE_MODE))) {
 			ast_log(LOG_WARNING, "Could not create file %s\n",
 						monitor->read_filename);
 			free(monitor);
@@ -208,7 +209,7 @@ int ast_monitor_start(	struct ast_channel *chan, const char *format_spec,
 		}
 		if (!(monitor->write_stream = ast_writefile(monitor->write_filename,
 						monitor->format, NULL,
-						O_CREAT|O_TRUNC|O_WRONLY, 0, 0644))) {
+						O_CREAT|O_TRUNC|O_WRONLY, 0, AST_FILE_MODE))) {
 			ast_log(LOG_WARNING, "Could not create file %s\n",
 						monitor->write_filename);
 			ast_closestream(monitor->read_stream);
@@ -221,8 +222,9 @@ int ast_monitor_start(	struct ast_channel *chan, const char *format_spec,
 		/* so we know this call has been monitored in case we need to bill for it or something */
 		pbx_builtin_setvar_helper(chan, "__MONITORED","true");
 	} else {
-		ast_log(LOG_DEBUG,"Cannot start monitoring %s, already monitored\n",
-					chan->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG,"Cannot start monitoring %s, already monitored\n",
+						chan->name);
 		res = -1;
 	}
 
@@ -313,7 +315,8 @@ int ast_monitor_stop(struct ast_channel *chan, int need_lock)
 				snprintf(tmp2,sizeof(tmp2), "( %s& rm -f \"%s/%s-\"* ) &",tmp, dir ,name); /* remove legs when done mixing */
 				ast_copy_string(tmp, tmp2, sizeof(tmp));
 			}
-			ast_log(LOG_DEBUG,"monitor executing %s\n",tmp);
+			if (option_debug)
+				ast_log(LOG_DEBUG,"monitor executing %s\n",tmp);
 			if (ast_safe_system(tmp) == -1)
 				ast_log(LOG_WARNING, "Execute of %s failed.\n",tmp);
 		}
@@ -593,8 +596,6 @@ void ast_monitor_setjoinfiles(struct ast_channel *chan, int turnon)
 		chan->monitor->joinfiles = turnon;
 }
 
-#define IS_NULL_STRING(string) ((!(string)) || (ast_strlen_zero((string))))
-
 enum MONITOR_PAUSING_ACTION
 {
 	MONITOR_ACTION_PAUSE,
@@ -606,7 +607,7 @@ static int do_pause_or_unpause(struct mansession *s, struct message *m, int acti
 	struct ast_channel *c = NULL;
 	char *name = astman_get_header(m, "Channel");
 	
-	if (IS_NULL_STRING(name)) {
+	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "No channel specified");
 		return -1;
 	}
