@@ -28,7 +28,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47436 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,10 +135,10 @@ static struct ast_jb_conf default_jbconf =
 };
 static struct ast_jb_conf global_jbconf;
 
-AST_THREADSTORAGE(device2str_threadbuf, device2str_threadbuf_init);
+AST_THREADSTORAGE(device2str_threadbuf);
 #define DEVICE2STR_BUFSIZE   15
 
-AST_THREADSTORAGE(control2str_threadbuf, control2str_threadbuf_init);
+AST_THREADSTORAGE(control2str_threadbuf);
 #define CONTROL2STR_BUFSIZE   100
 
 /*********************
@@ -869,10 +869,6 @@ static char *skinny_cxmodes[] = {
 static struct sched_context *sched;
 static struct io_context *io;
 
-/* usage count and locking */
-static int usecnt = 0;
-AST_MUTEX_DEFINE_STATIC(usecnt_lock);
-
 /* Protect the monitoring thread, so only one process can kill or start it, and not
    when it's doing something critical. */
 AST_MUTEX_DEFINE_STATIC(monlock);
@@ -1392,14 +1388,17 @@ static int transmit_response(struct skinnysession *s, struct skinny_req *req)
 	int res = 0;
 	ast_mutex_lock(&s->lock);
 
-#if 0
 	if (skinnydebug)
-		ast_verbose("writing packet type %04X (%d bytes) to socket %d\n", letohl(req->e), letohl(req->len)+8, s->fd);
-#endif
+		ast_log(LOG_VERBOSE, "writing packet type %04X (%d bytes) to socket %d\n", letohl(req->e), letohl(req->len)+8, s->fd);
+
+	if (letohl(req->len > SKINNY_MAX_PACKET) || letohl(req->len < 0) {
+		ast_log(LOG_WARNING, "transmit_response: the length of the request is out of bounds\n");
+		return -1;
+	}
 
 	memset(s->outbuf,0,sizeof(s->outbuf));
 	memcpy(s->outbuf, req, skinny_header_size);
-	memcpy(s->outbuf+skinny_header_size, &req->data, sizeof(union skinny_data));
+	memcpy(s->outbuf+skinny_header_size, &req->data, letohl(req->len));
 
 	res = write(s->fd, s->outbuf, letohl(req->len)+8);
 
@@ -1951,23 +1950,23 @@ static int skinny_show_lines(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static char show_devices_usage[] =
+static const char show_devices_usage[] =
 "Usage: skinny show devices\n"
 "       Lists all devices known to the Skinny subsystem.\n";
 
-static char show_lines_usage[] =
+static const char show_lines_usage[] =
 "Usage: skinny show lines\n"
 "       Lists all lines known to the Skinny subsystem.\n";
 
-static char debug_usage[] =
+static const char debug_usage[] =
 "Usage: skinny set debug\n"
 "       Enables dumping of Skinny packets for debugging purposes\n";
 
-static char no_debug_usage[] =
+static const char no_debug_usage[] =
 "Usage: skinny set debug off\n"
 "       Disables dumping of Skinny packets for debugging purposes\n";
 
-static char reset_usage[] =
+static const char reset_usage[] =
 "Usage: skinny reset <DeviceId|all> [restart]\n"
 "       Causes a Skinny device to reset itself, optionally with a full restart\n";
 
@@ -2309,7 +2308,8 @@ static void *skinny_ss(void *data)
 				timeout = matchdigittimeout;
 			}
 		} else if (res == 0) {
-			ast_log(LOG_DEBUG, "Not enough digits (and no ambiguous match)...\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Not enough digits (and no ambiguous match)...\n");
 			transmit_tone(s, SKINNY_REORDER);
 			ast_hangup(c);
 			return NULL;
@@ -2396,7 +2396,8 @@ static int skinny_hangup(struct ast_channel *ast)
 	struct skinnysession *s;
 
 	if (!sub) {
-		ast_log(LOG_DEBUG, "Asked to hangup channel not connected\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Asked to hangup channel not connected\n");
 		return 0;
 	}
 	l = sub->parent;
@@ -2499,7 +2500,8 @@ static struct ast_frame *skinny_rtp_read(struct skinny_subchannel *sub)
 		/* We already hold the channel lock */
 		if (f->frametype == AST_FRAME_VOICE) {
 			if (f->subclass != ast->nativeformats) {
-				ast_log(LOG_DEBUG, "Oooh, format changed to %d\n", f->subclass);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Oooh, format changed to %d\n", f->subclass);
 				ast->nativeformats = f->subclass;
 				ast_set_read_format(ast, ast->readformat);
 				ast_set_write_format(ast, ast->writeformat);
@@ -2752,10 +2754,6 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		if (l->amaflags)
 			tmp->amaflags = l->amaflags;
 
-		ast_mutex_lock(&usecnt_lock);
-		usecnt++;
-		ast_mutex_unlock(&usecnt_lock);
-		ast_update_use_count();
 		tmp->callgroup = l->callgroup;
 		tmp->pickupgroup = l->pickupgroup;
 		ast_string_field_set(tmp, call_forward, l->call_forward);
@@ -3171,7 +3169,8 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 			ast_setstate(sub->owner, AST_STATE_UP);
 		} else {
 			if (sub && sub->owner) {
-				ast_log(LOG_DEBUG, "Current subchannel [%s] already has owner\n", sub->owner->name);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Current subchannel [%s] already has owner\n", sub->owner->name);
 			} else {
 				c = skinny_new(l, AST_STATE_DOWN);
 				if(c) {
@@ -3247,7 +3246,8 @@ static int handle_offhook_message(struct skinny_req *req, struct skinnysession *
 		ast_setstate(sub->owner, AST_STATE_UP);
 	} else {
 		if (sub && sub->owner) {
-			ast_log(LOG_DEBUG, "Current sub [%s] already has owner\n", sub->owner->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Current sub [%s] already has owner\n", sub->owner->name);
 		} else {
 			c = skinny_new(l, AST_STATE_DOWN);
 			if(c) {
@@ -4449,14 +4449,11 @@ static int reload_config(void)
 			ast_parse_allow_disallow(&default_prefs, &default_capability, v->value, 1);
 		} else if (!strcasecmp(v->name, "disallow")) {
 			ast_parse_allow_disallow(&default_prefs, &default_capability, v->value, 0);
-		} else if (!strcasecmp(v->name, "bindport") || !strcasecmp(v->name, "port")) {
+		} else if (!strcasecmp(v->name, "bindport")) {
 			if (sscanf(v->value, "%d", &ourport) == 1) {
 				bindaddr.sin_port = htons(ourport);
 			} else {
 				ast_log(LOG_WARNING, "Invalid bindport '%s' at line %d of %s\n", v->value, v->lineno, config);
-			}
-			if (!strcasecmp(v->name, "port")) { /*! \todo Remove 'port' option after 1.4 */
-				ast_log(LOG_WARNING, "Option 'port' at line %d of %s has been deprecated.  Please use 'bindport' instead.\n", v->lineno, config);
 			}
 		}
 		v = v->next;
