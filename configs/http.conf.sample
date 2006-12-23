@@ -4,25 +4,47 @@
 ;
 [general]
 ;
-; Whether HTTP interface is enabled or not.  Default is no.
+; Whether HTTP/HTTPS interface is enabled or not.  Default is no.
+; This also affects manager/rawman/mxml access (see manager.conf)
 ;
 ;enabled=yes
 ;
-; Whether Asterisk should serve static content from http-static
-; Default is no.
-;
-;enablestatic=yes
-;
-; Address to bind to.  Default is 0.0.0.0
+; Address to bind to, both for HTTP and HTTPS.  Default is 0.0.0.0
 ;
 bindaddr=127.0.0.1
 ;
-; Port to bind to (default is 8088)
+; Port to bind to for HTTP sessions (default is 8088)
 ;
-bindport=8088
+;bindport=8088
 ;
 ; Prefix allows you to specify a prefix for all requests
 ; to the server.  The default is "asterisk" so that all
 ; requests must begin with /asterisk
 ;
 ;prefix=asterisk
+;
+; Whether Asterisk should serve static content from http-static
+; Default is no.
+;
+;enablestatic=yes
+;
+; Redirect one URI to another.  This is how you would set a
+; default page.  
+;   Syntax: redirect=<from here>=<to there>
+; For example, if you are using the Asterisk-gui,
+; it is convenient to enable the following redirect:
+;
+;redirect=/=/asterisk/static/config/cfgadvanced.html
+;
+; HTTPS support. In addition to enabled=yes, you need to
+; explicitly enable ssl, define the port to use,
+; and have a certificate somewhere.
+; sslenable=yes		; enable ssl - default no.
+; sslbindport=4433	; port to use - default is 8089
+; sslbindaddr=0.0.0.0	; address to bind to - default is bindaddr.
+;
+; sslcert=/tmp/foo.pem	; path to the certificate
+;
+; To produce a certificate you can e.g. use openssl
+;	openssl req -new -x509 -days 365 -nodes -out /tmp/foo.pem -keyout /tmp/foo.pem
+;
