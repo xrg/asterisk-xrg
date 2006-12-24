@@ -38,7 +38,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <ctype.h>
@@ -1864,7 +1864,7 @@ static int load_module(void)
 	}
 
 	if (ast_channel_register(&oss_tech)) {
-		ast_log(LOG_ERROR, "Unable to register channel class 'MGCP'\n");
+		ast_log(LOG_ERROR, "Unable to register channel type 'OSS'\n");
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
