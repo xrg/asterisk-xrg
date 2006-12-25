@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47860 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -52,7 +52,7 @@ static AST_LIST_HEAD_STATIC(headerlist, ast_frame);
 static void frame_cache_cleanup(void *data);
 
 /*! \brief A per-thread cache of frame headers */
-AST_THREADSTORAGE_CUSTOM(frame_cache, frame_cache_init, frame_cache_cleanup);
+AST_THREADSTORAGE_CUSTOM(frame_cache, NULL, frame_cache_cleanup);
 
 /*! 
  * \brief Maximum ast_frame cache size
@@ -102,7 +102,7 @@ struct ast_smoother {
 
 /*! \brief Definition of supported media formats (codecs) */
 static struct ast_format_list AST_FORMAT_LIST[] = {					/*!< Bit number: comment  - Bit numbers are hard coded in show_codec() */
-	{ 1, AST_FORMAT_G723_1 , "g723" , "G.723.1", 24, 30, 300, 30, 30 },	/*!<  1 */
+	{ 1, AST_FORMAT_G723_1 , "g723" , "G.723.1", 20, 30, 300, 30, 30 },	/*!<  1 */
 	{ 1, AST_FORMAT_GSM, "gsm" , "GSM", 33, 20, 300, 20, 20 },		/*!<  2: codec_gsm.c */
 	{ 1, AST_FORMAT_ULAW, "ulaw", "G.711 u-law", 80, 10, 150, 10, 20 },	/*!<  3: codec_ulaw.c */
 	{ 1, AST_FORMAT_ALAW, "alaw", "G.711 A-law", 80, 10, 150, 10, 20 },	/*!<  4: codec_alaw.c */
@@ -130,6 +130,10 @@ static struct ast_format_list AST_FORMAT_LIST[] = {					/*!< Bit number: comment
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, 0, "nothing", "undefined" },
 	{ 0, AST_FORMAT_MAX_VIDEO, "maxvideo", "Maximum video format" },
+	{ 1, AST_FORMAT_T140, "t140", "Passthrough T.140 Realtime Text" },
+	{ 0, 0, "nothing", "undefined" },
+	{ 0, 0, "nothing", "undefined" },
+	{ 0, AST_FORMAT_MAX_TEXT, "maxtext", "Maximum text format" },
 };
 
 struct ast_frame ast_null_frame = { AST_FRAME_NULL, };
@@ -600,50 +604,6 @@ char *ast_codec2str(int codec)
 	return ret;
 }
 
-static int show_codecs_deprecated(int fd, int argc, char *argv[])
-{
-	int i, found=0;
-	char hex[25];
-	
-	if ((argc < 2) || (argc > 3))
-		return RESULT_SHOWUSAGE;
-
-	if (!ast_opt_dont_warn)
-		ast_cli(fd, "Disclaimer: this command is for informational purposes only.\n"
-				"\tIt does not indicate anything about your configuration.\n");
-
-	ast_cli(fd, "%11s %9s %10s   TYPE   %8s   %s\n","INT","BINARY","HEX","NAME","DESC");
-	ast_cli(fd, "--------------------------------------------------------------------------------\n");
-	if ((argc == 2) || (!strcasecmp(argv[1],"audio"))) {
-		found = 1;
-		for (i=0;i<13;i++) {
-			snprintf(hex,25,"(0x%x)",1<<i);
-			ast_cli(fd, "%11u (1 << %2d) %10s  audio   %8s   (%s)\n",1 << i,i,hex,ast_getformatname(1<<i),ast_codec2str(1<<i));
-		}
-	}
-
-	if ((argc == 2) || (!strcasecmp(argv[1],"image"))) {
-		found = 1;
-		for (i=16;i<18;i++) {
-			snprintf(hex,25,"(0x%x)",1<<i);
-			ast_cli(fd, "%11u (1 << %2d) %10s  image   %8s   (%s)\n",1 << i,i,hex,ast_getformatname(1<<i),ast_codec2str(1<<i));
-		}
-	}
-
-	if ((argc == 2) || (!strcasecmp(argv[1],"video"))) {
-		found = 1;
-		for (i=18;i<22;i++) {
-			snprintf(hex,25,"(0x%x)",1<<i);
-			ast_cli(fd, "%11u (1 << %2d) %10s  video   %8s   (%s)\n",1 << i,i,hex,ast_getformatname(1<<i),ast_codec2str(1<<i));
-		}
-	}
-
-	if (! found)
-		return RESULT_SHOWUSAGE;
-	else
-		return RESULT_SUCCESS;
-}
-
 static int show_codecs(int fd, int argc, char *argv[])
 {
 	int i, found=0;
@@ -688,31 +648,9 @@ static int show_codecs(int fd, int argc, char *argv[])
 		return RESULT_SUCCESS;
 }
 
-static char frame_show_codecs_usage[] =
+static const char frame_show_codecs_usage[] =
 "Usage: core show codecs [audio|video|image]\n"
 "       Displays codec mapping\n";
-
-static int show_codec_n_deprecated(int fd, int argc, char *argv[])
-{
-	int codec, i, found=0;
-
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
-
-	if (sscanf(argv[2],"%d",&codec) != 1)
-		return RESULT_SHOWUSAGE;
-
-	for (i = 0; i < 32; i++)
-		if (codec & (1 << i)) {
-			found = 1;
-			ast_cli(fd, "%11u (1 << %2d)  %s\n",1 << i,i,ast_codec2str(1<<i));
-		}
-
-	if (!found)
-		ast_cli(fd, "Codec %d not found\n", codec);
-
-	return RESULT_SUCCESS;
-}
 
 static int show_codec_n(int fd, int argc, char *argv[])
 {
@@ -922,23 +860,6 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 
 
 #ifdef TRACE_FRAMES
-static int show_frame_stats_deprecated(int fd, int argc, char *argv[])
-{
-	struct ast_frame *f;
-	int x=1;
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
-	AST_LIST_LOCK(&headerlist);
-	ast_cli(fd, "     Framer Statistics     \n");
-	ast_cli(fd, "---------------------------\n");
-	ast_cli(fd, "Total allocated headers: %d\n", headers);
-	ast_cli(fd, "Queue Dump:\n");
-	AST_LIST_TRAVERSE(&headerlist, f, frame_list)
-		ast_cli(fd, "%d.  Type %d, subclass %d from %s\n", x++, f->frametype, f->subclass, f->src ? f->src : "<Unknown>");
-	AST_LIST_UNLOCK(&headerlist);
-	return RESULT_SUCCESS;
-}
-
 static int show_frame_stats(int fd, int argc, char *argv[])
 {
 	struct ast_frame *f;
@@ -956,69 +877,37 @@ static int show_frame_stats(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static char frame_stats_usage[] =
+static const char frame_stats_usage[] =
 "Usage: core show frame stats\n"
 "       Displays debugging statistics from framer\n";
 #endif
 
 /* Builtin Asterisk CLI-commands for debugging */
-static struct ast_cli_entry cli_show_codecs = {
-	{ "show", "codecs", NULL },
-	show_codecs_deprecated, NULL,
-	NULL };
-
-static struct ast_cli_entry cli_show_audio_codecs = {
-	{ "show", "audio", "codecs", NULL },
-	show_codecs_deprecated, NULL,
-	NULL };
-
-static struct ast_cli_entry cli_show_video_codecs = {
-	{ "show", "video", "codecs", NULL },
-	show_codecs_deprecated, NULL,
-	NULL };
-
-static struct ast_cli_entry cli_show_image_codecs = {
-	{ "show", "image", "codecs", NULL },
-	show_codecs_deprecated, NULL,
-	NULL };
-
-static struct ast_cli_entry cli_show_codec = {
-	{ "show", "codec", NULL },
-	show_codec_n_deprecated, NULL,
-	NULL };
-
-#ifdef TRACE_FRAMES
-static struct ast_cli_entry cli_show_frame_stats = {
-	{ "show", "frame", "stats", NULL },
-	show_frame_stats, NULL,
-	NULL };
-#endif
-
 static struct ast_cli_entry my_clis[] = {
 	{ { "core", "show", "codecs", NULL },
 	show_codecs, "Displays a list of codecs",
-	frame_show_codecs_usage, NULL, &cli_show_codecs },
+	frame_show_codecs_usage },
 
 	{ { "core", "show", "audio", "codecs", NULL },
 	show_codecs, "Displays a list of audio codecs",
-	frame_show_codecs_usage, NULL, &cli_show_audio_codecs },
+	frame_show_codecs_usage },
 
 	{ { "core", "show", "video", "codecs", NULL },
 	show_codecs, "Displays a list of video codecs",
-	frame_show_codecs_usage, NULL, &cli_show_video_codecs },
+	frame_show_codecs_usage },
 
 	{ { "core", "show", "image", "codecs", NULL },
 	show_codecs, "Displays a list of image codecs",
-	frame_show_codecs_usage, NULL, &cli_show_image_codecs },
+	frame_show_codecs_usage },
 
 	{ { "core", "show", "codec", NULL },
 	show_codec_n, "Shows a specific codec",
-	frame_show_codec_n_usage, NULL, &cli_show_codec },
+	frame_show_codec_n_usage },
 
 #ifdef TRACE_FRAMES
 	{ { "core", "show", "frame", "stats", NULL },
 	show_frame_stats, "Shows frame statistics",
-	frame_stats_usage, NULL, &cli_show_frame_stats },
+	frame_stats_usage },
 #endif
 };
 
@@ -1195,7 +1084,7 @@ int ast_codec_pref_setsize(struct ast_codec_pref *pref, int format, int framems)
 struct ast_format_list ast_codec_pref_getsize(struct ast_codec_pref *pref, int format)
 {
 	int x, index = -1, framems = 0;
-	struct ast_format_list fmt;
+	struct ast_format_list fmt = { 0, };
 
 	for (x = 0; x < sizeof(AST_FORMAT_LIST) / sizeof(AST_FORMAT_LIST[0]); x++) {
 		if(AST_FORMAT_LIST[x].bits == format) {
@@ -1496,6 +1385,9 @@ int ast_codec_get_len(int format, int samples)
 
 	/* XXX Still need speex, g723, and lpc10 XXX */	
 	switch(format) {
+	case AST_FORMAT_G723_1:
+		len = (samples / 240) * 20;
+		break;
 	case AST_FORMAT_ILBC:
 		len = (samples / 240) * 50;
 		break;
