@@ -26,7 +26,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -120,7 +120,6 @@ static int math(struct ast_channel *chan, char *cmd, char *parse,
 			iaction = LTEFUNCTION;
 		}
 	} else if ((op = strchr(mvalue1, '='))) {
-		iaction = GTFUNCTION;
 		*op = '\0';
 		if (*(op + 1) == '=') {
 			*++op = '\0';
