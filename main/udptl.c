@@ -17,7 +17,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47053 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,17 +55,17 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47053 $")
 #define TRUE (!FALSE)
 #endif
 
-static int udptlstart = 0;
-static int udptlend = 0;
-static int udptldebug = 0;                  /* Are we debugging? */
+static int udptlstart;
+static int udptlend;
+static int udptldebug;	                  /* Are we debugging? */
 static struct sockaddr_in udptldebugaddr;   /* Debug packets to/from this host */
 #ifdef SO_NO_CHECK
-static int nochecksums = 0;
+static int nochecksums;
 #endif
-static int udptlfectype = 0;
-static int udptlfecentries = 0;
-static int udptlfecspan = 0;
-static int udptlmaxdatagram = 0;
+static int udptlfectype;
+static int udptlfecentries;
+static int udptlfecspan;
+static int udptlmaxdatagram;
 
 #define LOCAL_FAX_MAX_DATAGRAM      400
 #define MAX_FEC_ENTRIES             5
@@ -137,7 +137,7 @@ struct ast_udptl {
 	udptl_fec_rx_buffer_t rx[UDPTL_BUF_MASK + 1];
 };
 
-static struct ast_udptl_protocol *protos = NULL;
+static struct ast_udptl_protocol *protos;
 
 static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len);
 static int udptl_build_packet(struct ast_udptl *s, uint8_t *buf, uint8_t *ifp, int ifp_len);
@@ -664,13 +664,15 @@ struct ast_frame *ast_udptl_read(struct ast_udptl *udptl)
 		if ((udptl->them.sin_addr.s_addr != sin.sin_addr.s_addr) ||
 			(udptl->them.sin_port != sin.sin_port)) {
 			memcpy(&udptl->them, &sin, sizeof(udptl->them));
-			ast_log(LOG_DEBUG, "UDPTL NAT: Using address %s:%d\n", ast_inet_ntoa(udptl->them.sin_addr), ntohs(udptl->them.sin_port));
+			if (option_debug)
+				ast_log(LOG_DEBUG, "UDPTL NAT: Using address %s:%d\n", ast_inet_ntoa(udptl->them.sin_addr), ntohs(udptl->them.sin_port));
 		}
 	}
 
 	if (udptl_debug_test_addr(&sin)) {
-		ast_verbose("Got UDPTL packet from %s:%d (type %d, seq %d, len %d)\n",
-			ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), 0, seqno, res);
+		if (option_verbose)
+			ast_verbose("Got UDPTL packet from %s:%d (type %d, seq %d, len %d)\n",
+				ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), 0, seqno, res);
 	}
 #if 0
 	printf("Got UDPTL packet from %s:%d (seq %d, len = %d)\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), seqno, res);
@@ -1035,7 +1037,8 @@ int ast_udptl_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, 
 		if ((c0->tech_pvt != pvt0) ||
 			(c1->tech_pvt != pvt1) ||
 			(c0->masq || c0->masqr || c1->masq || c1->masqr)) {
-				ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 				/* Tell it to try again later */
 				return -3;
 		}
@@ -1043,22 +1046,27 @@ int ast_udptl_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, 
 		ast_udptl_get_peer(p1, &t1);
 		ast_udptl_get_peer(p0, &t0);
 		if (inaddrcmp(&t1, &ac1)) {
-			ast_log(LOG_DEBUG, "Oooh, '%s' changed end address to %s:%d\n", 
-				c1->name, ast_inet_ntoa(t1.sin_addr), ntohs(t1.sin_port));
-			ast_log(LOG_DEBUG, "Oooh, '%s' was %s:%d\n", 
-				c1->name, ast_inet_ntoa(ac1.sin_addr), ntohs(ac1.sin_port));
+			if (option_debug) {
+				ast_log(LOG_DEBUG, "Oooh, '%s' changed end address to %s:%d\n", 
+					c1->name, ast_inet_ntoa(t1.sin_addr), ntohs(t1.sin_port));
+				ast_log(LOG_DEBUG, "Oooh, '%s' was %s:%d\n", 
+					c1->name, ast_inet_ntoa(ac1.sin_addr), ntohs(ac1.sin_port));
+			}
 			memcpy(&ac1, &t1, sizeof(ac1));
 		}
 		if (inaddrcmp(&t0, &ac0)) {
-			ast_log(LOG_DEBUG, "Oooh, '%s' changed end address to %s:%d\n", 
-				c0->name, ast_inet_ntoa(t0.sin_addr), ntohs(t0.sin_port));
-			ast_log(LOG_DEBUG, "Oooh, '%s' was %s:%d\n", 
-				c0->name, ast_inet_ntoa(ac0.sin_addr), ntohs(ac0.sin_port));
+			if (option_debug) {
+				ast_log(LOG_DEBUG, "Oooh, '%s' changed end address to %s:%d\n", 
+					c0->name, ast_inet_ntoa(t0.sin_addr), ntohs(t0.sin_port));
+				ast_log(LOG_DEBUG, "Oooh, '%s' was %s:%d\n", 
+					c0->name, ast_inet_ntoa(ac0.sin_addr), ntohs(ac0.sin_port));
+			}
 			memcpy(&ac0, &t0, sizeof(ac0));
 		}
 		who = ast_waitfor_n(cs, 2, &to);
 		if (!who) {
-			ast_log(LOG_DEBUG, "Ooh, empty read...\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Ooh, empty read...\n");
 			/* check for hangup / whentohangup */
 			if (ast_check_hangup(c0) || ast_check_hangup(c1))
 				break;
@@ -1068,7 +1076,8 @@ int ast_udptl_bridge(struct ast_channel *c0, struct ast_channel *c1, int flags, 
 		if (!f) {
 			*fo = f;
 			*rc = who;
-			ast_log(LOG_DEBUG, "Oooh, got a %s\n", f ? "digit" : "hangup");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Oooh, got a %s\n", f ? "digit" : "hangup");
 			/* That's all we needed */
 			return 0;
 		} else {
@@ -1144,18 +1153,13 @@ static int udptl_nodebug(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static char debug_usage[] =
+static const char debug_usage[] =
   "Usage: udptl debug [ip host[:port]]\n"
   "       Enable dumping of all UDPTL packets to and from host.\n";
 
-static char nodebug_usage[] =
+static const char nodebug_usage[] =
   "Usage: udptl debug off\n"
   "       Disable all UDPTL debugging\n";
-
-static struct ast_cli_entry cli_udptl_no_debug = {
-	{ "udptl", "no", "debug", NULL },
-	udptl_nodebug, NULL,
-	NULL };
 
 static struct ast_cli_entry cli_udptl[] = {
 	{ { "udptl", "debug", NULL },
@@ -1168,7 +1172,7 @@ static struct ast_cli_entry cli_udptl[] = {
 
 	{ { "udptl", "debug", "off", NULL },
 	udptl_nodebug, "Disable UDPTL debugging",
-	nodebug_usage, NULL, &cli_udptl_no_debug },
+	nodebug_usage },
 };
 
 void ast_udptl_reload(void)

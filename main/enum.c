@@ -42,7 +42,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46631 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -85,7 +85,7 @@ static struct enum_search {
 	struct enum_search *next;
 } *toplevs;
 
-static int enumver = 0;
+static int enumver;
 
 AST_MUTEX_DEFINE_STATIC(enumlock);
 
@@ -494,7 +494,8 @@ int ast_get_enum(struct ast_channel *chan, const char *number, char *dst, int ds
 	}
 
 	if (ret < 0) {
-		ast_log(LOG_DEBUG, "No such number found: %s (%s)\n", tmp, strerror(errno));
+		if (option_debug)
+			ast_log(LOG_DEBUG, "No such number found: %s (%s)\n", tmp, strerror(errno));
 		strcpy(dst, "0");
 		ret = 0;
 	}
