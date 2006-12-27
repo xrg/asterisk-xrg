@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 41650 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -53,7 +53,7 @@ static int oframes = 0;
 static void frame_cache_cleanup(void *data);
 
 /*! \brief A per-thread cache of iax_frame structures */
-AST_THREADSTORAGE_CUSTOM(frame_cache, frame_cache_init, frame_cache_cleanup);
+AST_THREADSTORAGE_CUSTOM(frame_cache, NULL, frame_cache_cleanup);
 
 /*! \brief This is just so iax_frames, a list head struct for holding a list of
  *  iax_frame structures, is defined. */
@@ -957,7 +957,7 @@ struct iax_frame *iax_frame_new(int direction, int datalen)
 	}
 
 	if (!fr) {
-		if (!(fr = ast_calloc(1, sizeof(*fr) + datalen)))
+		if (!(fr = ast_calloc_cache(1, sizeof(*fr) + datalen)))
 			return NULL;
 		fr->mallocd_datalen = datalen;
 	}
