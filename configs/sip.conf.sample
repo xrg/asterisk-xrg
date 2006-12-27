@@ -13,19 +13,23 @@
 ; where the proxyhostname is defined in a section below 
 ; 
 ; Useful CLI commands to check peers/users:
-;   sip show peers		Show all SIP peers (including friends)
-;   sip show users		Show all SIP users (including friends)
-;   sip show registry		Show status of hosts we register with
+;   sip list peers		Show all SIP peers (including friends)
+;   sip list users		Show all SIP users (including friends)
+;   sip list registry		Show status of hosts we register with
 ;
 ;   sip debug			Show all SIP messages
 ;
-;   reload chan_sip.so		Reload configuration file
+;   sip reload			Reload configuration file
 ;				Active SIP peers will not be reconfigured
 ;
 
 [general]
 context=default			; Default context for incoming calls
 ;allowguest=no			; Allow or reject guest calls (default is yes)
+;match_auth_username=yes	; if available, match user entry using the
+				; 'username' field from the authentication line
+				; instead of the From: field.
+				
 allowoverlap=no			; Disable overlap dialing support. (Default is yes)
 ;allowtransfer=no		; Disable all transfers (unless enabled in peers or users)
 				; Default is enabled
@@ -66,6 +70,9 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; Defaults to 100 ms
 ;notifymimetype=text/plain	; Allow overriding of mime type in MWI NOTIFY
 ;checkmwi=10			; Default time between mailbox checks for peers
+;buggyciscomwi=no		; Cisco SIP firmware doesn't support the MWI RFC
+				; fully. Enable this option to not get error messages
+				; when sending MWI to phones with this bug.
 ;vmexten=voicemail		; dialplan extension to reach mailbox sets the 
 				; Message-Account in the MWI notify message 
 				; defaults to "asterisk"
@@ -122,6 +129,12 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; for peers and users as well
 ;callevents=no			; generate manager events when sip ua 
 				; performs events (e.g. hold)
+;limitpeersonly=no		; Apply all call limits ("limit=") only to peers, never
+				; to users. This improves handling of call limits
+				; and device states in certain situations. The user part
+				; of a type=friend will still be affected by the call
+				; limit, but Asterisk will only use one object for
+				; counting the simultaneous calls.
 ;alwaysauthreject = yes		; When an incoming INVITE or REGISTER is to be rejected,
  		    		; for any reason, always reject with '401 Unauthorized'
  				; instead of letting the requester know whether there was
@@ -194,7 +207,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;notifyhold = yes		; Notify subscriptions on HOLD state (default: no)
 				; Turning on notifyringing and notifyhold will add a lot
 				; more database transactions if you are using realtime.
-;limitonpeers = yes		; Apply call limits on peers only. This will improve 
+;limitonpeer = yes		; Apply call limits on peers only. This will improve 
 				; status notification when you are using type=friend
 				; Inbound calls, that really apply to the user part
 				; of a friend will now be added to and compared with
@@ -224,6 +237,14 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;
 ; host is either a host name defined in DNS or the name of a section defined
 ; below.
+;
+; A similar effect can be achieved by adding a "callbackextension" option in a peer section.
+; this is equivalent to having the following line in the general section:
+;
+;	register => username:secret@host/callbackextension
+;
+; and more readable because you don't have to write the parameters in two places
+; (note that the "port" is ignored - this is a bug that should be fixed).
 ;
 ; Examples:
 ;
@@ -299,7 +320,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; behind a NAT, or for some other reason wants Asterisk to
 				; stay in the audio path, you may want to turn this off.
 
-				; In Asterisk 1.4 this setting also affect direct RTP
+				; This setting also affect direct RTP
 				; at call setup (a new feature in 1.4 - setting up the
 				; call directly between the endpoints instead of sending
 				; a re-INVITE).
@@ -481,6 +502,7 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;                             sendrpid
 ;                             outboundproxy
 ;                             rfc2833compensate
+;                             callbackextension
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)
@@ -504,6 +526,14 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 					; since they are not stored in-memory
 ;port=80				; The port number we want to connect to on the remote side
 
+;--- sample definition for a provider
+;[provider1]
+;type=peer
+;host=sip.provider1.com
+;username=4015552299		; how your provider knows you
+;secret=youwillneverguessit
+;callbackextension=123		; Register with this server and require calls coming back to this extension
+
 ;------------------------------------------------------------------------------
 ; Definitions of locally connected SIP devices
 ;
@@ -519,7 +549,51 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; If Asterisk is on a public IP, and the phone is inside of a NAT device
 ; you will need to configure nat option for those phones.
 ; Also, turn on qualify=yes to keep the nat session open
+;
+; Because you might have a large number of similar sections, it is generally
+; convenient to use templates for the common parameters, and add them
+; the the various sections. Examples are below, and we can even leave
+; the templates uncommented as they will not harm:
 
+[basic-options](!)		; a template
+	dtmfmode=rfc2833
+	context=from-office
+	type=friend
+
+[natted-phone](!,basic-options)	; another template inheriting basic-options
+	nat=yes
+	canreinvite=no
+	host=dynamic
+
+[public-phone](!,basic-options)	; another template inheriting basic-options
+	nat=no
+	canreinvite=yes
+
+[my-codecs](!)		; a template for my preferred codecs
+	disallow=all
+	allow=ilbc
+	allow=g729
+	allow=gsm
+	allow=g723
+	allow=ulaw
+
+[ulaw-phone](!)		; and another one for ulaw-only
+	disallow=all
+	allow=ulaw
+
+; and finally instantiate a few phones
+;
+; [2133](natted-phone,my-codecs)
+;	secret = peekaboo
+; [2134](natted-phone,ulaw-hone)
+;	secret = not_very_secret
+; [2136](public-phone,ulaw-hone)
+;	secret = not_very_secret_either
+; ...
+;
+
+; Standard configurations not using templates look like this:
+;
 ;[grandstream1]
 ;type=friend 			
 ;context=from-sip		; Where to start in the dialplan when this phone calls
