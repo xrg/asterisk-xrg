@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47707 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,11 +95,11 @@ struct ast_channel_whisper_buffer {
 #endif
 
 /*! Prevent new channel allocation if shutting down. */
-static int shutting_down = 0;
+static int shutting_down;
 
-static int uniqueint = 0;
+static int uniqueint;
 
-unsigned long global_fin = 0, global_fout = 0;
+unsigned long global_fin, global_fout;
 
 AST_THREADSTORAGE(state2str_threadbuf, state2str_threadbuf_init);
 #define STATE2STR_BUFSIZE   32
