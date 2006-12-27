@@ -59,7 +59,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47370 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -151,8 +151,6 @@ int daemon(int, int);  /* defined in libresolv of all places */
   Some of them can be changed in the CLI 
  */
 /*! @{ */
-
-extern int ast_language_is_prefix;	/* XXX move to some header */
 
 struct ast_flags ast_options = { AST_DEFAULT_OPTIONS };
 
