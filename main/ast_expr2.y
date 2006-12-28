@@ -15,7 +15,7 @@
 #include "asterisk.h"
 
 #ifndef STANDALONE
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #endif
 
 #include <sys/types.h>
@@ -26,7 +26,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
 #include <unistd.h>
 #include <ctype.h>
 #if !defined(SOLARIS) && !defined(__CYGWIN__)
-#include <err.h>
+/* #include <err.h> */
 #else
 #define quad_t int64_t
 #endif
