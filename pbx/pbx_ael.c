@@ -24,7 +24,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47558 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <stdlib.h>
@@ -131,6 +131,10 @@ static int extension_matches(pval *here, const char *exten, const char *pattern)
 static void check_goto(pval *item);
 static void find_pval_goto_item(pval *item, int lev);
 static void find_pval_gotos(pval *item, int lev);
+static int check_break(pval *item);
+static int check_continue(pval *item);
+static void check_label(pval *item);
+static void check_macro_returns(pval *macro);
 
 static struct pval *find_label_in_current_context(char *exten, char *label, pval *curr_cont);
 static struct pval *find_first_label_in_current_context(char *label, pval *curr_cont);
@@ -145,6 +149,20 @@ static void fix_gotos_in_extensions(struct ael_extension *exten);
 static pval *get_extension_or_contxt(pval *p);
 static pval *get_contxt(pval *p);
 static void remove_spaces_before_equals(char *str);
+static void substitute_commas(char *str);
+
+/* I am adding this code to substitute commas with vertbars in the args to apps */
+static void substitute_commas(char *str)
+{
+	char *p = str;
+	while (p && *p)
+	{
+		if (*p == ',' && ((p != str && *(p-1) != '\\')
+				|| p == str))
+			*p = '|';
+		p++;
+	}
+}
 
 
 /* PRETTY PRINTER FOR AEL:  ============================================================================= */
@@ -204,7 +222,7 @@ static void print_pval(FILE *fin, pval *item, int depth)
 		fprintf(fin,"%s(", item->u1.str);
 		for (lp=item->u2.arglist; lp; lp=lp->next) {
 			if ( lp != item->u2.arglist )
-				fprintf(fin,", ");
+				fprintf(fin,",");
 			fprintf(fin,"%s", lp->u1.str);
 		}
 		fprintf(fin,");\n");
@@ -681,6 +699,49 @@ void traverse_pval_template(pval *item, int depth) /* depth comes in handy for a
 /*   (not all that is syntactically legal is good! */
 
 
+static void check_macro_returns(pval *macro)
+{
+	pval *i;
+	if (!macro->u3.macro_statements)
+	{
+		pval *z = calloc(1, sizeof(struct pval));
+		ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: The macro %s is empty! I will insert a return.\n",
+				macro->filename, macro->startline, macro->endline, macro->u1.str);
+
+		z->type = PV_RETURN;
+		z->startline = macro->startline;
+		z->endline = macro->endline;
+		z->startcol = macro->startcol;
+		z->endcol = macro->endcol;
+		z->filename = strdup(macro->filename);
+
+		macro->u3.macro_statements = z;
+		return;
+	}
+	for (i=macro->u3.macro_statements; i; i=i->next) {
+		/* if the last statement in the list is not return, then insert a return there */
+		if (i->next == NULL) {
+			if (i->type != PV_RETURN) {
+				pval *z = calloc(1, sizeof(struct pval));
+				ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: The macro %s does not end with a return; I will insert one.\n",
+						macro->filename, macro->startline, macro->endline, macro->u1.str);
+
+				z->type = PV_RETURN;
+				z->startline = macro->startline;
+				z->endline = macro->endline;
+				z->startcol = macro->startcol;
+				z->endcol = macro->endcol;
+				z->filename = strdup(macro->filename);
+
+				i->next = z;
+				return;
+			}
+		}
+	}
+	return;
+}
+
+
 
 static int extension_matches(pval *here, const char *exten, const char *pattern)
 {
@@ -688,10 +749,10 @@ static int extension_matches(pval *here, const char *exten, const char *pattern)
 	regex_t preg;
 	
 	/* simple case, they match exactly, the pattern and exten name */
-	if( !strcmp(pattern,exten) == 0 )
+	if (!strcmp(pattern,exten) == 0)
 		return 1;
 	
-	if ( pattern[0] == '_' ) {
+	if (pattern[0] == '_') {
 		char reg1[2000];
 		const char *p;
 		char *r = reg1;
@@ -1068,16 +1129,64 @@ static int check_continue(pval *item)
 	return 0;
 }
 
+static struct pval *in_macro(pval *item)
+{
+	struct pval *curr;
+	curr = item;	
+	while( curr ) {
+		if( curr->type == PV_MACRO  ) {
+			return curr;
+		}
+		curr = curr->dad;
+	}
+	return 0;
+}
+
+static struct pval *in_context(pval *item)
+{
+	struct pval *curr;
+	curr = item;	
+	while( curr ) {
+		if( curr->type == PV_MACRO || curr->type == PV_CONTEXT ) {
+			return curr;
+		}
+		curr = curr->dad;
+	}
+	return 0;
+}
+
 
 /* general purpose goto finder */
 
 static void check_label(pval *item)
 {
+	struct pval *curr;
+	struct pval *x;
+	int alright = 0;
+	
+	/* A label outside an extension just plain does not make sense! */
+	
+	curr = item;
+	
+	while( curr ) {
+		if( curr->type == PV_MACRO || curr->type == PV_EXTENSION   ) {
+			alright = 1;
+			break;
+		}
+		curr = curr->dad;
+	}
+	if( !alright )
+	{
+		ast_log(LOG_ERROR,"Error: file %s, line %d-%d: Label %s is not within an extension or macro!\n",
+				item->filename, item->startline, item->endline, item->u1.str);
+		errs++;	
+	}
+	
+	
 	/* basically, ensure that a label is not repeated in a context. Period.
 	   The method:  well, for each label, find the first label in the context
 	   with the same name. If it's not the current label, then throw an error. */
-	struct pval *curr;
-	struct pval *x;
+
 	
 	/* printf("==== check_label:   ====\n"); */
 	if( !current_extension )
@@ -1259,11 +1368,33 @@ static void check_goto(pval *item)
 						ast_log(LOG_ERROR,"Error: file %s, line %d-%d: goto:  no label %s|%s exists in the context %s or its inclusions!\n",
 								item->filename, item->startline, item->endline, item->u1.list->next->u1.str, item->u1.list->next->next->u1.str, item->u1.list->u1.str );
 						errs++;
+					} else {
+						struct pval *mac = in_macro(item); /* is this goto inside a macro? */
+						if( mac ) {    /* yes! */
+							struct pval *targ = in_context(found);
+							if( mac != targ )
+							{
+								ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: It's bad form to have a goto in a macro to a target outside the macro!\n",
+										item->filename, item->startline, item->endline);
+								warns++;								
+							}
+						}
 					}
 				} else {
 					ast_log(LOG_ERROR,"Error: file %s, line %d-%d: goto:  no context %s could be found that matches the goto target!\n",
 							item->filename, item->startline, item->endline, item->u1.list->u1.str);
 					errs++;
+				}
+			} else {
+				struct pval *mac = in_macro(item); /* is this goto inside a macro? */
+				if( mac ) {    /* yes! */
+					struct pval *targ = in_context(x);
+					if( mac != targ )
+					{
+						ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: It's bad form to have a goto in a macro to a target outside the macro!\n",
+								item->filename, item->startline, item->endline);
+						warns++;								
+					}
 				}
 			}
 		}
@@ -2217,7 +2348,7 @@ void check_pval_item(pval *item, struct argapp *apps, int in_globals)
 #endif
 	struct pval *macro_def;
 	struct pval *app_def;
-	
+
 	char errmsg[4096];
 	char *strp;
 	
@@ -2238,6 +2369,9 @@ void check_pval_item(pval *item, struct argapp *apps, int in_globals)
 		in_abstract_context = 0;
 		current_context = item;
 		current_extension = 0;
+
+		check_macro_returns(item);
+		
 		for (lp=item->u2.arglist; lp; lp=lp->next) {
 		
 		}
@@ -2311,11 +2445,32 @@ void check_pval_item(pval *item, struct argapp *apps, int in_globals)
 			|| strcasecmp(item->u1.str,"while") == 0
 			|| strcasecmp(item->u1.str,"endwhile") == 0
 			|| strcasecmp(item->u1.str,"random") == 0
+			|| strcasecmp(item->u1.str,"gosub") == 0
+			|| strcasecmp(item->u1.str,"return") == 0
+			|| strcasecmp(item->u1.str,"gosubif") == 0
+			|| strcasecmp(item->u1.str,"continuewhile") == 0
+			|| strcasecmp(item->u1.str,"endwhile") == 0
+			|| strcasecmp(item->u1.str,"execif") == 0
+			|| strcasecmp(item->u1.str,"execiftime") == 0
+			|| strcasecmp(item->u1.str,"exitwhile") == 0
+			|| strcasecmp(item->u1.str,"goto") == 0
+			|| strcasecmp(item->u1.str,"macro") == 0
+			|| strcasecmp(item->u1.str,"macroexclusive") == 0
+			|| strcasecmp(item->u1.str,"macroif") == 0
+			|| strcasecmp(item->u1.str,"stackpop") == 0
 			|| strcasecmp(item->u1.str,"execIf") == 0 ) {
-			ast_log(LOG_WARNING,"Warning: file %s, line %d-%d: application call to %s needs to be re-written using AEL if, while, goto, etc. keywords instead!\n",
+			ast_log(LOG_WARNING,"Warning: file %s, line %d-%d: application call to %s affects flow of control, and needs to be re-written using AEL if, while, goto, etc. keywords instead!\n",
 					item->filename, item->startline, item->endline, item->u1.str);
 			warns++;
 		}
+		if (strcasecmp(item->u1.str,"macroexit") == 0) {
+				ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: I am converting the MacroExit call here to a return statement.\n",
+						item->filename, item->startline, item->endline);
+				item->type = PV_RETURN;
+				free(item->u1.str);
+				item->u1.str = 0;
+		}
+		
 #ifdef AAL_ARGCHECK
 		found = 0;
 		for (app=apps; app; app=app->next) {
@@ -2828,6 +2983,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 	char new_label[2000];
 	int default_exists;
 	int local_control_statement_count;
+	int first;
 	struct ael_priority *loop_break_save;
 	struct ael_priority *loop_continue_save;
 	struct ael_extension *switch_case;
@@ -3076,7 +3232,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							linkprio(switch_case, fall_thru);
 						}
 					}
-					if (switch_case->return_needed) {
+					if (switch_case->return_needed) { /* returns don't generate a goto eoe (end of extension) any more, just a Return() app call) */
 						char buf[2000];
 						struct ael_priority *np2 = new_prio();
 						np2->type = AEL_APPCALL;
@@ -3138,7 +3294,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							linkprio(switch_case, fall_thru);
 						}
 					}
-					if (switch_case->return_needed) {
+					if (switch_case->return_needed) { /* returns don't generate a goto eoe (end of extension) any more, just a Return() app call) */
 						char buf[2000];
 						struct ael_priority *np2 = new_prio();
 						np2->type = AEL_APPCALL;
@@ -3202,7 +3358,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							linkprio(switch_case, fall_thru);
 						}
 					}
-					if (switch_case->return_needed) {
+					if (switch_case->return_needed) { /* returns don't generate a goto eoe (end of extension) any more, just a Return() app call) */
 						char buf[2000];
 						struct ael_priority *np2 = new_prio();
 						np2->type = AEL_APPCALL;
@@ -3226,12 +3382,22 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 		case PV_MACRO_CALL:
 			pr = new_prio();
 			pr->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"%s", p->u1.str);
+			snprintf(buf1,sizeof(buf1),"%s|s|1", p->u1.str);
+			first = 1;
 			for (p2 = p->u2.arglist; p2; p2 = p2->next) {
-				strcat(buf1,"|");
+				if (first)
+				{
+					strcat(buf1,"(");
+					first = 0;
+				}
+				else
+					strcat(buf1,"|");
 				strcat(buf1,p2->u1.str);
 			}
-			pr->app = strdup("Macro");
+			if (!first)
+				strcat(buf1,")");
+
+			pr->app = strdup("Gosub");
 			pr->appargs = strdup(buf1);
 			pr->origin = p;
 			linkprio(exten, pr);
@@ -3244,6 +3410,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			for (p2 = p->u2.arglist; p2; p2 = p2->next) {
 				if (p2 != p->u2.arglist )
 					strcat(buf1,"|");
+				substitute_commas(p2->u1.str);
 				strcat(buf1,p2->u1.str);
 			}
 			pr->app = strdup(p->u1.str);
@@ -3262,9 +3429,9 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 
 		case PV_RETURN: /* hmmmm */
 			pr = new_prio();
-			pr->type = AEL_RETURN; /* simple goto */
-			exten->return_needed++;
-			pr->app = strdup("Goto");
+			pr->type = AEL_RETURN; /* simple Return */
+			/* exten->return_needed++; */
+			pr->app = strdup("Return");
 			pr->appargs = strdup("");
 			pr->origin = p;
 			linkprio(exten, pr);
@@ -3277,46 +3444,6 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			pr->origin = p;
 			linkprio(exten, pr);
 			break;
-
-#ifdef OLD_RAND_ACTION
-		case PV_RANDOM:
-			control_statement_count++;
-			snprintf(new_label,sizeof(new_label),"rand-%s-%d", label, control_statement_count);
-			rand_test = new_prio();
-			rand_test->type = AEL_RAND_CONTROL;
-			snprintf(buf1,sizeof(buf1),"$[%s]",
-					 p->u1.str );
-			rand_test->app = 0;
-			rand_test->appargs = strdup(buf1);
-			rand_test->origin = p;
-			
-			rand_end = new_prio();
-			rand_end->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"Finish rand-%s-%d", label, control_statement_count);
-			rand_end->app = strdup("NoOp");
-			rand_end->appargs = strdup(buf1);
-			
-			rand_skip = new_prio();
-			rand_skip->type = AEL_CONTROL1; /* simple goto */
-			rand_skip->goto_true = rand_end;
-			rand_skip->origin  = p;
-
-			rand_test->goto_true = rand_skip; /* +1, really */
-
-			linkprio(exten, rand_test);
-			
-			if (p->u3.else_statements) {
-				gen_prios(exten, new_label, p->u3.else_statements, mother_exten, this_context); /* this will link in all the else statements here */
-			}
-			
-			linkprio(exten, rand_skip);
-			
-			gen_prios(exten, new_label, p->u2.statements, mother_exten, this_context); /* this will link in all the "true" statements here */
-
-			linkprio(exten, rand_end);
-			
-			break;
-#endif			
 
 		case PV_IFTIME:
 			control_statement_count++;
@@ -3439,7 +3566,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			snprintf(new_label,sizeof(new_label),"catch-%s-%d",p->u1.str, control_statement_count);
 			
 			gen_prios(switch_case, new_label, p->u2.statements,mother_exten,this_context); /* this will link in all the catch body statements here */
-			if (switch_case->return_needed) {
+			if (switch_case->return_needed) { /* returns now generate a Return() app call, no longer a goto to the end of the exten */
 				char buf[2000];
 				struct ael_priority *np2 = new_prio();
 				np2->type = AEL_APPCALL;
@@ -3560,8 +3687,8 @@ void add_extensions(struct ael_extension *exten)
 				break;
 
 			case AEL_RETURN:
-				strcpy(app,"Goto");
-				snprintf(appargs,sizeof(appargs), "%d", exten->return_target->priority_num);
+				strcpy(app,"Return");
+				appargs[0] = 0;
 				break;
 				
 			default:
@@ -3679,9 +3806,8 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct pval *root)
 		
 		switch (p->type) {
 		case PV_MACRO:
-			strcpy(buf,"macro-");
-			strcat(buf,p->u1.str);
-			context = ast_context_create(local_contexts, buf, registrar);
+			
+			context = ast_context_create(local_contexts, p->u1.str, registrar);
 			
 			exten = new_exten();
 			exten->context = context;
@@ -3700,7 +3826,7 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct pval *root)
 			
 			/* CONTAINS APPCALLS, CATCH, just like extensions... */
 			gen_prios(exten, p->u1.str, p->u3.macro_statements, 0, context );
-			if (exten->return_needed) {
+			if (exten->return_needed) {  /* most likely, this will go away */
 				struct ael_priority *np2 = new_prio();
 				np2->type = AEL_APPCALL;
 				np2->app = strdup("NoOp");
@@ -3747,7 +3873,7 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct pval *root)
 						exten->hints = strdup(p2->u3.hints);
 					exten->regexten = p2->u4.regexten;
 					gen_prios(exten, p->u1.str, p2->u2.statements, 0, context );
-					if (exten->return_needed) {
+					if (exten->return_needed) { /* returns don't generate a goto eoe (end of extension) any more, just a Return() app call) */
 						struct ael_priority *np2 = new_prio();
 						np2->type = AEL_APPCALL;
 						np2->app = strdup("NoOp");
