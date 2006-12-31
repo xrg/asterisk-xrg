@@ -35,10 +35,10 @@ attach=yes
 ; (100) is used.  Maximum value for this option is 9999.
 ;maxmsg=100
 ; Maximum length of a voicemail message in seconds
-;maxmessage=180
+;maxsecs=180
 ; Minimum length of a voicemail message in seconds for the message to be kept
 ; The default is no minimum.
-;minmessage=3
+;minsecs=3
 ; Maximum length of greetings in seconds
 ;maxgreet=60
 ; How many milliseconds to skip forward/back when rew/ff in message playback
@@ -66,7 +66,11 @@ maxlogins=3
 
 ; If you need to have an external program, i.e. /usr/bin/myapp
 ; called when a voicemail password is changed, uncomment this:
+; Note: If this is set, the password will NOT be changed in voicemail.conf
+; If you would like to also change the password in voicemail.conf, use
+; the externpassnotify option below instead.
 ;externpass=/usr/bin/myapp
+;externpassnotify=/usr/bin/myapp
 ; For the directory, you can override the intro file if you want
 ;directoryintro=dir-intro
 ; The character set for voicemail messages can be specified here
@@ -209,7 +213,25 @@ sendvoicemail=yes	; Context to Send voicemail from [option 5 from the advanced m
 			;     greetings.  The default is "no".
 ; hidefromdir=yes	; Hide this mailbox from the directory produced by app_directory
 			;     The default is "no".
-;tempgreetwarn=yes	; Remind the user that their temporary greeting is set
+; tempgreetwarn=yes	; Remind the user that their temporary greeting is set
+; vm-password=custom_sound
+			;     Customize which sound file is used instead of the default
+			;     prompt that says: "password"
+; vm-newpassword=custom_sound
+			;     Customize which sound file is used instead of the default
+			;     prompt that says: "Please enter your new password followed by
+			;     the pound key."
+; vm-passchanged=custom_sound
+			;     Customize which sound file is used instead of the default
+			;     prompt that says: "Your password has been changed."
+; vm-reenterpassword=custom_sound
+			;     Customize which sound file is used instead of the default
+			;     prompt that says: "Please re-enter your password followed by
+			;     the pound key"
+; vm-mismatch=custom_sound
+			;     Customize which sound file is used instead of the default
+			;     prompt that says: "The passwords you entered and re-entered
+			;     did not match.  Please try again."
 
 [zonemessages]
 eastern=America/New_York|'vm-received' Q 'digits/at' IMp
