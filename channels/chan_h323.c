@@ -44,7 +44,7 @@ extern "C" {
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47457 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #ifdef __cplusplus
 }
@@ -117,6 +117,7 @@ rfc2833_cb on_set_rfc2833_payload;
 hangup_cb on_hangup;
 setcapabilities_cb on_setcapabilities;
 setpeercapabilities_cb on_setpeercapabilities;
+onhold_cb on_hold;
 
 /* global debug flag */
 int h323debug;
@@ -137,7 +138,7 @@ static const char config[] = "h323.conf";
 static char default_context[AST_MAX_CONTEXT] = "default";
 static struct sockaddr_in bindaddr;
 
-#define GLOBAL_CAPABILITY (AST_FORMAT_G723_1 | AST_FORMAT_GSM | AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_G729A | AST_FORMAT_H261)
+#define GLOBAL_CAPABILITY (AST_FORMAT_G723_1 | AST_FORMAT_GSM | AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_G729A | AST_FORMAT_G726_AAL2 | AST_FORMAT_H261)
 
 /** H.323 configuration values */
 static int h323_signalling_port = 1720;
@@ -184,7 +185,7 @@ struct oh323_pvt {
 	int peercapability;					/* Capabilities learned from peer */
 	int jointcapability;				/* Common capabilities for local and remote side */
 	struct ast_codec_pref peer_prefs;	/* Preferenced list of codecs which remote side supports */
-	int dtmf_pt;						/* Payload code used for RFC2833 messages */
+	int dtmf_pt[2];						/* Payload code used for RFC2833/CISCO messages */
 	int curDTMF;						/* DTMF tone being generated to Asterisk side */
 	int DTMFsched;						/* Scheduler descriptor for DTMF */
 	int update_rtp_info;				/* Configuration of fd's array is pending */
@@ -516,7 +517,9 @@ static int oh323_digit_begin(struct ast_channel *c, char digit)
 		return -1;
 	}
 	ast_mutex_lock(&pvt->lock);
-	if (pvt->rtp && (pvt->options.dtmfmode & H323_DTMF_RFC2833) && (pvt->dtmf_pt > 0)) {
+	if (pvt->rtp &&
+		(((pvt->options.dtmfmode & H323_DTMF_RFC2833) && pvt->dtmf_pt[0])
+		 /*|| ((pvt->options.dtmfmode & H323_DTMF_CISCO) && pvt->dtmf_pt[1]))*/)) {
 		/* out-of-band DTMF */
 		if (h323debug) {
 			ast_log(LOG_DTMF, "Begin sending out-of-band digit %c on %s\n", digit, c->name);
@@ -555,7 +558,7 @@ static int oh323_digit_end(struct ast_channel *c, char digit)
 		return -1;
 	}
 	ast_mutex_lock(&pvt->lock);
-	if (pvt->rtp && (pvt->options.dtmfmode & H323_DTMF_RFC2833) && (pvt->dtmf_pt > 0)) {
+	if (pvt->rtp && (pvt->options.dtmfmode & H323_DTMF_RFC2833) && ((pvt->dtmf_pt[0] > 0) || (pvt->dtmf_pt[0] > 0))) {
 		/* out-of-band DTMF */
 		if (h323debug) {
 			ast_log(LOG_DTMF, "End sending out-of-band digit %c on %s\n", digit, c->name);
@@ -652,7 +655,7 @@ static int oh323_call(struct ast_channel *c, char *dest, int timeout)
 	if (option_verbose > 2)
 		ast_verbose(VERBOSE_PREFIX_3 "Requested transfer capability: 0x%.2x - %s\n", c->transfercapability, ast_transfercapability2str(c->transfercapability));
 	if (h323debug)
-		ast_log(LOG_DEBUG, "Placing outgoing call to %s, %d\n", called_addr, pvt->options.dtmfcodec);
+		ast_log(LOG_DEBUG, "Placing outgoing call to %s, %d/%d\n", called_addr, pvt->options.dtmfcodec[0], pvt->options.dtmfcodec[1]);
 	ast_mutex_unlock(&pvt->lock);
 	res = h323_make_call(called_addr, &(pvt->cd), &pvt->options);
 	if (res) {
@@ -765,7 +768,7 @@ static struct ast_frame *oh323_rtp_read(struct oh323_pvt *pvt)
 
 	f = ast_rtp_read(pvt->rtp);
 	/* Don't send RFC2833 if we're not supposed to */
-	if (f && (f->frametype == AST_FRAME_DTMF) && !(pvt->options.dtmfmode & H323_DTMF_RFC2833)) {
+	if (f && (f->frametype == AST_FRAME_DTMF) && !(pvt->options.dtmfmode & (H323_DTMF_RFC2833 | H323_DTMF_CISCO))) {
 		return &ast_null_frame;
 	}
 	if (pvt->owner) {
@@ -879,7 +882,7 @@ static int oh323_indicate(struct ast_channel *c, int condition, const void *data
 	ast_mutex_unlock(&pvt->lock);
 
 	if (h323debug)
-		ast_log(LOG_DEBUG, "OH323: Indicating %d on %s\n", condition, token);
+		ast_log(LOG_DEBUG, "OH323: Indicating %d on %s (%s)\n", condition, token, c->name);
 
 	switch(condition) {
 	case AST_CONTROL_RINGING:
@@ -911,10 +914,13 @@ static int oh323_indicate(struct ast_channel *c, int condition, const void *data
 		}
 		break;
 	case AST_CONTROL_HOLD:
+		h323_hold_call(token, 1);
+		/* We should start MOH only if remote party isn't provide audio for us */
 		ast_moh_start(c, data, NULL);
 		res = 0;
 		break;
 	case AST_CONTROL_UNHOLD:
+		h323_hold_call(token, 0);
 		ast_moh_stop(c);
 		res = 0;
 		break;
@@ -976,8 +982,10 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 		ast_log(LOG_DEBUG, "Setting NAT on RTP to %d\n", pvt->options.nat);
 	ast_rtp_setnat(pvt->rtp, pvt->options.nat);
 
-	if (pvt->dtmf_pt > 0)
-		ast_rtp_set_rtpmap_type(pvt->rtp, pvt->dtmf_pt, "audio", "telephone-event", 0);
+	if (pvt->dtmf_pt[0] > 0)
+		ast_rtp_set_rtpmap_type(pvt->rtp, pvt->dtmf_pt[0], "audio", "telephone-event", 0);
+	if (pvt->dtmf_pt[1] > 0)
+		ast_rtp_set_rtpmap_type(pvt->rtp, pvt->dtmf_pt[1], "audio", "cisco-telephone-event", 0);
 
 	if (pvt->peercapability)
 		ast_rtp_codec_setpref(pvt->rtp, &pvt->peer_prefs);
@@ -1125,7 +1133,7 @@ static struct oh323_pvt *oh323_alloc(int callid)
 	}
 	memcpy(&pvt->options, &global_options, sizeof(pvt->options));
 	pvt->jointcapability = pvt->options.capability;
-	if (pvt->options.dtmfmode & H323_DTMF_RFC2833) {
+	if (pvt->options.dtmfmode & (H323_DTMF_RFC2833 | H323_DTMF_CISCO)) {
 		pvt->nonCodecCapability |= AST_RTP_DTMF;
 	} else {
 		pvt->nonCodecCapability &= ~AST_RTP_DTMF;
@@ -1248,49 +1256,63 @@ static struct oh323_alias *realtime_alias(const char *alias)
 	return a;
 }
 
-#define DEPRECATED(_v, _new_opt) \
-	ast_log(LOG_WARNING, "Option %s found at line %d has beed deprecated. Use %s instead.\n", (_v)->name, (_v)->lineno, (_new_opt))
-
 static int update_common_options(struct ast_variable *v, struct call_options *options)
 {
 	int tmp;
+	char *val, *opt;
 
 	if (!strcasecmp(v->name, "allow")) {
 		ast_parse_allow_disallow(&options->prefs, &options->capability, v->value, 1);
 	} else if (!strcasecmp(v->name, "disallow")) {
 		ast_parse_allow_disallow(&options->prefs, &options->capability, v->value, 0);
 	} else if (!strcasecmp(v->name, "dtmfmode")) {
+		val = ast_strdupa(v->value);
+		if ((opt = strchr(val, ':')) != (char *)NULL) {
+			*opt++ = '\0';
+			tmp = atoi(opt);
+		}
 		if (!strcasecmp(v->value, "inband")) {
-			options->dtmfmode = H323_DTMF_INBAND;
-		} else if (!strcasecmp(v->value, "rfc2833")) {
-			options->dtmfmode = H323_DTMF_RFC2833;
+			options->dtmfmode |= H323_DTMF_INBAND;
+		} else if (!strcasecmp(val, "rfc2833")) {
+			options->dtmfmode |= H323_DTMF_RFC2833;
+			if (!opt) {
+				options->dtmfcodec[0] = H323_DTMF_RFC2833_PT;
+			} else if ((tmp >= 96) && (tmp < 128)) {
+				options->dtmfcodec[0] = tmp;
+			} else {
+				options->dtmfcodec[0] = H323_DTMF_RFC2833_PT;
+				ast_log(LOG_WARNING, "Unknown rfc2833 payload %s specified at line %d, using default %d\n", opt, v->lineno, options->dtmfcodec[0]);
+			}
+		} else if (!strcasecmp(val, "cisco")) {
+			options->dtmfmode |= H323_DTMF_CISCO;
+			if (!opt) {
+				options->dtmfcodec[1] = H323_DTMF_CISCO_PT;
+			} else if ((tmp >= 96) && (tmp < 128)) {
+				options->dtmfcodec[1] = tmp;
+			} else {
+				options->dtmfcodec[1] = H323_DTMF_CISCO_PT;
+				ast_log(LOG_WARNING, "Unknown Cisco DTMF payload %s specified at line %d, using default %d\n", opt, v->lineno, options->dtmfcodec[1]);
+			}
+		} else if (!strcasecmp(v->value, "h245-signal")) {
+			options->dtmfmode |= H323_DTMF_SIGNAL;
 		} else {
-			ast_log(LOG_WARNING, "Unknown dtmf mode '%s', using rfc2833\n", v->value);
-			options->dtmfmode = H323_DTMF_RFC2833;
+			ast_log(LOG_WARNING, "Unknown dtmf mode '%s' at line %d\n", v->value, v->lineno);
 		}
 	} else if (!strcasecmp(v->name, "dtmfcodec")) {
+		ast_log(LOG_NOTICE, "Option %s at line %d is deprecated. Use dtmfmode=rfc2833[:<payload>] instead.\n", v->name, v->lineno);
 		tmp = atoi(v->value);
 		if (tmp < 96)
 			ast_log(LOG_WARNING, "Invalid %s value %s at line %d\n", v->name, v->value, v->lineno);
 		else
-			options->dtmfcodec = tmp;
+			options->dtmfcodec[0] = tmp;
 	} else if (!strcasecmp(v->name, "bridge")) {
 		options->bridge = ast_true(v->value);
 	} else if (!strcasecmp(v->name, "nat")) {
 		options->nat = ast_true(v->value);
-	} else if (!strcasecmp(v->name, "noFastStart")) {
-		DEPRECATED(v, "fastStart");
-		options->fastStart = !ast_true(v->value);
 	} else if (!strcasecmp(v->name, "fastStart")) {
 		options->fastStart = ast_true(v->value);
-	} else if (!strcasecmp(v->name, "noH245Tunneling")) {
-		DEPRECATED(v, "h245Tunneling");
-		options->h245Tunneling = !ast_true(v->value);
 	} else if (!strcasecmp(v->name, "h245Tunneling")) {
 		options->h245Tunneling = ast_true(v->value);
-	} else if (!strcasecmp(v->name, "noSilenceSuppression")) {
-		DEPRECATED(v, "silenceSuppression");
-		options->silenceSuppression = !ast_true(v->value);
 	} else if (!strcasecmp(v->name, "silenceSuppression")) {
 		options->silenceSuppression = ast_true(v->value);
 	} else if (!strcasecmp(v->name, "progress_setup")) {
@@ -1324,12 +1346,22 @@ static int update_common_options(struct ast_variable *v, struct call_options *op
 			options->tunnelOptions |= H323_TUNNEL_QSIG;
 		else
 			ast_log(LOG_WARNING, "Invalid value %s for %s at line %d\n", v->value, v->name, v->lineno);
+	} else if (!strcasecmp(v->name, "hold")) {
+		if (!strcasecmp(v->value, "none"))
+			options->holdHandling = ~0;
+		else if (!strcasecmp(v->value, "notify"))
+			options->holdHandling |= H323_HOLD_NOTIFY;
+		else if (!strcasecmp(v->value, "q931only"))
+			options->holdHandling |= H323_HOLD_NOTIFY | H323_HOLD_Q931ONLY;
+		else if (!strcasecmp(v->value, "h450"))
+			options->holdHandling |= H323_HOLD_H450;
+		else
+			ast_log(LOG_WARNING, "Invalid value %s for %s at line %d\n", v->value, v->name, v->lineno);
 	} else
 		return 1;
 
 	return 0;
 }
-#undef DEPRECATED
 
 static struct oh323_user *build_user(char *name, struct ast_variable *v, struct ast_variable *alt, int realtime)
 {
@@ -1350,6 +1382,8 @@ static struct oh323_user *build_user(char *name, struct ast_variable *v, struct 
 	oldha = user->ha;
 	user->ha = (struct ast_ha *)NULL;
 	memcpy(&user->options, &global_options, sizeof(user->options));
+	user->options.dtmfmode = 0;
+	user->options.holdHandling = 0;
 	/* Set default context */
 	ast_copy_string(user->context, default_context, sizeof(user->context));
 	if (user && !found)
@@ -1391,9 +1425,15 @@ static struct oh323_user *build_user(char *name, struct ast_variable *v, struct 
 			}
 		} else if (!strcasecmp(v->name, "permit") ||
 					!strcasecmp(v->name, "deny")) {
-			user->ha = ast_append_ha(v->name, v->value, user->ha);
+			user->ha = ast_append_ha(v->name, v->value, user->ha, NULL);
 		}
 	}
+	if (!user->options.dtmfmode)
+		user->options.dtmfmode = global_options.dtmfmode;
+	if (user->options.holdHandling == ~0)
+		user->options.holdHandling = 0;
+	else if (!user->options.holdHandling)
+		user->options.holdHandling = global_options.holdHandling;
 	ASTOBJ_UNMARK(user);
 	ast_free_ha(oldha);
 	return user;
@@ -1455,6 +1495,8 @@ static struct oh323_peer *build_peer(const char *name, struct ast_variable *v, s
 	oldha = peer->ha;
 	peer->ha = NULL;
 	memcpy(&peer->options, &global_options, sizeof(peer->options));
+	peer->options.dtmfmode = 0;
+	peer->options.holdHandling = 0;
 	peer->addr.sin_port = htons(h323_signalling_port);
 	peer->addr.sin_family = AF_INET;
 	if (!found && name)
@@ -1492,6 +1534,12 @@ static struct oh323_peer *build_peer(const char *name, struct ast_variable *v, s
 			ast_copy_string(peer->mailbox, v->value, sizeof(peer->mailbox));
 		}
 	}
+	if (!peer->options.dtmfmode)
+		peer->options.dtmfmode = global_options.dtmfmode;
+	if (peer->options.holdHandling == ~0)
+		peer->options.holdHandling = 0;
+	else if (!peer->options.holdHandling)
+		peer->options.holdHandling = global_options.holdHandling;
 	ASTOBJ_UNMARK(peer);
 	ast_free_ha(oldha);
 	return peer;
@@ -1904,6 +1952,10 @@ static void setup_rtp_connection(unsigned call_reference, const char *remoteIp, 
 
 	if (!pvt->rtp)
 		__oh323_rtp_create(pvt);
+
+	if ((pt == 2) && (pvt->jointcapability & AST_FORMAT_G726_AAL2)) {
+		ast_rtp_set_rtpmap_type(pvt->rtp, pt, "audio", "G726-32", AST_RTP_OPT_G726_NONSTANDARD);
+	}
 
 	them.sin_family = AF_INET;
 	/* only works for IPv4 */
@@ -2357,21 +2409,21 @@ static void hangup_connection(unsigned int call_reference, const char *token, in
 	ast_mutex_unlock(&pvt->lock);
 }
 
-static void set_dtmf_payload(unsigned call_reference, const char *token, int payload)
+static void set_dtmf_payload(unsigned call_reference, const char *token, int payload, int is_cisco)
 {
 	struct oh323_pvt *pvt;
 
 	if (h323debug)
-		ast_log(LOG_DEBUG, "Setting DTMF payload to %d on %s\n", payload, token);
+		ast_log(LOG_DEBUG, "Setting %s DTMF payload to %d on %s\n", (is_cisco ? "Cisco" : "RFC2833"), payload, token);
 
 	pvt = find_call_locked(call_reference, token);
 	if (!pvt) {
 		return;
 	}
 	if (pvt->rtp) {
-		ast_rtp_set_rtpmap_type(pvt->rtp, payload, "audio", "telephone-event", 0);
+		ast_rtp_set_rtpmap_type(pvt->rtp, payload, "audio", (is_cisco ? "cisco-telephone-event" : "telephone-event"), 0);
 	}
-	pvt->dtmf_pt = payload;
+	pvt->dtmf_pt[is_cisco ? 1 : 0] = payload;
 	ast_mutex_unlock(&pvt->lock);
 	if (h323debug)
 		ast_log(LOG_DEBUG, "DTMF payload on %s set to %d\n", token, payload);
@@ -2424,6 +2476,32 @@ static void set_local_capabilities(unsigned call_reference, const char *token)
 
 	if (h323debug)
 		ast_log(LOG_DEBUG, "Capabilities for connection %s is set\n", token);
+}
+
+static void remote_hold(unsigned call_reference, const char *token, int is_hold)
+{
+	struct oh323_pvt *pvt;
+
+	if (h323debug)
+		ast_log(LOG_DEBUG, "Setting %shold status for connection %s\n", (is_hold ? "" : "un"), token);
+
+	pvt = find_call_locked(call_reference, token);
+	if (!pvt)
+		return;
+	if (pvt->owner && !ast_channel_trylock(pvt->owner)) {
+		if (is_hold)
+			ast_queue_control(pvt->owner, AST_CONTROL_HOLD);
+		else
+			ast_queue_control(pvt->owner, AST_CONTROL_UNHOLD);
+		ast_channel_unlock(pvt->owner);
+	}
+	else {
+		if (is_hold)
+			pvt->newcontrol = AST_CONTROL_HOLD;
+		else
+			pvt->newcontrol = AST_CONTROL_UNHOLD;
+	}
+	ast_mutex_unlock(&pvt->lock);
 }
 
 static void *do_monitor(void *data)
@@ -2610,61 +2688,71 @@ static int h323_tokens_show(int fd, int argc, char *argv[])
 }
 
 static char trace_usage[] =
-"Usage: h.323 trace <level num>\n"
+"Usage: h323 trace <level num>\n"
 "       Enables H.323 stack tracing for debugging purposes\n";
 
 static char no_trace_usage[] =
-"Usage: h.323 trace off\n"
+"Usage: h323 no trace\n"
 "       Disables H.323 stack tracing for debugging purposes\n";
 
 static char debug_usage[] =
-"Usage: h.323 debug\n"
+"Usage: h323 debug\n"
 "       Enables H.323 debug output\n";
 
 static char no_debug_usage[] =
-"Usage: h.323 debug off\n"
+"Usage: h323 no debug\n"
 "       Disables H.323 debug output\n";
 
 static char show_cycle_usage[] =
-"Usage: h.323 gk cycle\n"
+"Usage: h323 gk cycle\n"
 "       Manually re-register with the Gatekeper (Currently Disabled)\n";
 
 static char show_hangup_usage[] =
-"Usage: h.323 hangup <token>\n"
+"Usage: h323 hangup <token>\n"
 "       Manually try to hang up call identified by <token>\n";
 
 static char show_tokens_usage[] =
-"Usage: h.323 show tokens\n"
+"Usage: h323 show tokens\n"
 "       Print out all active call tokens\n";
 
 static char h323_reload_usage[] =
 "Usage: h323 reload\n"
 "       Reloads H.323 configuration from h323.conf\n";
 
-static struct ast_cli_entry cli_h323_no_trace_deprecated = {
-	{ "h.323", "no", "trace", NULL },
-	h323_no_trace, "Disable H.323 Stack Tracing",
-	no_trace_usage };
-
-static struct ast_cli_entry cli_h323_no_debug_deprecated = {
-	{ "h.323", "no", "debug", NULL },
-	h323_no_debug, "Disable H.323 debug",
-	no_debug_usage };
-
-static struct ast_cli_entry cli_h323_debug_deprecated = {
-	{ "h.323", "debug", NULL },
-	h323_do_debug, "Enable H.323 debug",
-	debug_usage };
-
-static struct ast_cli_entry cli_h323_trace_deprecated = {
-	{ "h.323", "trace", NULL },
+static struct ast_cli_entry cli_h323_trace_deprecated =
+	{ { "h.323", "trace", NULL },
 	h323_do_trace, "Enable H.323 Stack Tracing",
 	trace_usage };
 
-static struct ast_cli_entry cli_h323_gk_cycle_deprecated = {
-	{ "h323", "cycle", "gk", NULL },
+static struct ast_cli_entry cli_h323_no_trace_deprecated =
+	{ { "h.323", "no", "trace", NULL },
+	h323_no_trace, "Disable H.323 Stack Tracing",
+	no_trace_usage };
+
+static struct ast_cli_entry cli_h323_debug_deprecated =
+	{ { "h.323", "debug", NULL },
+	h323_do_debug, "Enable H.323 debug",
+	debug_usage };
+
+static struct ast_cli_entry cli_h323_no_debug_deprecated =
+	{ { "h.323", "no", "debug", NULL },
+	h323_no_debug, "Disable H.323 debug",
+	no_debug_usage };
+
+static struct ast_cli_entry cli_h323_gk_cycle_deprecated =
+	{ { "h.323", "gk", "cycle", NULL },
 	h323_gk_cycle, "Manually re-register with the Gatekeper",
 	show_cycle_usage };
+
+static struct ast_cli_entry cli_h323_hangup_deprecated =
+	{ { "h.323", "hangup", NULL },
+	h323_ep_hangup, "Manually try to hang up a call",
+	show_hangup_usage };
+
+static struct ast_cli_entry cli_h323_show_tokens_deprecated =
+	{ { "h.323", "show", "tokens", NULL },
+	h323_tokens_show, "Show all active call tokens",
+	show_tokens_usage };
 
 static struct ast_cli_entry cli_h323[] = {
 	{ { "h323", "set", "trace", NULL },
@@ -2689,11 +2777,11 @@ static struct ast_cli_entry cli_h323[] = {
 
 	{ { "h323", "hangup", NULL },
 	h323_ep_hangup, "Manually try to hang up a call",
-	show_hangup_usage },
+	show_hangup_usage, NULL, &cli_h323_hangup_deprecated },
 
 	{ { "h323", "show", "tokens", NULL },
 	h323_tokens_show, "Show all active call tokens",
-	show_tokens_usage },
+	show_tokens_usage, NULL, &cli_h323_show_tokens_deprecated },
 };
 
 static int reload_config(int is_reload)
@@ -2730,8 +2818,10 @@ static int reload_config(int is_reload)
 	memset(&global_options, 0, sizeof(global_options));
 	global_options.fastStart = 1;
 	global_options.h245Tunneling = 1;
-	global_options.dtmfcodec = 101;
-	global_options.dtmfmode = H323_DTMF_RFC2833;
+	global_options.dtmfcodec[0] = H323_DTMF_RFC2833_PT;
+	global_options.dtmfcodec[1] = H323_DTMF_CISCO_PT;
+	global_options.dtmfmode = 0;
+	global_options.holdHandling = 0;
 	global_options.capability = GLOBAL_CAPABILITY;
 	global_options.bridge = 1;		/* Do native bridging by default */
 	strcpy(default_context, "default");
@@ -2824,6 +2914,12 @@ static int reload_config(int is_reload)
 			/* dummy */
 		}
 	}
+	if (!global_options.dtmfmode)
+		global_options.dtmfmode = H323_DTMF_RFC2833;
+	if (global_options.holdHandling == ~0)
+		global_options.holdHandling = 0;
+	else if (!global_options.holdHandling)
+		global_options.holdHandling = H323_HOLD_H450;
 
 	for (cat = ast_category_browse(cfg, NULL); cat; cat = ast_category_browse(cfg, cat)) {
 		if (strcasecmp(cat, "general")) {
@@ -2981,10 +3077,16 @@ static int reload(void)
 	return h323_reload(0, 0, NULL);
 }
 
-static struct ast_cli_entry cli_h323_reload =
+static struct ast_cli_entry cli_h323_reload_deprecated =
 	{ { "h.323", "reload", NULL },
 	h323_reload, "Reload H.323 configuration",
 	h323_reload_usage
+};
+
+static struct ast_cli_entry cli_h323_reload =
+	{ { "h323", "reload", NULL },
+	h323_reload, "Reload H.323 configuration",
+	h323_reload_usage, NULL, &cli_h323_reload_deprecated
 };
 
 static enum ast_rtp_get_result oh323_get_rtp_peer(struct ast_channel *chan, struct ast_rtp **rtp)
@@ -3134,7 +3236,8 @@ static enum ast_module_load_result load_module(void)
 						set_dtmf_payload,
 						hangup_connection,
 						set_local_capabilities,
-						set_peer_capabilities);
+						set_peer_capabilities,
+						remote_hold);
 		/* start the h.323 listener */
 		if (h323_start_listener(h323_signalling_port, bindaddr)) {
 			ast_log(LOG_ERROR, "Unable to create H323 listener.\n");
