@@ -52,7 +52,7 @@ struct ast_codec_pref {
 	\arg \b VIDEO:	Video data, subclass is codec (AST_FORMAT_*)
 	\arg \b DTMF:	A DTMF digit, subclass is the digit
 	\arg \b IMAGE:	Image transport, mostly used in IAX
-	\arg \b TEXT:	Text messages
+	\arg \b TEXT:	Text messages and character by character (real time text)
 	\arg \b HTML:	URL's and web pages
 	\arg \b MODEM:	Modulated data encodings, such as T.38 and V.150
 	\arg \b IAX:	Private frame type for the IAX protocol
@@ -261,6 +261,11 @@ extern struct ast_frame ast_null_frame;
 /*! Maximum video format */
 #define AST_FORMAT_MAX_VIDEO	(1 << 24)
 #define AST_FORMAT_VIDEO_MASK   (((1 << 25)-1) & ~(AST_FORMAT_AUDIO_MASK))
+/*! T.140 Text format - ITU T.140, RFC 4351*/
+#define AST_FORMAT_T140		(1 << 25)
+/*! Maximum text mask */
+#define AST_FORMAT_MAX_TEXT	(1 << 26)
+#define AST_FORMAT_TEXT_MASK   (((1 << 27)-1) & ~(AST_FORMAT_AUDIO_MASK) & ~(AST_FORMAT_VIDEO_MASK)))
 
 enum ast_control_frame_type {
 	AST_CONTROL_HANGUP = 1,		/*!< Other end has hungup */
@@ -450,6 +455,19 @@ int ast_getformatbyname(const char *name);
  */
 char *ast_codec2str(int codec);
 
+/*! \page ast_smooth
+The ast_smoother interface was designed specifically
+to take frames of variant sizes and produce frames of a single expected
+size, precisely what you want to do.
+
+The basic interface is:
+
+- Initialize with ast_smoother_new()
+- Queue input frames with ast_smoother_feed()
+- Get output frames with ast_smoother_read()
+- when you're done, free the structure with ast_smoother_free()
+- Also see ast_smoother_test_flag(), ast_smoother_set_flags(), ast_smoother_get_flags(), ast_smoother_reset()
+*/
 struct ast_smoother;
 
 struct ast_format_list *ast_get_format_list_index(int index);
@@ -515,8 +533,9 @@ struct ast_format_list ast_codec_pref_getsize(struct ast_codec_pref *pref, int f
 /*! \brief Parse an "allow" or "deny" line in a channel or device configuration 
         and update the capabilities mask and pref if provided.
 	Video codecs are not added to codec preference lists, since we can not transcode
+	\return Returns number of errors encountered during parsing
  */
-void ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char *list, int allowing);
+int ast_parse_allow_disallow(struct ast_codec_pref *pref, int *mask, const char *list, int allowing);
 
 /*! \brief Dump audio codec preference list into a string */
 int ast_codec_pref_string(struct ast_codec_pref *pref, char *buf, size_t size);
