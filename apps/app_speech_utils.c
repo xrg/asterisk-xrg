@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40968 $");
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,7 +64,7 @@ static char *speechbackground_descrip =
 "Once they stop talking the processing sound is played to indicate the speech recognition engine is working.\n"
 "Once results are available the application returns and results (score and text) are available using dialplan functions.\n"
 "The first text and score are ${SPEECH_TEXT(0)} AND ${SPEECH_SCORE(0)} while the second are ${SPEECH_TEXT(1)} and ${SPEECH_SCORE(1)}.\n"
-"The first argument is the sound file and the second is the timeout. Note the timeout will only start once the sound file has stopped playing.\n";
+"The first argument is the sound file and the second is the timeout integer in seconds. Note the timeout will only start once the sound file has stopped playing.\n";
 
 static char *speechdeactivategrammar_descrip =
 "SpeechDeactivateGrammar(Grammar Name)\n"
@@ -144,7 +144,7 @@ static struct ast_speech_result *find_result(struct ast_speech_result *results, 
 }
 
 /*! \brief SPEECH_SCORE() Dialplan Function */
-static int speech_score(struct ast_channel *chan, char *cmd, char *data,
+static int speech_score(struct ast_channel *chan, const char *cmd, char *data,
 		       char *buf, size_t len)
 {
 	struct ast_speech_result *result = NULL;
@@ -172,7 +172,7 @@ static struct ast_custom_function speech_score_function = {
 };
 
 /*! \brief SPEECH_TEXT() Dialplan Function */
-static int speech_text(struct ast_channel *chan, char *cmd, char *data,
+static int speech_text(struct ast_channel *chan, const char *cmd, char *data,
 			char *buf, size_t len)
 {
         struct ast_speech_result *result = NULL;
@@ -198,7 +198,7 @@ static struct ast_custom_function speech_text_function = {
 };
 
 /*! \brief SPEECH_GRAMMAR() Dialplan Function */
-static int speech_grammar(struct ast_channel *chan, char *cmd, char *data,
+static int speech_grammar(struct ast_channel *chan, const char *cmd, char *data,
 			char *buf, size_t len)
 {
         struct ast_speech_result *result = NULL;
@@ -224,7 +224,7 @@ static struct ast_custom_function speech_grammar_function = {
 };
 
 /*! \brief SPEECH_ENGINE() Dialplan Function */
-static int speech_engine_write(struct ast_channel *chan, char *cmd, char *data, const char *value)
+static int speech_engine_write(struct ast_channel *chan, const char *cmd, char *data, const char *value)
 {
 	struct ast_speech *speech = find_speech(chan);
 
@@ -247,7 +247,7 @@ static struct ast_custom_function speech_engine_function = {
 };
 
 /*! \brief SPEECH() Dialplan Function */
-static int speech_read(struct ast_channel *chan, char *cmd, char *data,
+static int speech_read(struct ast_channel *chan, const char *cmd, char *data,
 			char *buf, size_t len)
 {
 	int results = 0;

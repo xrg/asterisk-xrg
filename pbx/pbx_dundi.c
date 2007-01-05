@@ -28,7 +28,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44378 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -86,13 +86,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44378 $")
 /*! Keep times of last 10 lookups */
 #define DUNDI_TIMING_HISTORY	10
 
-#define FLAG_ISREG       (1 << 0)   /*!< Transaction is register request */
-#define FLAG_DEAD        (1 << 1)   /*!< Transaction is dead */
-#define FLAG_FINAL       (1 << 2)   /*!< Transaction has final message sent */
-#define FLAG_ISQUAL      (1 << 3)   /*!< Transaction is a qualification */
-#define FLAG_ENCRYPT     (1 << 4)   /*!< Transaction is encrypted wiht ECX/DCX */
-#define FLAG_SENDFULLKEY (1 << 5)   /*!< Send full key on transaction */
-#define FLAG_STOREHIST   (1 << 6)   /*!< Record historic performance */
+enum {
+	FLAG_ISREG =       (1 << 0),  /*!< Transaction is register request */
+	FLAG_DEAD =        (1 << 1),  /*!< Transaction is dead */
+	FLAG_FINAL =       (1 << 2),  /*!< Transaction has final message sent */
+	FLAG_ISQUAL =      (1 << 3),  /*!< Transaction is a qualification */
+	FLAG_ENCRYPT =     (1 << 4),  /*!< Transaction is encrypted wiht ECX/DCX */
+	FLAG_SENDFULLKEY = (1 << 5),  /*!< Send full key on transaction */
+	FLAG_STOREHIST =   (1 << 6),  /*!< Record historic performance */
+};
 
 #define DUNDI_FLAG_INTERNAL_NOPARTIAL (1 << 17)
 
@@ -101,9 +103,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44378 $")
 #else
 #define DUNDI_SECRET_TIME DUNDI_DEFAULT_CACHE_TIME
 #endif
-
-#define KEY_OUT			0
-#define KEY_IN			1
 
 static struct io_context *io;
 static struct sched_context *sched;
@@ -331,31 +330,28 @@ static struct dundi_transaction *find_transaction(struct dundi_hdr *hdr, struct 
 			  ((trans->dtrans == (ntohs(hdr->strans) & 32767)) && (!hdr->dtrans))) /* We match their destination */) {
 			  if (hdr->strans)
 				  trans->dtrans = ntohs(hdr->strans) & 32767;
-			  break;
+			  return trans;
 		}
 	}
-	if (!trans) {
-		switch(hdr->cmdresp & 0x7f) {
-		case DUNDI_COMMAND_DPDISCOVER:
-		case DUNDI_COMMAND_EIDQUERY:
-		case DUNDI_COMMAND_PRECACHERQ:
-		case DUNDI_COMMAND_REGREQ:
-		case DUNDI_COMMAND_NULL:
-		case DUNDI_COMMAND_ENCRYPT:
-			if (hdr->strans) {	
-				/* Create new transaction */
-				trans = create_transaction(NULL);
-				if (trans) {
-					memcpy(&trans->addr, sin, sizeof(trans->addr));
-					trans->dtrans = ntohs(hdr->strans) & 32767;
-				} else
-					ast_log(LOG_WARNING, "Out of memory!\n");
-			}
+	
+	switch(hdr->cmdresp & 0x7f) {
+	case DUNDI_COMMAND_DPDISCOVER:
+	case DUNDI_COMMAND_EIDQUERY:
+	case DUNDI_COMMAND_PRECACHERQ:
+	case DUNDI_COMMAND_REGREQ:
+	case DUNDI_COMMAND_NULL:
+	case DUNDI_COMMAND_ENCRYPT:
+		if (!hdr->strans)
 			break;
-		default:
+		/* Create new transaction */
+		if (!(trans = create_transaction(NULL)))
 			break;
-		}
+		memcpy(&trans->addr, sin, sizeof(trans->addr));
+		trans->dtrans = ntohs(hdr->strans) & 32767;
+	default:
+		break;
 	}
+	
 	return trans;
 }
 
@@ -393,25 +389,26 @@ static void dundi_reject(struct dundi_hdr *h, struct sockaddr_in *sin)
 static void reset_global_eid(void)
 {
 #if defined(SIOCGIFHWADDR)
-	int x,s;
+	int s, x = 0;
 	char eid_str[20];
 	struct ifreq ifr;
 
 	s = socket(AF_INET, SOCK_STREAM, 0);
-	if (s > 0) {
-		x = 0;
-		for(x=0;x<10;x++) {
-			memset(&ifr, 0, sizeof(ifr));
-			snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "eth%d", x);
-			if (!ioctl(s, SIOCGIFHWADDR, &ifr)) {
-				memcpy(&global_eid, ((unsigned char *)&ifr.ifr_hwaddr) + 2, sizeof(global_eid));
-				ast_log(LOG_DEBUG, "Seeding global EID '%s' from '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &global_eid), ifr.ifr_name);
-				close(s);
-				return;
-			}
-        }
-		close(s);
+	if (s < 0)
+		return;
+	for (x = 0; x < 10; x++) {
+		memset(&ifr, 0, sizeof(ifr));
+		snprintf(ifr.ifr_name, sizeof(ifr.ifr_name), "eth%d", x);
+		if (ioctl(s, SIOCGIFHWADDR, &ifr))
+			continue;
+		memcpy(&global_eid, ((unsigned char *)&ifr.ifr_hwaddr) + 2, sizeof(global_eid));
+		if (option_debug) {
+			ast_log(LOG_DEBUG, "Seeding global EID '%s' from '%s'\n", 
+				dundi_eid_to_str(eid_str, sizeof(eid_str), &global_eid), ifr.ifr_name);
+		}
+		break;
 	}
+	close(s);
 #else
 #if defined(ifa_broadaddr) && !defined(SOLARIS)
 	char eid_str[20];
@@ -425,7 +422,8 @@ static void reset_global_eid(void)
 				memcpy(
 					&(global_eid.eid),
 					sdp->sdl_data + sdp->sdl_nlen, 6);
-				ast_log(LOG_DEBUG, "Seeding global EID '%s' from '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &global_eid), ifap->ifa_name);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Seeding global EID '%s' from '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &global_eid), ifap->ifa_name);
 				freeifaddrs(ifap);
 				return;
 			}
@@ -598,8 +596,9 @@ static void *dundi_lookup_thread(void *data)
 	int max = 999999;
 	int expiration = dundi_cache_time;
 
-	ast_log(LOG_DEBUG, "Whee, looking up '%s@%s' for '%s'\n", st->called_number, st->called_context, 
-		st->eids[0] ? dundi_eid_to_str(eid_str, sizeof(eid_str), st->eids[0]) :  "ourselves");
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Whee, looking up '%s@%s' for '%s'\n", st->called_number, st->called_context, 
+			st->eids[0] ? dundi_eid_to_str(eid_str, sizeof(eid_str), st->eids[0]) :  "ourselves");
 	memset(&ied, 0, sizeof(ied));
 	memset(&dr, 0, sizeof(dr));
 	memset(&hmd, 0, sizeof(hmd));
@@ -630,7 +629,8 @@ static void *dundi_lookup_thread(void *data)
 	if (!ast_test_flag_nonstd(&hmd, DUNDI_HINT_DONT_ASK))
 		hmd.exten[0] = '\0';
 	if (ast_test_flag(st->trans, FLAG_DEAD)) {
-		ast_log(LOG_DEBUG, "Our transaction went away!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Our transaction went away!\n");
 		st->trans->thread = 0;
 		destroy_trans(st->trans, 0);
 	} else {
@@ -657,8 +657,9 @@ static void *dundi_precache_thread(void *data)
 	struct dundi_hint_metadata hmd;
 	char eid_str[20];
 
-	ast_log(LOG_DEBUG, "Whee, precaching '%s@%s' for '%s'\n", st->called_number, st->called_context, 
-		st->eids[0] ? dundi_eid_to_str(eid_str, sizeof(eid_str), st->eids[0]) :  "ourselves");
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Whee, precaching '%s@%s' for '%s'\n", st->called_number, st->called_context, 
+			st->eids[0] ? dundi_eid_to_str(eid_str, sizeof(eid_str), st->eids[0]) :  "ourselves");
 	memset(&ied, 0, sizeof(ied));
 
 	/* Now produce precache */
@@ -669,7 +670,8 @@ static void *dundi_precache_thread(void *data)
 	if (!ast_test_flag_nonstd(&hmd, DUNDI_HINT_DONT_ASK))
 		hmd.exten[0] = '\0';
 	if (ast_test_flag(st->trans, FLAG_DEAD)) {
-		ast_log(LOG_DEBUG, "Our transaction went away!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Our transaction went away!\n");
 		st->trans->thread = 0;
 		destroy_trans(st->trans, 0);
 	} else {
@@ -691,14 +693,17 @@ static void *dundi_query_thread(void *data)
 	struct dundi_hint_metadata hmd;
 	char eid_str[20];
 	int res;
-	ast_log(LOG_DEBUG, "Whee, looking up '%s@%s' for '%s'\n", st->called_number, st->called_context, 
-		st->eids[0] ? dundi_eid_to_str(eid_str, sizeof(eid_str), st->eids[0]) :  "ourselves");
+
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Whee, looking up '%s@%s' for '%s'\n", st->called_number, st->called_context, 
+			st->eids[0] ? dundi_eid_to_str(eid_str, sizeof(eid_str), st->eids[0]) :  "ourselves");
 	memset(&ied, 0, sizeof(ied));
 	memset(&dei, 0, sizeof(dei));
 	memset(&hmd, 0, sizeof(hmd));
 	if (!dundi_eid_cmp(&st->trans->us_eid, &st->reqeid)) {
 		/* Ooh, it's us! */
-		ast_log(LOG_DEBUG, "Neat, someone look for us!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Neat, someone look for us!\n");
 		ast_copy_string(dei.orgunit, dept, sizeof(dei.orgunit));
 		ast_copy_string(dei.org, org, sizeof(dei.org));
 		ast_copy_string(dei.locality, locality, sizeof(dei.locality));
@@ -713,7 +718,8 @@ static void *dundi_query_thread(void *data)
 	}
 	AST_LIST_LOCK(&peers);
 	if (ast_test_flag(st->trans, FLAG_DEAD)) {
-		ast_log(LOG_DEBUG, "Our transaction went away!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Our transaction went away!\n");
 		st->trans->thread = 0;
 		destroy_trans(st->trans, 0);
 	} else {
@@ -772,7 +778,8 @@ static int dundi_answer_entity(struct dundi_transaction *trans, struct dundi_ies
 			*st->eids[x-skipfirst] = *ies->eids[x];
 			s += sizeof(dundi_eid);
 		}
-		ast_log(LOG_DEBUG, "Answering EID query for '%s@%s'!\n", dundi_eid_to_str(eid_str, sizeof(eid_str), ies->reqeid), ies->called_context);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Answering EID query for '%s@%s'!\n", dundi_eid_to_str(eid_str, sizeof(eid_str), ies->reqeid), ies->called_context);
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 		trans->thread = 1;
@@ -824,9 +831,11 @@ static int cache_save_hint(dundi_eid *eidpeer, struct dundi_request *req, struct
 	snprintf(data, sizeof(data), "%ld|", (long)(timeout));
 	
 	ast_db_put("dundi/cache", key1, data);
-	ast_log(LOG_DEBUG, "Caching hint at '%s'\n", key1);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Caching hint at '%s'\n", key1);
 	ast_db_put("dundi/cache", key2, data);
-	ast_log(LOG_DEBUG, "Caching hint at '%s'\n", key2);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Caching hint at '%s'\n", key2);
 	return 0;
 }
 
@@ -998,7 +1007,8 @@ static int dundi_prop_precache(struct dundi_transaction *trans, struct dundi_ies
 			}
 		}
 		st->nummaps = mapcount;
-		ast_log(LOG_DEBUG, "Forwarding precache for '%s@%s'!\n", ies->called_number, ies->called_context);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Forwarding precache for '%s@%s'!\n", ies->called_number, ies->called_context);
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 		trans->thread = 1;
@@ -1084,7 +1094,8 @@ static int dundi_answer_query(struct dundi_transaction *trans, struct dundi_ies 
 			}
 		}
 		st->nummaps = mapcount;
-		ast_log(LOG_DEBUG, "Answering query for '%s@%s'!\n", ies->called_number, ies->called_context);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Answering query for '%s@%s'!\n", ies->called_number, ies->called_context);
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 		trans->thread = 1;
@@ -1125,7 +1136,8 @@ static int cache_lookup_internal(time_t now, struct dundi_request *req, char *ke
 		if (!ast_get_time_t(ptr, &timeout, 0, &length)) {
 			int expiration = timeout - now;
 			if (expiration > 0) {
-				ast_log(LOG_DEBUG, "Found cache expiring in %d seconds!\n", expiration);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Found cache expiring in %d seconds!\n", expiration);
 				ptr += length + 1;
 				while((sscanf(ptr, "%d/%d/%d/%n", &(flags.flags), &weight, &tech, &length) == 3)) {
 					ptr += length;
@@ -1138,8 +1150,9 @@ static int cache_lookup_internal(time_t now, struct dundi_request *req, char *ke
 							src++;
 						} else
 							src = "";
-						ast_log(LOG_DEBUG, "Found cached answer '%s/%s' originally from '%s' with flags '%s' on behalf of '%s'\n", 
-							tech2str(tech), ptr, src, dundi_flags2str(fs, sizeof(fs), flags.flags), eid_str_full);
+						if (option_debug)
+							ast_log(LOG_DEBUG, "Found cached answer '%s/%s' originally from '%s' with flags '%s' on behalf of '%s'\n", 
+								tech2str(tech), ptr, src, dundi_flags2str(fs, sizeof(fs), flags.flags), eid_str_full);
 						/* Make sure it's not already there */
 						for (z=0;z<req->respcount;z++) {
 							if ((req->dr[z].techint == tech) &&
@@ -1260,7 +1273,8 @@ static int do_register_expire(void *data)
 {
 	struct dundi_peer *peer = data;
 	char eid_str[20];
-	ast_log(LOG_DEBUG, "Register expired for '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &peer->eid));
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Register expired for '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &peer->eid));
 	peer->registerexpire = -1;
 	peer->lastms = 0;
 	memset(&peer->addr, 0, sizeof(peer->addr));
@@ -1354,7 +1368,8 @@ static struct dundi_hdr *dundi_decrypt(struct dundi_transaction *trans, unsigned
 	*h = *ohdr;
 	bytes = space - 6;
 	if (uncompress(dst + 6, &bytes, decrypt_space, srclen) != Z_OK) {
-		ast_log(LOG_DEBUG, "Ouch, uncompress failed :(\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Ouch, uncompress failed :(\n");
 		return NULL;
 	}
 	/* Update length */
@@ -1380,7 +1395,8 @@ static int dundi_encrypt(struct dundi_transaction *trans, struct dundi_packet *p
 		bytes = len;
 		res = compress(compress_space, &bytes, pack->data + 6, pack->datalen - 6);
 		if (res != Z_OK) {
-			ast_log(LOG_DEBUG, "Ouch, compression failed!\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Ouch, compression failed!\n");
 			return -1;
 		}
 		memset(&ied, 0, sizeof(ied));
@@ -1475,7 +1491,8 @@ static int check_key(struct dundi_peer *peer, unsigned char *newkey, unsigned ch
 		return 0;
 	}
 	/* Decrypted, passes signature */
-	ast_log(LOG_DEBUG, "Wow, new key combo passed signature and decrypt!\n");
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Wow, new key combo passed signature and decrypt!\n");
 	memcpy(peer->rxenckey, newkey, 128);
 	memcpy(peer->rxenckey + 128, newsig, 128);
 	peer->them_keycrc32 = crc32(0L, peer->rxenckey, 128);
@@ -1507,7 +1524,8 @@ static int handle_command_response(struct dundi_transaction *trans, struct dundi
 			return -1;
 		/* Make a copy for parsing */
 		memcpy(bufcpy, hdr->ies, datalen);
-		ast_log(LOG_DEBUG, "Got canonical message %d (%d), %d bytes data%s\n", cmd, hdr->oseqno, datalen, final ? " (Final)" : "");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Got canonical message %d (%d), %d bytes data%s\n", cmd, hdr->oseqno, datalen, final ? " (Final)" : "");
 		if (dundi_parse_ies(&ies, bufcpy, datalen) < 0) {
 			ast_log(LOG_WARNING, "Failed to parse DUNDI information elements!\n");
 			return -1;
@@ -1621,7 +1639,8 @@ static int handle_command_response(struct dundi_transaction *trans, struct dundi
 		/* A dialplan response, lets see what we got... */
 		if (ies.cause < 1) {
 			/* Success of some sort */
-			ast_log(LOG_DEBUG, "Looks like success of some sort (%d), %d answers\n", ies.cause, ies.anscount);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Looks like success of some sort (%d), %d answers\n", ies.cause, ies.anscount);
 			if (ast_test_flag(trans, FLAG_ENCRYPT)) {
 				authpass = encrypted;
 			} else 
@@ -1705,7 +1724,8 @@ static int handle_command_response(struct dundi_transaction *trans, struct dundi
 		/* A dialplan response, lets see what we got... */
 		if (ies.cause < 1) {
 			/* Success of some sort */
-			ast_log(LOG_DEBUG, "Looks like success of some sort (%d)\n", ies.cause);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Looks like success of some sort (%d)\n", ies.cause);
 			if (ast_test_flag(trans, FLAG_ENCRYPT)) {
 				authpass = encrypted;
 			} else 
@@ -1771,8 +1791,9 @@ static int handle_command_response(struct dundi_transaction *trans, struct dundi
 					dundi_send(trans, DUNDI_COMMAND_CANCEL, 0, 1, &ied);
 				}
 			} else {
-				ast_log(LOG_DEBUG, "Yay, we've registered as '%s' to '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &trans->us_eid),
-							dundi_eid_to_str(eid_str2, sizeof(eid_str2), &trans->them_eid));
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Yay, we've registered as '%s' to '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &trans->us_eid),
+								dundi_eid_to_str(eid_str2, sizeof(eid_str2), &trans->them_eid));
 				/* Close connection if not final */
 				if (!final) 
 					dundi_send(trans, DUNDI_COMMAND_CANCEL, 0, 1, NULL);
@@ -1854,8 +1875,10 @@ static int handle_command_response(struct dundi_transaction *trans, struct dundi
 					/* Carry back final flag */
 					hdr->cmdresp |= dhdr->cmdresp & 0x80;
 					break;
-				} else
-					ast_log(LOG_DEBUG, "Ouch, decrypt failed :(\n");
+				} else {
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Ouch, decrypt failed :(\n");
+				}
 			}
 		}
 		if (!final) {
@@ -1947,7 +1970,8 @@ static int handle_frame(struct dundi_hdr *h, struct sockaddr_in *sin, int datale
 		dundi_ack(trans, 0);
 	} else {
 		/* Out of window -- simply drop */
-		ast_log(LOG_DEBUG, "Dropping packet out of window!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Dropping packet out of window!\n");
 	}
 	return 0;
 }
@@ -1958,8 +1982,8 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 	int res;
 	struct dundi_hdr *h;
 	char buf[MAX_PACKET_SIZE];
-	socklen_t len;
-	len = sizeof(sin);
+	socklen_t len = sizeof(sin);
+	
 	res = recvfrom(netsocket, buf, sizeof(buf) - 1, 0,(struct sockaddr *) &sin, &len);
 	if (res < 0) {
 		if (errno != ECONNREFUSED)
@@ -1971,7 +1995,7 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 		return 1;
 	}
 	buf[res] = '\0';
-	h = (struct dundi_hdr *)buf;
+	h = (struct dundi_hdr *) buf;
 	if (dundidebug)
 		dundi_showframe(h, 1, &sin, res - sizeof(struct dundi_hdr));
 	AST_LIST_LOCK(&peers);
@@ -2607,71 +2631,71 @@ static int dundi_show_precache(int fd, int argc, char *argv[])
 #undef FORMAT2
 }
 
-static char debug_usage[] = 
+static const char debug_usage[] = 
 "Usage: dundi debug\n"
 "       Enables dumping of DUNDi packets for debugging purposes\n";
 
-static char no_debug_usage[] = 
+static const char no_debug_usage[] = 
 "Usage: dundi no debug\n"
 "       Disables dumping of DUNDi packets for debugging purposes\n";
 
-static char store_history_usage[] = 
+static const char store_history_usage[] = 
 "Usage: dundi store history\n"
 "       Enables storing of DUNDi requests and times for debugging\n"
 "purposes\n";
 
-static char no_store_history_usage[] = 
+static const char no_store_history_usage[] = 
 "Usage: dundi no store history\n"
 "       Disables storing of DUNDi requests and times for debugging\n"
 "purposes\n";
 
-static char show_peers_usage[] = 
+static const char show_peers_usage[] = 
 "Usage: dundi show peers\n"
 "       Lists all known DUNDi peers.\n";
 
-static char show_trans_usage[] = 
+static const char show_trans_usage[] = 
 "Usage: dundi show trans\n"
 "       Lists all known DUNDi transactions.\n";
 
-static char show_mappings_usage[] = 
+static const char show_mappings_usage[] = 
 "Usage: dundi show mappings\n"
 "       Lists all known DUNDi mappings.\n";
 
-static char show_precache_usage[] = 
+static const char show_precache_usage[] = 
 "Usage: dundi show precache\n"
 "       Lists all known DUNDi scheduled precache updates.\n";
 
-static char show_entityid_usage[] = 
+static const char show_entityid_usage[] = 
 "Usage: dundi show entityid\n"
 "       Displays the global entityid for this host.\n";
 
-static char show_peer_usage[] = 
+static const char show_peer_usage[] = 
 "Usage: dundi show peer [peer]\n"
 "       Provide a detailed description of a specifid DUNDi peer.\n";
 
-static char show_requests_usage[] = 
+static const char show_requests_usage[] = 
 "Usage: dundi show requests\n"
 "       Lists all known pending DUNDi requests.\n";
 
-static char lookup_usage[] =
+static const char lookup_usage[] =
 "Usage: dundi lookup <number>[@context] [bypass]\n"
 "       Lookup the given number within the given DUNDi context\n"
 "(or e164 if none is specified).  Bypasses cache if 'bypass'\n"
 "keyword is specified.\n";
 
-static char precache_usage[] =
+static const char precache_usage[] =
 "Usage: dundi precache <number>[@context]\n"
 "       Lookup the given number within the given DUNDi context\n"
 "(or e164 if none is specified) and precaches the results to any\n"
 "upstream DUNDi push servers.\n";
 
-static char query_usage[] =
+static const char query_usage[] =
 "Usage: dundi query <entity>[@context]\n"
 "       Attempts to retrieve contact information for a specific\n"
 "DUNDi entity identifier (EID) within a given DUNDi context (or\n"
 "e164 if none is specified).\n";
 
-static char flush_usage[] =
+static const char flush_usage[] =
 "Usage: dundi flush [stats]\n"
 "       Flushes DUNDi answer cache, used primarily for debug.  If\n"
 "'stats' is present, clears timer statistics instead of normal\n"
@@ -2750,22 +2774,23 @@ static struct dundi_transaction *create_transaction(struct dundi_peer *p)
 	tid = get_trans_id();
 	if (tid < 1)
 		return NULL;
-	trans = ast_calloc(1, sizeof(*trans));
-	if (trans) {
-		if (global_storehistory) {
-			trans->start = ast_tvnow();
-			ast_set_flag(trans, FLAG_STOREHIST);
-		}
-		trans->retranstimer = DUNDI_DEFAULT_RETRANS_TIMER;
-		trans->autokillid = -1;
-		if (p) {
-			apply_peer(trans, p);
-			if (!p->sentfullkey)
-				ast_set_flag(trans, FLAG_SENDFULLKEY);
-		}
-		trans->strans = tid;
-		AST_LIST_INSERT_HEAD(&alltrans, trans, all);
+	if (!(trans = ast_calloc(1, sizeof(*trans))))
+		return NULL;
+
+	if (global_storehistory) {
+		trans->start = ast_tvnow();
+		ast_set_flag(trans, FLAG_STOREHIST);
 	}
+	trans->retranstimer = DUNDI_DEFAULT_RETRANS_TIMER;
+	trans->autokillid = -1;
+	if (p) {
+		apply_peer(trans, p);
+		if (!p->sentfullkey)
+			ast_set_flag(trans, FLAG_SENDFULLKEY);
+	}
+	trans->strans = tid;
+	AST_LIST_INSERT_HEAD(&alltrans, trans, all);
+	
 	return trans;
 }
 
@@ -3154,7 +3179,8 @@ static int precache_transactions(struct dundi_request *dr, struct dundi_mapping 
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&dr->trans, trans, parentlist) {
 		trans->thread = 0;
 		if (ast_test_flag(trans, FLAG_DEAD)) {
-			ast_log(LOG_DEBUG, "Our transaction went away!\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Our transaction went away!\n");
 			/* This is going to remove the transaction from the dundi_request's list, as well
 			 * as the global transactions list */
 			destroy_trans(trans, 0);
@@ -3247,10 +3273,14 @@ static int append_transaction(struct dundi_request *dr, struct dundi_peer *p, in
 		return 0;
 	if (p->maxms && ((p->lastms < 0) || (p->lastms >= p->maxms)))
 		return 0;
-	if (ast_strlen_zero(dr->number))
-		ast_log(LOG_DEBUG, "Will query peer '%s' for '%s' (context '%s')\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &p->eid), dundi_eid_to_str(eid_str2, sizeof(eid_str2), &dr->query_eid), dr->dcontext);
-	else
-		ast_log(LOG_DEBUG, "Will query peer '%s' for '%s@%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &p->eid), dr->number, dr->dcontext);
+
+	if (option_debug) {
+		if (ast_strlen_zero(dr->number))
+			ast_log(LOG_DEBUG, "Will query peer '%s' for '%s' (context '%s')\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &p->eid), dundi_eid_to_str(eid_str2, sizeof(eid_str2), &dr->query_eid), dr->dcontext);
+		else
+			ast_log(LOG_DEBUG, "Will query peer '%s' for '%s@%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &p->eid), dr->number, dr->dcontext);
+	}
+
 	trans = create_transaction(p);
 	if (!trans)
 		return -1;
@@ -3335,8 +3365,10 @@ static void build_transactions(struct dundi_request *dr, int ttl, int order, int
 						if (!avoid[x] && (!blockempty || !dundi_eid_zero(&p->us_eid))) {
 							/* Check for a matching or 0 cache entry */
 							append_transaction(dr, p, ttl, avoid);
-						} else
-							ast_log(LOG_DEBUG, "Avoiding '%s' in transaction\n", dundi_eid_to_str(eid_str, sizeof(eid_str), avoid[x]));
+						} else {
+							if (option_debug)
+								ast_log(LOG_DEBUG, "Avoiding '%s' in transaction\n", dundi_eid_to_str(eid_str, sizeof(eid_str), avoid[x]));
+						}
 					}
 				}
 				*foundcache |= res;
@@ -3360,16 +3392,18 @@ static int register_request(struct dundi_request *dr, struct dundi_request **pen
 		if (!strcasecmp(cur->dcontext, dr->dcontext) &&
 		    !strcasecmp(cur->number, dr->number) &&
 		    (!dundi_eid_cmp(&cur->root_eid, &dr->root_eid) || (cur->crc32 == dr->crc32))) {
-			ast_log(LOG_DEBUG, "Found existing query for '%s@%s' for '%s' crc '%08lx'\n", 
-				cur->dcontext, cur->number, dundi_eid_to_str(eid_str, sizeof(eid_str), &cur->root_eid), cur->crc32);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Found existing query for '%s@%s' for '%s' crc '%08lx'\n", 
+					cur->dcontext, cur->number, dundi_eid_to_str(eid_str, sizeof(eid_str), &cur->root_eid), cur->crc32);
 			*pending = cur;
 			res = 1;
 			break;
 		}
 	}
 	if (!res) {
-		ast_log(LOG_DEBUG, "Registering request for '%s@%s' on behalf of '%s' crc '%08lx'\n", 
-				dr->number, dr->dcontext, dundi_eid_to_str(eid_str, sizeof(eid_str), &dr->root_eid), dr->crc32);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Registering request for '%s@%s' on behalf of '%s' crc '%08lx'\n", 
+					dr->number, dr->dcontext, dundi_eid_to_str(eid_str, sizeof(eid_str), &dr->root_eid), dr->crc32);
 		/* Go ahead and link us in since nobody else is searching for this */
 		AST_LIST_INSERT_HEAD(&requests, dr, list);
 		*pending = NULL;
@@ -3458,15 +3492,17 @@ static int dundi_lookup_internal(struct dundi_result *result, int maxret, struct
 		if (rooteid && !dundi_eid_cmp(&dr.root_eid, &pending->root_eid)) {
 			/* This is on behalf of someone else.  Go ahead and close this out since
 			   they'll get their answer anyway. */
-			ast_log(LOG_DEBUG, "Oooh, duplicate request for '%s@%s' for '%s'\n",
-				dr.number,dr.dcontext,dundi_eid_to_str(eid_str, sizeof(eid_str), &dr.root_eid));
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Oooh, duplicate request for '%s@%s' for '%s'\n",
+					dr.number,dr.dcontext,dundi_eid_to_str(eid_str, sizeof(eid_str), &dr.root_eid));
 			close(dr.pfds[0]);
 			close(dr.pfds[1]);
 			return -2;
 		} else {
 			/* Wait for the cache to populate */
-			ast_log(LOG_DEBUG, "Waiting for similar request for '%s@%s' for '%s'\n",
-				dr.number,dr.dcontext,dundi_eid_to_str(eid_str, sizeof(eid_str), &pending->root_eid));
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Waiting for similar request for '%s@%s' for '%s'\n",
+					dr.number,dr.dcontext,dundi_eid_to_str(eid_str, sizeof(eid_str), &pending->root_eid));
 			start = ast_tvnow();
 			while(check_request(pending) && (ast_tvdiff_ms(ast_tvnow(), start) < ttlms) && (!chan || !chan->_softhangup)) {
 				/* XXX Would be nice to have a way to poll/select here XXX */
@@ -3505,7 +3541,7 @@ static int dundi_lookup_internal(struct dundi_result *result, int maxret, struct
 		ms = 100;
 		ast_waitfor_n_fd(dr.pfds, 1, &ms, NULL);
 	}
-	if (chan && chan->_softhangup)
+	if (chan && chan->_softhangup && option_debug)
 		ast_log(LOG_DEBUG, "Hrm, '%s' hungup before their query for %s@%s finished\n", chan->name, dr.number, dr.dcontext);
 	cancel_request(&dr);
 	unregister_request(&dr);
@@ -3572,19 +3608,16 @@ static void dundi_precache_full(void)
 	AST_LIST_TRAVERSE(&mappings, cur, list) {
 		ast_log(LOG_NOTICE, "Should precache context '%s'\n", cur->dcontext);
 		ast_lock_contexts();
-		con = ast_walk_contexts(NULL);
-		while (con) {
-			if (!strcasecmp(cur->lcontext, ast_get_context_name(con))) {
-				/* Found the match, now queue them all up */
-				ast_lock_context(con);
-				e = ast_walk_context_extensions(con, NULL);
-				while (e) {
-					reschedule_precache(ast_get_extension_name(e), cur->dcontext, 0);
-					e = ast_walk_context_extensions(con, e);
-				}
-				ast_unlock_context(con);
-			}
-			con = ast_walk_contexts(con);
+		con = NULL;
+		while ((con = ast_walk_contexts(con))) {
+			if (strcasecmp(cur->lcontext, ast_get_context_name(con)))
+				continue;
+			/* Found the match, now queue them all up */
+			ast_lock_context(con);
+			e = NULL;
+			while ((e = ast_walk_context_extensions(con, e)))
+				reschedule_precache(ast_get_extension_name(e), cur->dcontext, 0);
+			ast_unlock_context(con);
 		}
 		ast_unlock_contexts();
 	}
@@ -3602,7 +3635,8 @@ static int dundi_precache_internal(const char *context, const char *number, int 
 	int foundcache, skipped, ttlms, ms;
 	if (!context)
 		context = "e164";
-	ast_log(LOG_DEBUG, "Precache internal (%s@%s)!\n", number, context);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Precache internal (%s@%s)!\n", number, context);
 
 	AST_LIST_LOCK(&peers);
 	AST_LIST_TRAVERSE(&mappings, cur, list) {
@@ -3721,7 +3755,7 @@ int dundi_query_eid(struct dundi_entity_info *dei, const char *dcontext, dundi_e
 	return dundi_query_eid_internal(dei, dcontext, &eid, &hmd, dundi_ttl, 0, avoid);
 }
 
-static int dundifunc_read(struct ast_channel *chan, char *cmd, char *num, char *buf, size_t len)
+static int dundifunc_read(struct ast_channel *chan, const char *cmd, char *num, char *buf, size_t len)
 {
 	char *context;
 	char *opts;
@@ -3955,7 +3989,8 @@ static int do_register(void *data)
 	struct dundi_peer *peer = data;
 	char eid_str[20];
 	char eid_str2[20];
-	ast_log(LOG_DEBUG, "Register us as '%s' to '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &peer->us_eid), dundi_eid_to_str(eid_str2, sizeof(eid_str2), &peer->eid));
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Register us as '%s' to '%s'\n", dundi_eid_to_str(eid_str, sizeof(eid_str), &peer->us_eid), dundi_eid_to_str(eid_str2, sizeof(eid_str2), &peer->eid));
 	peer->registerid = ast_sched_add(sched, default_expiration * 1000, do_register, data);
 	/* Destroy old transaction if there is one */
 	if (peer->regtrans)
@@ -4236,6 +4271,7 @@ static int dundi_exec(struct ast_channel *chan, const char *context, const char 
 	int res;
 	int x=0;
 	char req[1024];
+	const char *dundiargs;
 	struct ast_app *dial;
 	
 	if (!strncasecmp(context, "macro-", 6)) {
@@ -4273,7 +4309,9 @@ static int dundi_exec(struct ast_channel *chan, const char *context, const char 
 	}
 	if (x < res) {
 		/* Got a hit! */
-		snprintf(req, sizeof(req), "%s/%s", results[x].tech, results[x].dest);
+		dundiargs = pbx_builtin_getvar_helper(chan, "DUNDIDIALARGS");
+		snprintf(req, sizeof(req), "%s/%s||%s", results[x].tech, results[x].dest, 
+			S_OR(dundiargs, ""));
 		dial = pbx_findapp("Dial");
 		if (dial)
 			res = pbx_exec(chan, dial, req);
@@ -4466,13 +4504,15 @@ static int unload_module(void)
 static int reload(void)
 {
 	struct sockaddr_in sin;
-	set_config("dundi.conf",&sin);
+
+	if (set_config("dundi.conf", &sin))
+		return -1;
+
 	return 0;
 }
 
 static int load_module(void)
 {
-	int res = 0;
 	struct sockaddr_in sin;
 
 	dundi_set_output(dundi_debug_output);
@@ -4486,23 +4526,22 @@ static int load_module(void)
 	io = io_context_create();
 	sched = sched_context_create();
 	
-	if (!io || !sched) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
+	if (!io || !sched)
+		return AST_MODULE_LOAD_FAILURE;
 
-	if(set_config("dundi.conf",&sin))
+	if (set_config("dundi.conf", &sin))
 		return AST_MODULE_LOAD_DECLINE;
 
 	netsocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
 	
 	if (netsocket < 0) {
 		ast_log(LOG_ERROR, "Unable to create network socket: %s\n", strerror(errno));
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
-	if (bind(netsocket,(struct sockaddr *)&sin, sizeof(sin))) {
-		ast_log(LOG_ERROR, "Unable to bind to %s port %d: %s\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), strerror(errno));
-		return -1;
+	if (bind(netsocket, (struct sockaddr *) &sin, sizeof(sin))) {
+		ast_log(LOG_ERROR, "Unable to bind to %s port %d: %s\n", 
+			ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), strerror(errno));
+		return AST_MODULE_LOAD_FAILURE;
 	}
 
 	if (option_verbose > 1)
@@ -4511,22 +4550,23 @@ static int load_module(void)
 	if (setsockopt(netsocket, IPPROTO_IP, IP_TOS, &tos, sizeof(tos))) 
 		ast_log(LOG_WARNING, "Unable to set TOS to %d\n", tos);
 	
-	res = start_network_thread();
-	if (res) {
+	if (start_network_thread()) {
 		ast_log(LOG_ERROR, "Unable to start network thread\n");
 		close(netsocket);
-		return -1;
+		return AST_MODULE_LOAD_FAILURE;
 	}
-
-	if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "DUNDi Ready and Listening on %s port %d\n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
-
-	ast_cli_register_multiple(cli_dundi, sizeof(cli_dundi) / sizeof(struct ast_cli_entry));
+	
+	ast_cli_register_multiple(cli_dundi, sizeof(cli_dundi) / sizeof(*cli_dundi));
 	if (ast_register_switch(&dundi_switch))
 		ast_log(LOG_ERROR, "Unable to register DUNDi switch\n");
-	ast_custom_function_register(&dundi_function); 
+	ast_custom_function_register(&dundi_function);
 	
-	return res;
+	if (option_verbose > 1) {
+		ast_verbose(VERBOSE_PREFIX_2 "DUNDi Ready and Listening on %s port %d\n", 
+			ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
+	}
+
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Distributed Universal Number Discovery (DUNDi)",
