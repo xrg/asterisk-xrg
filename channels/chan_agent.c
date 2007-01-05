@@ -33,7 +33,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <string.h>
@@ -77,11 +77,9 @@ static const char tdesc[] = "Call Agent Proxy Channel";
 static const char config[] = "agents.conf";
 
 static const char app[] = "AgentLogin";
-static const char app2[] = "AgentCallbackLogin";
 static const char app3[] = "AgentMonitorOutgoing";
 
 static const char synopsis[] = "Call agent login";
-static const char synopsis2[] = "Call agent callback login";
 static const char synopsis3[] = "Record agent's outgoing call";
 
 static const char descrip[] =
@@ -92,14 +90,6 @@ static const char descrip[] =
 "the star key.\n"
 "The option string may contain zero or more of the following characters:\n"
 "      's' -- silent login - do not announce the login ok segment after agent logged in/off\n";
-
-static const char descrip2[] =
-"  AgentCallbackLogin([AgentNo][|[options][|[exten]@context]]):\n"
-"Asks the agent to login to the system with callback.\n"
-"The agent's callback extension is called (optionally with the specified\n"
-"context).\n"
-"The option string may contain zero or more of the following characters:\n"
-"      's' -- silent login - do not announce the login ok segment agent logged in/off\n";
 
 static const char descrip3[] =
 "  AgentMonitorOutgoing([options]):\n"
@@ -204,10 +194,12 @@ static AST_LIST_HEAD_STATIC(agents, agent_pvt);	/*!< Holds the list of agents (l
 #define CHECK_FORMATS(ast, p) do { \
 	if (p->chan) {\
 		if (ast->nativeformats != p->chan->nativeformats) { \
-			ast_log(LOG_DEBUG, "Native formats changing from %d to %d\n", ast->nativeformats, p->chan->nativeformats); \
+			if (option_debug) \
+				ast_log(LOG_DEBUG, "Native formats changing from %d to %d\n", ast->nativeformats, p->chan->nativeformats); \
 			/* Native formats changed, reset things */ \
 			ast->nativeformats = p->chan->nativeformats; \
-			ast_log(LOG_DEBUG, "Resetting read to %d and write to %d\n", ast->readformat, ast->writeformat);\
+			if (option_debug) \
+				ast_log(LOG_DEBUG, "Resetting read to %d and write to %d\n", ast->readformat, ast->writeformat);\
 			ast_set_read_format(ast, ast->readformat); \
 			ast_set_write_format(ast, ast->writeformat); \
 		} \
@@ -452,7 +444,7 @@ static struct ast_frame *agent_read(struct ast_channel *ast)
 			/* Note that we don't hangup if it's not a callback because Asterisk will do it
 			   for us when the PBX instance that called login finishes */
 			if (!ast_strlen_zero(p->loginchan)) {
-				if (p->chan)
+				if (p->chan && option_debug)
 					ast_log(LOG_DEBUG, "Bridge on '%s' being cleared (2)\n", p->chan->name);
 
 				status = pbx_builtin_getvar_helper(p->chan, "CHANLOCALSTATUS");
@@ -523,7 +515,7 @@ static struct ast_frame *agent_read(struct ast_channel *ast)
 	if (p->chan && !p->chan->_bridge) {
 		if (strcasecmp(p->chan->tech->type, "Local")) {
 			p->chan->_bridge = ast;
-			if (p->chan)
+			if (p->chan && option_debug)
 				ast_log(LOG_DEBUG, "Bridge on '%s' being set to '%s' (3)\n", p->chan->name, p->chan->_bridge->name);
 		}
 	}
@@ -569,9 +561,10 @@ static int agent_write(struct ast_channel *ast, struct ast_frame *f)
 		    (f->subclass == p->chan->writeformat)) {
 			res = ast_write(p->chan, f);
 		} else {
-			ast_log(LOG_DEBUG, "Dropping one incompatible %s frame on '%s' to '%s'\n", 
-				f->frametype == AST_FRAME_VOICE ? "audio" : "video",
-				ast->name, p->chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Dropping one incompatible %s frame on '%s' to '%s'\n", 
+					f->frametype == AST_FRAME_VOICE ? "audio" : "video",
+					ast->name, p->chan->name);
 			res = 0;
 		}
 	}
@@ -636,7 +629,8 @@ static int agent_call(struct ast_channel *ast, char *dest, int timeout)
 	p->acknowledged = 0;
 	if (!p->chan) {
 		if (p->pending) {
-			ast_log(LOG_DEBUG, "Pretending to dial on pending agent\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Pretending to dial on pending agent\n");
 			newstate = AST_STATE_DIALING;
 			res = 0;
 		} else {
@@ -769,7 +763,8 @@ static int agent_hangup(struct ast_channel *ast)
 				ast_hangup(p->chan);
 				p->chan = NULL;
 			}
-			ast_log(LOG_DEBUG, "Hungup, howlong is %d, autologoff is %d\n", howlong, p->autologoff);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Hungup, howlong is %d, autologoff is %d\n", howlong, p->autologoff);
 			if (howlong  && p->autologoff && (howlong > p->autologoff)) {
 				long logintime = time(NULL) - p->loginstart;
 				p->loginstart = 0;
@@ -836,7 +831,7 @@ static int agent_cont_sleep( void *data )
 	}
 	ast_mutex_unlock(&p->lock);
 
-	if(option_debug > 4 && !res )
+	if (option_debug > 4 && !res)
 		ast_log(LOG_DEBUG, "agent_cont_sleep() returning %d\n", res );
 
 	return res;
@@ -940,11 +935,6 @@ static struct ast_channel *agent_new(struct agent_pvt *p, int state)
 	/* Safe, agentlock already held */
 	tmp->tech_pvt = p;
 	p->owner = tmp;
-	/* XXX: this needs fixing */
-#if 0
-	ast_atomic_fetchadd_int(&__mod_desc->usecnt, +1);
-#endif
-	ast_update_use_count();
 	tmp->priority = 1;
 	/* Wake up and wait for other applications (by definition the login app)
 	 * to release this channel). Takes ownership of the agent channel
@@ -1185,13 +1175,14 @@ static int check_availability(struct agent_pvt *newlyavailable, int needlock)
 			res = 0;
 		} else {
 			if (option_debug > 2)
-				ast_log( LOG_DEBUG, "Playing beep, lang '%s'\n", newlyavailable->chan->language);
+				ast_log(LOG_DEBUG, "Playing beep, lang '%s'\n", newlyavailable->chan->language);
 			res = ast_streamfile(newlyavailable->chan, beep, newlyavailable->chan->language);
 			if (option_debug > 2)
-				ast_log( LOG_DEBUG, "Played beep, result '%d'\n", res);
+				ast_log(LOG_DEBUG, "Played beep, result '%d'\n", res);
 			if (!res) {
 				res = ast_waitstream(newlyavailable->chan, "");
-				ast_log( LOG_DEBUG, "Waited for stream, result '%d'\n", res);
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Waited for stream, result '%d'\n", res);
 			}
 		}
 		if (!res) {
@@ -1228,7 +1219,8 @@ static int check_beep(struct agent_pvt *newlyavailable, int needlock)
 	struct agent_pvt *p;
 	int res=0;
 
-	ast_log(LOG_DEBUG, "Checking beep availability of '%s'\n", newlyavailable->agent);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Checking beep availability of '%s'\n", newlyavailable->agent);
 	if (needlock)
 		AST_LIST_LOCK(&agents);
 	AST_LIST_TRAVERSE(&agents, p, list) {
@@ -1249,14 +1241,14 @@ static int check_beep(struct agent_pvt *newlyavailable, int needlock)
 	if (p) {
 		ast_mutex_unlock(&newlyavailable->lock);
 		if (option_debug > 2)
-			ast_log( LOG_DEBUG, "Playing beep, lang '%s'\n", newlyavailable->chan->language);
+			ast_log(LOG_DEBUG, "Playing beep, lang '%s'\n", newlyavailable->chan->language);
 		res = ast_streamfile(newlyavailable->chan, beep, newlyavailable->chan->language);
 		if (option_debug > 2)
-			ast_log( LOG_DEBUG, "Played beep, result '%d'\n", res);
+			ast_log(LOG_DEBUG, "Played beep, result '%d'\n", res);
 		if (!res) {
 			res = ast_waitstream(newlyavailable->chan, "");
 			if (option_debug)
-				ast_log( LOG_DEBUG, "Waited for stream, result '%d'\n", res);
+				ast_log(LOG_DEBUG, "Waited for stream, result '%d'\n", res);
 		}
 		ast_mutex_lock(&newlyavailable->lock);
 	}
@@ -1369,8 +1361,10 @@ static struct ast_channel *agent_request(const char *type, int format, void *dat
 			chan = agent_new(p, AST_STATE_DOWN);
 			if (!chan) 
 				ast_log(LOG_WARNING, "Weird...  Fix this to drop the unused pending agent\n");
-		} else
-			ast_log(LOG_DEBUG, "Not creating place holder for '%s' since nobody logged in\n", s);
+		} else {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Not creating place holder for '%s' since nobody logged in\n", s);
+		}
 	}
 	*cause = hasagent ? AST_CAUSE_BUSY : AST_CAUSE_UNREGISTERED;
 	AST_LIST_UNLOCK(&agents);
@@ -1395,9 +1389,9 @@ static force_inline int powerof(unsigned int d)
  * \returns 
  * \sa action_agent_logoff(), action_agent_callback_login(), load_module().
  */
-static int action_agents(struct mansession *s, struct message *m)
+static int action_agents(struct mansession *s, const struct message *m)
 {
-	char *id = astman_get_header(m,"ActionID");
+	const char *id = astman_get_header(m,"ActionID");
 	char idText[256] = "";
 	char chanbuf[256];
 	struct agent_pvt *p;
@@ -1505,7 +1499,7 @@ static void agent_logoff_maintenance(struct agent_pvt *p, char *loginchan, long 
 
 }
 
-static int agent_logoff(char *agent, int soft)
+static int agent_logoff(const char *agent, int soft)
 {
 	struct agent_pvt *p;
 	long logintime;
@@ -1556,10 +1550,10 @@ static int agent_logoff_cmd(int fd, int argc, char **argv)
  * \returns 
  * \sa action_agents(), action_agent_callback_login(), load_module().
  */
-static int action_agent_logoff(struct mansession *s, struct message *m)
+static int action_agent_logoff(struct mansession *s, const struct message *m)
 {
-	char *agent = astman_get_header(m, "Agent");
-	char *soft_s = astman_get_header(m, "Soft"); /* "true" is don't hangup */
+	const char *agent = astman_get_header(m, "Agent");
+	const char *soft_s = astman_get_header(m, "Soft"); /* "true" is don't hangup */
 	int soft;
 	int ret; /* return value of agent_logoff */
 
@@ -1718,37 +1712,27 @@ static int agents_show_online(int fd, int argc, char **argv)
 
 
 
-static char show_agents_usage[] = 
+static const char show_agents_usage[] = 
 "Usage: agent show\n"
 "       Provides summary information on agents.\n";
 
-static char show_agents_online_usage[] =
+static const char show_agents_online_usage[] =
 "Usage: agent show online\n"
 "	Provides a list of all online agents.\n";
 
-static char agent_logoff_usage[] =
+static const char agent_logoff_usage[] =
 "Usage: agent logoff <channel> [soft]\n"
 "       Sets an agent as no longer logged in.\n"
 "       If 'soft' is specified, do not hangup existing calls.\n";
 
-static struct ast_cli_entry cli_show_agents_deprecated = {
-	{ "show", "agents", NULL },
-	agents_show, NULL,
-	NULL, NULL };
-
-static struct ast_cli_entry cli_show_agents_online_deprecated = {
-	{ "show", "agents", "online" },
-	agents_show_online, NULL,
-	NULL, NULL };
-
 static struct ast_cli_entry cli_agents[] = {
 	{ { "agent", "show", NULL },
 	agents_show, "Show status of agents",
-	show_agents_usage, NULL, &cli_show_agents_deprecated },
+	show_agents_usage },
 
 	{ { "agent", "show", "online" },
 	agents_show_online, "Show all online agents",
-	show_agents_online_usage, NULL, &cli_show_agents_online_deprecated },
+	show_agents_online_usage },
 
 	{ { "agent", "logoff", NULL },
 	agent_logoff_cmd, "Sets an agent offline",
@@ -2198,117 +2182,6 @@ static int login_exec(struct ast_channel *chan, void *data)
 	return __login_exec(chan, data, 0);
 }
 
-static void callback_deprecated(void)
-{
-	static int depwarning = 0;
-
-	if (!depwarning) {
-		depwarning = 1;
-
-		ast_log(LOG_WARNING, "AgentCallbackLogin is deprecated and will be removed in a future release.\n");
-		ast_log(LOG_WARNING, "See doc/queues-with-callback-members.txt for an example of how to achieve\n");
-		ast_log(LOG_WARNING, "the same functionality using only dialplan logic.\n");
-	}
-}
-
-/*!
- *  Called by the AgentCallbackLogin application (from the dial plan).
- * 
- * \param chan
- * \param data
- * \returns
- * \sa login_exec(), agentmonitoroutgoing_exec(), load_module().
- */
-static int callback_exec(struct ast_channel *chan, void *data)
-{
-	callback_deprecated();
-
-	return __login_exec(chan, data, 1);
-}
-
-/*!
- * Sets an agent as logged in by callback in the Manager API.
- * It is registered on load_module() and it gets called by the manager backend.
- * \param s
- * \param m
- * \returns 
- * \sa action_agents(), action_agent_logoff(), load_module().
- */
-static int action_agent_callback_login(struct mansession *s, struct message *m)
-{
-	char *agent = astman_get_header(m, "Agent");
-	char *exten = astman_get_header(m, "Exten");
-	char *context = astman_get_header(m, "Context");
-	char *wrapuptime_s = astman_get_header(m, "WrapupTime");
-	char *ackcall_s = astman_get_header(m, "AckCall");
-	struct agent_pvt *p;
-	int login_state = 0;
-
-	callback_deprecated();
-
-	if (ast_strlen_zero(agent)) {
-		astman_send_error(s, m, "No agent specified");
-		return 0;
-	}
-
-	if (ast_strlen_zero(exten)) {
-		astman_send_error(s, m, "No extension specified");
-		return 0;
-	}
-
-	AST_LIST_LOCK(&agents);
-	AST_LIST_TRAVERSE(&agents, p, list) {
-		if (strcmp(p->agent, agent) || p->pending) 
-			continue;
-		if (p->chan) {
-			login_state = 2; /* already logged in (and on the phone)*/
-			break;
-		}
-		ast_mutex_lock(&p->lock);
-		login_state = 1; /* Successful Login */
-		
-		if (ast_strlen_zero(context))
-			ast_copy_string(p->loginchan, exten, sizeof(p->loginchan));
-		else
-			snprintf(p->loginchan, sizeof(p->loginchan), "%s@%s", exten, context);
-
-		if (!ast_strlen_zero(wrapuptime_s)) {
-			p->wrapuptime = atoi(wrapuptime_s);
-			if (p->wrapuptime < 0)
-				p->wrapuptime = 0;
-		}
-
-		if (ast_true(ackcall_s))
-			p->ackcall = 1;
-		else
-			p->ackcall = 0;
-
-		if (p->loginstart == 0)
-			time(&p->loginstart);
-		manager_event(EVENT_FLAG_AGENT, "Agentcallbacklogin",
-			      "Agent: %s\r\n"
-			      "Loginchan: %s\r\n",
-			      p->agent, p->loginchan);
-		ast_queue_log("NONE", "NONE", agent, "AGENTCALLBACKLOGIN", "%s", p->loginchan);
-		if (option_verbose > 1)
-			ast_verbose(VERBOSE_PREFIX_2 "Callback Agent '%s' logged in on %s\n", p->agent, p->loginchan);
-		ast_device_state_changed("Agent/%s", p->agent);
-		ast_mutex_unlock(&p->lock);
-		if (persistent_agents)
-			dump_agents();
-	}
-	AST_LIST_UNLOCK(&agents);
-
-	if (login_state == 1)
-		astman_send_ack(s, m, "Agent logged in");
-	else if (login_state == 0)
-		astman_send_error(s, m, "No such agent");
-	else if (login_state == 2)
-		astman_send_error(s, m, "Agent already logged in");
-
-	return 0;
-}
-
 /*!
  *  \brief Called by the AgentMonitorOutgoing application (from the dial plan).
  *
@@ -2600,13 +2473,11 @@ static int load_module(void)
 		reload_agents();
 	/* Dialplan applications */
 	ast_register_application(app, login_exec, synopsis, descrip);
-	ast_register_application(app2, callback_exec, synopsis2, descrip2);
 	ast_register_application(app3, agentmonitoroutgoing_exec, synopsis3, descrip3);
 
 	/* Manager commands */
 	ast_manager_register2("Agents", EVENT_FLAG_AGENT, action_agents, "Lists agents and their status", mandescr_agents);
 	ast_manager_register2("AgentLogoff", EVENT_FLAG_AGENT, action_agent_logoff, "Sets an agent as no longer logged in", mandescr_agent_logoff);
-	ast_manager_register2("AgentCallbackLogin", EVENT_FLAG_AGENT, action_agent_callback_login, "Sets an agent as logged in by callback", mandescr_agent_callback_login);
 
 	/* CLI Commands */
 	ast_cli_register_multiple(cli_agents, sizeof(cli_agents) / sizeof(struct ast_cli_entry));
@@ -2636,12 +2507,10 @@ static int unload_module(void)
 	ast_cli_unregister_multiple(cli_agents, sizeof(cli_agents) / sizeof(struct ast_cli_entry));
 	/* Unregister dialplan applications */
 	ast_unregister_application(app);
-	ast_unregister_application(app2);
 	ast_unregister_application(app3);
 	/* Unregister manager command */
 	ast_manager_unregister("Agents");
 	ast_manager_unregister("AgentLogoff");
-	ast_manager_unregister("AgentCallbackLogin");
 	/* Unregister channel */
 	AST_LIST_LOCK(&agents);
 	/* Hangup all interfaces if they have an owner */

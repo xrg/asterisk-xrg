@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47053 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -55,7 +55,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47053 $")
 #define JABBER_CONFIG "jabber.conf"
 
 /*-- Forward declarations */
-static int manager_jabber_send( struct mansession *s, struct message *m );
 static int aji_highest_bit(int number);
 static void aji_buddy_destroy(struct aji_buddy *obj);
 static void aji_client_destroy(struct aji_client *obj);
@@ -98,19 +97,19 @@ static int aji_register_transport(void *data, ikspak *pak);
 static int aji_register_transport2(void *data, ikspak *pak);
 */
 
-static char debug_usage[] = 
+static const char debug_usage[] = 
 "Usage: jabber debug\n" 
 "       Enables dumping of Jabber packets for debugging purposes.\n";
 
-static char no_debug_usage[] = 
+static const char no_debug_usage[] = 
 "Usage: jabber debug off\n" 
 "       Disables dumping of Jabber packets for debugging purposes.\n";
 
-static char reload_usage[] = 
+static const char reload_usage[] = 
 "Usage: jabber reload\n" 
 "       Enables reloading of Jabber module.\n";
 
-static char test_usage[] = 
+static const char test_usage[] = 
 "Usage: jabber test [client]\n" 
 "       Sends test message for debugging purposes.  A specific client\n"
 "       as configured in jabber.conf can be optionally specified.\n";
@@ -539,11 +538,12 @@ static int aji_act_hook(void *data, int type, iks *node)
 									iks *x = NULL;
 									x = iks_new("auth");
 									if (x) {
-										iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_SASL);
 										int len = strlen(client->jid->user) + strlen(client->password) + 3;
 										/* XXX Check return values XXX */
 										char *s = ast_malloc(80 + len);
 										char *base64 = ast_malloc(80 + len * 2);
+
+										iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_SASL);
 										iks_insert_attrib(x, "mechanism", "PLAIN");
 										sprintf(s, "%c%s%c%s", 0, client->jid->user, 0, client->password);
 										ast_base64encode(base64, (const unsigned char *) s, len, len * 2);
@@ -708,8 +708,9 @@ static int aji_register_query_handler(void *data, ikspak *pak)
 
 	buddy = ASTOBJ_CONTAINER_FIND(&client->buddies, pak->from->partial);
 	if (!buddy) {
-		ast_verbose("Someone.... %s tried to register but they aren't allowed\n", pak->from->partial);
 		iks *iq = NULL, *query = NULL, *error = NULL, *notacceptable = NULL;
+
+		ast_verbose("Someone.... %s tried to register but they aren't allowed\n", pak->from->partial);
 		iq = iks_new("iq");
 		query = iks_new("query");
 		error = iks_new("error");
@@ -1252,8 +1253,10 @@ static void aji_handle_presence(struct aji_client *client, ikspak *pak)
 		found->cap = aji_find_version(node, ver, pak);
 		if(gtalk_yuck(pak->x)) /* gtalk should do discover */
 			found->cap->jingle = 1;
-		if(found->cap->jingle && option_debug > 4)
-			ast_log(LOG_DEBUG,"Special case for google till they support discover.\n");
+		if(found->cap->jingle && option_debug > 4) {
+			if (option_debug)
+				ast_log(LOG_DEBUG,"Special case for google till they support discover.\n");
+		}
 		else {
 			iks *iq, *query;
 			iq = iks_new("iq");
@@ -1367,7 +1370,7 @@ static void aji_handle_subscribe(struct aji_client *client, ikspak *pak)
  * \param aji_client struct , reciever, message.
  * \return 1.
  */
-int ast_aji_send(struct aji_client *client, char *address, char *message)
+int ast_aji_send(struct aji_client *client, const char *address, const char *message)
 {
 	int res = 0;
 	iks *message_packet = NULL;
@@ -2291,7 +2294,7 @@ static int aji_load_config(void)
  * \param void. 
  * \return 1.
  */
-struct aji_client *ast_aji_get_client(char *name)
+struct aji_client *ast_aji_get_client(const char *name)
 {
 	struct aji_client *client = NULL;
 
@@ -2314,13 +2317,13 @@ static char mandescr_jabber_send[] =
 "  Message:	Message to be sent to the buddy\n";
 
 /*! \brief  Send a Jabber Message via call from the Manager */
-static int manager_jabber_send( struct mansession *s, struct message *m )
+static int manager_jabber_send(struct mansession *s, const struct message *m)
 {
 	struct aji_client *client = NULL;
-	char *id = astman_get_header(m,"ActionID");
-	char *jabber = astman_get_header(m,"Jabber");
-	char *screenname = astman_get_header(m,"ScreenName");
-	char *message = astman_get_header(m,"Message");
+	const char *id = astman_get_header(m,"ActionID");
+	const char *jabber = astman_get_header(m,"Jabber");
+	const char *screenname = astman_get_header(m,"ScreenName");
+	const char *message = astman_get_header(m,"Message");
 
 	if (ast_strlen_zero(jabber)) {
 		astman_send_error(s, m, "No transport specified");

@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48155 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -99,6 +99,7 @@ static int adsipark;
 
 static int transferdigittimeout;
 static int featuredigittimeout;
+static int comebacktoorigin = 1;
 
 static int atxfernoanswertimeout;
 
@@ -398,7 +399,7 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 		"Channel: %s\r\n"
 		"From: %s\r\n"
 		"Timeout: %ld\r\n"
-		"CallerID: %s\r\n"
+		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n",
 		pu->parkingexten, pu->chan->name, peer ? peer->name : "",
 		(long)pu->start.tv_sec + (long)(pu->parkingtime/1000) - (long)time(NULL),
@@ -546,7 +547,7 @@ static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *pee
 	if (!ast_strlen_zero(courtesytone)) {
 		if (ast_autoservice_start(callee_chan))
 			return -1;
-		if (ast_stream_and_wait(caller_chan, courtesytone, caller_chan->language, "")) {
+		if (ast_stream_and_wait(caller_chan, courtesytone, "")) {
 			ast_log(LOG_WARNING, "Failed to play courtesy tone!\n");
 			ast_autoservice_stop(callee_chan);
 			return -1;
@@ -651,7 +652,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	memset(xferto, 0, sizeof(xferto));
 	
 	/* Transfer */
-	res = ast_stream_and_wait(transferer, "pbx-transfer", transferer->language, AST_DIGIT_ANY);
+	res = ast_stream_and_wait(transferer, "pbx-transfer", AST_DIGIT_ANY);
 	if (res < 0) {
 		finishup(transferee);
 		return -1; /* error ? */
@@ -701,7 +702,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 		if (option_verbose > 2)	
 			ast_verbose(VERBOSE_PREFIX_3 "Unable to find extension '%s' in context '%s'\n", xferto, transferer_real_context);
 	}
-	if (ast_stream_and_wait(transferer, xferfailsound, transferer->language, AST_DIGIT_ANY) < 0 ) {
+	if (ast_stream_and_wait(transferer, xferfailsound, AST_DIGIT_ANY) < 0 ) {
 		finishup(transferee);
 		return -1;
 	}
@@ -750,7 +751,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	ast_indicate(transferee, AST_CONTROL_HOLD);
 	
 	/* Transfer */
-	res = ast_stream_and_wait(transferer, "pbx-transfer", transferer->language, AST_DIGIT_ANY);
+	res = ast_stream_and_wait(transferer, "pbx-transfer", AST_DIGIT_ANY);
 	if (res < 0) {
 		finishup(transferee);
 		return res;
@@ -767,7 +768,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	if (res == 0) {
 		ast_log(LOG_WARNING, "Did not read data.\n");
 		finishup(transferee);
-		if (ast_stream_and_wait(transferer, "beeperr", transferer->language, ""))
+		if (ast_stream_and_wait(transferer, "beeperr", ""))
 			return -1;
 		return FEATURE_RETURN_SUCCESS;
 	}
@@ -776,7 +777,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	if (!ast_exists_extension(transferer, transferer_real_context, xferto, 1, transferer->cid.cid_num)) {
 		ast_log(LOG_WARNING, "Extension %s does not exist in context %s\n",xferto,transferer_real_context);
 		finishup(transferee);
-		if (ast_stream_and_wait(transferer, "beeperr", transferer->language, ""))
+		if (ast_stream_and_wait(transferer, "beeperr", ""))
 			return -1;
 		return FEATURE_RETURN_SUCCESS;
 	}
@@ -790,7 +791,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		finishup(transferee);
 		/* any reason besides user requested cancel and busy triggers the failed sound */
 		if (outstate != AST_CONTROL_UNHOLD && outstate != AST_CONTROL_BUSY &&
-				ast_stream_and_wait(transferer, xferfailsound, transferer->language, ""))
+				ast_stream_and_wait(transferer, xferfailsound, ""))
 			return -1;
 		return FEATURE_RETURN_SUCCESS;
 	}
@@ -803,7 +804,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	res = ast_bridge_call(transferer, newchan, &bconfig);
 	if (newchan->_softhangup || newchan->_state != AST_STATE_UP || !transferer->_softhangup) {
 		ast_hangup(newchan);
-		if (ast_stream_and_wait(transferer, xfersound, transferer->language, ""))
+		if (ast_stream_and_wait(transferer, xfersound, ""))
 			ast_log(LOG_WARNING, "Failed to play transfer sound!\n");
 		finishup(transferee);
 		transferer->_softhangup = 0;
@@ -855,7 +856,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	tobj->peer = newchan;
 	tobj->bconfig = *config;
 
-	if (ast_stream_and_wait(newchan, xfersound, newchan->language, ""))
+	if (ast_stream_and_wait(newchan, xfersound, ""))
 		ast_log(LOG_WARNING, "Failed to play transfer sound!\n");
 	ast_bridge_call_thread_launch(tobj);
 	return -1;	/* XXX meaning the channel is bridged ? */
@@ -1510,7 +1511,7 @@ static void post_manager_event(const char *s, char *parkingexten, struct ast_cha
 	manager_event(EVENT_FLAG_CALL, s,
 		"Exten: %s\r\n"
 		"Channel: %s\r\n"
-		"CallerID: %s\r\n"
+		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n\r\n",
 		parkingexten, 
 		chan->name,
@@ -1522,7 +1523,9 @@ static void post_manager_event(const char *s, char *parkingexten, struct ast_cha
 /*! \brief Take care of parked calls and unpark them if needed */
 static void *do_parking_thread(void *ignore)
 {
+	char parkingslot[AST_MAX_EXTENSION];
 	fd_set rfds, efds;	/* results from previous select, to be preserved across loops. */
+
 	FD_ZERO(&rfds);
 	FD_ZERO(&efds);
 
@@ -1569,7 +1572,14 @@ static void *do_parking_thread(void *ignore)
 						snprintf(returnexten, sizeof(returnexten), "%s||t", peername);
 						ast_add_extension2(con, 1, peername, 1, NULL, NULL, "Dial", strdup(returnexten), ast_free, registrar);
 					}
-					set_c_e_p(chan, parking_con_dial, peername, 1);
+					if (comebacktoorigin) { 
+								set_c_e_p(chan, parking_con_dial, peername, 1);
+					} else {
+							ast_log(LOG_WARNING, "now going to parkedcallstimeout,s,1 | ps is %d\n",pu->parkingnum);
+							snprintf(parkingslot, sizeof(parkingslot), "%d", pu->parkingnum);
+							pbx_builtin_setvar_helper(pu->chan, "PARKINGSLOT", parkingslot);
+							set_c_e_p(chan, "parkedcallstimeout", peername, 1);
+							}
 				} else {
 					/* They've been waiting too long, send them back to where they came.  Theoretically they
 					   should have their original extensions and such, but we copy to be on the safe side */
@@ -1764,7 +1774,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 			"Exten: %s\r\n"
 			"Channel: %s\r\n"
 			"From: %s\r\n"
-			"CallerID: %s\r\n"
+			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n",
 			pu->parkingexten, pu->chan->name, chan->name,
 			S_OR(pu->chan->cid.cid_num, "<unknown>"),
@@ -1784,9 +1794,9 @@ static int park_exec(struct ast_channel *chan, void *data)
 			int error = 0;
 			ast_indicate(peer, AST_CONTROL_UNHOLD);
 			if (parkedplay == 0) {
-				error = ast_stream_and_wait(chan, courtesytone, chan->language, "");
+				error = ast_stream_and_wait(chan, courtesytone, "");
 			} else if (parkedplay == 1) {
-				error = ast_stream_and_wait(peer, courtesytone, chan->language, "");
+				error = ast_stream_and_wait(peer, courtesytone, "");
 			} else if (parkedplay == 2) {
 				if (!ast_streamfile(chan, courtesytone, chan->language) &&
 						!ast_streamfile(peer, courtesytone, chan->language)) {
@@ -1826,7 +1836,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 		return res;
 	} else {
 		/*! \todo XXX Play a message XXX */
-		if (ast_stream_and_wait(chan, "pbx-invalidpark", chan->language, ""))
+		if (ast_stream_and_wait(chan, "pbx-invalidpark", ""))
 			ast_log(LOG_WARNING, "ast_streamfile of %s failed on %s\n", "pbx-invalidpark", chan->name);
 		if (option_verbose > 2) 
 			ast_verbose(VERBOSE_PREFIX_3 "Channel %s tried to talk to nonexistent parked call %d\n", chan->name, park);
@@ -1901,7 +1911,7 @@ static int handle_parkedcalls(int fd, int argc, char *argv[])
 		numparked++;
 	}
 	ast_mutex_unlock(&parking_lock);
-	ast_cli(fd, "%d parked call%s.\n", numparked, (numparked != 1) ? "s" : "");
+	ast_cli(fd, "%d parked call%s.\n", numparked, ESS(numparked));
 
 
 	return RESULT_SUCCESS;
@@ -1911,15 +1921,10 @@ static char showparked_help[] =
 "Usage: show parkedcalls\n"
 "       Lists currently parked calls.\n";
 
-static struct ast_cli_entry cli_show_features_deprecated = {
-	{ "show", "features", NULL },
-	handle_showfeatures, NULL,
-	NULL };
-
 static struct ast_cli_entry cli_features[] = {
 	{ { "feature", "show", NULL },
 	handle_showfeatures, "Lists configured features",
-	showfeatures_help, NULL, &cli_show_features_deprecated },
+	showfeatures_help },
 
 	{ { "show", "parkedcalls", NULL },
 	handle_parkedcalls, "Lists parked calls",
@@ -1927,10 +1932,10 @@ static struct ast_cli_entry cli_features[] = {
 };
 
 /*! \brief Dump lot status */
-static int manager_parking_status( struct mansession *s, struct message *m )
+static int manager_parking_status( struct mansession *s, const struct message *m)
 {
 	struct parkeduser *cur;
-	char *id = astman_get_header(m,"ActionID");
+	const char *id = astman_get_header(m,"ActionID");
 	char idText[256] = "";
 
 	if (!ast_strlen_zero(id))
@@ -1946,7 +1951,7 @@ static int manager_parking_status( struct mansession *s, struct message *m )
 			"Channel: %s\r\n"
 			"From: %s\r\n"
 			"Timeout: %ld\r\n"
-			"CallerID: %s\r\n"
+			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
 			"%s"
 			"\r\n",
@@ -1974,11 +1979,11 @@ static char mandescr_park[] =
 "	*Channel2: Channel to announce park info to (and return to if timeout)\n"
 "	Timeout: Number of milliseconds to wait before callback.\n";  
 
-static int manager_park(struct mansession *s, struct message *m)
+static int manager_park(struct mansession *s, const struct message *m)
 {
-	char *channel = astman_get_header(m, "Channel");
-	char *channel2 = astman_get_header(m, "Channel2");
-	char *timeout = astman_get_header(m, "Timeout");
+	const char *channel = astman_get_header(m, "Channel");
+	const char *channel2 = astman_get_header(m, "Channel2");
+	const char *timeout = astman_get_header(m, "Timeout");
 	char buf[BUFSIZ];
 	int to = 0;
 	int res = 0;
@@ -2107,6 +2112,7 @@ static int load_config(void)
 	parking_stop = 750;
 	parkfindnext = 0;
 	adsipark = 0;
+	comebacktoorigin = 1;
 	parkaddhints = 0;
 
 	transferdigittimeout = DEFAULT_TRANSFER_DIGIT_TIMEOUT;
@@ -2174,6 +2180,8 @@ static int load_config(void)
 			ast_copy_string(xferfailsound, var->value, sizeof(xferfailsound));
 		} else if (!strcasecmp(var->name, "pickupexten")) {
 			ast_copy_string(pickup_ext, var->value, sizeof(pickup_ext));
+		} else if (!strcasecmp(var->name, "comebacktoorigin")) {
+			comebacktoorigin = ast_true(var->value);
 		} else if (!strcasecmp(var->name, "parkedmusicclass")) {
 			ast_copy_string(parkmohclass, var->value, sizeof(parkmohclass));
 		}
