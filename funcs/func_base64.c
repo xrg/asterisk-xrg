@@ -23,7 +23,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,7 +37,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
-static int base64_encode(struct ast_channel *chan, char *cmd, char *data,
+static int base64_encode(struct ast_channel *chan, const const char *cmd, char *data,
 			 char *buf, size_t len)
 {
 	if (ast_strlen_zero(data)) {
@@ -50,7 +50,7 @@ static int base64_encode(struct ast_channel *chan, char *cmd, char *data,
 	return 0;
 }
 
-static int base64_decode(struct ast_channel *chan, char *cmd, char *data,
+static int base64_decode(struct ast_channel *chan, const const char *cmd, char *data,
 			 char *buf, size_t len)
 {
 	if (ast_strlen_zero(data)) {

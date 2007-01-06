@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48017 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,7 +52,7 @@ AST_APP_OPTIONS(cdr_func_options, {
 	AST_APP_OPTION('u', OPT_UNPARSED),
 });
 
-static int cdr_read(struct ast_channel *chan, char *cmd, char *parse,
+static int cdr_read(struct ast_channel *chan, const char *cmd, char *parse,
 		    char *buf, size_t len)
 {
 	char *ret;
@@ -85,7 +85,7 @@ static int cdr_read(struct ast_channel *chan, char *cmd, char *parse,
 	return 0;
 }
 
-static int cdr_write(struct ast_channel *chan, char *cmd, char *parse,
+static int cdr_write(struct ast_channel *chan, const char *cmd, char *parse,
 		     const char *value)
 {
 	struct ast_flags flags = { 0 };
@@ -129,7 +129,7 @@ static struct ast_custom_function cdr_function = {
 "  For example, 'start', 'answer', and 'end' will be retrieved as epoch\n"
 "  values, when the 'u' option is passed, but formatted as YYYY-MM-DD HH:MM:SS\n"
 "  otherwise.  Similarly, disposition and amaflags will return their raw\n"
-"  integral values.\n",
+"  integral values.\n"
 "  Here is a list of all the available cdr field names:\n"
 "    clid          lastdata       disposition\n"
 "    src           start          amaflags\n"

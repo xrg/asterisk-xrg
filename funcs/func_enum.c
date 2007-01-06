@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46631 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -50,7 +50,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46631 $")
 
  static char *synopsis = "Syntax: ENUMLOOKUP(number[|Method-type[|options[|record#[|zone-suffix]]]])\n";
 
-static int function_enum(struct ast_channel *chan, char *cmd, char *data,
+static int function_enum(struct ast_channel *chan, const char *cmd, char *data,
 			 char *buf, size_t len)
 {
 	AST_DECLARE_APP_ARGS(args,
@@ -132,7 +132,7 @@ static struct ast_custom_function enum_function = {
 	.read = function_enum,
 };
 
-static int function_txtcidname(struct ast_channel *chan, char *cmd,
+static int function_txtcidname(struct ast_channel *chan, const char *cmd,
 			       char *data, char *buf, size_t len)
 {
 	int res;

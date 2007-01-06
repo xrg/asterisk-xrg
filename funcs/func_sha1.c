@@ -24,7 +24,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
-static int sha1(struct ast_channel *chan, char *cmd, char *data,
+static int sha1(struct ast_channel *chan, const char *cmd, char *data,
 		char *buf, size_t len)
 {
 	*buf = '\0';

@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 43933 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -40,7 +40,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 43933 $")
 #include "asterisk/app.h"
 #include "asterisk/options.h"
 
-static int timeout_read(struct ast_channel *chan, char *cmd, char *data,
+static int timeout_read(struct ast_channel *chan, const char *cmd, char *data,
 			char *buf, size_t len)
 {
 	time_t myt;
@@ -83,7 +83,7 @@ static int timeout_read(struct ast_channel *chan, char *cmd, char *data,
 	return 0;
 }
 
-static int timeout_write(struct ast_channel *chan, char *cmd, char *data,
+static int timeout_write(struct ast_channel *chan, const char *cmd, char *data,
 			 const char *value)
 {
 	int x;
@@ -146,7 +146,7 @@ static int timeout_write(struct ast_channel *chan, char *cmd, char *data,
 
 static struct ast_custom_function timeout_function = {
 	.name = "TIMEOUT",
-	.synopsis = "Gets or sets timeouts on the channel.",
+	.synopsis = "Gets or sets timeouts on the channel. Timeout values are in seconds.",
 	.syntax = "TIMEOUT(timeouttype)",
 	.desc =
 		"Gets or sets various channel timeouts. The timeouts that can be\n"
