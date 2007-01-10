@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 41633 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <strings.h>
@@ -146,7 +146,7 @@ static int load_module(void)
 	int res;
 
 	/* Configuration file */
-	if(loadconfigurationfile())
+	if (!loadconfigurationfile())
 		return AST_MODULE_LOAD_DECLINE;
 	
 	res = ast_cdr_register(name, "Asterisk Manager Interface CDR Backend", manager_log);
