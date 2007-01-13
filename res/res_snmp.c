@@ -20,7 +20,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44378 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/channel.h"
 #include "asterisk/module.h"
@@ -106,7 +106,7 @@ static int unload_module(void)
 	ast_verbose(VERBOSE_PREFIX_1 "Unloading [Sub]Agent Module\n");
 
 	res_snmp_dont_stop = 0;
-	return pthread_join(thread, NULL);
+	return ((thread != AST_PTHREADT_NULL) ? pthread_join(thread, NULL) : 0);
 }
 
 static int reload(void)
