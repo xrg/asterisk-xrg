@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48088 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <string.h>
@@ -93,15 +93,12 @@ static char context[AST_MAX_EXTENSION] = "default";
 
 /* Default language */
 static char language[MAX_LANGUAGE] = "";
-static int usecnt =0;
 
 static int echocancel = AEC_OFF;
 
 static int silencesupression = 0;
 
-static int prefformat = AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW;
-
-AST_MUTEX_DEFINE_STATIC(usecnt_lock);
+static int prefformat = AST_FORMAT_G729A | AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW;
 
 /* Protect the interface list (of phone_pvt's) */
 AST_MUTEX_DEFINE_STATIC(iflock);
@@ -173,7 +170,7 @@ static int phone_indicate(struct ast_channel *chan, int condition, const void *d
 static const struct ast_channel_tech phone_tech = {
 	.type = "Phone",
 	.description = tdesc,
-	.capabilities = AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW,
+	.capabilities = AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW | AST_FORMAT_G729A,
 	.requester = phone_request,
 	.send_digit_begin = phone_digit_begin,
 	.send_digit_end = phone_digit_end,
@@ -211,7 +208,8 @@ static int phone_indicate(struct ast_channel *chan, int condition, const void *d
 {
 	struct phone_pvt *p = chan->tech_pvt;
 	int res=-1;
-	ast_log(LOG_DEBUG, "Requested indication %d on channel %s\n", condition, chan->name);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Requested indication %d on channel %s\n", condition, chan->name);
 	switch(condition) {
 		case AST_CONTROL_FLASH:
 			ioctl(p->fd, IXJCTL_PSTN_SET_STATE, PSTN_ON_HOOK);
@@ -367,8 +365,10 @@ static int phone_hangup(struct ast_channel *ast)
 
 	/* If it's an FXO, hang them up */
 	if (p->mode == MODE_FXO) {
-		if (ioctl(p->fd, PHONE_PSTN_SET_STATE, PSTN_ON_HOOK)) 
-			ast_log(LOG_DEBUG, "ioctl(PHONE_PSTN_SET_STATE) failed on %s (%s)\n",ast->name, strerror(errno));
+		if (ioctl(p->fd, PHONE_PSTN_SET_STATE, PSTN_ON_HOOK)) { 
+			if (option_debug)
+				ast_log(LOG_DEBUG, "ioctl(PHONE_PSTN_SET_STATE) failed on %s (%s)\n",ast->name, strerror(errno));
+		}
 	}
 
 	/* If they're off hook, give a busy signal */
@@ -385,12 +385,6 @@ static int phone_hangup(struct ast_channel *ast)
 	p->dialtone = 0;
 	memset(p->ext, 0, sizeof(p->ext));
 	((struct phone_pvt *)(ast->tech_pvt))->owner = NULL;
-	ast_mutex_lock(&usecnt_lock);
-	usecnt--;
-	if (usecnt < 0) 
-		ast_log(LOG_WARNING, "Usecnt < 0???\n");
-	ast_mutex_unlock(&usecnt_lock);
-	ast_update_use_count();
 	if (option_verbose > 2) 
 		ast_verbose( VERBOSE_PREFIX_3 "Hungup '%s'\n", ast->name);
 	ast->tech_pvt = NULL;
@@ -405,8 +399,17 @@ static int phone_setup(struct ast_channel *ast)
 	p = ast->tech_pvt;
 	ioctl(p->fd, PHONE_CPT_STOP);
 	/* Nothing to answering really, just start recording */
-	if (ast->rawreadformat == AST_FORMAT_G723_1) {
-		/* Prefer g723 */
+	if (ast->rawreadformat == AST_FORMAT_G729A) {
+		/* Prefer g729 */
+		ioctl(p->fd, PHONE_REC_STOP);
+		if (p->lastinput != AST_FORMAT_G729A) {
+			p->lastinput = AST_FORMAT_G729A;
+			if (ioctl(p->fd, PHONE_REC_CODEC, G729)) {
+				ast_log(LOG_WARNING, "Failed to set codec to g729\n");
+				return -1;
+			}
+		}
+        } else if (ast->rawreadformat == AST_FORMAT_G723_1) {
 		ioctl(p->fd, PHONE_REC_STOP);
 		if (p->lastinput != AST_FORMAT_G723_1) {
 			p->lastinput = AST_FORMAT_G723_1;
@@ -463,10 +466,14 @@ static int phone_answer(struct ast_channel *ast)
 	p = ast->tech_pvt;
 	/* In case it's a LineJack, take it off hook */
 	if (p->mode == MODE_FXO) {
-		if (ioctl(p->fd, PHONE_PSTN_SET_STATE, PSTN_OFF_HOOK)) 
-			ast_log(LOG_DEBUG, "ioctl(PHONE_PSTN_SET_STATE) failed on %s (%s)\n", ast->name, strerror(errno));
-		else
-			ast_log(LOG_DEBUG, "Took linejack off hook\n");
+		if (ioctl(p->fd, PHONE_PSTN_SET_STATE, PSTN_OFF_HOOK)) {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "ioctl(PHONE_PSTN_SET_STATE) failed on %s (%s)\n", ast->name, strerror(errno));
+		}
+		else {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Took linejack off hook\n");
+		}
 	}
 	phone_setup(ast);
 	if (option_debug)
@@ -669,7 +676,7 @@ static int phone_write(struct ast_channel *ast, struct ast_frame *frame)
 		return 0;
 	}
 	if (!(frame->subclass &
-		(AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW)) && 
+		(AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW | AST_FORMAT_G729A)) && 
 	    p->mode != MODE_FXS) {
 		ast_log(LOG_WARNING, "Cannot handle frames in %d format\n", frame->subclass);
 		return -1;
@@ -686,7 +693,30 @@ static int phone_write(struct ast_channel *ast, struct ast_frame *frame)
 		return 0;
 	}
 #endif	
-	if (frame->subclass == AST_FORMAT_G723_1) {
+	if (frame->subclass == AST_FORMAT_G729A) {
+		if (p->lastformat != AST_FORMAT_G729A) {
+			ioctl(p->fd, PHONE_PLAY_STOP);
+			ioctl(p->fd, PHONE_REC_STOP);
+			if (ioctl(p->fd, PHONE_PLAY_CODEC, G729)) {
+				ast_log(LOG_WARNING, "Unable to set G729 mode\n");
+				return -1;
+			}
+			if (ioctl(p->fd, PHONE_REC_CODEC, G729)) {
+				ast_log(LOG_WARNING, "Unable to set G729 mode\n");
+				return -1;
+			}
+			p->lastformat = AST_FORMAT_G729A;
+			p->lastinput = AST_FORMAT_G729A;
+			/* Reset output buffer */
+			p->obuflen = 0;
+			codecset = 1;
+		}
+		if (frame->datalen > 80) {
+			ast_log(LOG_WARNING, "Frame size too large for G.729 (%d bytes)\n", frame->datalen);
+			return -1;
+		}
+		maxfr = 80;
+        } else if (frame->subclass == AST_FORMAT_G723_1) {
 		if (p->lastformat != AST_FORMAT_G723_1) {
 			ioctl(p->fd, PHONE_PLAY_STOP);
 			ioctl(p->fd, PHONE_REC_STOP);
@@ -877,10 +907,6 @@ static struct ast_channel *phone_new(struct phone_pvt *i, int state, char *conte
 		tmp->cid.cid_name = ast_strdup(i->cid_name);
 
 		i->owner = tmp;
-		ast_mutex_lock(&usecnt_lock);
-		usecnt++;
-		ast_mutex_unlock(&usecnt_lock);
-		ast_update_use_count();
 		if (state != AST_STATE_DOWN) {
 			if (state == AST_STATE_RING) {
 				ioctl(tmp->fds[0], PHONE_RINGBACK);
@@ -915,7 +941,8 @@ static void phone_check_exception(struct phone_pvt *i)
 	union telephony_exception phonee;
 	/* XXX Do something XXX */
 #if 0
-	ast_log(LOG_DEBUG, "Exception!\n");
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Exception!\n");
 #endif
 	phonee.bytes = ioctl(i->fd, PHONE_EXCEPTION);
 	if (phonee.bits.dtmf_ready)  {
@@ -960,10 +987,6 @@ static void phone_check_exception(struct phone_pvt *i)
 			if (i->mode == MODE_IMMEDIATE) {
 				phone_new(i, AST_STATE_RING, i->context);
 			} else if (i->mode == MODE_DIALTONE) {
-				ast_mutex_lock(&usecnt_lock);
-				usecnt++;
-				ast_mutex_unlock(&usecnt_lock);
-				ast_update_use_count();
 				/* Reset the extension */
 				i->ext[0] = '\0';
 				/* Play the dialtone */
@@ -973,10 +996,6 @@ static void phone_check_exception(struct phone_pvt *i)
 				ioctl(i->fd, PHONE_PLAY_START);
 				i->lastformat = -1;
 			} else if (i->mode == MODE_SIGMA) {
-				ast_mutex_lock(&usecnt_lock);
-				usecnt++;
-				ast_mutex_unlock(&usecnt_lock);
-				ast_update_use_count();
 				/* Reset the extension */
 				i->ext[0] = '\0';
 				/* Play the dialtone */
@@ -984,12 +1003,6 @@ static void phone_check_exception(struct phone_pvt *i)
 				ioctl(i->fd, PHONE_DIALTONE);
 			}
 		} else {
-			if (i->dialtone) {
-				ast_mutex_lock(&usecnt_lock);
-				usecnt--;
-				ast_mutex_unlock(&usecnt_lock);
-				ast_update_use_count();
-			}
 			memset(i->ext, 0, sizeof(i->ext));
 			if (i->cpt)
 			{
@@ -1081,7 +1094,8 @@ static void *do_monitor(void *data)
 		}
 		/* Okay, select has finished.  Let's see what happened.  */
 		if (res < 0) {
-			ast_log(LOG_DEBUG, "select return %d: %s\n", res, strerror(errno));
+			if (option_debug)
+				ast_log(LOG_DEBUG, "select return %d: %s\n", res, strerror(errno));
 			continue;
 		}
 		/* If there are no fd's changed, just continue, it's probably time
@@ -1168,8 +1182,10 @@ static struct phone_pvt *mkif(char *iface, int mode, int txgain, int rxgain)
 			return NULL;
 		}
 		if (mode == MODE_FXO) {
-			if (ioctl(tmp->fd, IXJCTL_PORT, PORT_PSTN)) 
-				ast_log(LOG_DEBUG, "Unable to set port to PSTN\n");
+			if (ioctl(tmp->fd, IXJCTL_PORT, PORT_PSTN)) {
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Unable to set port to PSTN\n");
+			}
 		} else {
 			if (ioctl(tmp->fd, IXJCTL_PORT, PORT_POTS)) 
 				 if (mode != MODE_FXS)
@@ -1179,8 +1195,10 @@ static struct phone_pvt *mkif(char *iface, int mode, int txgain, int rxgain)
 		ioctl(tmp->fd, PHONE_REC_STOP);
 		ioctl(tmp->fd, PHONE_RING_STOP);
 		ioctl(tmp->fd, PHONE_CPT_STOP);
-		if (ioctl(tmp->fd, PHONE_PSTN_SET_STATE, PSTN_ON_HOOK)) 
-			ast_log(LOG_DEBUG, "ioctl(PHONE_PSTN_SET_STATE) failed on %s (%s)\n",iface, strerror(errno));
+		if (ioctl(tmp->fd, PHONE_PSTN_SET_STATE, PSTN_ON_HOOK)) {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "ioctl(PHONE_PSTN_SET_STATE) failed on %s (%s)\n",iface, strerror(errno));
+		}
 		if (echocancel != AEC_OFF)
 			ioctl(tmp->fd, IXJCTL_AEC_START, echocancel);
 		if (silencesupression) 
@@ -1228,7 +1246,7 @@ static struct ast_channel *phone_request(const char *type, int format, void *dat
 	p = iflist;
 	while(p) {
 		if (p->mode == MODE_FXS ||
-		    format & (AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW)) {
+		    format & (AST_FORMAT_G729A | AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW)) {
 		    size_t length = strlen(p->dev + 5);
     		if (strncmp(name, p->dev + 5, length) == 0 &&
     		    !isalnum(name[length])) {
@@ -1245,7 +1263,7 @@ static struct ast_channel *phone_request(const char *type, int format, void *dat
 	restart_monitor();
 	if (tmp == NULL) {
 		oldformat = format;
-		format &= (AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW);
+		format &= (AST_FORMAT_G729A | AST_FORMAT_G723_1 | AST_FORMAT_SLINEAR | AST_FORMAT_ULAW);
 		if (!format) {
 			ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%d'\n", oldformat);
 			return NULL;
@@ -1396,7 +1414,9 @@ static int load_module(void)
 		} else if (!strcasecmp(v->name, "context")) {
 			ast_copy_string(context, v->value, sizeof(context));
 		} else if (!strcasecmp(v->name, "format")) {
-			if (!strcasecmp(v->value, "g723.1")) {
+			if (!strcasecmp(v->value, "g729")) {
+				prefformat = AST_FORMAT_G729A;
+                        } else if (!strcasecmp(v->value, "g723.1")) {
 				prefformat = AST_FORMAT_G723_1;
 			} else if (!strcasecmp(v->value, "slinear")) {
 				if (mode == MODE_FXS)
