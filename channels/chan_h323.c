@@ -44,7 +44,7 @@ extern "C" {
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47457 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #ifdef __cplusplus
 }
@@ -234,7 +234,7 @@ static int h323_do_reload(void);
 
 static struct ast_channel *oh323_request(const char *type, int format, void *data, int *cause);
 static int oh323_digit_begin(struct ast_channel *c, char digit);
-static int oh323_digit_end(struct ast_channel *c, char digit);
+static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int oh323_call(struct ast_channel *c, char *dest, int timeout);
 static int oh323_hangup(struct ast_channel *c);
 static int oh323_answer(struct ast_channel *c);
@@ -545,7 +545,7 @@ static int oh323_digit_begin(struct ast_channel *c, char digit)
  * Send (play) the specified digit to the channel.
  *
  */
-static int oh323_digit_end(struct ast_channel *c, char digit)
+static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration)
 {
 	struct oh323_pvt *pvt = (struct oh323_pvt *) c->tech_pvt;
 	char *token;
