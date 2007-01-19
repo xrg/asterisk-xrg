@@ -31,14 +31,13 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/ioctl.h>
-#include <zaptel/zaptel.h>
+#include "asterisk/zapata.h"
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"

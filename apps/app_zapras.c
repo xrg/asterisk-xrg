@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48375 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/ioctl.h>
 #include <sys/wait.h>
@@ -48,7 +48,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48375 $")
 #include <errno.h>
 #include <stdio.h>
 #include <fcntl.h>
-#include <zaptel/zaptel.h>
+
+#include "asterisk/zapata.h"
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -161,7 +162,8 @@ static void run_ras(struct ast_channel *chan, char *args)
 			if (!res) {
 				/* Check for hangup */
 				if (chan->_softhangup && !signalled) {
-					ast_log(LOG_DEBUG, "Channel '%s' hungup.  Signalling RAS at %d to die...\n", chan->name, pid);
+					if (option_debug)
+						ast_log(LOG_DEBUG, "Channel '%s' hungup.  Signalling RAS at %d to die...\n", chan->name, pid);
 					kill(pid, SIGTERM);
 					signalled=1;
 				}

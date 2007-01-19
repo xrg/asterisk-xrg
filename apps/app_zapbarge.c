@@ -37,15 +37,14 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include <sys/ioctl.h>
-#include <zaptel/zaptel.h>
+#include "asterisk/zapata.h"
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -172,7 +171,8 @@ zapretry:
 	if (ztc.confmode) {
 		/* Whoa, already in a conference...  Retry... */
 		if (!retryzap) {
-			ast_log(LOG_DEBUG, "Zap channel is in a conference already, retrying with pseudo\n");
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Zap channel is in a conference already, retrying with pseudo\n");
 			retryzap = 1;
 			goto zapretry;
 		}
@@ -188,7 +188,8 @@ zapretry:
 		close(fd);
 		goto outrun;
 	}
-	ast_log(LOG_DEBUG, "Placed channel %s in ZAP channel %d monitor\n", chan->name, confno);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Placed channel %s in ZAP channel %d monitor\n", chan->name, confno);
 
 	for(;;) {
 		outfd = -1;
@@ -200,7 +201,8 @@ zapretry:
 					/* Kill old pseudo */
 					close(fd);
 				}
-				ast_log(LOG_DEBUG, "Ooh, something swapped out under us, starting over\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Ooh, something swapped out under us, starting over\n");
 				retryzap = 0;
 				goto zapretry;
 			}
