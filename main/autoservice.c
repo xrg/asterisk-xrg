@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44378 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -64,7 +64,7 @@ static pthread_t asthread = AST_PTHREADT_NULL;
 static void *autoservice_run(void *ign)
 {
 
-	for(;;) {
+	for (;;) {
 		struct ast_channel *mons[MAX_AUTOMONS];
 		struct ast_channel *chan;
 		struct asent *as;
@@ -148,7 +148,7 @@ int ast_autoservice_stop(struct ast_channel *chan)
 	AST_LIST_UNLOCK(&aslist);
 
 	/* Wait for it to un-block */
-	while(ast_test_flag(chan, AST_FLAG_BLOCKING))
+	while (ast_test_flag(chan, AST_FLAG_BLOCKING))
 		usleep(1000);
 	return res;
 }

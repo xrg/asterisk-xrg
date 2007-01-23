@@ -42,7 +42,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 41507 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <stdlib.h>
@@ -59,6 +59,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 41507 $")
 #include "asterisk/ulaw.h"
 #include "asterisk/alaw.h"
 #include "asterisk/utils.h"
+#include "asterisk/options.h"
 
 /*! Number of goertzels for progress detect */
 enum gsamp_size {
@@ -1054,7 +1055,7 @@ static int __ast_dsp_call_progress(struct ast_dsp *dsp, short *s, int len)
 	int pass;
 	int newstate = DSP_TONE_STATE_SILENCE;
 	int res = 0;
-	while(len) {
+	while (len) {
 		/* Take the lesser of the number of samples we need and what we have */
 		pass = len;
 		if (pass > dsp->gsamp_size - dsp->gsamps) 
@@ -1076,7 +1077,7 @@ static int __ast_dsp_call_progress(struct ast_dsp *dsp, short *s, int len)
 			printf("%.2e %.2e %.2e %.2e %.2e %.2e %.2e %.2e %.2e\n", 
 				hz[HZ_350], hz[HZ_425], hz[HZ_440], hz[HZ_480], hz[HZ_620], hz[HZ_950], hz[HZ_1400], hz[HZ_1800], dsp->genergy);
 #endif
-			switch(dsp->progmode) {
+			switch (dsp->progmode) {
 			case PROG_MODE_NA:
 				if (pair_there(hz[HZ_480], hz[HZ_620], hz[HZ_350], hz[HZ_440], dsp->genergy)) {
 					newstate = DSP_TONE_STATE_BUSY;
@@ -1335,8 +1336,10 @@ int ast_dsp_busydetect(struct ast_dsp *dsp)
 	}
 #endif
 #if 1
-	if (res)
-		ast_log(LOG_DEBUG, "ast_dsp_busydetect detected busy, avgtone: %d, avgsilence %d\n", avgtone, avgsilence);
+	if (res) {
+		if (option_debug)
+			ast_log(LOG_DEBUG, "ast_dsp_busydetect detected busy, avgtone: %d, avgsilence %d\n", avgtone, avgsilence);
+	}
 #endif
 	return res;
 }
@@ -1418,7 +1421,7 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 
 #define FIX_INF(inf) do { \
 		if (writeback) { \
-			switch(inf->subclass) { \
+			switch (inf->subclass) { \
 			case AST_FORMAT_SLINEAR: \
 				break; \
 			case AST_FORMAT_ULAW: \
@@ -1440,7 +1443,7 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 	odata = af->data;
 	len = af->datalen;
 	/* Make sure we have short data */
-	switch(af->subclass) {
+	switch (af->subclass) {
 	case AST_FORMAT_SLINEAR:
 		shortdata = af->data;
 		len = af->datalen / 2;
@@ -1470,7 +1473,8 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 		memset(&dsp->f, 0, sizeof(dsp->f));
 		dsp->f.frametype = AST_FRAME_CONTROL;
 		dsp->f.subclass = AST_CONTROL_BUSY;
-		ast_log(LOG_DEBUG, "Requesting Hangup because the busy tone was detected on channel %s\n", chan->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Requesting Hangup because the busy tone was detected on channel %s\n", chan->name);
 		return &dsp->f;
 	}
 	if ((dsp->features & DSP_FEATURE_DTMF_DETECT)) {
@@ -1572,7 +1576,7 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 	if ((dsp->features & DSP_FEATURE_CALL_PROGRESS)) {
 		res = __ast_dsp_call_progress(dsp, shortdata, len);
 		if (res) {
-			switch(res) {
+			switch (res) {
 			case AST_CONTROL_ANSWER:
 			case AST_CONTROL_BUSY:
 			case AST_CONTROL_RINGING:
@@ -1655,7 +1659,8 @@ void ast_dsp_set_busy_pattern(struct ast_dsp *dsp, int tonelength, int quietleng
 {
 	dsp->busy_tonelength = tonelength;
 	dsp->busy_quietlength = quietlength;
-	ast_log(LOG_DEBUG, "dsp busy pattern set to %d,%d\n", tonelength, quietlength);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "dsp busy pattern set to %d,%d\n", tonelength, quietlength);
 }
 
 void ast_dsp_digitreset(struct ast_dsp *dsp)

@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 41278 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -399,7 +399,7 @@ static void jb_get_and_deliver(struct ast_channel *chan)
 		
 		res = jbimpl->get(jbobj, &f, now, interpolation_len);
 		
-		switch(res) {
+		switch (res) {
 		case JB_IMPL_OK:
 			/* deliver the frame */
 			ast_write(chan, f);
