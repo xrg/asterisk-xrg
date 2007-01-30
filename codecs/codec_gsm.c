@@ -32,7 +32,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 42477 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -50,7 +50,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 42477 $")
 #include "asterisk/channel.h"
 #include "asterisk/utils.h"
 
+#ifdef HAVE_GSM_HEADER
 #include "gsm.h"
+#elif defined(HAVE_GSM_GSM_HEADER)
+#include <gsm/gsm.h>
+#endif
 
 #include "../formats/msgsm.h"
 
