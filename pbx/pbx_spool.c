@@ -24,7 +24,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48038 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/stat.h>
 #include <errno.h>
@@ -367,6 +367,7 @@ static void launch_service(struct outgoing *o)
 		ast_log(LOG_WARNING, "Unable to create thread :( (returned error: %d)\n", ret);
 		free_outgoing(o);
 	}
+	pthread_attr_destroy(&attr);
 }
 
 static int scan_service(char *fn, time_t now, time_t atime)
@@ -403,20 +404,20 @@ static int scan_service(char *fn, time_t now, time_t atime)
 					return now;
 				} else {
 					ast_log(LOG_EVENT, "Queued call to %s/%s expired without completion after %d attempt%s\n", o->tech, o->dest, o->retries - 1, ((o->retries - 1) != 1) ? "s" : "");
-					free_outgoing(o);
 					remove_from_queue(o, "Expired");
+					free_outgoing(o);
 					return 0;
 				}
 			} else {
+				remove_from_queue(o, "Failed");
 				free_outgoing(o);
 				ast_log(LOG_WARNING, "Invalid file contents in %s, deleting\n", fn);
 				fclose(f);
-				remove_from_queue(o, "Failed");
 			}
 		} else {
+			remove_from_queue(o, "Failed");
 			free_outgoing(o);
 			ast_log(LOG_WARNING, "Unable to open %s: %s, deleting\n", fn, strerror(errno));
-			remove_from_queue(o, "Failed");
 		}
 	} else
 		ast_log(LOG_WARNING, "Out of memory :(\n");
@@ -499,6 +500,7 @@ static int load_module(void)
 		ast_log(LOG_WARNING, "Unable to create thread :( (returned error: %d)\n", ret);
 		return -1;
 	}
+	pthread_attr_destroy(&attr);
 	return 0;
 }
 
