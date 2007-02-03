@@ -1,0 +1,9 @@
+autoconfig.h
+config.status
+makeopts
+menuselect
+mxml/config.h
+mxml/config.status
+mxml/libmxml.a
+mxml/Makefile
+mxml/mxml.list
