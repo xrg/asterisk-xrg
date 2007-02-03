@@ -1,0 +1,14 @@
+agi/eagi-sphinx-test
+agi/eagi-test
+agi/strcompat.c
+main/asterisk
+makeopts
+menuselect.makedeps
+menuselect.makeopts
+makeopts.embed_rules
+menuselect-tree
+config.log
+config.status
+defaults.h
+.lastclean
+build_tools/menuselect-deps
