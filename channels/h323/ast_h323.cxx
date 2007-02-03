@@ -26,7 +26,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
- * Version Info: $Id: ast_h323.cxx 44684 2006-10-07 14:39:34Z pcadach $
+ * Version Info: $Id$
  */
 #include <arpa/inet.h>
 
@@ -177,7 +177,7 @@ class MyH323_Shutdown {
 	};
 };
 
-MyProcess::MyProcess(): PProcess("The NuFone Network's",
+MyProcess::MyProcess(): PProcess("The NuFone Networks",
 			"H.323 Channel Driver for Asterisk",
 			MAJOR_VERSION, MINOR_VERSION, BUILD_TYPE, BUILD_NUMBER)
 {
