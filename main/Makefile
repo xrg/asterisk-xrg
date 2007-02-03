@@ -26,7 +26,7 @@ OBJS=	io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	utils.o plc.o jitterbuf.o dnsmgr.o devicestate.o \
 	netsock.o slinfactory.o ast_expr2.o ast_expr2f.o \
 	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o \
-	strcompat.o
+	strcompat.o threadstorage.o dial.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -95,7 +95,7 @@ ifeq ($(OSARCH),SunOS)
 endif
 
 editline/libedit.a:
-	cd editline && test -f config.h || CFLAGS="$(ASTCFLAGS:-Werror=)" ./configure --build=$(BUILD_PLATFORM) --host=$(HOST_PLATFORM)
+	cd editline && test -f config.h || CFLAGS="$(PTHREAD_CFLAGS) $(ASTCFLAGS:-Werror=)" LDFLAGS="$(ASTLDFLAGS)" ./configure --build=$(BUILD_PLATFORM) --host=$(HOST_PLATFORM) --with-ncurses=$(NCURSES_DIR) --with-curses=$(CURSES_DIR) --with-termcap=$(TERMCAP_DIR) --with-tinfo=$(TINFO_DIR)
 	$(MAKE) -C editline libedit.a
 
 db1-ast/libdb1.a:
@@ -141,6 +141,6 @@ asterisk: $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS)
 clean::
 	rm -f asterisk
 	rm -f db1-ast/.*.d
-	@if [ -f editline/Makefile ]; then $(MAKE) -C editline distclean ; fi
+	@if [ -f editline/Makefile ]; then $(MAKE) -C editline clean ; fi
 	@$(MAKE) -C db1-ast clean
 	@$(MAKE) -C stdtime clean

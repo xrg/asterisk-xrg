@@ -59,7 +59,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47370 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -152,15 +152,13 @@ int daemon(int, int);  /* defined in libresolv of all places */
  */
 /*! @{ */
 
-extern int ast_language_is_prefix;	/* XXX move to some header */
-
 struct ast_flags ast_options = { AST_DEFAULT_OPTIONS };
 
-int option_verbose = 0;				/*!< Verbosity level */
-int option_debug = 0;				/*!< Debug level */
+int option_verbose;				/*!< Verbosity level */
+int option_debug;				/*!< Debug level */
 
-double option_maxload = 0.0;			/*!< Max load avg on system */
-int option_maxcalls = 0;			/*!< Max number of active calls */
+double option_maxload;				/*!< Max load avg on system */
+int option_maxcalls;				/*!< Max number of active calls */
 
 /*! @} */
 
@@ -187,8 +185,8 @@ static AST_LIST_HEAD_STATIC(atexits, ast_atexit);
 time_t ast_startuptime;
 time_t ast_lastreloadtime;
 
-static History *el_hist = NULL;
-static EditLine *el = NULL;
+static History *el_hist;
+static EditLine *el;
 static char *remotehostname;
 
 struct console consoles[AST_MAX_CONNECTS];
@@ -229,11 +227,13 @@ extern const char *ast_build_date;
 extern const char *ast_build_user;
 
 static char *_argv[256];
-static int shuttingdown = 0;
-static int restartnow = 0;
+static int shuttingdown;
+static int restartnow;
 static pthread_t consolethread = AST_PTHREADT_NULL;
 
 static char randompool[256];
+
+static unsigned int need_reload;
 
 #if !defined(LOW_MEMORY)
 struct file_version {
@@ -1042,8 +1042,7 @@ static void hup_handler(int num)
 		printf("Received HUP signal -- Reloading configs\n");
 	if (restartnow)
 		execvp(_argv[0], _argv);
-	/* XXX This could deadlock XXX */
-	ast_module_reload(NULL);
+	need_reload = 1;
 	signal(num, hup_handler);
 }
 
@@ -1370,6 +1369,16 @@ static char version_help[] =
 "Usage: core show version\n"
 "       Shows Asterisk version information.\n";
 
+static int handle_version_deprecated(int fd, int argc, char *argv[])
+{
+	if (argc != 2)
+		return RESULT_SHOWUSAGE;
+	ast_cli(fd, "Asterisk %s built by %s @ %s on a %s running %s on %s\n",
+		ASTERISK_VERSION, ast_build_user, ast_build_hostname,
+		ast_build_machine, ast_build_os, ast_build_date);
+	return RESULT_SUCCESS;
+}
+
 static int handle_version(int fd, int argc, char *argv[])
 {
 	if (argc != 3)
@@ -1521,6 +1530,11 @@ static int show_license(int fd, int argc, char *argv[])
 
 #define ASTERISK_PROMPT2 "%s*CLI> "
 
+static struct ast_cli_entry cli_show_version_deprecated = {
+	{ "show", "version", NULL },
+	handle_version_deprecated, "Display version info",
+	version_help };
+
 #if !defined(LOW_MEMORY)
 static struct ast_cli_entry cli_show_version_files_deprecated = {
 	{ "show", "version", "files", NULL },
@@ -1576,7 +1590,7 @@ static struct ast_cli_entry cli_asterisk[] = {
 
 	{ { "core", "show", "version", NULL },
 	handle_version, "Display version info",
-	version_help },
+	version_help, NULL, &cli_show_version_deprecated },
 
 	{ { "!", NULL },
 	handle_bang, "Execute a shell command",
@@ -2024,6 +2038,8 @@ static char *cli_complete(EditLine *el, int ch)
 				retval = CC_REFRESH;
 			}
 		}
+		for (i = 0; matches[i]; i++)
+			free(matches[i]);
 		free(matches);
 	}
 
@@ -2185,6 +2201,11 @@ static void ast_remotecontrol(char * data)
 					break;
 				}
 			}
+		}
+
+		if (need_reload) {
+			need_reload = 0;
+			ast_module_reload(NULL);
 		}
 	}
 	printf("\nDisconnected from Asterisk server\n");
@@ -2434,7 +2455,7 @@ int main(int argc, char *argv[])
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
 	/* Check for options */
-	while ((c = getopt(argc, argv, "mtThfdvVqprRgciInx:U:G:C:L:M:")) != -1) {
+	while ((c = getopt(argc, argv, "mtThfFdvVqprRgciInx:U:G:C:L:M:")) != -1) {
 		switch (c) {
 #if HAVE_WORKING_FORK
 		case 'F':
@@ -2716,6 +2737,9 @@ int main(int argc, char *argv[])
 		printf(term_quit());
 		exit(1);
 	}
+
+	threadstorage_init();
+
 	if (load_modules(1)) {
 		printf(term_quit());
 		exit(1);
@@ -2832,14 +2856,21 @@ int main(int argc, char *argv[])
 					ast_log(LOG_WARNING, "Failed to open /dev/null to recover from dead console. Bad things will happen!\n");
 				break;
 			}
+			if (need_reload) {
+				need_reload = 0;
+				ast_module_reload(NULL);
+			}
 		}
-
 	}
 	/* Do nothing */
 	for (;;) {	/* apparently needed for Mac OS X */
 		struct pollfd p = { -1 /* no descriptor */, 0, 0 };
-
 		poll(&p, 0, -1);
+ 		/* SIGHUP will cause this to break out of poll() */
+ 		if (need_reload) {
+ 			need_reload = 0;
+ 			ast_module_reload(NULL);
+ 		}
 	}
 
 	return 0;

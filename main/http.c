@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47051 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <stdio.h>
@@ -64,14 +64,15 @@ struct ast_http_server_instance {
 	ast_http_callback callback;
 };
 
+AST_RWLOCK_DEFINE_STATIC(uris_lock);
 static struct ast_http_uri *uris;
 
 static int httpfd = -1;
 static pthread_t master = AST_PTHREADT_NULL;
 static char prefix[MAX_PREFIX];
-static int prefix_len = 0;
+static int prefix_len;
 static struct sockaddr_in oldsin;
-static int enablestatic=0;
+static int enablestatic;
 
 /*! \brief Limit the kinds of files we're willing to serve up */
 static struct {
@@ -241,7 +242,10 @@ char *ast_http_error(int status, const char *title, const char *extra_header, co
 
 int ast_http_uri_link(struct ast_http_uri *urih)
 {
-	struct ast_http_uri *prev=uris;
+	struct ast_http_uri *prev;
+
+	ast_rwlock_wrlock(&uris_lock);
+	prev = uris;
 	if (!uris || strlen(uris->uri) <= strlen(urih->uri)) {
 		urih->next = uris;
 		uris = urih;
@@ -252,14 +256,21 @@ int ast_http_uri_link(struct ast_http_uri *urih)
 		urih->next = prev->next;
 		prev->next = urih;
 	}
+	ast_rwlock_unlock(&uris_lock);
+
 	return 0;
 }	
 
 void ast_http_uri_unlink(struct ast_http_uri *urih)
 {
-	struct ast_http_uri *prev = uris;
-	if (!uris)
+	struct ast_http_uri *prev;
+
+	ast_rwlock_wrlock(&uris_lock);
+	if (!uris) {
+		ast_rwlock_unlock(&uris_lock);
 		return;
+	}
+	prev = uris;
 	if (uris == urih) {
 		uris = uris->next;
 	}
@@ -270,6 +281,7 @@ void ast_http_uri_unlink(struct ast_http_uri *urih)
 		}
 		prev = prev->next;
 	}
+	ast_rwlock_unlock(&uris_lock);
 }
 
 static char *handle_uri(struct sockaddr_in *sin, char *uri, int *status, char **title, int *contentlength, struct ast_variable **cookies)
@@ -317,6 +329,7 @@ static char *handle_uri(struct sockaddr_in *sin, char *uri, int *status, char **
 		if (!*uri || (*uri == '/')) {
 			if (*uri == '/')
 				uri++;
+			ast_rwlock_rdlock(&uris_lock);
 			urih = uris;
 			while(urih) {
 				len = strlen(urih->uri);
@@ -333,17 +346,20 @@ static char *handle_uri(struct sockaddr_in *sin, char *uri, int *status, char **
 				}
 				urih = urih->next;
 			}
+			if (!urih)
+				ast_rwlock_unlock(&uris_lock);
 		}
 	}
 	if (urih) {
 		c = urih->callback(sin, uri, vars, status, title, contentlength);
+		ast_rwlock_unlock(&uris_lock);
 	} else if (ast_strlen_zero(uri) && ast_strlen_zero(prefix)) {
 		/* Special case: If no prefix, and no URI, send to /static/index.html */
 		c = ast_http_error(302, "Moved Temporarily", "Location: /static/index.html\r\n", "This is not the page you are looking for...");
 		*status = 302;
 		*title = strdup("Moved Temporarily");
 	} else {
-		c = ast_http_error(404, "Not Found", NULL, "The requested URL was not found on this serer.");
+		c = ast_http_error(404, "Not Found", NULL, "The requested URL was not found on this server.");
 		*status = 404;
 		*title = strdup("Not Found");
 	}
@@ -523,6 +539,7 @@ static void *http_root(void *data)
 				fclose(ser->f);
 				free(ser);
 			}
+			pthread_attr_destroy(&attr);
 		} else {
 			ast_log(LOG_WARNING, "fdopen failed!\n");
 			close(ser->fd);
@@ -616,7 +633,7 @@ static int __ast_http_load(int reload)
 	char newprefix[MAX_PREFIX];
 
 	memset(&sin, 0, sizeof(sin));
-	sin.sin_port = 8088;
+	sin.sin_port = htons(8088);
 	strcpy(newprefix, DEFAULT_PREFIX);
 	cfg = ast_config_load("http.conf");
 	if (cfg) {
@@ -672,6 +689,7 @@ static int handle_show_http(int fd, int argc, char *argv[])
 	else
 		ast_cli(fd, "Server Disabled\n\n");
 	ast_cli(fd, "Enabled URI's:\n");
+	ast_rwlock_rdlock(&uris_lock);
 	urih = uris;
 	while(urih){
 		ast_cli(fd, "%s/%s%s => %s\n", prefix, urih->uri, (urih->has_subtree ? "/..." : "" ), urih->description);
@@ -679,6 +697,7 @@ static int handle_show_http(int fd, int argc, char *argv[])
 	}
 	if (!uris)
 		ast_cli(fd, "None.\n");
+	ast_rwlock_unlock(&uris_lock);
 	return RESULT_SUCCESS;
 }
 

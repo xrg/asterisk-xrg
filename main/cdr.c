@@ -33,7 +33,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48152 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -57,7 +57,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48152 $")
 
 /*! Default AMA flag for billing records (CDR's) */
 int ast_default_amaflags = AST_CDR_DOCUMENTATION;
-char ast_default_accountcode[AST_MAX_ACCOUNT_CODE] = "";
+char ast_default_accountcode[AST_MAX_ACCOUNT_CODE];
 
 struct ast_cdr_beitem {
 	char name[20];
@@ -860,6 +860,7 @@ void ast_cdr_submit_batch(int shutdown)
 			if (option_debug)
 				ast_log(LOG_DEBUG, "CDR multi-threaded batch processing begins now\n");
 		}
+		pthread_attr_destroy(&attr);
 	}
 }
 

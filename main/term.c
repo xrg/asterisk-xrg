@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47641 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,7 +43,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47641 $")
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
 
-static int vt100compat = 0;
+static int vt100compat;
 
 static char prepdata[80] = "";
 static char enddata[80] = "";

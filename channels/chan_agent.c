@@ -33,7 +33,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <string.h>
@@ -238,7 +238,7 @@ static struct ast_channel *agent_request(const char *type, int format, void *dat
 static int agent_devicestate(void *data);
 static void agent_logoff_maintenance(struct agent_pvt *p, char *loginchan, long logintime, const char *uniqueid, char *logcommand);
 static int agent_digit_begin(struct ast_channel *ast, char digit);
-static int agent_digit_end(struct ast_channel *ast, char digit);
+static int agent_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
 static int agent_call(struct ast_channel *ast, char *dest, int timeout);
 static int agent_hangup(struct ast_channel *ast);
 static int agent_answer(struct ast_channel *ast);
@@ -617,12 +617,12 @@ static int agent_digit_begin(struct ast_channel *ast, char digit)
 	return res;
 }
 
-static int agent_digit_end(struct ast_channel *ast, char digit)
+static int agent_digit_end(struct ast_channel *ast, char digit, unsigned int duration)
 {
 	struct agent_pvt *p = ast->tech_pvt;
 	int res = -1;
 	ast_mutex_lock(&p->lock);
-	ast_senddigit_end(p->chan, digit);
+	ast_senddigit_end(p->chan, digit, duration);
 	ast_mutex_unlock(&p->lock);
 	return res;
 }
@@ -1395,9 +1395,9 @@ static force_inline int powerof(unsigned int d)
  * \returns 
  * \sa action_agent_logoff(), action_agent_callback_login(), load_module().
  */
-static int action_agents(struct mansession *s, struct message *m)
+static int action_agents(struct mansession *s, const struct message *m)
 {
-	char *id = astman_get_header(m,"ActionID");
+	const char *id = astman_get_header(m,"ActionID");
 	char idText[256] = "";
 	char chanbuf[256];
 	struct agent_pvt *p;
@@ -1505,7 +1505,7 @@ static void agent_logoff_maintenance(struct agent_pvt *p, char *loginchan, long 
 
 }
 
-static int agent_logoff(char *agent, int soft)
+static int agent_logoff(const char *agent, int soft)
 {
 	struct agent_pvt *p;
 	long logintime;
@@ -1556,10 +1556,10 @@ static int agent_logoff_cmd(int fd, int argc, char **argv)
  * \returns 
  * \sa action_agents(), action_agent_callback_login(), load_module().
  */
-static int action_agent_logoff(struct mansession *s, struct message *m)
+static int action_agent_logoff(struct mansession *s, const struct message *m)
 {
-	char *agent = astman_get_header(m, "Agent");
-	char *soft_s = astman_get_header(m, "Soft"); /* "true" is don't hangup */
+	const char *agent = astman_get_header(m, "Agent");
+	const char *soft_s = astman_get_header(m, "Soft"); /* "true" is don't hangup */
 	int soft;
 	int ret; /* return value of agent_logoff */
 
@@ -2234,13 +2234,13 @@ static int callback_exec(struct ast_channel *chan, void *data)
  * \returns 
  * \sa action_agents(), action_agent_logoff(), load_module().
  */
-static int action_agent_callback_login(struct mansession *s, struct message *m)
+static int action_agent_callback_login(struct mansession *s, const struct message *m)
 {
-	char *agent = astman_get_header(m, "Agent");
-	char *exten = astman_get_header(m, "Exten");
-	char *context = astman_get_header(m, "Context");
-	char *wrapuptime_s = astman_get_header(m, "WrapupTime");
-	char *ackcall_s = astman_get_header(m, "AckCall");
+	const char *agent = astman_get_header(m, "Agent");
+	const char *exten = astman_get_header(m, "Exten");
+	const char *context = astman_get_header(m, "Context");
+	const char *wrapuptime_s = astman_get_header(m, "WrapupTime");
+	const char *ackcall_s = astman_get_header(m, "AckCall");
 	struct agent_pvt *p;
 	int login_state = 0;
 

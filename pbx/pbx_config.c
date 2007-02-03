@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44186 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <stdlib.h>
@@ -1508,7 +1508,7 @@ static int handle_context_add_extension(int fd, int argc, char *argv[])
 	/* check for arguments at first */
 	if (argc != 6 && argc != 7)
 		return RESULT_SHOWUSAGE;
-	if (strcmp(argv[3], "into"))
+	if (strcmp(argv[4], "into"))
 		return RESULT_SHOWUSAGE;
 	if (argc == 7) if (strcmp(argv[6], "replace")) return RESULT_SHOWUSAGE;
 
@@ -1553,7 +1553,7 @@ static int handle_context_add_extension(int fd, int argc, char *argv[])
 
 	if (!app_data)
 		app_data="";
-	if (ast_add_extension(argv[5], argc == 6 ? 1 : 0, exten, iprior, NULL, cidmatch, app,
+	if (ast_add_extension(argv[5], argc == 7 ? 1 : 0, exten, iprior, NULL, cidmatch, app,
 		(void *)strdup(app_data), free, registrar)) {
 		switch (errno) {
 		case ENOMEM:
@@ -2368,7 +2368,7 @@ static void pbx_load_users(void)
 			append_interface(iface, sizeof(iface), tmp);
 		}
 		if (ast_true(ast_config_option(cfg, cat, "hasiax"))) {
-			snprintf(tmp, sizeof(tmp), "IAX/%s", cat);
+			snprintf(tmp, sizeof(tmp), "IAX2/%s", cat);
 			append_interface(iface, sizeof(iface), tmp);
 		}
 		if (ast_true(ast_config_option(cfg, cat, "hash323"))) {
@@ -2409,7 +2409,7 @@ static void pbx_load_users(void)
 		}
 		if (!ast_strlen_zero(iface)) {
 			/* Add hint */
-			ast_add_extension2(con, 0, cat, -1, NULL, NULL, iface, strdup(""), ast_free, registrar);
+			ast_add_extension2(con, 0, cat, -1, NULL, NULL, iface, NULL, NULL, registrar);
 			/* If voicemail, use "stdexten" else use plain old dial */
 			if (hasvoicemail) {
 				snprintf(tmp, sizeof(tmp), "stdexten|%s|${HINT}", cat);

@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48155 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <pthread.h>
 #include <stdlib.h>
@@ -1818,7 +1818,12 @@ static int park_exec(struct ast_channel *chan, void *data)
 			ast_verbose(VERBOSE_PREFIX_3 "Channel %s connected to parked call %d\n", chan->name, park);
 
 		memset(&config, 0, sizeof(struct ast_bridge_config));
+		ast_set_flag(&(config.features_callee), AST_FEATURE_REDIRECT);
+		ast_set_flag(&(config.features_caller), AST_FEATURE_REDIRECT);
 		res = ast_bridge_call(chan, peer, &config);
+
+		pbx_builtin_setvar_helper(chan, "PARKEDCHANNEL", peer->name);
+		ast_cdr_setdestchan(chan->cdr, peer->name);
 
 		/* Simulate the PBX hanging up */
 		if (res != AST_PBX_NO_HANGUP_PEER)
@@ -1927,10 +1932,10 @@ static struct ast_cli_entry cli_features[] = {
 };
 
 /*! \brief Dump lot status */
-static int manager_parking_status( struct mansession *s, struct message *m )
+static int manager_parking_status( struct mansession *s, const struct message *m)
 {
 	struct parkeduser *cur;
-	char *id = astman_get_header(m,"ActionID");
+	const char *id = astman_get_header(m,"ActionID");
 	char idText[256] = "";
 
 	if (!ast_strlen_zero(id))
@@ -1974,11 +1979,11 @@ static char mandescr_park[] =
 "	*Channel2: Channel to announce park info to (and return to if timeout)\n"
 "	Timeout: Number of milliseconds to wait before callback.\n";  
 
-static int manager_park(struct mansession *s, struct message *m)
+static int manager_park(struct mansession *s, const struct message *m)
 {
-	char *channel = astman_get_header(m, "Channel");
-	char *channel2 = astman_get_header(m, "Channel2");
-	char *timeout = astman_get_header(m, "Timeout");
+	const char *channel = astman_get_header(m, "Channel");
+	const char *channel2 = astman_get_header(m, "Channel2");
+	const char *timeout = astman_get_header(m, "Timeout");
 	char buf[BUFSIZ];
 	int to = 0;
 	int res = 0;
@@ -2277,7 +2282,7 @@ static int load_config(void)
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", parking_con);
 		return -1;
 	}
-	res = ast_add_extension2(con, 1, ast_parking_ext(), 1, NULL, NULL, parkcall, strdup(""), ast_free, registrar);
+	res = ast_add_extension2(con, 1, ast_parking_ext(), 1, NULL, NULL, parkcall, NULL, NULL, registrar);
 	if (parkaddhints)
 		park_add_hints(parking_con, parking_start, parking_stop);
 	if (!res)

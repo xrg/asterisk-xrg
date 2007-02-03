@@ -26,7 +26,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48382 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -35,6 +35,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48382 $")
 #include <regex.h>
 
 #include "asterisk/module.h"
+#include "asterisk/options.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/logger.h"
@@ -45,7 +46,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48382 $")
 static int function_fieldqty(struct ast_channel *chan, char *cmd,
 			     char *parse, char *buf, size_t len)
 {
-	char *varval;
+	char *varsubst, varval[8192] = "", *varval2 = varval;
 	int fieldcount = 0;
 	AST_DECLARE_APP_ARGS(args,
 			     AST_APP_ARG(varname);
@@ -54,8 +55,11 @@ static int function_fieldqty(struct ast_channel *chan, char *cmd,
 
 	AST_STANDARD_APP_ARGS(args, parse);
 	if (args.delim) {
-		pbx_retrieve_variable(chan, args.varname, &varval, buf, len, NULL);
-		while (strsep(&varval, args.delim))
+		varsubst = alloca(strlen(args.varname) + 4);
+
+		sprintf(varsubst, "${%s}", args.varname);
+		pbx_substitute_variables_helper(chan, varsubst, varval, sizeof(varval) - 1);
+		while (strsep(&varval2, args.delim))
 			fieldcount++;
 	} else {
 		fieldcount = 1;
@@ -126,7 +130,8 @@ static int regex(struct ast_channel *chan, char *cmd, char *parse, char *buf,
 	if ((*args.str == ' ') || (*args.str == '\t'))
 		args.str++;
 
-	ast_log(LOG_DEBUG, "FUNCTION REGEX (%s)(%s)\n", args.reg, args.str);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "FUNCTION REGEX (%s)(%s)\n", args.reg, args.str);
 
 	if ((errcode = regcomp(&regexbuf, args.reg, REG_EXTENDED | REG_NOSUB))) {
 		regerror(errcode, &regexbuf, buf, len);
@@ -175,7 +180,8 @@ static int array(struct ast_channel *chan, char *cmd, char *var,
 	 * want them to be surprised by the result.  Hence, we prefer commas as the
 	 * delimiter, but we'll fall back to vertical bars if commas aren't found.
 	 */
-	ast_log(LOG_DEBUG, "array (%s=%s)\n", var, value2);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "array (%s=%s)\n", var, value2);
 	if (strchr(var, ','))
 		AST_NONSTANDARD_APP_ARGS(arg1, var, ',');
 	else
@@ -187,8 +193,9 @@ static int array(struct ast_channel *chan, char *cmd, char *var,
 		AST_STANDARD_APP_ARGS(arg2, value2);
 
 	for (i = 0; i < arg1.argc; i++) {
-		ast_log(LOG_DEBUG, "array set value (%s=%s)\n", arg1.var[i],
-			arg2.val[i]);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "array set value (%s=%s)\n", arg1.var[i],
+				arg2.val[i]);
 		if (i < arg2.argc) {
 			pbx_builtin_setvar_helper(chan, arg1.var[i], arg2.val[i]);
 		} else {

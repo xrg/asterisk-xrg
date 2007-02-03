@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47701 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <errno.h>
@@ -796,10 +796,9 @@ int ast_streamfile(struct ast_channel *chan, const char *filename, const char *p
 			return -1;
 		if (vfs && ast_playstream(vfs))
 			return -1;
-#if 1
 		if (option_verbose > 2)
-			ast_verbose(VERBOSE_PREFIX_3 "Playing '%s' (language '%s')\n", filename, preflang ? preflang : "default");
-#endif
+			ast_verbose(VERBOSE_PREFIX_3 "<%s> Playing '%s' (language '%s')\n", chan->name, filename, preflang ? preflang : "default");
+
 		return 0;
 	}
 	ast_log(LOG_WARNING, "Unable to open %s (format %s): %s\n", filename, ast_getformatname_multiple(fmt, sizeof(fmt), chan->nativeformats), strerror(errno));
@@ -1134,7 +1133,7 @@ static int show_file_formats(int fd, int argc, char *argv[])
 	struct ast_format *f;
 	int count_fmt = 0;
 
-	if (argc != 3)
+	if (argc != 4)
 		return RESULT_SHOWUSAGE;
 	ast_cli(fd, FORMAT, "Format", "Name", "Extensions");
 	        
@@ -1154,13 +1153,40 @@ static int show_file_formats(int fd, int argc, char *argv[])
 #undef FORMAT2
 }
 
+static int show_file_formats_deprecated(int fd, int argc, char *argv[])
+{
+#define FORMAT "%-10s %-10s %-20s\n"
+#define FORMAT2 "%-10s %-10s %-20s\n"
+	struct ast_format *f;
+	int count_fmt = 0;
+	
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+	ast_cli(fd, FORMAT, "Format", "Name", "Extensions");
+	
+	if (AST_LIST_LOCK(&formats)) {
+		ast_log(LOG_WARNING, "Unable to lock format list\n");
+		return -1;
+	}
+	
+	AST_LIST_TRAVERSE(&formats, f, list) {
+		ast_cli(fd, FORMAT2, ast_getformatname(f->format), f->name, f->exts);
+		count_fmt++;
+	}
+	AST_LIST_UNLOCK(&formats);
+	ast_cli(fd, "%d file formats registered.\n", count_fmt);
+	return RESULT_SUCCESS;
+#undef FORMAT
+#undef FORMAT2
+}
+
 char show_file_formats_usage[] = 
 "Usage: core show file formats\n"
 "       Displays currently registered file formats (if any)\n";
 
 struct ast_cli_entry cli_show_file_formats_deprecated = {
 	{ "show", "file", "formats" },
-	show_file_formats, NULL,
+	show_file_formats_deprecated, NULL,
 	NULL };
 
 struct ast_cli_entry cli_file[] = {

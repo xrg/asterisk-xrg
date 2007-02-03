@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <string.h>
@@ -65,9 +65,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
 
 static const char tdesc[] = "Feature Proxy Channel Driver";
 
-static int usecnt =0;
-AST_MUTEX_DEFINE_STATIC(usecnt_lock);
-
 #define IS_OUTBOUND(a,b) (a == b->chan ? 1 : 0)
 
 struct feature_sub {
@@ -96,7 +93,7 @@ static AST_LIST_HEAD_STATIC(features, feature_pvt);
 
 static struct ast_channel *features_request(const char *type, int format, void *data, int *cause);
 static int features_digit_begin(struct ast_channel *ast, char digit);
-static int features_digit_end(struct ast_channel *ast, char digit);
+static int features_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
 static int features_call(struct ast_channel *ast, char *dest, int timeout);
 static int features_hangup(struct ast_channel *ast);
 static int features_answer(struct ast_channel *ast);
@@ -318,7 +315,7 @@ static int features_digit_begin(struct ast_channel *ast, char digit)
 	return res;
 }
 
-static int features_digit_end(struct ast_channel *ast, char digit)
+static int features_digit_end(struct ast_channel *ast, char digit, unsigned int duration)
 {
 	struct feature_pvt *p = ast->tech_pvt;
 	int res = -1;
@@ -328,7 +325,7 @@ static int features_digit_end(struct ast_channel *ast, char digit)
 	ast_mutex_lock(&p->lock);
 	x = indexof(p, ast, 0);
 	if (!x && p->subchan)
-		res = ast_senddigit_end(p->subchan, digit);
+		res = ast_senddigit_end(p->subchan, digit, duration);
 	ast_mutex_unlock(&p->lock);
 	return res;
 }
@@ -492,10 +489,7 @@ static struct ast_channel *features_new(struct feature_pvt *p, int state, int in
 	p->subs[index].owner = tmp;
 	if (!p->owner)
 		p->owner = tmp;
-	ast_mutex_lock(&usecnt_lock);
-	usecnt++;
-	ast_mutex_unlock(&usecnt_lock);
-	ast_update_use_count();
+	ast_module_ref(ast_module_info->self);
 	return tmp;
 }
 

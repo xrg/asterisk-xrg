@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48379 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -159,7 +159,7 @@ enum {
 enum {
 	OPT_ARG_WAITMARKED = 0,
 	OPT_ARG_ARRAY_SIZE = 1,
-} meetme_option_args;
+};
 
 AST_APP_OPTIONS(meetme_opts, {
 	AST_APP_OPTION('A', CONFFLAG_MARKEDUSER ),
@@ -293,7 +293,6 @@ static const char *descripslat =
 "other participants in the conference, all member stations are invited into\n"
 "the bridge.\n";
 
-#define CONFIG_FILE_NAME "meetme.conf"
 #define CONFIG_FILE_NAME_SLA "sla.conf"
 
 /*! \brief The MeetMe Conference object */
@@ -375,9 +374,6 @@ struct ast_sla_box {
 	ASTOBJ_CONTAINER_COMPONENTS(struct ast_sla);
 } slas;
 
-static int audio_buffers;			/*!< The number of audio buffers to be allocated on pseudo channels
-						   when in a conference
-						*/
 /*! The number of audio buffers to be allocated on pseudo channels
  *  when in a conference */
 static int audio_buffers;
@@ -1076,6 +1072,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		pthread_attr_init(&conf->attr);
 		pthread_attr_setdetachstate(&conf->attr, PTHREAD_CREATE_DETACHED);
 		ast_pthread_create_background(&conf->recordthread, &conf->attr, recordthread, conf);
+		pthread_attr_destroy(&conf->attr);
 	}
 
 	time(&user->jointime);
@@ -1961,25 +1958,21 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 		if (!strcmp(confno, cnf->confno)) 
 			break;
 	}
-	if (cnf){
+	if (cnf) {
 		cnf->refcount += refcount;
 	}
 	AST_LIST_UNLOCK(&confs);
 
 	if (!cnf) {
 		char *pin = NULL, *pinadmin = NULL; /* For temp use */
-
-		cnf = ast_calloc(1, sizeof(struct ast_conference));
-		if (!cnf) {
-			ast_log(LOG_ERROR, "Out of memory\n");
-			return NULL;
-		}
-
+		
 		var = ast_load_realtime("meetme", "confno", confno, NULL);
+
+		if (!var)
+			return NULL;
+
 		while (var) {
-			if (!strcasecmp(var->name, "confno")) {
-				ast_copy_string(cnf->confno, var->value, sizeof(cnf->confno));
-			} else if (!strcasecmp(var->name, "pin")) {
+			if (!strcasecmp(var->name, "pin")) {
 				pin = ast_strdupa(var->value);
 			} else if (!strcasecmp(var->name, "adminpin")) {
 				pinadmin = ast_strdupa(var->value);
@@ -1987,7 +1980,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 			var = var->next;
 		}
 		ast_variables_destroy(var);
-
+		
 		cnf = build_conf(confno, pin ? pin : "", pinadmin ? pinadmin : "", make, dynamic, refcount);
 	}
 
@@ -2755,12 +2748,12 @@ static int admin_exec(struct ast_channel *chan, void *data) {
 	return 0;
 }
 
-static int meetmemute(struct mansession *s, struct message *m, int mute)
+static int meetmemute(struct mansession *s, const struct message *m, int mute)
 {
 	struct ast_conference *conf;
 	struct ast_conf_user *user;
-	char *confid = astman_get_header(m, "Meetme");
-	char *userid = astman_get_header(m, "Usernum");
+	const char *confid = astman_get_header(m, "Meetme");
+	char *userid = ast_strdupa(astman_get_header(m, "Usernum"));
 	int userno;
 
 	if (ast_strlen_zero(confid)) {
@@ -2816,12 +2809,12 @@ static int meetmemute(struct mansession *s, struct message *m, int mute)
 	return 0;
 }
 
-static int action_meetmemute(struct mansession *s, struct message *m)
+static int action_meetmemute(struct mansession *s, const struct message *m)
 {
 	return meetmemute(s, m, 1);
 }
 
-static int action_meetmeunmute(struct mansession *s, struct message *m)
+static int action_meetmeunmute(struct mansession *s, const struct message *m)
 {
 	return meetmemute(s, m, 0);
 }

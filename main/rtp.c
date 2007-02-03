@@ -77,18 +77,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static int dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 
-static int rtpstart = 0;		/*!< First port for RTP sessions (set in rtp.conf) */
-static int rtpend = 0;			/*!< Last port for RTP sessions (set in rtp.conf) */
-static int rtpdebug = 0;		/*!< Are we debugging? */
-static int rtcpdebug = 0;		/*!< Are we debugging RTCP? */
-static int rtcpstats = 0;		/*!< Are we debugging RTCP? */
+static int rtpstart;			/*!< First port for RTP sessions (set in rtp.conf) */
+static int rtpend;			/*!< Last port for RTP sessions (set in rtp.conf) */
+static int rtpdebug;			/*!< Are we debugging? */
+static int rtcpdebug;			/*!< Are we debugging RTCP? */
+static int rtcpstats;			/*!< Are we debugging RTCP? */
 static int rtcpinterval = RTCP_DEFAULT_INTERVALMS; /*!< Time between rtcp reports in millisecs */
-static int stundebug = 0;		/*!< Are we debugging stun? */
+static int stundebug;			/*!< Are we debugging stun? */
 static struct sockaddr_in rtpdebugaddr;	/*!< Debug packets to/from this host */
 static struct sockaddr_in rtcpdebugaddr;	/*!< Debug RTCP packets to/from this host */
 #ifdef SO_NO_CHECK
-static int nochecksums = 0;
+static int nochecksums;
 #endif
+
+/* Uncomment this to enable more intense native bridging, but note: this is currently buggy */
+/* #define P2P_INTENSE */
 
 /*!
  * \brief Structure representing a RTP session.
@@ -137,10 +140,11 @@ struct ast_rtp {
 	char resp;
 	unsigned int lasteventendseqn;
 	int dtmfcount;
-	unsigned int dtmfduration;
+	unsigned int dtmfsamples;
 	/* DTMF Transmission Variables */
 	unsigned int lastdigitts;
-	char send_digit;
+	char sending_digit;	/* boolean - are we sending digits */
+	char send_digit;	/* digit we are sending */
 	int send_payload;
 	int send_duration;
 	int nat;
@@ -588,6 +592,11 @@ void ast_rtp_setnat(struct ast_rtp *rtp, int nat)
 	rtp->nat = nat;
 }
 
+int ast_rtp_getnat(struct ast_rtp *rtp)
+{
+	return ast_test_flag(rtp, FLAG_NAT_ACTIVE);
+}
+
 void ast_rtp_setdtmf(struct ast_rtp *rtp, int dtmf)
 {
 	ast_set2_flag(rtp, dtmf ? 1 : 0, FLAG_HAS_DTMF);
@@ -610,7 +619,7 @@ static struct ast_frame *send_dtmf(struct ast_rtp *rtp, enum ast_frame_type type
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Ignore potential DTMF echo from '%s'\n", ast_inet_ntoa(rtp->them.sin_addr));
 		rtp->resp = 0;
-		rtp->dtmfduration = 0;
+		rtp->dtmfsamples = 0;
 		return &ast_null_frame;
 	}
 	if (option_debug)
@@ -700,18 +709,18 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 {
 	unsigned int event;
 	unsigned int event_end;
-	unsigned int duration;
+	unsigned int samples;
 	char resp = 0;
 	struct ast_frame *f = NULL;
 
-	/* Figure out event, event end, and duration */
+	/* Figure out event, event end, and samples */
 	event = ntohl(*((unsigned int *)(data)));
 	event >>= 24;
 	event_end = ntohl(*((unsigned int *)(data)));
 	event_end <<= 8;
 	event_end >>= 24;
-	duration = ntohl(*((unsigned int *)(data)));
-	duration &= 0xFFFF;
+	samples = ntohl(*((unsigned int *)(data)));
+	samples &= 0xFFFF;
 
 	/* Print out debug if turned on */
 	if (rtpdebug || option_debug > 2)
@@ -736,19 +745,19 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 			f = send_dtmf(rtp, AST_FRAME_DTMF_BEGIN);
 	} else if (event_end & 0x80 && rtp->lasteventendseqn != seqno && rtp->resp) {
 		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
-		f->samples = duration;
+		f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
 		rtp->resp = 0;
 		rtp->lasteventendseqn = seqno;
 	} else if (ast_test_flag(rtp, FLAG_DTMF_COMPENSATE) && event_end & 0x80 && rtp->lasteventendseqn != seqno) {
 		rtp->resp = resp;
 		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
-		f->samples = duration;
+		f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
 		rtp->resp = 0;
 		rtp->lasteventendseqn = seqno;
 	}
 
 	rtp->dtmfcount = dtmftimeout;
-	rtp->dtmfduration = duration;
+	rtp->dtmfsamples = samples;
 
 	return f;
 }
@@ -1056,11 +1065,11 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 				ast_log(LOG_DEBUG, "RTP NAT: Can't write RTP to private address %s:%d, waiting for other end to send audio...\n", ast_inet_ntoa(bridged->them.sin_addr), ntohs(bridged->them.sin_port));
 			ast_set_flag(bridged, FLAG_NAT_INACTIVE_NOWARN);
 		}
-		return -1;
+		return 0;
 	} else if (rtp_debug_test_addr(&bridged->them))
-			ast_verbose("Sent RTP P2P packet to %s:%d (type %-2.2d, len %-6.6u)\n", ast_inet_ntoa(bridged->them.sin_addr), ntohs(bridged->them.sin_port), bridged_payload, len - hdrlen);
+			ast_verbose("Sent RTP P2P packet to %s:%u (type %-2.2d, len %-6.6u)\n", ast_inet_ntoa(bridged->them.sin_addr), ntohs(bridged->them.sin_port), bridged_payload, len - hdrlen);
 
-	return -1;
+	return 0;
 }
 
 struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
@@ -1083,7 +1092,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	struct ast_rtp *bridged = NULL;
 	
 	/* If time is up, kill it */
-	if (rtp->send_digit)
+	if (rtp->sending_digit)
 		ast_rtp_senddigit_continuation(rtp);
 
 	len = sizeof(sin);
@@ -1206,7 +1215,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		rtp->themssrc = ntohl(rtpheader[2]); /* Record their SSRC to put in future RR */
 	
 	if (rtp_debug_test_addr(&sin))
-		ast_verbose("Got  RTP packet from    %s:%d (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
+		ast_verbose("Got  RTP packet from    %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
 			ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp,res - hdrlen);
 
 	rtpPT = ast_rtp_lookup_pt(rtp, payloadtype);
@@ -1229,7 +1238,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 				event_end >>= 24;
 				duration = ntohl(*((unsigned int *)(data)));
 				duration &= 0xFFFF;
-				ast_verbose("Got  RTP RFC2833 from   %s:%d (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u, mark %d, event %08x, end %d, duration %-5.5d) \n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp, res - hdrlen, (mark?1:0), event, ((event_end & 0x80)?1:0), duration);
+				ast_verbose("Got  RTP RFC2833 from   %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u, mark %d, event %08x, end %d, duration %-5.5d) \n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp, res - hdrlen, (mark?1:0), event, ((event_end & 0x80)?1:0), duration);
 			}
 			f = process_rfc2833(rtp, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno);
 		} else if (rtpPT.code == AST_RTP_CISCO_DTMF) {
@@ -1798,6 +1807,23 @@ static struct ast_rtcp *ast_rtcp_new(void)
 	return rtcp;
 }
 
+/*!
+ * \brief Initialize a new RTP structure.
+ *
+ */
+void ast_rtp_new_init(struct ast_rtp *rtp)
+{
+	ast_mutex_init(&rtp->bridge_lock);
+
+	rtp->them.sin_family = AF_INET;
+	rtp->us.sin_family = AF_INET;
+	rtp->ssrc = ast_random();
+	rtp->seqno = ast_random() & 0xffff;
+	ast_set_flag(rtp, FLAG_HAS_DTMF);
+
+	return;
+}
+
 struct ast_rtp *ast_rtp_new_with_bindaddr(struct sched_context *sched, struct io_context *io, int rtcpenable, int callbackmode, struct in_addr addr)
 {
 	struct ast_rtp *rtp;
@@ -1808,14 +1834,9 @@ struct ast_rtp *ast_rtp_new_with_bindaddr(struct sched_context *sched, struct io
 	if (!(rtp = ast_calloc(1, sizeof(*rtp))))
 		return NULL;
 
-	ast_mutex_init(&rtp->bridge_lock);
+	ast_rtp_new_init(rtp);
 
-	rtp->them.sin_family = AF_INET;
-	rtp->us.sin_family = AF_INET;
 	rtp->s = rtp_socket();
-	rtp->ssrc = ast_random();
-	rtp->seqno = ast_random() & 0xffff;
-	ast_set_flag(rtp, FLAG_HAS_DTMF);
 	if (rtp->s < 0) {
 		free(rtp);
 		ast_log(LOG_ERROR, "Unable to allocate socket: %s\n", strerror(errno));
@@ -1979,7 +2000,7 @@ void ast_rtp_reset(struct ast_rtp *rtp)
 	rtp->lasttxformat = 0;
 	rtp->lastrxformat = 0;
 	rtp->dtmfcount = 0;
-	rtp->dtmfduration = 0;
+	rtp->dtmfsamples = 0;
 	rtp->seqno = 0;
 	rtp->rxseqno = 0;
 }
@@ -2102,11 +2123,11 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 		rtpheader[3] = htonl((digit << 24) | (0xa << 16) | (rtp->send_duration));
 		res = sendto(rtp->s, (void *) rtpheader, hdrlen + 4, 0, (struct sockaddr *) &rtp->them, sizeof(rtp->them));
 		if (res < 0) 
-			ast_log(LOG_ERROR, "RTP Transmission error to %s:%d: %s\n",
+			ast_log(LOG_ERROR, "RTP Transmission error to %s:%u: %s\n",
 				ast_inet_ntoa(rtp->them.sin_addr),
 				ntohs(rtp->them.sin_port), strerror(errno));
 		if (rtp_debug_test_addr(&rtp->them))
-			ast_verbose("Sent RTP DTMF packet to %s:%d (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
+			ast_verbose("Sent RTP DTMF packet to %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
 				    ast_inet_ntoa(rtp->them.sin_addr),
 				    ntohs(rtp->them.sin_port), payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 		/* Increment sequence number */
@@ -2118,6 +2139,7 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 	}
 
 	/* Since we received a begin, we can safely store the digit and disable any compensation */
+	rtp->sending_digit = 1;
 	rtp->send_digit = digit;
 	rtp->send_payload = payload;
 
@@ -2149,7 +2171,7 @@ static int ast_rtp_senddigit_continuation(struct ast_rtp *rtp)
 			ast_inet_ntoa(rtp->them.sin_addr),
 			ntohs(rtp->them.sin_port), strerror(errno));
 	if (rtp_debug_test_addr(&rtp->them))
-		ast_verbose("Sent RTP DTMF packet to %s:%d (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
+		ast_verbose("Sent RTP DTMF packet to %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
 			    ast_inet_ntoa(rtp->them.sin_addr),
 			    ntohs(rtp->them.sin_port), rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 
@@ -2205,10 +2227,11 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit)
 				ast_inet_ntoa(rtp->them.sin_addr),
 				ntohs(rtp->them.sin_port), strerror(errno));
 		if (rtp_debug_test_addr(&rtp->them))
-			ast_verbose("Sent RTP DTMF packet to %s:%d (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
+			ast_verbose("Sent RTP DTMF packet to %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
 				    ast_inet_ntoa(rtp->them.sin_addr),
 				    ntohs(rtp->them.sin_port), rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
+	rtp->sending_digit = 0;
 	rtp->send_digit = 0;
 	/* Increment lastdigitts */
 	rtp->lastdigitts += 960;
@@ -2365,7 +2388,7 @@ static int ast_rtcp_write_rr(void *data)
 		return 0;
 	  
 	if (!rtp->rtcp->them.sin_addr.s_addr) {
-		ast_log(LOG_ERROR, "RTCP RR transmission error to, rtcp halted %s\n",strerror(errno));
+		ast_log(LOG_ERROR, "RTCP RR transmission error, rtcp halted\n");
 		if (rtp->rtcp->schedid > 0)
 			ast_sched_del(rtp->sched, rtp->rtcp->schedid);
 		rtp->rtcp->schedid = -1;
@@ -2484,7 +2507,7 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level)
 		if (res <0) 
 			ast_log(LOG_ERROR, "RTP Comfort Noise Transmission error to %s:%d: %s\n", ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), strerror(errno));
 		if (rtp_debug_test_addr(&rtp->them))
-			ast_verbose("Sent Comfort Noise RTP packet to %s:%d (type %d, seq %d, ts %u, len %d)\n"
+			ast_verbose("Sent Comfort Noise RTP packet to %s:%u (type %d, seq %u, ts %u, len %d)\n"
 					, ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), payload, rtp->seqno, rtp->lastts,res - hdrlen);		   
 		   
 	}
@@ -2571,7 +2594,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 		}
 				
 		if (rtp_debug_test_addr(&rtp->them))
-			ast_verbose("Sent RTP packet to      %s:%d (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
+			ast_verbose("Sent RTP packet to      %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
 					ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), codec, rtp->seqno, rtp->lastts,res - hdrlen);
 	}
 
@@ -2723,7 +2746,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 	int oldcodec0 = codec0, oldcodec1 = codec1;
 	struct sockaddr_in ac1 = {0,}, vac1 = {0,}, ac0 = {0,}, vac0 = {0,};
 	struct sockaddr_in t1 = {0,}, vt1 = {0,}, t0 = {0,}, vt0 = {0,};
-
+	
 	/* Set it up so audio goes directly between the two endpoints */
 
 	/* Test the first channel */
@@ -2841,7 +2864,20 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 			if ((fr->subclass == AST_CONTROL_HOLD) ||
 			    (fr->subclass == AST_CONTROL_UNHOLD) ||
 			    (fr->subclass == AST_CONTROL_VIDUPDATE)) {
-				ast_indicate(other, fr->subclass);
+				if (fr->subclass == AST_CONTROL_HOLD) {
+					/* If we someone went on hold we want the other side to reinvite back to us */
+					if (who == c0)
+						pr1->set_rtp_peer(c1, NULL, NULL, 0, 0);
+					else
+						pr0->set_rtp_peer(c0, NULL, NULL, 0, 0);
+				} else if (fr->subclass == AST_CONTROL_UNHOLD) {
+					/* If they went off hold they should go back to being direct */
+					if (who == c0)
+						pr1->set_rtp_peer(c1, p0, vp0, codec0, ast_test_flag(p0, FLAG_NAT_ACTIVE));
+					else
+						pr0->set_rtp_peer(c0, p1, vp1, codec1, ast_test_flag(p1, FLAG_NAT_ACTIVE));
+				}
+				ast_indicate_data(other, fr->subclass, fr->data, fr->datalen);
 				ast_frfree(fr);
 			} else {
 				*fo = fr;
@@ -2850,9 +2886,14 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 				return AST_BRIDGE_COMPLETE;
 			}
 		} else {
-			if ((fr->frametype == AST_FRAME_DTMF) ||
+			if ((fr->frametype == AST_FRAME_DTMF_BEGIN) ||
+			    (fr->frametype == AST_FRAME_DTMF) ||
 			    (fr->frametype == AST_FRAME_VOICE) ||
-			    (fr->frametype == AST_FRAME_VIDEO)) {
+			    (fr->frametype == AST_FRAME_VIDEO) ||
+			    (fr->frametype == AST_FRAME_IMAGE) ||
+			    (fr->frametype == AST_FRAME_HTML) ||
+			    (fr->frametype == AST_FRAME_MODEM) ||
+			    (fr->frametype == AST_FRAME_TEXT)) {
 				ast_write(other, fr);
 			}
 			ast_frfree(fr);
@@ -2867,6 +2908,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 }
 
 /*! \brief P2P RTP Callback */
+#ifdef P2P_INTENSE
 static int p2p_rtp_callback(int *id, int fd, short events, void *cbdata)
 {
 	int res = 0, hdrlen = 12;
@@ -2924,6 +2966,12 @@ static int p2p_callback_enable(struct ast_channel *chan, struct ast_rtp *rtp, in
 
 	return 1;
 }
+#else
+static int p2p_callback_enable(struct ast_channel *chan, struct ast_rtp *rtp, int *fds, int **iod)
+{
+	return 0;
+}
+#endif
 
 /*! \brief Helper function to switch a channel and RTP stream out of callback mode */
 static int p2p_callback_disable(struct ast_channel *chan, struct ast_rtp *rtp, int *fds, int **iod)
@@ -2988,6 +3036,10 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		    (c1->tech_pvt != pvt1) ||
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
+			if ((c0->masq || c0->masqr) && (fr = ast_read(c0)))
+				ast_frfree(fr);
+			if ((c1->masq || c1->masqr) && (fr = ast_read(c1)))
+				ast_frfree(fr);
 			res = AST_BRIDGE_RETRY;
 			break;
 		}
@@ -3038,7 +3090,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 					p0_callback = p2p_callback_enable(c0, p0, &p0_fds[0], &p0_iod[0]);
 					p1_callback = p2p_callback_enable(c1, p1, &p1_fds[0], &p1_iod[0]);
 				}
-				ast_indicate(other, fr->subclass);
+				ast_indicate_data(other, fr->subclass, fr->data, fr->datalen);
 				ast_frfree(fr);
 			} else {
 				*fo = fr;
@@ -3048,12 +3100,17 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 				break;
 			}
 		} else {
-			/* If this is a DTMF, voice, or video frame write it to the other channel */
-			if ((fr->frametype == AST_FRAME_DTMF) ||
+			if ((fr->frametype == AST_FRAME_DTMF_BEGIN) ||
+			    (fr->frametype == AST_FRAME_DTMF) ||
 			    (fr->frametype == AST_FRAME_VOICE) ||
-			    (fr->frametype == AST_FRAME_VIDEO)) {
+			    (fr->frametype == AST_FRAME_VIDEO) ||
+			    (fr->frametype == AST_FRAME_IMAGE) ||
+			    (fr->frametype == AST_FRAME_HTML) ||
+			    (fr->frametype == AST_FRAME_MODEM) ||
+			    (fr->frametype == AST_FRAME_TEXT)) {
 				ast_write(other, fr);
 			}
+
 			ast_frfree(fr);
 		}
 		/* Swap priority */
@@ -3143,6 +3200,30 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 
 	if (ast_test_flag(p1, FLAG_HAS_DTMF) && (flags & AST_BRIDGE_DTMF_CHANNEL_1)) {
 		ast_set_flag(p1, FLAG_P2P_NEED_DTMF);
+		audio_p1_res = AST_RTP_TRY_PARTIAL;
+	}
+
+	/* If both sides are not using the same method of DTMF transmission 
+	 * (ie: one is RFC2833, other is INFO... then we can not do direct media. 
+	 * --------------------------------------------------
+	 * | DTMF Mode |  HAS_DTMF  |  Accepts Begin Frames |
+	 * |-----------|------------|-----------------------|
+	 * | Inband    | False      | True                  |
+	 * | RFC2833   | True       | True                  |
+	 * | SIP INFO  | False      | False                 |
+	 * --------------------------------------------------
+	 * However, if DTMF from both channels is being monitored by the core, then
+	 * we can still do packet-to-packet bridging, because passing through the 
+	 * core will handle DTMF mode translation.
+	 */
+	if ( (ast_test_flag(p0, FLAG_HAS_DTMF) != ast_test_flag(p1, FLAG_HAS_DTMF)) ||
+		 (!c0->tech->send_digit_begin != !c1->tech->send_digit_begin)) {
+		if (!ast_test_flag(p0, FLAG_P2P_NEED_DTMF) || !ast_test_flag(p1, FLAG_P2P_NEED_DTMF)) {
+			ast_channel_unlock(c0);
+			ast_channel_unlock(c1);
+			return AST_BRIDGE_FAILED_NOWARN;
+		}
+		audio_p0_res = AST_RTP_TRY_PARTIAL;
 		audio_p1_res = AST_RTP_TRY_PARTIAL;
 	}
 

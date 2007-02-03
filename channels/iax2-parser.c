@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 41650 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -50,6 +50,7 @@ static int frames = 0;
 static int iframes = 0;
 static int oframes = 0;
 
+#if !defined(LOW_MEMORY)
 static void frame_cache_cleanup(void *data);
 
 /*! \brief A per-thread cache of iax_frame structures */
@@ -58,6 +59,7 @@ AST_THREADSTORAGE_CUSTOM(frame_cache, frame_cache_init, frame_cache_cleanup);
 /*! \brief This is just so iax_frames, a list head struct for holding a list of
  *  iax_frame structures, is defined. */
 AST_LIST_HEAD_NOLOCK(iax_frames, iax_frame);
+#endif
 
 static void internaloutput(const char *str)
 {
@@ -937,9 +939,11 @@ void iax_frame_wrap(struct iax_frame *fr, struct ast_frame *f)
 	}
 }
 
-struct iax_frame *iax_frame_new(int direction, int datalen)
+struct iax_frame *iax_frame_new(int direction, int datalen, unsigned int cacheable)
 {
 	struct iax_frame *fr = NULL;
+
+#if !defined(LOW_MEMORY)
 	struct iax_frames *iax_frames;
 
 	/* Attempt to get a frame from this thread's cache */
@@ -955,27 +959,37 @@ struct iax_frame *iax_frame_new(int direction, int datalen)
 		}
 		AST_LIST_TRAVERSE_SAFE_END
 	}
-
 	if (!fr) {
-		if (!(fr = ast_calloc(1, sizeof(*fr) + datalen)))
+		if (!(fr = ast_calloc_cache(1, sizeof(*fr) + datalen)))
 			return NULL;
 		fr->mallocd_datalen = datalen;
 	}
+#else
+	if (!(fr = ast_calloc(1, sizeof(*fr) + datalen)))
+		return NULL;
+	fr->mallocd_datalen = datalen;
+#endif
+
 
 	fr->direction = direction;
 	fr->retrans = -1;
+	fr->cacheable = cacheable;
 	
 	if (fr->direction == DIRECTION_INGRESS)
 		ast_atomic_fetchadd_int(&iframes, 1);
 	else
 		ast_atomic_fetchadd_int(&oframes, 1);
 	
+	ast_atomic_fetchadd_int(&frames, 1);
+
 	return fr;
 }
 
 void iax_frame_free(struct iax_frame *fr)
 {
+#if !defined(LOW_MEMORY)
 	struct iax_frames *iax_frames;
+#endif
 
 	/* Note: does not remove from scheduler! */
 	if (fr->direction == DIRECTION_INGRESS)
@@ -986,17 +1000,22 @@ void iax_frame_free(struct iax_frame *fr)
 		errorf("Attempt to double free frame detected\n");
 		return;
 	}
-	fr->direction = 0;
 	ast_atomic_fetchadd_int(&frames, -1);
 
-	if (!(iax_frames = ast_threadstorage_get(&frame_cache, sizeof(*iax_frames)))) {
+#if !defined(LOW_MEMORY)
+	if (!fr->cacheable || !(iax_frames = ast_threadstorage_get(&frame_cache, sizeof(*iax_frames)))) {
 		free(fr);
 		return;
 	}
 
+	fr->direction = 0;
 	AST_LIST_INSERT_HEAD(iax_frames, fr, list);
+#else
+	free(fr);
+#endif
 }
 
+#if !defined(LOW_MEMORY)
 static void frame_cache_cleanup(void *data)
 {
 	struct iax_frames *frames = data;
@@ -1007,6 +1026,7 @@ static void frame_cache_cleanup(void *data)
 
 	free(frames);
 }
+#endif
 
 int iax_get_frames(void) { return frames; }
 int iax_get_iframes(void) { return iframes; }

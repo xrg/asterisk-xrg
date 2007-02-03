@@ -749,7 +749,6 @@ static struct in_addr __ourip;
 struct ast_hostent ahp;
 struct hostent *hp;
 static int skinnysock = -1;
-static pthread_t tcp_thread;
 static pthread_t accept_t;
 static char context[AST_MAX_CONTEXT] = "default";
 static char language[MAX_LANGUAGE] = "";
@@ -868,10 +867,6 @@ static char *skinny_cxmodes[] = {
 /* driver scheduler */
 static struct sched_context *sched;
 static struct io_context *io;
-
-/* usage count and locking */
-static int usecnt = 0;
-AST_MUTEX_DEFINE_STATIC(usecnt_lock);
 
 /* Protect the monitoring thread, so only one process can kill or start it, and not
    when it's doing something critical. */
@@ -1033,7 +1028,7 @@ static int skinny_write(struct ast_channel *ast, struct ast_frame *frame);
 static int skinny_indicate(struct ast_channel *ast, int ind, const void *data, size_t datalen);
 static int skinny_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
 static int skinny_senddigit_begin(struct ast_channel *ast, char digit);
-static int skinny_senddigit_end(struct ast_channel *ast, char digit);
+static int skinny_senddigit_end(struct ast_channel *ast, char digit, unsigned int duration);
 
 static const struct ast_channel_tech skinny_tech = {
 	.type = "Skinny",
@@ -2567,7 +2562,7 @@ static int skinny_senddigit_begin(struct ast_channel *ast, char digit)
 	return -1; /* Start inband indications */
 }
 
-static int skinny_senddigit_end(struct ast_channel *ast, char digit)
+static int skinny_senddigit_end(struct ast_channel *ast, char digit, unsigned int duration)
 {
 #if 0
 	struct skinny_subchannel *sub = ast->tech_pvt;
@@ -2755,10 +2750,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		if (l->amaflags)
 			tmp->amaflags = l->amaflags;
 
-		ast_mutex_lock(&usecnt_lock);
-		usecnt++;
-		ast_mutex_unlock(&usecnt_lock);
-		ast_update_use_count();
+		ast_module_ref(ast_module_info->self);
 		tmp->callgroup = l->callgroup;
 		tmp->pickupgroup = l->pickupgroup;
 		ast_string_field_set(tmp, call_forward, l->call_forward);
@@ -4274,6 +4266,7 @@ static void *accept_thread(void *ignore)
 	struct protoent *p;
 	int arg = 1;
 	pthread_attr_t attr;
+	pthread_t tcp_thread;
 
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -4302,13 +4295,14 @@ static void *accept_thread(void *ignore)
 		sessions = s;
 		ast_mutex_unlock(&sessionlock);
 
-		if (ast_pthread_create(&tcp_thread, NULL, skinny_session, s)) {
+		if (ast_pthread_create(&tcp_thread, &attr, skinny_session, s)) {
 			destroy_session(s);
 		}
 	}
 	if (skinnydebug)
 		ast_verbose("killing accept thread\n");
 	close(as);
+	pthread_attr_destroy(&attr);
 	return 0;
 }
 
@@ -4683,13 +4677,6 @@ static int unload_module(void)
 	}
 	monitor_thread = AST_PTHREADT_STOP;
 	ast_mutex_unlock(&monlock);
-
-	if (tcp_thread && (tcp_thread != AST_PTHREADT_STOP)) {
-		pthread_cancel(tcp_thread);
-		pthread_kill(tcp_thread, SIGURG);
-		pthread_join(tcp_thread, NULL);
-	}
-	tcp_thread = AST_PTHREADT_STOP;
 
 	ast_mutex_lock(&netlock);
 	if (accept_t && (accept_t != AST_PTHREADT_STOP)) {

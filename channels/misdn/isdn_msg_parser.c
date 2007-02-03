@@ -326,6 +326,10 @@ static msg_t *build_setup (struct isdn_msg msgs[], struct misdn_bchannel *bc, in
     
 		enc_ie_bearer(&setup->BEARER, msg, coding, capability, mode, rate, -1, user, nt,bc);
 	}
+
+	if (bc->sending_complete) {
+		enc_ie_complete(&setup->BEARER,msg, bc->sending_complete, nt, bc);
+	}
   
 #if DEBUG 
 	printf("Building SETUP Msg\n"); 
@@ -812,10 +816,14 @@ static msg_t *build_restart (struct isdn_msg msgs[], struct misdn_bchannel *bc, 
 	msg_t *msg =(msg_t*)create_l3msg(CC_RESTART | REQUEST, MT_RESTART,  bc?bc->l3_id:-1, sizeof(RESTART_t) ,nt); 
  
 	restart=(RESTART_t*)((msg->data+HEADER_LEN)); 
-
+	
 #if DEBUG 
 	printf("Building RESTART Msg\n"); 
 #endif
+	enc_ie_channel_id(&restart->CHANNEL_ID, msg, 1,bc->channel, nt,bc);
+
+	cb_log(0,bc->port, "Restarting channel %d\n", bc->channel);
+	
 	return msg; 
 }
 

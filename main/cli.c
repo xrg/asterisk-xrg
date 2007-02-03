@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48179 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -541,9 +541,24 @@ static void print_uptimestr(int fd, time_t timeval, const char *prefix, int prin
 		ast_cli(fd, "%s: %s\n", prefix, timestr);
 }
 
-static int handle_showuptime(int fd, int argc, char *argv[])
+static int handle_showuptime_deprecated(int fd, int argc, char *argv[])
 {
 	/* 'show uptime [seconds]' */
+	time_t curtime = time(NULL);
+	int printsec = (argc == 3 && !strcasecmp(argv[2],"seconds"));
+
+	if (argc != 2 && !printsec)
+		return RESULT_SHOWUSAGE;
+	if (ast_startuptime)
+		print_uptimestr(fd, curtime - ast_startuptime, "System uptime", printsec);
+	if (ast_lastreloadtime)
+		print_uptimestr(fd, curtime - ast_lastreloadtime, "Last reload", printsec);
+	return RESULT_SUCCESS;
+}
+
+static int handle_showuptime(int fd, int argc, char *argv[])
+{
+	/* 'core show uptime [seconds]' */
 	time_t curtime = time(NULL);
 	int printsec = (argc == 4 && !strcasecmp(argv[3],"seconds"));
 
@@ -578,14 +593,94 @@ static int handle_modlist(int fd, int argc, char *argv[])
 #undef MODLIST_FORMAT
 #undef MODLIST_FORMAT2
 
-static int handle_chanlist(int fd, int argc, char *argv[])
-{
 #define FORMAT_STRING  "%-20.20s %-20.20s %-7.7s %-30.30s\n"
 #define FORMAT_STRING2 "%-20.20s %-20.20s %-7.7s %-30.30s\n"
 #define CONCISE_FORMAT_STRING  "%s!%s!%s!%d!%s!%s!%s!%s!%s!%d!%s!%s\n"
 #define VERBOSE_FORMAT_STRING  "%-20.20s %-20.20s %-16.16s %4d %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-20.20s\n"
 #define VERBOSE_FORMAT_STRING2 "%-20.20s %-20.20s %-16.16s %-4.4s %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-20.20s\n"
 
+static int handle_chanlist_deprecated(int fd, int argc, char *argv[])
+{
+	struct ast_channel *c = NULL;
+	char durbuf[10] = "-";
+	char locbuf[40];
+	char appdata[40];
+	int duration;
+	int durh, durm, durs;
+	int numchans = 0, concise = 0, verbose = 0;
+
+	concise = (argc == 3 && (!strcasecmp(argv[2],"concise")));
+	verbose = (argc == 3 && (!strcasecmp(argv[2],"verbose")));
+
+	if (argc < 2 || argc > 3 || (argc == 3 && !concise && !verbose))
+		return RESULT_SHOWUSAGE;
+
+	if (!concise && !verbose)
+		ast_cli(fd, FORMAT_STRING2, "Channel", "Location", "State", "Application(Data)");
+	else if (verbose)
+		ast_cli(fd, VERBOSE_FORMAT_STRING2, "Channel", "Context", "Extension", "Priority", "State", "Application", "Data", 
+		        "CallerID", "Duration", "Accountcode", "BridgedTo");
+
+	while ((c = ast_channel_walk_locked(c)) != NULL) {
+		struct ast_channel *bc = ast_bridged_channel(c);
+		if ((concise || verbose)  && c->cdr && !ast_tvzero(c->cdr->start)) {
+			duration = (int)(ast_tvdiff_ms(ast_tvnow(), c->cdr->start) / 1000);
+			if (verbose) {
+				durh = duration / 3600;
+				durm = (duration % 3600) / 60;
+				durs = duration % 60;
+				snprintf(durbuf, sizeof(durbuf), "%02d:%02d:%02d", durh, durm, durs);
+			} else {
+				snprintf(durbuf, sizeof(durbuf), "%d", duration);
+			}				
+		} else {
+			durbuf[0] = '\0';
+		}
+		if (concise) {
+			ast_cli(fd, CONCISE_FORMAT_STRING, c->name, c->context, c->exten, c->priority, ast_state2str(c->_state),
+			        c->appl ? c->appl : "(None)",
+				S_OR(c->data, ""),	/* XXX different from verbose ? */
+			        S_OR(c->cid.cid_num, ""),
+			        S_OR(c->accountcode, ""),
+				c->amaflags, 
+			        durbuf,
+				bc ? bc->name : "(None)");
+		} else if (verbose) {
+			ast_cli(fd, VERBOSE_FORMAT_STRING, c->name, c->context, c->exten, c->priority, ast_state2str(c->_state),
+			        c->appl ? c->appl : "(None)",
+				c->data ? S_OR(c->data, "(Empty)" ): "(None)",
+			        S_OR(c->cid.cid_num, ""),
+				durbuf,
+			        S_OR(c->accountcode, ""),
+				bc ? bc->name : "(None)");
+		} else {
+			if (!ast_strlen_zero(c->context) && !ast_strlen_zero(c->exten)) 
+				snprintf(locbuf, sizeof(locbuf), "%s@%s:%d", c->exten, c->context, c->priority);
+			else
+				strcpy(locbuf, "(None)");
+			if (c->appl)
+				snprintf(appdata, sizeof(appdata), "%s(%s)", c->appl, c->data ? c->data : "");
+			else
+				strcpy(appdata, "(None)");
+			ast_cli(fd, FORMAT_STRING, c->name, locbuf, ast_state2str(c->_state), appdata);
+		}
+		numchans++;
+		ast_channel_unlock(c);
+	}
+	if (!concise) {
+		ast_cli(fd, "%d active channel%s\n", numchans, ESS(numchans));
+		if (option_maxcalls)
+			ast_cli(fd, "%d of %d max active call%s (%5.2f%% of capacity)\n",
+				ast_active_calls(), option_maxcalls, ESS(ast_active_calls()),
+				((double)ast_active_calls() / (double)option_maxcalls) * 100.0);
+		else
+			ast_cli(fd, "%d active call%s\n", ast_active_calls(), ESS(ast_active_calls()));
+	}
+	return RESULT_SUCCESS;
+}
+	
+static int handle_chanlist(int fd, int argc, char *argv[])
+{
 	struct ast_channel *c = NULL;
 	char durbuf[10] = "-";
 	char locbuf[40];
@@ -662,13 +757,13 @@ static int handle_chanlist(int fd, int argc, char *argv[])
 			ast_cli(fd, "%d active call%s\n", ast_active_calls(), ESS(ast_active_calls()));
 	}
 	return RESULT_SUCCESS;
+}
 	
 #undef FORMAT_STRING
 #undef FORMAT_STRING2
 #undef CONCISE_FORMAT_STRING
 #undef VERBOSE_FORMAT_STRING
 #undef VERBOSE_FORMAT_STRING2
-}
 
 static char showchan_help[] = 
 "Usage: core show channel <channel>\n"
@@ -894,6 +989,90 @@ static int handle_nodebugchan_deprecated(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 		
+static int handle_showchan_deprecated(int fd, int argc, char *argv[])
+{
+	struct ast_channel *c=NULL;
+	struct timeval now;
+	char buf[2048];
+	char cdrtime[256];
+	char nf[256], wf[256], rf[256];
+	long elapsed_seconds=0;
+	int hour=0, min=0, sec=0;
+	
+	if (argc != 3)
+		return RESULT_SHOWUSAGE;
+	now = ast_tvnow();
+	c = ast_get_channel_by_name_locked(argv[2]);
+	if (!c) {
+		ast_cli(fd, "%s is not a known channel\n", argv[2]);
+		return RESULT_SUCCESS;
+	}
+	if(c->cdr) {
+		elapsed_seconds = now.tv_sec - c->cdr->start.tv_sec;
+		hour = elapsed_seconds / 3600;
+		min = (elapsed_seconds % 3600) / 60;
+		sec = elapsed_seconds % 60;
+		snprintf(cdrtime, sizeof(cdrtime), "%dh%dm%ds", hour, min, sec);
+	} else
+		strcpy(cdrtime, "N/A");
+	ast_cli(fd, 
+		" -- General --\n"
+		"           Name: %s\n"
+		"           Type: %s\n"
+		"       UniqueID: %s\n"
+		"      Caller ID: %s\n"
+		" Caller ID Name: %s\n"
+		"    DNID Digits: %s\n"
+		"          State: %s (%d)\n"
+		"          Rings: %d\n"
+		"  NativeFormats: %s\n"
+		"    WriteFormat: %s\n"
+		"     ReadFormat: %s\n"
+		" WriteTranscode: %s\n"
+		"  ReadTranscode: %s\n"
+		"1st File Descriptor: %d\n"
+		"      Frames in: %d%s\n"
+		"     Frames out: %d%s\n"
+		" Time to Hangup: %ld\n"
+		"   Elapsed Time: %s\n"
+		"  Direct Bridge: %s\n"
+		"Indirect Bridge: %s\n"
+		" --   PBX   --\n"
+		"        Context: %s\n"
+		"      Extension: %s\n"
+		"       Priority: %d\n"
+		"     Call Group: %llu\n"
+		"   Pickup Group: %llu\n"
+		"    Application: %s\n"
+		"           Data: %s\n"
+		"    Blocking in: %s\n",
+		c->name, c->tech->type, c->uniqueid,
+		S_OR(c->cid.cid_num, "(N/A)"),
+		S_OR(c->cid.cid_name, "(N/A)"),
+		S_OR(c->cid.cid_dnid, "(N/A)"), ast_state2str(c->_state), c->_state, c->rings, 
+		ast_getformatname_multiple(nf, sizeof(nf), c->nativeformats), 
+		ast_getformatname_multiple(wf, sizeof(wf), c->writeformat), 
+		ast_getformatname_multiple(rf, sizeof(rf), c->readformat),
+		c->writetrans ? "Yes" : "No",
+		c->readtrans ? "Yes" : "No",
+		c->fds[0],
+		c->fin & ~DEBUGCHAN_FLAG, (c->fin & DEBUGCHAN_FLAG) ? " (DEBUGGED)" : "",
+		c->fout & ~DEBUGCHAN_FLAG, (c->fout & DEBUGCHAN_FLAG) ? " (DEBUGGED)" : "",
+		(long)c->whentohangup,
+		cdrtime, c->_bridge ? c->_bridge->name : "<none>", ast_bridged_channel(c) ? ast_bridged_channel(c)->name : "<none>", 
+		c->context, c->exten, c->priority, c->callgroup, c->pickupgroup, ( c->appl ? c->appl : "(N/A)" ),
+		( c-> data ? S_OR(c->data, "(Empty)") : "(None)"),
+		(ast_test_flag(c, AST_FLAG_BLOCKING) ? c->blockproc : "(Not Blocking)"));
+	
+	if(pbx_builtin_serialize_variables(c,buf,sizeof(buf)))
+		ast_cli(fd,"      Variables:\n%s\n",buf);
+	if(c->cdr && ast_cdr_serialize_variables(c->cdr,buf, sizeof(buf), '=', '\n', 1))
+		ast_cli(fd,"  CDR Variables:\n%s\n",buf);
+	
+	ast_channel_unlock(c);
+	return RESULT_SUCCESS;
+}
+
 static int handle_showchan(int fd, int argc, char *argv[])
 {
 	struct ast_channel *c=NULL;
@@ -994,6 +1173,13 @@ char *ast_cli_complete(const char *word, char *const choices[], int state)
 	return NULL;
 }
 
+static char *complete_show_channels_deprecated(const char *line, const char *word, int pos, int state)
+{
+	static char *choices[] = { "concise", "verbose", NULL };
+
+	return (pos != 2) ? NULL : ast_cli_complete(word, choices, state);
+}
+
 static char *complete_show_channels(const char *line, const char *word, int pos, int state)
 {
 	static char *choices[] = { "concise", "verbose", NULL };
@@ -1057,12 +1243,33 @@ static char *complete_mod_4(const char *line, const char *word, int pos, int sta
 	return ast_module_helper(line, word, pos, state, 3, 0);
 }
 
-static char *complete_fn(const char *line, const char *word, int pos, int state)
+static char *complete_fn_2(const char *line, const char *word, int pos, int state)
 {
 	char *c;
 	char filename[256];
 
 	if (pos != 1)
+		return NULL;
+	
+	if (word[0] == '/')
+		ast_copy_string(filename, word, sizeof(filename));
+	else
+		snprintf(filename, sizeof(filename), "%s/%s", ast_config_AST_MODULE_DIR, word);
+	
+	c = filename_completion_function(filename, state);
+	
+	if (c && word[0] != '/')
+		c += (strlen(ast_config_AST_MODULE_DIR) + 1);
+	
+	return c ? strdup(c) : c;
+}
+
+static char *complete_fn_3(const char *line, const char *word, int pos, int state)
+{
+	char *c;
+	char filename[256];
+
+	if (pos != 2)
 		return NULL;
 	
 	if (word[0] == '/')
@@ -1184,13 +1391,13 @@ static struct ast_cli_entry cli_set_verbose_deprecated = {
 
 static struct ast_cli_entry cli_show_channel_deprecated = {
 	{ "show", "channel", NULL },
-	handle_showchan, NULL,
+	handle_showchan_deprecated, NULL,
 	NULL, complete_ch_3 };
 
 static struct ast_cli_entry cli_show_channels_deprecated = {
 	{ "show", "channels", NULL },
-	handle_chanlist, NULL,
-	NULL, complete_show_channels };
+	handle_chanlist_deprecated, NULL,
+	NULL, complete_show_channels_deprecated };
 
 static struct ast_cli_entry cli_show_modules_deprecated = {
 	{ "show", "modules", NULL },
@@ -1205,7 +1412,7 @@ static struct ast_cli_entry cli_show_modules_like_deprecated = {
 static struct ast_cli_entry cli_module_load_deprecated = {
 	{ "load", NULL },
 	handle_load_deprecated, NULL,
-	NULL, complete_fn };
+	NULL, complete_fn_2 };
 
 static struct ast_cli_entry cli_module_reload_deprecated = {
 	{ "reload", NULL },
@@ -1216,6 +1423,11 @@ static struct ast_cli_entry cli_module_unload_deprecated = {
 	{ "unload", NULL },
 	handle_unload_deprecated, NULL,
 	NULL, complete_mod_2 };
+
+static struct ast_cli_entry cli_show_uptime_deprecated = {
+	{ "show", "uptime", NULL },
+	handle_showuptime_deprecated, "Show uptime information",
+	NULL };
 
 static struct ast_cli_entry cli_cli[] = {
 	/* Deprecated, but preferred command is now consolidated (and already has a deprecated command for it). */
@@ -1269,7 +1481,7 @@ static struct ast_cli_entry cli_cli[] = {
 
 	{ { "module", "load", NULL },
 	handle_load, "Load a module by name",
-	load_help, complete_fn, &cli_module_load_deprecated },
+	load_help, complete_fn_3, &cli_module_load_deprecated },
 
 	{ { "module", "reload", NULL },
 	handle_reload, "Reload configuration",
@@ -1281,7 +1493,7 @@ static struct ast_cli_entry cli_cli[] = {
 
  	{ { "core", "show", "uptime", NULL },
 	handle_showuptime, "Show uptime information",
-	uptime_help },
+	uptime_help, NULL, &cli_show_uptime_deprecated },
 
 	{ { "soft", "hangup", NULL },
 	handle_softhangup, "Request a hangup on a given channel",

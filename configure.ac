@@ -21,6 +21,9 @@ AC_CONFIG_HEADER(include/asterisk/autoconfig.h)
 AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
 
+AC_GNU_SOURCE
+AC_USE_SYSTEM_EXTENSIONS
+
 case "${host_os}" in
      freebsd*)
      ac_default_prefix=/usr/local
@@ -89,18 +92,12 @@ if test ! x"${UNAME}" = xNo; then
 fi
 AC_SUBST(PBX_OSREV)
 
-# This needs to be before any macros that use the C compiler
-AC_GNU_SOURCE
-
 AH_TOP(
 #ifndef ASTERISK_AUTOCONFIG_H
 #define ASTERISK_AUTOCONFIG_H
 
 #include "asterisk/buildopts.h"
 
-#ifndef _REENTRANT
-#define _REENTRANT
-#endif
 )
 
 AH_BOTTOM(
@@ -156,6 +153,8 @@ else
   DOWNLOAD=${FETCH}
 fi
 AC_SUBST(DOWNLOAD)
+
+ACX_PTHREAD
 
 AC_LANG(C)
 
@@ -262,6 +261,24 @@ AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
 AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
 
+AC_MSG_CHECKING(for PTHREAD_RWLOCK_INITIALIZER)
+AC_LINK_IFELSE(
+        AC_LANG_PROGRAM([#include <pthread.h>],
+                        [int foo = PTHREAD_RWLOCK_INITIALIZER;]),
+        AC_MSG_RESULT(yes)
+        AC_DEFINE([HAVE_PTHREAD_RWLOCK_INITIALIZER], 1, [Define to 1 if your system has PTHREAD_RWLOCK_INITIALIZER.]),
+        AC_MSG_RESULT(no)
+)
+
+AC_MSG_CHECKING(for PTHREAD_RWLOCK_PREFER_WRITER_NP)
+AC_LINK_IFELSE(
+        AC_LANG_PROGRAM([#include <pthread.h>],
+                        [int foo = PTHREAD_RWLOCK_PREFER_WRITER_NP;]),
+        AC_MSG_RESULT(yes)
+        AC_DEFINE([HAVE_PTHREAD_RWLOCK_PREFER_WRITER_NP], 1, [Define to 1 if your system has PTHREAD_RWLOCK_PREFER_WRITER_NP.]),
+        AC_MSG_RESULT(no)
+)
+
 AC_MSG_CHECKING(for compiler atomic operations)
 AC_LINK_IFELSE(
 AC_LANG_PROGRAM([], [int foo1; int foo2 = __sync_fetch_and_add(&foo1, 1);]),
@@ -349,26 +366,57 @@ if test "${USE_GSM}" != "no"; then
    if test "${GSM_SYSTEM}" = "yes"; then
       gsmlibdir=""
       if test "x${GSM_DIR}" != "x"; then
-      	 if test -d ${GSM_DIR}/lib; then
-	    gsmlibdir="-L${GSM_DIR}/lib"
-	 else
-	    gsmlibdir="-L${GSM_DIR}"
-	 fi
+         if test -d ${GSM_DIR}/lib; then
+            gsmlibdir="-L${GSM_DIR}/lib"
+         else
+            gsmlibdir="-L${GSM_DIR}"
+         fi
       fi
       AC_CHECK_LIB([gsm], [gsm_create], AC_DEFINE_UNQUOTED([HAVE_GSM], 1,
       [Define to indicate the GSM library]), [], ${gsmlibdir})
       if test "${ac_cv_lib_gsm_gsm_create}" = "yes"; then
-	 GSM_LIB="-lgsm"
-	 if test "x${GSM_DIR}" != "x"; then
-	    GSM_LIB="${gsmlibdir} ${GSM_LIB}"
-	    GSM_INCLUDE="-I${GSM_DIR}/include"
-	 fi
-	 PBX_GSM=1
-	 GSM_INTERNAL="no"
+         if test "x${GSM_DIR}" != "x" ; then
+            AC_CHECK_HEADER([${GSM_DIR}/include/gsm.h], [GSM_HEADER_FOUND=1], [GSM_HEADER_FOUND=0])
+            AC_CHECK_HEADER([${GSM_DIR}/include/gsm/gsm.h], [GSM_GSM_HEADER_FOUND=1], [GSM_GSM_HEADER_FOUND=0])
+         else
+            AC_CHECK_HEADER([gsm.h], [GSM_HEADER_FOUND=1], [GSM_HEADER_FOUND=0])
+            AC_CHECK_HEADER([gsm/gsm.h], [GSM_GSM_HEADER_FOUND=1], [GSM_GSM_HEADER_FOUND=0])
+         fi
+         if test "${GSM_HEADER_FOUND}" = "0" ; then
+            if test "{GSM_GSM_HEADER_FOUND}" = "0" ; then
+               if test "x${GSM_MANDATORY}" = "xyes" ; then
+                  AC_MSG_NOTICE([***])
+                  AC_MSG_NOTICE([*** It appears that you do not have the gsm development package installed.])
+                  AC_MSG_NOTICE([*** Please install it to include ${GSM_DESCRIP} support, or re-run configure])
+                  AC_MSG_NOTICE([*** without explicitly specifying --with-${GSM_OPTION}])
+                  exit 1
+               fi
+            fi
+         fi
+         GSM_OK=0
+         if test "${GSM_HEADER_FOUND}" = "1" ; then
+            AC_DEFINE_UNQUOTED([HAVE_GSM_HEADER], 1, [Define to indicate that gsm.h has no prefix for its location])
+            GSM_OK=1
+         else
+            if test "${GSM_GSM_HEADER_FOUND}" = "1" ; then
+               AC_DEFINE_UNQUOTED([HAVE_GSM_GSM_HEADER], 1, [Define to indicate that gsm.h is in gsm/gsm.h])
+               GSM_OK=1
+            fi
+         fi
+         if test "${GSM_OK}" = "1" ; then
+            GSM_LIB="-lgsm"
+            if test "x${GSM_DIR}" != "x"; then
+               GSM_LIB="${gsmlibdir} ${GSM_LIB}"
+               GSM_INCLUDE="-I${GSM_DIR}/include"
+            fi
+            PBX_GSM=1
+            GSM_INTERNAL="no"
+         fi
       fi
    fi
    if test "${GSM_INTERNAL}" = "yes"; then
       PBX_GSM=1
+      AC_DEFINE_UNQUOTED([HAVE_GSM_HEADER], 1, [Define to indicate that gsm.h has no prefix for its location])
    fi
 fi
 
@@ -377,7 +425,7 @@ AST_EXT_LIB_CHECK([IKSEMEL], [iksemel], [iks_start_sasl], [iksemel.h])
 if test "${PBX_IKSEMEL}" = 1; then
    AST_EXT_LIB_CHECK([GNUTLS], [gnutls], [gnutls_bye])
    if test "${PBX_GNUTLS}" = 1; then
-      IKSEMEL_LIB="${IKSEMEL_LIB} -lgnutls -lz -lgcrypt -lnsl -lgpg-error"
+      IKSEMEL_LIB="${IKSEMEL_LIB} -lgnutls -lz -lgcrypt -lgpg-error"
    fi
 fi
 
@@ -610,7 +658,7 @@ if test "${USE_NETSNMP}" != "no"; then
    fi
 fi
 if test x"${NETSNMP_CONFIG}" != xNo; then
-   NETSNMP_libs=`net-snmp-config --agent-libs`
+   NETSNMP_libs=`${NETSNMP_CONFIG} --agent-libs`
    
    AC_CHECK_LIB([netsnmp], [snmp_register_callback], AC_DEFINE_UNQUOTED([HAVE_NETSNMP], 1,
    [Define to indicate the Net-SNMP library]), [], ${NETSNMP_libs})
@@ -677,8 +725,8 @@ if test "${USE_PGSQL}" != "no"; then
    fi
 fi
 if test "${PG_CONFIG}" != No; then
-   PGSQL_libdir=`pg_config --libdir`
-   PGSQL_includedir=`pg_config --includedir`
+   PGSQL_libdir=`${PG_CONFIG} --libdir`
+   PGSQL_includedir=`${PG_CONFIG} --includedir`
    
    AC_CHECK_LIB([pq], [PQexec], AC_DEFINE_UNQUOTED([HAVE_PGSQL], 1,
    [Define to indicate the PostgreSQL library]), [], -L${PGSQL_libdir} -lz)
@@ -925,7 +973,7 @@ AC_LANG_POP
 AST_EXT_LIB_CHECK([ZLIB], [z], [compress], [zlib.h])
 
 if test "${USE_ZAPTEL}" != "no"; then
-   AC_MSG_CHECKING(for ZT_TONE_DTMF_BASE in zaptel.h)
+   AC_MSG_CHECKING(for ZT_DIAL_OP_CANCEL in zaptel/zaptel.h)
    saved_cppflags="${CPPFLAGS}"
    if test "x${ZAPTEL_DIR}" != "x"; then
       CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
@@ -934,7 +982,7 @@ if test "${USE_ZAPTEL}" != "no"; then
 	[
 	AC_LANG_PROGRAM(
 	[#include <zaptel/zaptel.h>],
-	[int foo = ZT_TONE_DTMF_BASE;])
+	[int foo = ZT_DIAL_OP_CANCEL;])
 	],
 	[	AC_MSG_RESULT(yes) 
 		ac_cv_zaptel_h="yes" 
@@ -960,37 +1008,54 @@ if test "${USE_ZAPTEL}" != "no"; then
    fi
 fi
 
-if test "${USE_ZAPTEL}" != "no"; then
-   if test "${PBX_ZAPTEL}" != "1"; then
-      AC_MSG_CHECKING(for ZT_DIAL_OP_CANCEL in zaptel.h)
-      saved_cppflags="${CPPFLAGS}"
-      if test "x${ZAPTEL_DIR}" != "x"; then
-	 CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
-      fi
-      AC_COMPILE_IFELSE(
+if test "${PBX_ZAPTEL}" = 1; then
+   AC_MSG_CHECKING(for ZT_TONE_DTMF_BASE in zaptel/zaptel.h)
+   saved_cppflags="${CPPFLAGS}"
+   if test "x${ZAPTEL_DIR}" != "x"; then
+      CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
+   fi
+   AC_COMPILE_IFELSE(
 	[
 	AC_LANG_PROGRAM(
-	[#include <zaptel.h>],
-	[int foo = ZT_DIAL_OP_CANCEL;])
+	[#include <zaptel/zaptel.h>],
+	[int foo = ZT_TONE_DTMF_BASE;])
 	],
 	[	AC_MSG_RESULT(yes) 
-		ac_cv_zaptel_h="yes" 
+		ac_cv_zaptel_vldtmf="yes" 
 	],
 	[	AC_MSG_RESULT(no) 
-		ac_cv_zaptel_h="no" 
+		ac_cv_zaptel_vldtmf="no" 
 	]
 	)
-      CPPFLAGS="${saved_cppflags}"
-      if test "${ac_cv_zaptel_h}" = "yes"; then
-         AC_MSG_NOTICE([***])
-	 AC_MSG_NOTICE([*** The Zaptel installation on this system is too old])
-	 AC_MSG_NOTICE([*** to be useable with this version of Asterisk.])
-	 AC_MSG_NOTICE([*** Either upgrade your Zaptel installation, or run configure])
-	 AC_MSG_NOTICE([*** including --without-zaptel.])
-	 exit 1
-      fi
+   CPPFLAGS="${saved_cppflags}"
+   if test "${ac_cv_zaptel_vldtmf}" = "yes"; then
+	PBX_ZAPTEL_VLDTMF=1
+   fi
+   AC_MSG_CHECKING(for ZT_TCOP_TRANSCODE in zaptel/zaptel.h)
+   saved_cppflags="${CPPFLAGS}"
+   if test "x${ZAPTEL_DIR}" != "x"; then
+      CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
+   fi
+   AC_COMPILE_IFELSE(
+	[
+	AC_LANG_PROGRAM(
+	[#include <zaptel/zaptel.h>],
+	[int foo = ZT_TCOP_TRANSCODE;])
+	],
+	[	AC_MSG_RESULT(yes) 
+		ac_cv_zaptel_transcode="yes" 
+	],
+	[	AC_MSG_RESULT(no) 
+		ac_cv_zaptel_transcode="no" 
+	]
+	)
+   CPPFLAGS="${saved_cppflags}"
+   if test "${ac_cv_zaptel_transcode}" = "yes"; then
+	PBX_ZAPTEL_TRANSCODE=1
    fi
 fi
+AC_SUBST(PBX_ZAPTEL_VLDTMF)
+AC_SUBST(PBX_ZAPTEL_TRANSCODE)
 
 EDITLINE_LIB=""
 if test "x$TERMCAP_LIB" != "x" ; then
@@ -1030,12 +1095,12 @@ AC_SUBST(GTK_INCLUDE)
 AC_SUBST(GTK_LIB)
 
 if test "${USE_CURL}" != "no"; then
-   AC_PATH_TOOL([CURL], [curl-config], No)
-   if test ! x"${CURL}" = xNo; then
+   AC_PATH_TOOL([CURL_CONFIG], [curl-config], No)
+   if test ! x"${CURL_CONFIG}" = xNo; then
    # check for version
-      if test $(printf "%d" 0x$(curl-config --vernum)) -ge $(printf "%d" 0x070907); then
-         CURL_INCLUDE=$(${CURL} --cflags)
-         CURL_LIB=$(${CURL} --libs)
+      if test $(printf "%d" 0x$(${CURL_CONFIG} --vernum)) -ge $(printf "%d" 0x070907); then
+         CURL_INCLUDE=$(${CURL_CONFIG} --cflags)
+         CURL_LIB=$(${CURL_CONFIG} --libs)
          PBX_CURL=1
          AC_DEFINE([HAVE_CURL], 1, [Define if your system has the curl libraries.])
       fi

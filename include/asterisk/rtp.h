@@ -180,6 +180,8 @@ char *ast_rtp_lookup_mime_multiple(char *buf, size_t size, const int capability,
 
 void ast_rtp_setnat(struct ast_rtp *rtp, int nat);
 
+int ast_rtp_getnat(struct ast_rtp *rtp);
+
 /*! \brief Indicate whether this RTP session is carrying DTMF or not */
 void ast_rtp_setdtmf(struct ast_rtp *rtp, int dtmf);
 
@@ -208,6 +210,8 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp);
 
 /*! \brief Send an H.261 fast update request. Some devices need this rather than the XML message  in SIP */
 int ast_rtcp_send_h261fur(void *data);
+
+void ast_rtp_new_init(struct ast_rtp *rtp);
 
 void ast_rtp_init(void);
 

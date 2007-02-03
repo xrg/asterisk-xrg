@@ -35,7 +35,7 @@
 
 /*** MODULEINFO
 	<depend>openh323</depend>
-	<defaultenabled>no</defaultenabled>
+	<defaultenabled>yes</defaultenabled>
  ***/
 
 #ifdef __cplusplus
@@ -44,7 +44,7 @@ extern "C" {
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47457 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #ifdef __cplusplus
 }
@@ -234,7 +234,7 @@ static int h323_do_reload(void);
 
 static struct ast_channel *oh323_request(const char *type, int format, void *data, int *cause);
 static int oh323_digit_begin(struct ast_channel *c, char digit);
-static int oh323_digit_end(struct ast_channel *c, char digit);
+static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int oh323_call(struct ast_channel *c, char *dest, int timeout);
 static int oh323_hangup(struct ast_channel *c);
 static int oh323_answer(struct ast_channel *c);
@@ -545,7 +545,7 @@ static int oh323_digit_begin(struct ast_channel *c, char digit)
  * Send (play) the specified digit to the channel.
  *
  */
-static int oh323_digit_end(struct ast_channel *c, char digit)
+static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration)
 {
 	struct oh323_pvt *pvt = (struct oh323_pvt *) c->tech_pvt;
 	char *token;
@@ -2524,8 +2524,10 @@ static int restart_monitor(void)
 			monitor_thread = AST_PTHREADT_NULL;
 			ast_mutex_unlock(&monlock);
 			ast_log(LOG_ERROR, "Unable to start monitor thread.\n");
+			pthread_attr_destroy(&attr);
 			return -1;
 		}
+		pthread_attr_destroy(&attr);
 	}
 	ast_mutex_unlock(&monlock);
 	return 0;
@@ -2662,7 +2664,7 @@ static struct ast_cli_entry cli_h323_trace_deprecated = {
 	trace_usage };
 
 static struct ast_cli_entry cli_h323_gk_cycle_deprecated = {
-	{ "h323", "cycle", "gk", NULL },
+	{ "h.323", "gk", "cycle", NULL },
 	h323_gk_cycle, "Manually re-register with the Gatekeper",
 	show_cycle_usage };
 
@@ -3091,13 +3093,17 @@ static enum ast_module_load_result load_module(void)
 	ASTOBJ_CONTAINER_INIT(&aliasl);
 	res = reload_config(0);
 	if (res) {
+		/* No config entry */
+		ast_log(LOG_NOTICE, "Unload and load chan_h323.so again in order to receive configuration changes.\n");
 		ast_cli_unregister(&cli_h323_reload);
 		io_context_destroy(io);
+		io = NULL;
 		sched_context_destroy(sched);
+		sched = NULL;
 		ASTOBJ_CONTAINER_DESTROY(&userl);
 		ASTOBJ_CONTAINER_DESTROY(&peerl);
 		ASTOBJ_CONTAINER_DESTROY(&aliasl);
-		return /*AST_MODULE_LOAD_DECLINE*/AST_MODULE_LOAD_FAILURE;
+		return AST_MODULE_LOAD_DECLINE;
 	} else {
 		/* Make sure we can register our channel type */
 		if (ast_channel_register(&oh323_tech)) {
@@ -3227,8 +3233,10 @@ static int unload_module(void)
 	if (!gatekeeper_disable)
 		h323_gk_urq();
 	h323_end_process();
-	io_context_destroy(io);
-	sched_context_destroy(sched);
+	if (io)
+		io_context_destroy(io);
+	if (sched)
+		sched_context_destroy(sched);
 
 	ASTOBJ_CONTAINER_DESTROYALL(&userl, oh323_destroy_user);
 	ASTOBJ_CONTAINER_DESTROY(&userl);
