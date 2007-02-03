@@ -387,11 +387,9 @@ if test "${USE_IMAP_TK}" != "no"; then
    AC_MSG_CHECKING(for UW IMAP Toolkit c-client library)
    saved_cppflags="${CPPFLAGS}"
    saved_libs="${LIBS}"
-   if test -f ${IMAP_TK_DIR}/c-client/LDFLAGS ; then
-      imap_ldflags=`cat ${IMAP_TK_DIR}/c-client/LDFLAGS`
-   fi
-   CPPFLAGS="${CPPFLAGS} -I${IMAP_TK_DIR}/c-client"
-   LIBS="${LIBS} ${IMAP_TK_DIR}/c-client/c-client.a "`echo ${imap_ldflags}`
+   imap_ldflags="-lpam -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err -lssl -lcrypto"
+   CPPFLAGS="${CPPFLAGS} -I${IMAP_TK_DIR}/include/imap"
+   LIBS="${LIBS} ${IMAP_TK_DIR}/lib/libc-client.a "`echo ${imap_ldflags}`
    AC_LINK_IFELSE(
 	AC_LANG_PROGRAM(
 		[#include "c-client.h"
@@ -508,8 +506,8 @@ if test "${USE_IMAP_TK}" != "no"; then
    LIBS="${saved_libs}"
    if test "${ac_cv_imap_tk}" = "yes"; then
       AC_MSG_RESULT(yes) 
-      IMAP_TK_LIB="${IMAP_TK_DIR}/c-client/c-client.a "`echo ${imap_ldflags}`
-      IMAP_TK_INCLUDE="-I${IMAP_TK_DIR}/c-client"
+      IMAP_TK_LIB="${IMAP_TK_DIR}/lib/libc-client.a "`echo ${imap_ldflags}`
+      IMAP_TK_INCLUDE="-I${IMAP_TK_DIR}/include/imap"
       PBX_IMAP_TK=1
       AC_DEFINE([HAVE_IMAP_TK], 1, [Define if your system has the UW IMAP Toolkit c-client library.])
       if test "${ac_cv_imap_tk2006}" = "yes"; then
