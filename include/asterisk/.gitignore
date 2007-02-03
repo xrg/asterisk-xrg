@@ -1,3 +1,4 @@
+autoconfig.h
 build.h
 buildopts.h
-autoconfig.h
+version.h
