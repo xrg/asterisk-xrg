@@ -107,14 +107,14 @@ else
   ASTHEADERDIR=$(includedir)/asterisk
   ASTBINDIR=$(bindir)
   ASTSBINDIR=$(sbindir)
-  ASTSPOOLDIR=$(localstatedir)/spool/asterisk
-  ASTLOGDIR=$(localstatedir)/log/asterisk
-  ASTVARRUNDIR=$(localstatedir)/run
+  ASTSPOOLDIR=/var/spool/asterisk
+  ASTLOGDIR=/var/log/asterisk
+  ASTVARRUNDIR=/var/run
   ASTMANDIR=$(mandir)
 ifeq ($(OSARCH),FreeBSD)
   ASTVARLIBDIR=$(prefix)/share/asterisk
 else
-  ASTVARLIBDIR=$(localstatedir)/lib/asterisk
+  ASTVARLIBDIR=/var/lib/asterisk
 endif
 endif
 ifeq ($(ASTDATADIR),)
@@ -150,7 +150,7 @@ OTHER_SUBDIR_CFLAGS=-I$(ASTTOPDIR)/include
 ifeq ($(OSARCH),linux-gnu)
   ifeq ($(PROC),x86_64)
     # You must have GCC 3.4 to use k8, otherwise use athlon
-    PROC=k8
+    #PROC=k8
     #PROC=athlon
   endif
 
@@ -362,8 +362,9 @@ distclean: clean
 	rm -rf doc/api
 	rm -f build_tools/menuselect-deps
 
-datafiles: _all
-	if [ x`$(ID) -un` = xroot ]; then CFLAGS="$(ASTCFLAGS)" sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
+datafiles:
+	mkdir -p $(DESTDIR)/usr/lib/pkgconfig
+	CFLAGS="$(ASTCFLAGS)" sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
 # improved a lot.  I'll put it here for now.
@@ -395,7 +396,7 @@ update:
 NEWHEADERS=$(notdir $(wildcard include/asterisk/*.h))
 OLDHEADERS=$(filter-out $(NEWHEADERS),$(notdir $(wildcard $(DESTDIR)$(ASTHEADERDIR)/*.h)))
 
-bininstall: _all
+bininstall:
 	mkdir -p $(DESTDIR)$(MODULES_DIR)
 	mkdir -p $(DESTDIR)$(ASTSBINDIR)
 	mkdir -p $(DESTDIR)$(ASTETCDIR)
@@ -461,7 +462,7 @@ oldmodcheck:
 		echo " WARNING WARNING WARNING" ;\
 	fi
 
-install: datafiles bininstall $(SUBDIRS_INSTALL)
+install: datafiles bininstall adsi samples webvmail $(SUBDIRS_INSTALL)
 	@if [ -x /usr/sbin/asterisk-post-install ]; then \
 		/usr/sbin/asterisk-post-install $(DESTDIR) . ; \
 	fi
@@ -498,7 +499,7 @@ adsi:
 		fi ; \
 	done
 
-samples: adsi
+samples:
 	mkdir -p $(DESTDIR)$(ASTETCDIR)
 	for x in configs/*.sample; do \
 		if [ -f $(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x .sample` ]; then \
@@ -552,7 +553,7 @@ samples: adsi
 webvmail:
 	@[ -d $(DESTDIR)$(HTTP_DOCSDIR)/ ] || ( printf "http docs directory not found.\nUpdate assignment of variable HTTP_DOCSDIR in Makefile!\n" && exit 1 )
 	@[ -d $(DESTDIR)$(HTTP_CGIDIR) ] || ( printf "cgi-bin directory not found.\nUpdate assignment of variable HTTP_CGIDIR in Makefile!\n" && exit 1 )
-	$(INSTALL) -m 4755 -o root -g root contrib/scripts/vmail.cgi $(DESTDIR)$(HTTP_CGIDIR)/vmail.cgi
+	$(INSTALL) -m 4755 contrib/scripts/vmail.cgi $(DESTDIR)$(HTTP_CGIDIR)/vmail.cgi
 	mkdir -p $(DESTDIR)$(HTTP_DOCSDIR)/_asterisk
 	for x in images/*.gif; do \
 		$(INSTALL) -m 644 $$x $(DESTDIR)$(HTTP_DOCSDIR)/_asterisk/; \

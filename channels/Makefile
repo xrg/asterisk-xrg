@@ -20,8 +20,8 @@ ifeq ($(OSARCH),OpenBSD)
 endif
 
 ifeq ($(OSARCH),linux-gnu)
-  PTLIB=-lpt_linux_x86_r
-  H323LIB=-lh323_linux_x86_r
+  PTLIB=-lpt
+  H323LIB=-lopenh323
   CHANH323LIB=-ldl
 endif
 
@@ -41,11 +41,11 @@ ifeq ($(wildcard h323/libchanh323.a),)
 endif
 
 ifndef OPENH323DIR
-  OPENH323DIR=$(HOME)/openh323
+  OPENH323DIR=/usr/share/openh323
 endif
 
 ifndef PWLIBDIR
-  PWLIBDIR=$(HOME)/pwlib
+  PWLIBDIR=/usr/share/pwlib
 endif
 
 LOADABLE_MODS:=$(C_MODS) $(CC_MODS)

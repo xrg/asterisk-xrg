@@ -48,7 +48,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48088 $")
 #include <linux/telephony.h>
 /* Still use some IXJ specific stuff */
 #include <linux/version.h>
-#include <linux/ixjuser.h>
+#include "linux/ixjuser.h"
 
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
