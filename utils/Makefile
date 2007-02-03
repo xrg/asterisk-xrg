@@ -83,7 +83,7 @@ ast_expr2.c: ../main/ast_expr2.c
 ast_expr2f.c: ../main/ast_expr2f.c
 	@cp $< $@
 
-ast_expr2f.o: ASTCFLAGS+=-DSTANDALONE_AEL -I../main
+ast_expr2f.o: ASTCFLAGS+=-DSTANDALONE_AEL -DSTANDALONE -I../main
 
 check_expr: check_expr.c ast_expr2.o ast_expr2f.o
 
@@ -94,20 +94,20 @@ aelbison.o: ASTCFLAGS+=-I../pbx
 
 pbx_ael.c: ../pbx/pbx_ael.c
 	@cp $< $@
-pbx_ael.o: ASTCFLAGS+=-DSTANDALONE_AEL
+pbx_ael.o: ASTCFLAGS+=-DSTANDALONE_AEL -DSTANDALONE
 
 ael_main.o: ael_main.c ../include/asterisk/ael_structs.h
 
 aelparse.c: ../pbx/ael/ael_lex.c
 	@cp $< $@
 aelparse.o: aelparse.c ../include/asterisk/ael_structs.h ../pbx/ael/ael.tab.h
-aelparse.o: ASTCFLAGS+=-I../pbx -DSTANDALONE_AEL
+aelparse.o: ASTCFLAGS+=-I../pbx -DSTANDALONE_AEL -DSTANDALONE
 
 aelparse: aelparse.o aelbison.o pbx_ael.o ael_main.o ast_expr2f.o ast_expr2.o strcompat.o
 
 testexpr2s: ../main/ast_expr2f.c ../main/ast_expr2.c ../main/ast_expr2.h
-	$(CC) -g -c -I../include -DSTANDALONE_AEL ../main/ast_expr2f.c -o ast_expr2f.o
-	$(CC) -g -c -I../include -DSTANDALONE_AEL ../main/ast_expr2.c -o ast_expr2.o
+	$(CC) -g -c -I../include -DSTANDALONE_AEL -DSTANDALONE ../main/ast_expr2f.c -o ast_expr2f.o
+	$(CC) -g -c -I../include -DSTANDALONE_AEL -DSTANDALONE ../main/ast_expr2.c -o ast_expr2.o
 	$(CC) -g -o testexpr2s ast_expr2f.o ast_expr2.o
 	rm ast_expr2.o ast_expr2f.o 
 	./testexpr2s expr2.testinput
