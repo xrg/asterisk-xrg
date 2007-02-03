@@ -196,6 +196,7 @@ AST_EXT_LIB_SETUP([PWLIB], [PWlib], [pwlib])
 AST_EXT_LIB_SETUP([OPENH323], [OpenH323], [h323])
 AST_EXT_LIB_SETUP([QT], [Qt], [qt])
 AST_EXT_LIB_SETUP([RADIUS], [Radius Client], [radius])
+AST_EXT_LIB_SETUP([SPANDSP], [spandsp Library], [spandsp])
 AST_EXT_LIB_SETUP([SPEEX], [Speex], [speex])
 AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
 AST_EXT_LIB_SETUP([SUPPSERV], [mISDN Supplemental Services], [suppserv])
@@ -831,6 +832,8 @@ fi
 AC_LANG_POP
 
 AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
+
+AST_EXT_LIB_CHECK([SPANDSP], [spandsp], [fax_init], [spandsp.h], [-ltiff])
 
 AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 

@@ -33,6 +33,9 @@ MENUSELECT_DEPENDS_app_chanspy+=RT
 RT_LIB=-lrt
 endif
 
+MENUSELECT_DEPENDS_app_rxfax+=SPANDSP
+MENUSELECT_DEPENDS_app_txfax+=SPANDSP
+
 all: _all
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
