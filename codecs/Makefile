@@ -23,8 +23,8 @@ ifneq ($(findstring codecs,$(MENUSELECT_EMBED)),)
   LOADABLE_MODS:=
 endif
 
-LIBILBC:=ilbc/libilbc.a
-LIBLPC10:=lpc10/liblpc10.a
+LIBILBC=-lilbc
+LIBLPC10=-llpc10
 
 all: _all
 
@@ -37,19 +37,11 @@ endif
 
 clean::
 	$(MAKE) -C gsm clean
-	$(MAKE) -C lpc10 clean
-	$(MAKE) -C ilbc clean
 
 gsm/lib/libgsm.a:
 	@mkdir -p gsm/lib
 	@$(MAKE) -C gsm lib/libgsm.a
 
-$(LIBLPC10):
-	@$(MAKE) -C lpc10 all
-
 $(if $(filter codec_lpc10,$(EMBEDDED_MODS)),modules.link,codec_lpc10.so): $(LIBLPC10)
-
-$(LIBILBC):
-	@$(MAKE) -C ilbc all
 
 $(if $(filter codec_ilbc,$(EMBEDDED_MODS)),modules.link,codec_ilbc.so): $(LIBILBC)
