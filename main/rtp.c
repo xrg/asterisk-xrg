@@ -1924,7 +1924,7 @@ int ast_rtp_settos(struct ast_rtp *rtp, int tos)
 	int res;
 
 	if ((res = setsockopt(rtp->s, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)))) 
-		ast_log(LOG_WARNING, "Unable to set TOS to %d\n", tos);
+		ast_log(LOG_WARNING, "Unable to set TOS to %d %s\n", tos,strerror(errno));
 	return res;
 }
 
