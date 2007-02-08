@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 45817 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <dirent.h>
@@ -250,7 +250,8 @@ static int printdigest(const unsigned char *d)
 	for (pos = 0, x = 0; x < 16; x++)
 		pos += sprintf(buf + pos, " %02x", *d++);
 
-	ast_log(LOG_DEBUG, "Unexpected signature:%s\n", buf);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Unexpected signature:%s\n", buf);
 
 	return 0;
 }
@@ -535,8 +536,10 @@ int ast_module_reload(const char *name)
 	}
 	ast_lastreloadtime = time(NULL);
 
-	if (name && res)
+	if (name && res) {
+		ast_mutex_unlock(&reloadlock);
 		return res;
+	}
 
 	AST_LIST_LOCK(&module_list);
 	AST_LIST_TRAVERSE(&module_list, cur, entry) {
@@ -869,6 +872,20 @@ int ast_update_module_list(int (*modentry)(const char *module, const char *descr
 
 	return total_mod_loaded;
 }
+
+/*! \brief Check if module exists */
+int ast_module_check(char *name)
+{
+	struct ast_module *cur;
+
+	if (ast_strlen_zero(name))
+		return 0;       /* FALSE */
+
+	cur = find_resource(name, 1);
+
+	return (cur != NULL);
+}
+
 
 int ast_loader_register(int (*v)(void))
 {
