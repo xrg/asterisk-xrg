@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 45817 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <dirent.h>
@@ -535,8 +535,10 @@ int ast_module_reload(const char *name)
 	}
 	ast_lastreloadtime = time(NULL);
 
-	if (name && res)
+	if (name && res) {
+		ast_mutex_unlock(&reloadlock);
 		return res;
+	}
 
 	AST_LIST_LOCK(&module_list);
 	AST_LIST_TRAVERSE(&module_list, cur, entry) {
