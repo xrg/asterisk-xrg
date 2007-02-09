@@ -32,7 +32,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46200 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <time.h>
 #include <string.h>
@@ -1122,7 +1122,7 @@ static int unload_module(void)
 	return -1;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "ADSI Resource (not optional)",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "ADSI Resource",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,
