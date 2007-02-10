@@ -84,7 +84,9 @@ int ast_ivr_menu_run(struct ast_channel *c, struct ast_ivr_menu *menu, void *cbd
 
 /*! \brief Plays a stream and gets DTMF data from a channel 
  * \param c Which channel one is interacting with
- * \param prompt File to pass to ast_streamfile (the one that you wish to play)
+ * \param prompt File to pass to ast_streamfile (the one that you wish to play).
+ *        It is also valid for this to be multiple files concatenated by "&".
+ *        For example, "file1&file2&file3".
  * \param s The location where the DTMF data will be stored
  * \param maxlen Max Length of the data
  * \param timeout Timeout length waiting for data(in milliseconds).  Set to 0 for standard timeout(six seconds), or -1 for no time out.
@@ -94,7 +96,7 @@ int ast_ivr_menu_run(struct ast_channel *c, struct ast_ivr_menu *menu, void *cbd
  *  is pressed during playback, it will immediately break out of the message and continue
  *  execution of your code.
  */
-int ast_app_getdata(struct ast_channel *c, char *prompt, char *s, int maxlen, int timeout);
+int ast_app_getdata(struct ast_channel *c, const char *prompt, char *s, int maxlen, int timeout);
 
 /*! \brief Full version with audiofd and controlfd.  NOTE: returns '2' on ctrlfd available, not '1' like other full functions */
 int ast_app_getdata_full(struct ast_channel *c, char *prompt, char *s, int maxlen, int timeout, int audiofd, int ctrlfd);
@@ -125,7 +127,7 @@ int ast_safe_system(const char *s);
  * Normally, Asterisk has a SIGCHLD handler that is cleaning up all zombie
  * processes from forking elsewhere in Asterisk.  However, if you want to
  * wait*() on the process to retrieve information about it's exit status,
- * then this signal handler needs to be temporaraly replaced.
+ * then this signal handler needs to be temporarily replaced.
  *
  * Code that executes this function *must* call ast_unreplace_sigchld()
  * after it is finished doing the wait*().
@@ -305,6 +307,9 @@ struct ast_app_option {
 	  that should be used for this option's argument. */
 	unsigned int arg_index;
 };
+
+#define BEGIN_OPTIONS {
+#define END_OPTIONS }
 
 /*!
   \brief Declares an array of options for an application.
