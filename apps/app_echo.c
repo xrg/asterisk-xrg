@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 41507 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -73,6 +73,8 @@ static int echo_exec(struct ast_channel *chan, void *data)
 		case AST_FRAME_DTMF:
 			if (f->subclass == '#') {
 				res = 0;
+				if (ast_write(chan, f))
+					res = -1;
 				ast_frfree(f);
 				goto end;
 			}
