@@ -27,7 +27,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -96,9 +96,7 @@ static int sendimage_exec(struct ast_channel *chan, void *data)
 		return 0;
 	}
 
-	res = ast_send_image(chan, args.filename);
-	
-	if (!res)
+	if (!(res = ast_send_image(chan, args.filename)))
 		pbx_builtin_setvar_helper(chan, "SENDIMAGESTATUS", "OK");
 	
 	ast_module_user_remove(u);
