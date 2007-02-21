@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -44,12 +44,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
 #include "asterisk/channel.h"
 #include "asterisk/dns.h"
 #include "asterisk/endian.h"
+#include "asterisk/options.h"
 
 #define MAX_SIZE 4096
 
+#ifdef __PDP_ENDIAN
+#if __BYTE_ORDER == __PDP_ENDIAN
+#define DETERMINED_BYTE_ORDER __LITTLE_ENDIAN
+#endif
+#endif
+#if __BYTE_ORDER == __BIG_ENDIAN
+#define DETERMINED_BYTE_ORDER __BIG_ENDIAN
+#endif
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+#define DETERMINED_BYTE_ORDER __LITTLE_ENDIAN
+#endif
+
 typedef struct {
 	unsigned	id:16;          /*!< query identification number */
-#if __BYTE_ORDER == __BIG_ENDIAN
+#if DETERMINED_BYTE_ORDER == __BIG_ENDIAN
 			/* fields in third byte */
 	unsigned	qr:1;           /*!< response flag */
 	unsigned	opcode:4;       /*!< purpose of message */
@@ -63,7 +76,7 @@ typedef struct {
 	unsigned	cd:1;           /*!< checking disabled by resolver */
 	unsigned	rcode:4;        /*!< response code */
 #endif
-#if __BYTE_ORDER == __LITTLE_ENDIAN || __BYTE_ORDER == __PDP_ENDIAN
+#if DETERMINED_BYTE_ORDER == __LITTLE_ENDIAN
 			/* fields in third byte */
 	unsigned	rd:1;           /*!< recursion desired */
 	unsigned	tc:1;           /*!< truncated message */
@@ -177,7 +190,7 @@ static int dns_parse_answer(void *context,
 	return 0;
 }
 
-#if !HAVE_RES_NINIT
+#ifndef HAVE_RES_NINIT
 AST_MUTEX_DEFINE_STATIC(res_lock);
 #endif
 
@@ -189,13 +202,13 @@ int ast_search_dns(void *context,
 	   const char *dname, int class, int type,
 	   int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer))
 {
-#if HAVE_RES_NINIT
+#ifdef HAVE_RES_NINIT
 	struct __res_state dnsstate;
 #endif
 	unsigned char answer[MAX_SIZE];
 	int res, ret = -1;
 
-#if HAVE_RES_NINIT
+#ifdef HAVE_RES_NINIT
 	res_ninit(&dnsstate);
 	res = res_nsearch(&dnsstate, dname, class, type, answer, sizeof(answer));
 #else
@@ -209,13 +222,14 @@ int ast_search_dns(void *context,
 			ret = -1;
 		}
 		else if (ret == 0) {
-			ast_log(LOG_DEBUG, "No matches found in DNS for %s\n", dname);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "No matches found in DNS for %s\n", dname);
 			ret = 0;
 		}
 		else
 			ret = 1;
 	}
-#if HAVE_RES_NINIT
+#ifdef HAVE_RES_NINIT
 	res_nclose(&dnsstate);
 #else
 #ifndef __APPLE__
