@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #ifdef DEBUG_SCHEDULER
 #define DEBUG(a) do { \
@@ -201,7 +201,8 @@ static int sched_settime(struct timeval *tv, int when)
 		*tv = now;
 	*tv = ast_tvadd(*tv, ast_samp2tv(when, 1000));
 	if (ast_tvcmp(*tv, now) < 0) {
-		ast_log(LOG_DEBUG, "Request to schedule in the past?!?!\n");
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Request to schedule in the past?!?!\n");
 		*tv = now;
 	}
 	return 0;
@@ -280,7 +281,8 @@ int ast_sched_del(struct sched_context *con, int id)
 	ast_mutex_unlock(&con->lock);
 
 	if (!s) {
-		ast_log(LOG_NOTICE, "Attempted to delete nonexistent schedule entry %d!\n", id);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Attempted to delete nonexistent schedule entry %d!\n", id);
 #ifdef DO_CRASH
 		CRASH;
 #endif
@@ -296,26 +298,29 @@ void ast_sched_dump(const struct sched_context *con)
 	struct sched *q;
 	struct timeval tv = ast_tvnow();
 #ifdef SCHED_MAX_CACHE
-	ast_log(LOG_DEBUG, "Asterisk Schedule Dump (%d in Q, %d Total, %d Cache)\n", con->schedcnt, con->eventcnt - 1, con->schedccnt);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Asterisk Schedule Dump (%d in Q, %d Total, %d Cache)\n", con->schedcnt, con->eventcnt - 1, con->schedccnt);
 #else
-	ast_log(LOG_DEBUG, "Asterisk Schedule Dump (%d in Q, %d Total)\n", con->schedcnt, con->eventcnt - 1);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Asterisk Schedule Dump (%d in Q, %d Total)\n", con->schedcnt, con->eventcnt - 1);
 #endif
 
+	if (option_debug) {
 	ast_log(LOG_DEBUG, "=============================================================\n");
 	ast_log(LOG_DEBUG, "|ID    Callback          Data              Time  (sec:ms)   |\n");
 	ast_log(LOG_DEBUG, "+-----+-----------------+-----------------+-----------------+\n");
-	AST_LIST_TRAVERSE(&con->schedq, q, list) {
-		struct timeval delta = ast_tvsub(q->when, tv);
+		AST_LIST_TRAVERSE(&con->schedq, q, list) {
+			struct timeval delta = ast_tvsub(q->when, tv);
 
-		ast_log(LOG_DEBUG, "|%.4d | %-15p | %-15p | %.6ld : %.6ld |\n", 
-			q->id,
-			q->callback,
-			q->data,
-			delta.tv_sec,
-			(long int)delta.tv_usec);
+			ast_log(LOG_DEBUG, "|%.4d | %-15p | %-15p | %.6ld : %.6ld |\n", 
+				q->id,
+				q->callback,
+				q->data,
+				delta.tv_sec,
+				(long int)delta.tv_usec);
+		}
+		ast_log(LOG_DEBUG, "=============================================================\n");
 	}
-	ast_log(LOG_DEBUG, "=============================================================\n");
-	
 }
 
 /*! \brief
