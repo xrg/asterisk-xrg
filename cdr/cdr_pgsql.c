@@ -25,6 +25,7 @@
  * \brief PostgreSQL CDR logger 
  * 
  * \author Matthew D. Hardeman <mhardemn@papersoft.com> 
+ * \extref PostgreSQL http://www.postgresql.org/
  *
  * See also
  * \arg \ref Config_cdr
@@ -38,7 +39,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47584 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <stdio.h>

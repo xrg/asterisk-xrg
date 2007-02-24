@@ -21,6 +21,9 @@
  * \brief Provide Cryptographic Signature capability
  *
  * \author Mark Spencer <markster@digium.com> 
+ *
+ * \extref Uses the OpenSSL library, available at
+ *	http://www.openssl.org/
  */
 
 /*** MODULEINFO
@@ -29,7 +32,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47051 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <openssl/ssl.h>
@@ -433,7 +436,8 @@ static int __ast_check_signature_bin(struct ast_key *key, const char *msg, int m
 	res = RSA_verify(NID_sha1, digest, sizeof(digest), (unsigned char *)dsig, 128, key->rsa);
 	
 	if (!res) {
-		ast_log(LOG_DEBUG, "Key failed verification: %s\n", key->name);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Key failed verification: %s\n", key->name);
 		return -1;
 	}
 	/* Pass */
@@ -487,7 +491,8 @@ static void crypto_load(int ifd, int ofd)
 	while(key) {
 		nkey = key->next;
 		if (key->delme) {
-			ast_log(LOG_DEBUG, "Deleting key %s type %d\n", key->name, key->ktype);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Deleting key %s type %d\n", key->name, key->ktype);
 			/* Do the delete */
 			if (last)
 				last->next = nkey;
@@ -553,32 +558,22 @@ static int init_keys(int fd, int argc, char *argv[])
 	return RESULT_SUCCESS;
 }
 
-static char show_key_usage[] =
+static const char show_key_usage[] =
 "Usage: keys show\n"
 "       Displays information about RSA keys known by Asterisk\n";
 
-static char init_keys_usage[] =
+static const char init_keys_usage[] =
 "Usage: keys init\n"
 "       Initializes private keys (by reading in pass code from the user)\n";
-
-static struct ast_cli_entry cli_show_keys_deprecated = {
-	{ "show", "keys", NULL },
-	show_keys, NULL,
-	NULL };
-
-static struct ast_cli_entry cli_init_keys_deprecated = {
-	{ "init", "keys", NULL },
-	init_keys, NULL,
-	NULL };
 
 static struct ast_cli_entry cli_crypto[] = {
 	{ { "keys", "show", NULL },
 	show_keys, "Displays RSA key information",
-	show_key_usage, NULL, &cli_show_keys_deprecated },
+	show_key_usage },
 
 	{ { "keys", "init", NULL },
 	init_keys, "Initialize RSA key passcodes",
-	init_keys_usage, NULL, &cli_init_keys_deprecated },
+	init_keys_usage },
 };
 
 static int crypto_init(void)

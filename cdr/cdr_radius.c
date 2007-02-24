@@ -20,6 +20,7 @@
  *
  * \brief RADIUS CDR Support
  * \author Philippe Sultan
+ * \extref FreeRadius http://www.freeradius.org/
  * 
  * \arg See also \ref AstCDR
  * \ingroup cdr_drivers
@@ -31,7 +32,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Rev: 43373 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Rev$")
 
 #include <stdlib.h>
 #include <stdio.h>
