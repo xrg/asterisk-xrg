@@ -28,7 +28,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -59,7 +59,9 @@ static char *descrip =
   "This application sets the following channel variable upon completion:\n"
   "	LOOKUPBLSTATUS		The status of the Blacklist lookup as a text string, one of\n"
   "		FOUND | NOTFOUND\n"
-  "Example: exten => 1234,1,LookupBlacklist()\n";
+  "Example: exten => 1234,1,LookupBlacklist()\n\n"
+  "This application is deprecated and may be removed from a future release.\n"
+  "Please use the dialplan function BLACKLIST() instead.\n";
 
 
 static int blacklist_read(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
