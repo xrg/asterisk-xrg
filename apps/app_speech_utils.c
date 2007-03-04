@@ -505,7 +505,7 @@ static int speech_streamfile(struct ast_channel *chan, const char *filename, con
 static int speech_background(struct ast_channel *chan, void *data)
 {
         unsigned int timeout = 0;
-        int res = 0, done = 0, argc = 0, started = 0;
+        int res = 0, done = 0, argc = 0, started = 0, quieted = 0;
         struct ast_module_user *u = NULL;
         struct ast_speech *speech = find_speech(chan);
         struct ast_frame *f = NULL;
@@ -560,7 +560,7 @@ static int speech_background(struct ast_channel *chan, void *data)
         /* Okay it's streaming so go into a loop grabbing frames! */
         while (done == 0) {
 		/* If the filename is null and stream is not running, start up a new sound file */
-		if ((chan->streamid == -1 && chan->timingfunc == NULL) && (filename = strsep(&filename_tmp, "&"))) {
+		if (!quieted && (chan->streamid == -1 && chan->timingfunc == NULL) && (filename = strsep(&filename_tmp, "&"))) {
 			/* Discard old stream information */
 			ast_stopstream(chan);
 			/* Start new stream */
@@ -587,7 +587,7 @@ static int speech_background(struct ast_channel *chan, void *data)
                 }
 
 		/* Do timeout check (shared between audio/dtmf) */
-		if (started == 1) {
+		if (!quieted && started == 1) {
 			time(&current);
 			if ((current-start) >= timeout) {
 				done = 1;
@@ -599,9 +599,11 @@ static int speech_background(struct ast_channel *chan, void *data)
 
                 /* Do checks on speech structure to see if it's changed */
                 ast_mutex_lock(&speech->lock);
-                if (ast_test_flag(speech, AST_SPEECH_QUIET) && chan->stream != NULL) {
-                        ast_stopstream(chan);
+                if (ast_test_flag(speech, AST_SPEECH_QUIET)) {
+			if (chan->stream)
+				ast_stopstream(chan);
 			ast_clear_flag(speech, AST_SPEECH_QUIET);
+			quieted = 1;
                 }
                 /* Check state so we can see what to do */
                 switch (speech->state) {
@@ -609,43 +611,47 @@ static int speech_background(struct ast_channel *chan, void *data)
                         /* If audio playback has stopped do a check for timeout purposes */
                         if (chan->streamid == -1 && chan->timingfunc == NULL)
                                 ast_stopstream(chan);
-                        if (chan->stream == NULL && timeout > 0 && started == 0 && !filename_tmp) {
+                        if (!quieted && chan->stream == NULL && timeout > 0 && started == 0 && !filename_tmp) {
 				time(&start);
 				started = 1;
                         }
-                        /* Deal with audio frames if present */
-                        if (f != NULL && f->frametype == AST_FRAME_VOICE) {
+                        /* Write audio frame out to speech engine if no DTMF has been received */
+                        if (!strlen(dtmf) && f != NULL && f->frametype == AST_FRAME_VOICE) {
                                 ast_speech_write(speech, f->data, f->datalen);
                         }
                         break;
                 case AST_SPEECH_STATE_WAIT:
                         /* Cue up waiting sound if not already playing */
-                        if (chan->stream == NULL) {
-                                if (speech->processing_sound != NULL) {
-                                        if (strlen(speech->processing_sound) > 0 && strcasecmp(speech->processing_sound,"none")) {
-                                                speech_streamfile(chan, speech->processing_sound, chan->language);
-                                        }
-                                }
-                        } else if (chan->streamid == -1 && chan->timingfunc == NULL) {
-                                ast_stopstream(chan);
-                                if (speech->processing_sound != NULL) {
-                                        if (strlen(speech->processing_sound) > 0 && strcasecmp(speech->processing_sound,"none")) {
-                                                speech_streamfile(chan, speech->processing_sound, chan->language);
-                                        }
-                                }
-                        }
+			if (!strlen(dtmf)) {
+				if (chan->stream == NULL) {
+					if (speech->processing_sound != NULL) {
+						if (strlen(speech->processing_sound) > 0 && strcasecmp(speech->processing_sound,"none")) {
+							speech_streamfile(chan, speech->processing_sound, chan->language);
+						}
+					}
+				} else if (chan->streamid == -1 && chan->timingfunc == NULL) {
+					ast_stopstream(chan);
+					if (speech->processing_sound != NULL) {
+						if (strlen(speech->processing_sound) > 0 && strcasecmp(speech->processing_sound,"none")) {
+							speech_streamfile(chan, speech->processing_sound, chan->language);
+						}
+					}
+				}
+			}
                         break;
                 case AST_SPEECH_STATE_DONE:
-                        /* Copy to speech structure the results, if available */
-                        speech->results = ast_speech_results_get(speech);
-                        /* Now that we are done... let's switch back to not ready state */
+			/* Now that we are done... let's switch back to not ready state */
 			ast_speech_change_state(speech, AST_SPEECH_STATE_NOT_READY);
-                        /* Break out of our background too */
-                        done = 1;
-                        /* Stop audio playback */
-                        if (chan->stream != NULL) {
-                                ast_stopstream(chan);
-                        }
+			if (!strlen(dtmf)) {
+				/* Copy to speech structure the results, if available */
+				speech->results = ast_speech_results_get(speech);
+				/* Break out of our background too */
+				done = 1;
+				/* Stop audio playback */
+				if (chan->stream != NULL) {
+					ast_stopstream(chan);
+				}
+			}
                         break;
                 default:
                         break;
@@ -687,7 +693,7 @@ static int speech_background(struct ast_channel *chan, void *data)
                 }
         }
 
-	if (strlen(dtmf) > 0 && speech->results == NULL) {
+	if (strlen(dtmf)) {
 		/* We sort of make a results entry */
 		speech->results = ast_calloc(1, sizeof(*speech->results));
 		if (speech->results != NULL) {

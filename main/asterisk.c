@@ -232,7 +232,11 @@ static pthread_t consolethread = AST_PTHREADT_NULL;
 
 static char randompool[256];
 
-static unsigned int need_reload;
+static int sig_alert_pipe[2] = { -1, -1 };
+static struct {
+	 unsigned int need_reload:1;
+	 unsigned int need_quit:1;
+} sig_flags;
 
 #if !defined(LOW_MEMORY)
 struct file_version {
@@ -489,7 +493,7 @@ static const char show_version_files_help[] =
 "       Optional regular expression pattern is used to filter the file list.\n";
 
 /*! \brief CLI command to list module versions */
-static int handle_show_version_files(int fd, int argc, char *argv[])
+static int handle_show_version_files_deprecated(int fd, int argc, char *argv[])
 {
 #define FORMAT "%-25.25s %-40.40s\n"
 	struct file_version *iterator;
@@ -543,7 +547,61 @@ static int handle_show_version_files(int fd, int argc, char *argv[])
 #undef FORMAT
 }
 
-static char *complete_show_version_files(const char *line, const char *word, int pos, int state)
+static int handle_show_version_files(int fd, int argc, char *argv[])
+{
+#define FORMAT "%-25.25s %-40.40s\n"
+	struct file_version *iterator;
+	regex_t regexbuf;
+	int havepattern = 0;
+	int havename = 0;
+	int count_files = 0;
+
+	switch (argc) {
+	case 6:
+		if (!strcasecmp(argv[4], "like")) {
+			if (regcomp(&regexbuf, argv[5], REG_EXTENDED | REG_NOSUB))
+				return RESULT_SHOWUSAGE;
+			havepattern = 1;
+		} else
+			return RESULT_SHOWUSAGE;
+		break;
+	case 5:
+		havename = 1;
+		break;
+	case 4:
+		break;
+	default:
+		return RESULT_SHOWUSAGE;
+	}
+
+	ast_cli(fd, FORMAT, "File", "Revision");
+	ast_cli(fd, FORMAT, "----", "--------");
+	AST_LIST_LOCK(&file_versions);
+	AST_LIST_TRAVERSE(&file_versions, iterator, list) {
+		if (havename && strcasecmp(iterator->file, argv[4]))
+			continue;
+		
+		if (havepattern && regexec(&regexbuf, iterator->file, 0, NULL, 0))
+			continue;
+
+		ast_cli(fd, FORMAT, iterator->file, iterator->version);
+		count_files++;
+		if (havename)
+			break;
+	}
+	AST_LIST_UNLOCK(&file_versions);
+	if (!havename) {
+		ast_cli(fd, "%d files listed.\n", count_files);
+	}
+
+	if (havepattern)
+		regfree(&regexbuf);
+
+	return RESULT_SUCCESS;
+#undef FORMAT
+}
+
+static char *complete_show_version_files_deprecated(const char *line, const char *word, int pos, int state)
 {
 	struct file_version *find;
 	int which = 0;
@@ -564,6 +622,29 @@ static char *complete_show_version_files(const char *line, const char *word, int
 
 	return ret;
 }
+
+static char *complete_show_version_files(const char *line, const char *word, int pos, int state)
+{
+	struct file_version *find;
+	int which = 0;
+	char *ret = NULL;
+	int matchlen = strlen(word);
+	
+	if (pos != 4)
+		return NULL;
+
+	AST_LIST_LOCK(&file_versions);
+	AST_LIST_TRAVERSE(&file_versions, find, list) {
+		if (!strncasecmp(word, find->file, matchlen) && ++which > state) {
+			ret = ast_strdup(find->file);
+			break;
+		}
+	}
+	AST_LIST_UNLOCK(&file_versions);
+
+	return ret;
+}
+
 #endif /* ! LOW_MEMORY */
 
 int ast_register_atexit(void (*func)(void))
@@ -989,11 +1070,14 @@ static void urg_handler(int num)
 
 static void hup_handler(int num)
 {
+	int a = 0;
 	if (option_verbose > 1) 
 		printf("Received HUP signal -- Reloading configs\n");
 	if (restartnow)
 		execvp(_argv[0], _argv);
-	need_reload = 1;
+	sig_flags.need_reload = 1;
+	if (sig_alert_pipe[1] != -1)
+		write(sig_alert_pipe[1], &a, sizeof(a));
 	signal(num, hup_handler);
 }
 
@@ -1184,7 +1268,7 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 			fcntl(x, F_SETFD, FD_CLOEXEC);
 		}
 		if (option_verbose || ast_opt_console)
-			ast_verbose("Restarting Asterisk NOW...\n");
+			ast_verbose("Asterisk is now restarting...\n");
 		restartnow = 1;
 
 		/* close logger */
@@ -1208,7 +1292,12 @@ static void quit_handler(int num, int nice, int safeshutdown, int restart)
 
 static void __quit_handler(int num)
 {
-	quit_handler(num, 0, 1, 0);
+	int a = 0;
+	sig_flags.need_quit = 1;
+	if (sig_alert_pipe[1] != -1)
+		write(sig_alert_pipe[1], &a, sizeof(a));
+	/* There is no need to restore the signal handler here, since the app
+	 * is going to exit */
 }
 
 static const char *fix_header(char *outbuf, int maxout, const char *s, char *cmp)
@@ -1504,9 +1593,26 @@ static int show_license(int fd, int argc, char *argv[])
 
 #define ASTERISK_PROMPT2 "%s*CLI> "
 static struct ast_cli_entry cli_show_version_deprecated = {
-       { "show", "version", NULL },
-       handle_version_deprecated, "Display version info",
-       version_help };
+	{ "show", "version", NULL },
+	handle_version_deprecated, "Display version info",
+	version_help };
+
+#if !defined(LOW_MEMORY)
+static struct ast_cli_entry cli_show_version_files_deprecated = {
+	{ "show", "version", "files", NULL },
+	handle_show_version_files_deprecated, NULL,
+	NULL, complete_show_version_files_deprecated };
+
+static struct ast_cli_entry cli_show_profile_deprecated = {
+	{ "show", "profile", NULL },
+	handle_show_profile_deprecated, NULL,
+	NULL };
+
+static struct ast_cli_entry cli_clear_profile_deprecated = {
+	{ "clear", "profile", NULL },
+	handle_show_profile_deprecated, NULL,
+	NULL };
+#endif /* ! LOW_MEMORY */
 
 static struct ast_cli_entry cli_asterisk[] = {
 	{ { "abort", "halt", NULL },
@@ -2145,11 +2251,6 @@ static void ast_remotecontrol(char * data)
 				}
 			}
 		}
-
-		if (need_reload) {
-			need_reload = 0;
-			ast_module_reload(NULL);
-		}
 	}
 	printf("\nDisconnected from Asterisk server\n");
 }
@@ -2352,6 +2453,26 @@ static void ast_readconfig(void)
 		}
 	}
 	ast_config_destroy(cfg);
+}
+
+static void *monitor_sig_flags(void *unused)
+{
+	for (;;) {
+		struct pollfd p = { sig_alert_pipe[0], POLLIN, 0 };
+		int a;
+		poll(&p, 1, -1);
+		if (sig_flags.need_reload) {
+			sig_flags.need_reload = 0;
+			ast_module_reload(NULL);
+		}
+		if (sig_flags.need_quit) {
+			sig_flags.need_quit = 0;
+			quit_handler(0, 0, 1, 0);
+		}
+		read(sig_alert_pipe[0], &a, sizeof(a));
+	}
+
+	return NULL;
 }
 
 int main(int argc, char *argv[])
@@ -2784,6 +2905,9 @@ int main(int argc, char *argv[])
 	if (ast_opt_no_fork)
 		consolethread = pthread_self();
 
+	if (pipe(sig_alert_pipe))
+		sig_alert_pipe[0] = sig_alert_pipe[1] = -1;
+
 	ast_set_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED);
 	pthread_sigmask(SIG_UNBLOCK, &sigs, NULL);
 
@@ -2798,6 +2922,14 @@ int main(int argc, char *argv[])
 		/* Console stuff now... */
 		/* Register our quit function */
 		char title[256];
+		pthread_attr_t attr;
+		pthread_t dont_care;
+
+		pthread_attr_init(&attr);
+		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+		ast_pthread_create(&dont_care, &attr, monitor_sig_flags, NULL);
+		pthread_attr_destroy(&attr);
+
 		set_icon("Asterisk");
 		snprintf(title, sizeof(title), "Asterisk Console on '%s' (pid %ld)", hostname, (long)ast_mainpid);
 		set_title(title);
@@ -2821,22 +2953,10 @@ int main(int argc, char *argv[])
 					ast_log(LOG_WARNING, "Failed to open /dev/null to recover from dead console. Bad things will happen!\n");
 				break;
 			}
-			if (need_reload) {
-				need_reload = 0;
-				ast_module_reload(NULL);
-			}
 		}
 	}
-	/* Do nothing */
-	for (;;) {	/* apparently needed for Mac OS X */
-		struct pollfd p = { -1 /* no descriptor */, 0, 0 };
-		poll(&p, 0, -1);
- 		/* SIGHUP will cause this to break out of poll() */
- 		if (need_reload) {
- 			need_reload = 0;
- 			ast_module_reload(NULL);
- 		}
-	}
+
+	monitor_sig_flags(NULL);
 
 	return 0;
 }

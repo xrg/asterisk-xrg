@@ -437,6 +437,12 @@ fi
 if test "${USE_IMAP_TK}" != "no"; then
    if test "${IMAP_TK_DIR}" = ""; then
       IMAP_TK_DIR=`pwd`"/../imap-2004g"
+      if test  -n "${IMAP_TK_MANDATORY}"; then
+	 AC_MSG_NOTICE([The --with-imap option does not search your system for installed])
+	 AC_MSG_NOTICE([c-client library/header files. Since you did not provide a path])
+	 AC_MSG_NOTICE([the configure script will assume you have placed built the c-client])
+	 AC_MSG_NOTICE([files at ${IMAP_TK_DIR}, as outlined in the doc/imapstorage.txt file.])
+      fi
    fi
    AC_MSG_CHECKING(for UW IMAP Toolkit c-client library)
    saved_cppflags="${CPPFLAGS}"
@@ -567,7 +573,7 @@ if test "${USE_IMAP_TK}" != "no"; then
       if test "${ac_cv_imap_tk2006}" = "yes"; then
          AC_DEFINE([HAVE_IMAP_TK2006], 1, [Define if your system has the UW IMAP Toolkit c-client library version 2006 or greater.])
       fi
-   elif test ! -z "${IMAP_TK_MANDATORY}"; then
+   elif test -n "${IMAP_TK_MANDATORY}"; then
       AC_MSG_RESULT(no) 
       AC_MSG_NOTICE([***])
       AC_MSG_NOTICE([*** The UW IMAP Toolkit installation on this system appears to be broken.])
@@ -613,7 +619,7 @@ if test "${USE_KDE}" != "no"; then
       fi
       PBX_KDE=1
       AC_DEFINE([HAVE_LIBKDE], 1, [Define if your system has the KDE libraries.])
-   elif test ! -z "${KDE_MANDATORY}"; then
+   elif test -n "${KDE_MANDATORY}"; then
       AC_MSG_RESULT(no) 
       AC_MSG_NOTICE([***])
       AC_MSG_NOTICE([*** The KDE installation on this system appears to be broken.])
@@ -671,7 +677,7 @@ if test x"${NETSNMP_CONFIG}" != xNo; then
    if test "${ac_cv_lib_netsnmp_snmp_register_callback}" = "yes"; then
       NETSNMP_LIB="${NETSNMP_libs}"
       PBX_NETSNMP=1
-   elif test ! -z "${NETSNMP_MANDATORY}";
+   elif test -n "${NETSNMP_MANDATORY}";
    then
       AC_MSG_NOTICE([***])
       AC_MSG_NOTICE([*** The Net-SNMP installation on this system appears to be broken.])
@@ -679,7 +685,7 @@ if test x"${NETSNMP_CONFIG}" != xNo; then
       AC_MSG_NOTICE([*** including --without-netsnmp])
       exit 1
    fi
-elif test ! -z "${NETSNMP_MANDATORY}";
+elif test -n "${NETSNMP_MANDATORY}";
 then
    AC_MSG_NOTICE([***])
    AC_MSG_NOTICE([*** The Net-SNMP installation on this system appears to be broken.])
@@ -696,6 +702,7 @@ AST_EXT_LIB_CHECK([OGG], [ogg], [ogg_sync_init], [])
 
 AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
 
+if test "${USE_OSS}" != "no"; then
 PBX_OSS=0
 AC_CHECK_HEADER([linux/soundcard.h],
 	        [
@@ -711,6 +718,7 @@ if test "$PBX_OSS" = "0"; then
 fi
 if test "$PBX_OSS" = "0"; then
    AST_EXT_LIB_CHECK([OSS], [ossaudio], [oss_ioctl_mixer], [soundcard.h])
+fi
 fi
 
 PG_CONFIG=No
@@ -732,23 +740,33 @@ fi
 if test "${PG_CONFIG}" != No; then
    PGSQL_libdir=`${PG_CONFIG} --libdir`
    PGSQL_includedir=`${PG_CONFIG} --includedir`
-   
-   AC_CHECK_LIB([pq], [PQexec], AC_DEFINE_UNQUOTED([HAVE_PGSQL], 1,
-   [Define to indicate the PostgreSQL library]), [], -L${PGSQL_libdir} -lz)
 
-   if test "${ac_cv_lib_pq_PQexec}" = "yes"; then
-      PGSQL_LIB="-L${PGSQL_libdir} -lpq -lz"
-      PGSQL_INCLUDE="-I${PGSQL_includedir}"
-      PBX_PGSQL=1
-   elif test ! -z "${PGSQL_MANDATORY}";
-   then
-      AC_MSG_NOTICE([***])
-      AC_MSG_NOTICE([*** The PostgreSQL installation on this system appears to be broken.])
-      AC_MSG_NOTICE([*** Either correct the installation, or run configure])
-      AC_MSG_NOTICE([*** including --without-postgres])
-      exit 1
+   if test "x$?" != "x0" ; then
+      if test -n "${PGSQL_MANDATORY}" ; then
+         AC_MSG_NOTICE([***])
+         AC_MSG_NOTICE([*** The PostgreSQL installation on this system appears to be broken.])
+         AC_MSG_NOTICE([*** Either correct the installation, or run configure])
+         AC_MSG_NOTICE([*** including --without-postgres])
+         exit 1
+	  fi
+   else 
+      AC_CHECK_LIB([pq], [PQexec], AC_DEFINE_UNQUOTED([HAVE_PGSQL], 1,
+      [Define to indicate the PostgreSQL library]), [], -L${PGSQL_libdir} -lz)
+
+      if test "${ac_cv_lib_pq_PQexec}" = "yes"; then
+         PGSQL_LIB="-L${PGSQL_libdir} -lpq -lz"
+         PGSQL_INCLUDE="-I${PGSQL_includedir}"
+         PBX_PGSQL=1
+      elif test -n "${PGSQL_MANDATORY}";
+      then
+         AC_MSG_NOTICE([***])
+         AC_MSG_NOTICE([*** The PostgreSQL installation on this system appears to be broken.])
+         AC_MSG_NOTICE([*** Either correct the installation, or run configure])
+         AC_MSG_NOTICE([*** including --without-postgres])
+         exit 1
+      fi
    fi
-elif test ! -z "${PGSQL_MANDATORY}";
+elif test -n "${PGSQL_MANDATORY}";
 then
    AC_MSG_NOTICE([***])
    AC_MSG_NOTICE([*** The PostgreSQL installation on this system appears to be broken.])
@@ -762,7 +780,7 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_call], [libpri.h])
 
 if test "${USE_PWLIB}" != "no"; then
-	if test ! -z "${PWLIB_DIR}"; then
+	if test -n "${PWLIB_DIR}"; then
 		PWLIBDIR="${PWLIB_DIR}"
 	fi
 	AST_CHECK_PWLIB()
@@ -780,7 +798,7 @@ if test "${USE_PWLIB}" != "no"; then
 	fi
 fi
 
-if test "${USE_PWLIB}" != "no" -a "x${ac_cv_lib_PWLIB}" != "xyes" -a ! -z "${PWLIB_MANDATORY}"; then
+if test "${USE_PWLIB}" != "no" -a "x${ac_cv_lib_PWLIB}" != "xyes" -a -n "${PWLIB_MANDATORY}"; then
    AC_MSG_NOTICE([***])
    AC_MSG_NOTICE([*** The PWLIB installation on this system appears to be broken.])
    AC_MSG_NOTICE([*** Either correct the installation, or run configure])
@@ -789,7 +807,7 @@ if test "${USE_PWLIB}" != "no" -a "x${ac_cv_lib_PWLIB}" != "xyes" -a ! -z "${PWL
 fi
 
 if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
-	if test ! -z "${OPENH323_DIR}"; then
+	if test -n "${OPENH323_DIR}"; then
 		OPENH323DIR="${OPENH323_DIR}"
 	fi
 	AST_CHECK_OPENH323()
@@ -804,7 +822,7 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 		[H323EndPoint ep = H323EndPoint();],
 		[${PWLIB_INCLUDE}], [${PWLIB_LIB}])
 fi
-if test "${USE_OPENH323}" != "no" -a "x${ac_cv_lib_OPENH323}" != "xyes" -a ! -z "${OPENH323_MANDATORY}"; then
+if test "${USE_OPENH323}" != "no" -a "x${ac_cv_lib_OPENH323}" != "xyes" -a -n "${OPENH323_MANDATORY}"; then
    AC_MSG_NOTICE([***])
    AC_MSG_NOTICE([*** The OPENH323 installation on this system appears to be broken.])
    AC_MSG_NOTICE([*** Either correct the installation, or run configure])
@@ -872,7 +890,7 @@ if test "${USE_QT}" != "no"; then
       PBX_QT=1
       AC_DEFINE([HAVE_QT], 1, [Define if your system has the Qt library])
       AC_PATH_TOOL(QTMOC, moc, No)
-   elif test ! -z "${QT_MANDATORY}"; 
+   elif test -n "${QT_MANDATORY}"; 
    then
       AC_MSG_NOTICE([***])
       AC_MSG_NOTICE([*** The Qt installation on this system appears to be broken.])
@@ -964,7 +982,7 @@ if test "${USE_VPB}" != "no"; then
 	fi
 	PBX_VPB=1
 	AC_DEFINE([HAVE_VPB], 1, [Define if your system has the VoiceTronix API libraries.])
-   elif test ! -z "${VPB_MANDATORY}"; then
+   elif test -n "${VPB_MANDATORY}"; then
       AC_MSG_NOTICE([***])
       AC_MSG_NOTICE([*** The VoiceTronix (vpb) installation on this system appears to be broken.])
       AC_MSG_NOTICE([*** Either correct the installation, or run configure])
@@ -1003,7 +1021,7 @@ if test "${USE_ZAPTEL}" != "no"; then
 	fi
 	PBX_ZAPTEL=1
 	AC_DEFINE([HAVE_ZAPTEL], 1, [Define if your system has the Zaptel headers.])
-   elif test ! -z "${ZAPTEL_MANDATORY}"; 
+   elif test -n "${ZAPTEL_MANDATORY}"; 
    then
       AC_MSG_NOTICE([***])
       AC_MSG_NOTICE([*** The Zaptel installation on this system appears to be broken.])
@@ -1036,7 +1054,7 @@ if test "${PBX_ZAPTEL}" = 1; then
    if test "${ac_cv_zaptel_vldtmf}" = "yes"; then
 	PBX_ZAPTEL_VLDTMF=1
    fi
-   AC_MSG_CHECKING(for ZT_TCOP_TRANSCODE in zaptel/zaptel.h)
+   AC_MSG_CHECKING(for ZT_TCOP_ALLOCATE in zaptel/zaptel.h)
    saved_cppflags="${CPPFLAGS}"
    if test "x${ZAPTEL_DIR}" != "x"; then
       CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
@@ -1045,7 +1063,7 @@ if test "${PBX_ZAPTEL}" = 1; then
 	[
 	AC_LANG_PROGRAM(
 	[#include <zaptel/zaptel.h>],
-	[int foo = ZT_TCOP_TRANSCODE;])
+	[int foo = ZT_TCOP_ALLOCATE;])
 	],
 	[	AC_MSG_RESULT(yes) 
 		ac_cv_zaptel_transcode="yes" 

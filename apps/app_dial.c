@@ -82,7 +82,7 @@ static char *descrip =
 "    ANSWEREDTIME - This is the amount of time for actual call.\n"
 "    DIALSTATUS   - This is the status of the call:\n"
 "                   CHANUNAVAIL | CONGESTION | NOANSWER | BUSY | ANSWER | CANCEL\n" 
-"                   DONTCALL | TORTURE\n"
+"                   DONTCALL | TORTURE | INVALIDARGS\n"
 "  For the Privacy and Screening Modes, the DIALSTATUS variable will be set to\n"
 "DONTCALL if the called party chooses to send the calling party to the 'Go Away'\n"
 "script. The DIALSTATUS variable will be set to TORTURE if the called party\n"
@@ -729,9 +729,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					ast_log(LOG_WARNING, "Unable to send URL\n");
 			
 
-			if (single && ((f->frametype == AST_FRAME_VOICE) || (f->frametype == AST_FRAME_DTMF)))  {
+			if (single && ((f->frametype == AST_FRAME_VOICE) || (f->frametype == AST_FRAME_DTMF_BEGIN) || (f->frametype == AST_FRAME_DTMF_END)))  {
 				if (ast_write(outgoing->chan, f))
-					ast_log(LOG_WARNING, "Unable to forward voice\n");
+					ast_log(LOG_WARNING, "Unable to forward voice or dtmf\n");
 			}
 			if (single && (f->frametype == AST_FRAME_CONTROL) && 
 				((f->subclass == AST_CONTROL_HOLD) || 
@@ -770,7 +770,7 @@ static int valid_priv_reply(struct ast_flags *opts, int res)
 	return 0;
 }
 
-static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags *peerflags)
+static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags *peerflags, int *continue_exec)
 {
 	int res = -1;
 	struct ast_module_user *u;
@@ -793,7 +793,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	const char *end_sound = NULL;
 	const char *start_sound = NULL;
 	char *dtmfcalled = NULL, *dtmfcalling = NULL;
-	char status[256];
+	char status[256] = "INVALIDARGS";
 	int play_to_caller = 0, play_to_callee = 0;
 	int sentringing = 0, moh = 0;
 	const char *outbound_group = NULL;
@@ -814,21 +814,25 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/number)\n");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		return -1;
 	}
 
 	u = ast_module_user_add(chan);
 
 	parse = ast_strdupa(data);
-
+	
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	if (!ast_strlen_zero(args.options) &&
-			ast_app_parse_options(dial_exec_options, &opts, opt_args, args.options))
+			ast_app_parse_options(dial_exec_options, &opts, opt_args, args.options)) {
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		goto done;
+	}
 
 	if (ast_strlen_zero(args.peers)) {
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/number)\n");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		goto done;
 	}
 
@@ -844,6 +848,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		calldurationlimit = atoi(opt_args[OPT_ARG_DURATION_STOP]);
 		if (!calldurationlimit) {
 			ast_log(LOG_WARNING, "Dial does not accept S(%s), hanging up.\n", opt_args[OPT_ARG_DURATION_STOP]);
+			pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 			goto done;
 		}
 		if (option_verbose > 2)
@@ -1029,6 +1034,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				   "At the tone, please say your name:"
 
 				*/
+				ast_answer(chan);
 				res = ast_play_and_record(chan, "priv-recordintro", privintro, 4, "gsm", &duration, 128, 2000, 0);  /* NOTE: I've reduced the total time to 4 sec */
 										/* don't think we'll need a lock removed, we took care of
 										   conflicts by naming the privintro file */
@@ -1046,6 +1052,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			}
 		}
 	}
+
+	if (continue_exec)
+		*continue_exec = 0;
 
 	/* If a channel group has been specified, get it for use when we create peer channels */
 	outbound_group = pbx_builtin_getvar_helper(chan, "OUTBOUND_GROUP");
@@ -1177,8 +1186,14 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_app_group_set_channel(tmp->chan, outbound_group);
 
 		/* Inherit context and extension */
-		ast_copy_string(tmp->chan->dialcontext, chan->context, sizeof(tmp->chan->dialcontext));
-		ast_copy_string(tmp->chan->exten, chan->exten, sizeof(tmp->chan->exten));
+		if (!ast_strlen_zero(chan->macrocontext))
+			ast_copy_string(tmp->chan->dialcontext, chan->macrocontext, sizeof(tmp->chan->dialcontext));
+		else
+			ast_copy_string(tmp->chan->dialcontext, chan->context, sizeof(tmp->chan->dialcontext));
+		if (!ast_strlen_zero(chan->macroexten))
+			ast_copy_string(tmp->chan->exten, chan->macroexten, sizeof(tmp->chan->exten));
+		else
+			ast_copy_string(tmp->chan->exten, chan->exten, sizeof(tmp->chan->exten));
 
 		/* Place the call, but don't wait on the answer */
 		res = ast_call(tmp->chan, numsubst, 0);
@@ -1233,7 +1248,14 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		strcpy(status, "NOANSWER");
 		if (ast_test_flag(outgoing, OPT_MUSICBACK)) {
 			moh = 1;
-			ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
+			if (!ast_strlen_zero(opt_args[OPT_ARG_MUSICBACK])) {
+				char *original_moh = ast_strdupa(chan->musicclass);
+				ast_string_field_set(chan, musicclass, opt_args[OPT_ARG_MUSICBACK]);
+				ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
+				ast_string_field_set(chan, musicclass, original_moh);
+			} else {
+				ast_moh_start(chan, NULL, NULL);
+			}
 			ast_indicate(chan, AST_CONTROL_PROGRESS);
 		} else if (ast_test_flag(outgoing, OPT_RINGBACK)) {
 			ast_indicate(chan, AST_CONTROL_RINGING);
@@ -1291,8 +1313,11 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			   time and make the caller believe the peer hasn't picked up yet */
 
 			if (ast_test_flag(&opts, OPT_MUSICBACK) && !ast_strlen_zero(opt_args[OPT_ARG_MUSICBACK])) {
+				char *original_moh = ast_strdupa(chan->musicclass);
 				ast_indicate(chan, -1);
+				ast_string_field_set(chan, musicclass, opt_args[OPT_ARG_MUSICBACK]);
 				ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
+				ast_string_field_set(chan, musicclass, original_moh);
 			} else if (ast_test_flag(&opts, OPT_RINGBACK)) {
 				ast_indicate(chan, AST_CONTROL_RINGING);
 				sentringing++;
@@ -1460,7 +1485,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			peer->priority++;
 			ast_pbx_start(peer);
 			hanguptree(outgoing, NULL);
-			res = 1;
+			if (continue_exec)
+				*continue_exec = 1;
+			res = 0;
 			goto done;
 		}
 
@@ -1653,12 +1680,10 @@ done:
 static int dial_exec(struct ast_channel *chan, void *data)
 {
 	struct ast_flags peerflags;
-	int res = 0;
 
 	memset(&peerflags, 0, sizeof(peerflags));
-	res = dial_exec_full(chan, data, &peerflags);
 
-	return (res >= 0 ? 0 : -1);
+	return dial_exec_full(chan, data, &peerflags, NULL);
 }
 
 static int retrydial_exec(struct ast_channel *chan, void *data)
@@ -1714,14 +1739,16 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 
 	res = 0;
 	while (loops) {
+		int continue_exec;
+
 		chan->data = "Retrying";
 		if (ast_test_flag(chan, AST_FLAG_MOH))
 			ast_moh_stop(chan);
 
-		res = dial_exec_full(chan, dialdata, &peerflags);
-		if (res == 1) {
+		res = dial_exec_full(chan, dialdata, &peerflags, &continue_exec);
+		if (continue_exec)
 			break;
-		} else if (res == 0) {
+		if (res == 0) {
 			if (ast_test_flag(&peerflags, OPT_DTMF_EXIT)) {
 				if (!(res = ast_streamfile(chan, announce, chan->language)))
 					res = ast_waitstream(chan, AST_DIGIT_ANY);
@@ -1759,7 +1786,6 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 
 	if (ast_test_flag(chan, AST_FLAG_MOH))
 		ast_moh_stop(chan);
-
  done:
 	ast_module_user_remove(u);
 	return res;

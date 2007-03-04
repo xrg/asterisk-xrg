@@ -48,7 +48,7 @@ static char userscontext[AST_MAX_EXTENSION] = "default";
 
 static int static_config = 0;
 static int write_protect_config = 1;
-static int autofallthrough_config = 0;
+static int autofallthrough_config = 1;
 static int clearglobalvars_config = 0;
 
 AST_MUTEX_DEFINE_STATIC(save_dialplan_lock);
@@ -2067,6 +2067,8 @@ static int handle_reload_extensions(int fd, int argc, char *argv[])
 {
 	if (argc != 2)
 		return RESULT_SHOWUSAGE;
+	if (clearglobalvars_config)
+		pbx_builtin_clear_globals();
 	pbx_load_module();
 	return RESULT_SUCCESS;
 }
@@ -2172,6 +2174,7 @@ static int pbx_load_config(const char *config_file)
 	struct ast_context *con;
 	struct ast_variable *v;
 	const char *cxt;
+	const char *aft;
 
 	cfg = ast_config_load(config_file);
 	if (!cfg)
@@ -2180,7 +2183,8 @@ static int pbx_load_config(const char *config_file)
 	/* Use existing config to populate the PBX table */
 	static_config = ast_true(ast_variable_retrieve(cfg, "general", "static"));
 	write_protect_config = ast_true(ast_variable_retrieve(cfg, "general", "writeprotect"));
-	autofallthrough_config = ast_true(ast_variable_retrieve(cfg, "general", "autofallthrough"));
+	if ((aft = ast_variable_retrieve(cfg, "general", "autofallthrough")))
+		autofallthrough_config = ast_true(aft);
 	clearglobalvars_config = ast_true(ast_variable_retrieve(cfg, "general", "clearglobalvars"));
 	ast_set2_flag(&ast_options, ast_true(ast_variable_retrieve(cfg, "general", "priorityjumping")), AST_OPT_FLAG_PRIORITY_JUMPING);
 

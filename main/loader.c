@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 45817 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <dirent.h>
@@ -445,6 +445,11 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 	if (!ast_test_flag(mod, FLAG_RUNNING | FLAG_DECLINED))
 		error = 1;
 
+	if (!mod->lib) {
+		ast_log(LOG_WARNING, "Unloading embedded modules is not supported.\n");
+		error = 1;
+	}
+
 	if (!error && (mod->usecount > 0)) {
 		if (force)
 			ast_log(LOG_WARNING, "Warning:  Forcing removal of module '%s' with use count %d\n",
@@ -535,8 +540,10 @@ int ast_module_reload(const char *name)
 	}
 	ast_lastreloadtime = time(NULL);
 
-	if (name && res)
+	if (name && res) {
+		ast_mutex_unlock(&reloadlock);
 		return res;
+	}
 
 	AST_LIST_LOCK(&module_list);
 	AST_LIST_TRAVERSE(&module_list, cur, entry) {

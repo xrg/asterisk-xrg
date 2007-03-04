@@ -161,7 +161,7 @@ static char *descrip =
 static char *app_aqm = "AddQueueMember" ;
 static char *app_aqm_synopsis = "Dynamically adds queue members" ;
 static char *app_aqm_descrip =
-"   AddQueueMember(queuename[|interface[|penalty[|options]]]):\n"
+"   AddQueueMember(queuename[|interface[|penalty[|options[|membername]]]]):\n"
 "Dynamically adds interface to an existing queue.\n"
 "If the interface is already in the queue and there exists an n+101 priority\n"
 "then it will then jump to this priority.  Otherwise it will return an error\n"
@@ -1929,7 +1929,10 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 				if (!ast_strlen_zero(o->chan->call_forward) && !forwardsallowed) {
 					if (option_verbose > 2)
 						ast_verbose(VERBOSE_PREFIX_3 "Forwarding %s to '%s' prevented.\n", in->name, o->chan->call_forward);
-                                        winner = o->chan = NULL;
+					numnochan++;
+					do_hang(o);
+					winner = NULL;
+					continue;
 				} else if (!ast_strlen_zero(o->chan->call_forward)) {
 					char tmpchan[256];
 					char *stuff;

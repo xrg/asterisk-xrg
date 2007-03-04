@@ -227,7 +227,6 @@ static struct ast_flags globalflags = { 0 };
 static pthread_t netthreadid = AST_PTHREADT_NULL;
 static pthread_t schedthreadid = AST_PTHREADT_NULL;
 AST_MUTEX_DEFINE_STATIC(sched_lock);
-static int sched_halt = 0;
 static ast_cond_t sched_cond;
 
 enum {
@@ -448,6 +447,7 @@ static AST_LIST_HEAD_STATIC(registrations, iax2_registry);
 static int iaxthreadcount = DEFAULT_THREAD_COUNT;
 static int iaxmaxthreadcount = DEFAULT_MAX_THREAD_COUNT;
 static int iaxdynamicthreadcount = 0;
+static int iaxactivethreadcount = 0;
 
 struct iax_rr {
 	int jitter;
@@ -690,7 +690,6 @@ struct iax2_thread {
 	char curfunc[80];
 #endif	
 	int actions;
-	int halt;
 	pthread_t threadid;
 	int threadnum;
 	struct sockaddr_in iosin;
@@ -843,6 +842,7 @@ static void insert_idle_thread(struct iax2_thread *thread)
 
 static struct iax2_thread *find_idle_thread(void)
 {
+	pthread_attr_t attr;
 	struct iax2_thread *thread = NULL;
 
 	/* Pop the head of the list off */
@@ -862,7 +862,9 @@ static struct iax2_thread *find_idle_thread(void)
 				thread->type = IAX_TYPE_DYNAMIC;
 				ast_mutex_init(&thread->lock);
 				ast_cond_init(&thread->cond, NULL);
-				if (ast_pthread_create_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
+				pthread_attr_init(&attr);
+				pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);	
+				if (ast_pthread_create(&thread->threadid, &attr, iax2_process_thread, thread)) {
 					free(thread);
 					thread = NULL;
 				} else {
@@ -2446,8 +2448,10 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 
 	peer = build_peer(peername, var, NULL, ast_test_flag((&globalflags), IAX_RTCACHEFRIENDS) ? 0 : 1);
 	
-	if (!peer)
+	if (!peer) {
+		ast_variables_destroy(var);
 		return NULL;
+	}
 
 	for (tmp = var; tmp; tmp = tmp->next) {
 		/* Make sure it's not a user only... */
@@ -2470,10 +2474,11 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 				dynamic = 1;
 		}
 	}
-	if (!peer)
-		return NULL;
 
 	ast_variables_destroy(var);
+
+	if (!peer)
+		return NULL;
 
 	if (ast_test_flag((&globalflags), IAX_RTCACHEFRIENDS)) {
 		ast_copy_flags(peer, &globalflags, IAX_RTAUTOCLEAR|IAX_RTCACHEFRIENDS);
@@ -2533,10 +2538,11 @@ static struct iax2_user *realtime_user(const char *username)
 	}
 
 	user = build_user(username, var, NULL, !ast_test_flag((&globalflags), IAX_RTCACHEFRIENDS));
-	if (!user)
-		return NULL;
 
 	ast_variables_destroy(var);
+
+	if (!user)
+		return NULL;
 
 	if (ast_test_flag((&globalflags), IAX_RTCACHEFRIENDS)) {
 		ast_set_flag(user, IAX_RTCACHEFRIENDS);
@@ -3178,23 +3184,34 @@ static int iax2_answer(struct ast_channel *c)
 static int iax2_indicate(struct ast_channel *c, int condition, const void *data, size_t datalen)
 {
 	unsigned short callno = PTR_TO_CALLNO(c->tech_pvt);
+	struct chan_iax2_pvt *pvt;
+	int res = 0;
 
 	if (option_debug && iaxdebug)
 		ast_log(LOG_DEBUG, "Indicating condition %d\n", condition);
 
-	if (!strcasecmp(iaxs[callno]->mohinterpret, "passthrough"))
-		return send_command_locked(callno, AST_FRAME_CONTROL, condition, 0, data, datalen, -1);
+	ast_mutex_lock(&iaxsl[callno]);
+	pvt = iaxs[callno];
+	if (!strcasecmp(pvt->mohinterpret, "passthrough")) {
+		res = send_command(pvt, AST_FRAME_CONTROL, condition, 0, data, datalen, -1);
+		ast_mutex_unlock(&iaxsl[callno]);
+		return res;
+	}
 
 	switch (condition) {
 	case AST_CONTROL_HOLD:
-		ast_moh_start(c, data, iaxs[callno]->mohinterpret);
-		return 0;
+		ast_moh_start(c, data, pvt->mohinterpret);
+		break;
 	case AST_CONTROL_UNHOLD:
 		ast_moh_stop(c);
-		return 0;
+		break;
 	default:
-		return send_command_locked(callno, AST_FRAME_CONTROL, condition, 0, data, datalen, -1);
+		res = send_command(pvt, AST_FRAME_CONTROL, condition, 0, data, datalen, -1);
 	}
+
+	ast_mutex_unlock(&iaxsl[callno]);
+
+	return res;
 }
 	
 static int iax2_transfer(struct ast_channel *c, const char *dest)
@@ -4739,16 +4756,14 @@ static int check_access(int callno, struct sockaddr_in *sin, struct iax_ies *ies
 				*key = '\0';
 				key++;
 			}
-			if (!key || ast_db_get(family, key, buf, sizeof(buf))) {
+			if (!key || ast_db_get(family, key, buf, sizeof(buf)))
 				ast_log(LOG_WARNING, "Unable to retrieve database password for family/key '%s'!\n", user->dbsecret);
-				if (ast_test_flag(user, IAX_TEMPONLY)) {
-					destroy_user(user);
-					user = NULL;
-				}
-			} else
+			else
 				ast_string_field_set(iaxs[callno], secret, buf);
 		} else
 			ast_string_field_set(iaxs[callno], secret, user->secret);
+		if (ast_test_flag(user, IAX_TEMPONLY))
+			destroy_user(user);
 		res = 0;
 	}
 	ast_set2_flag(iaxs[callno], iax2_getpeertrunk(*sin), IAX_TRUNK);	
@@ -7585,6 +7600,16 @@ retryowner2:
 	return 1;
 }
 
+/* Function to clean up process thread if it is cancelled */
+static void iax2_process_thread_cleanup(void *data)
+{
+	struct iax2_thread *thread = data;
+	ast_mutex_destroy(&thread->lock);
+	ast_cond_destroy(&thread->cond);
+	free(thread);
+	ast_atomic_dec_and_test(&iaxactivethreadcount);
+}
+
 static void *iax2_process_thread(void *data)
 {
 	struct iax2_thread *thread = data;
@@ -7592,6 +7617,8 @@ static void *iax2_process_thread(void *data)
 	struct timespec ts;
 	int put_into_idle = 0;
 
+	ast_atomic_fetchadd_int(&iaxactivethreadcount,1);
+	pthread_cleanup_push(iax2_process_thread_cleanup, data);
 	for(;;) {
 		/* Wait for something to signal us to be awake */
 		ast_mutex_lock(&thread->lock);
@@ -7611,17 +7638,12 @@ static void *iax2_process_thread(void *data)
 				AST_LIST_REMOVE(&dynamic_list, thread, list);
 				iaxdynamicthreadcount--;
 				AST_LIST_UNLOCK(&dynamic_list);
-				break;
+				break;		/* exiting the main loop */
 			}
 		} else {
 			ast_cond_wait(&thread->cond, &thread->lock);
 		}
 		ast_mutex_unlock(&thread->lock);
-
-		/* If we were signalled, then we are already out of both lists or we are shutting down */
-		if (thread->halt) {
-			break;
-		}
 
 		/* Add ourselves to the active list now */
 		AST_LIST_LOCK(&active_list);
@@ -7658,10 +7680,10 @@ static void *iax2_process_thread(void *data)
 		put_into_idle = 1;
 	}
 
-	/* Free our own memory */
-	ast_mutex_destroy(&thread->lock);
-	ast_cond_destroy(&thread->cond);
-	free(thread);
+	/* I am exiting here on my own volition, I need to clean up my own data structures
+	* Assume that I am no longer in any of the lists (idle, active, or dynamic)
+	*/
+	pthread_cleanup_pop(1);
 
 	return NULL;
 }
@@ -8025,17 +8047,16 @@ static void *sched_thread(void *ignore)
 		ts.tv_sec = tv.tv_sec;
 		ts.tv_nsec = tv.tv_usec * 1000;
 
+		pthread_testcancel();
 		ast_mutex_lock(&sched_lock);
 		ast_cond_timedwait(&sched_cond, &sched_lock, &ts);
-		if (sched_halt == 1)
-			break;
 		ast_mutex_unlock(&sched_lock);
+		pthread_testcancel();
 
 		count = ast_sched_runq(sched);
 		if (count >= 20)
 			ast_log(LOG_DEBUG, "chan_iax2: ast_sched_runq ran %d scheduled tasks all at once\n", count);
 	}
-	ast_mutex_unlock(&sched_lock);
 	return NULL;
 }
 
@@ -8050,6 +8071,8 @@ static void *network_thread(void *ignore)
 		ast_io_add(io, timingfd, timing_read, AST_IO_IN | AST_IO_PRI, NULL);
 	
 	for(;;) {
+		pthread_testcancel();
+
 		/* Go through the queue, sending messages which have not yet been
 		   sent, and scheduling retransmissions if appropriate */
 		AST_LIST_LOCK(&iaxq.queue);
@@ -8090,6 +8113,8 @@ static void *network_thread(void *ignore)
 		AST_LIST_TRAVERSE_SAFE_END
 		AST_LIST_UNLOCK(&iaxq.queue);
 
+		pthread_testcancel();
+
 		if (count >= 20)
 			ast_log(LOG_DEBUG, "chan_iax2: Sent %d queued outbound frames all at once\n", count);
 
@@ -8105,6 +8130,7 @@ static void *network_thread(void *ignore)
 
 static int start_network_thread(void)
 {
+	pthread_attr_t attr;
 	int threadcount = 0;
 	int x;
 	for (x = 0; x < iaxthreadcount; x++) {
@@ -8114,7 +8140,9 @@ static int start_network_thread(void)
 			thread->threadnum = ++threadcount;
 			ast_mutex_init(&thread->lock);
 			ast_cond_init(&thread->cond, NULL);
-			if (ast_pthread_create_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
+			pthread_attr_init(&attr);
+			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);	
+			if (ast_pthread_create(&thread->threadid, &attr, iax2_process_thread, thread)) {
 				ast_log(LOG_WARNING, "Failed to create new thread!\n");
 				free(thread);
 				thread = NULL;
@@ -9864,32 +9892,35 @@ static struct ast_cli_entry cli_iax2[] = {
 
 static int __unload_module(void)
 {
-	pthread_t threadid = AST_PTHREADT_NULL;
 	struct iax2_thread *thread = NULL;
 	int x;
 
+	/* Make sure threads do not hold shared resources when they are canceled */
+	
+	/* Grab the sched lock resource to keep it away from threads about to die */
 	/* Cancel the network thread, close the net socket */
 	if (netthreadid != AST_PTHREADT_NULL) {
+		AST_LIST_LOCK(&iaxq.queue);
+		ast_mutex_lock(&sched_lock);
 		pthread_cancel(netthreadid);
+		ast_cond_signal(&sched_cond);
+		ast_mutex_unlock(&sched_lock);	/* Release the schedule lock resource */
+		AST_LIST_UNLOCK(&iaxq.queue);
 		pthread_join(netthreadid, NULL);
 	}
 	if (schedthreadid != AST_PTHREADT_NULL) {
+		ast_mutex_lock(&sched_lock);	
 		pthread_cancel(schedthreadid);
-		ast_mutex_lock(&sched_lock);
-		sched_halt = 1;
 		ast_cond_signal(&sched_cond);
-		ast_mutex_unlock(&sched_lock);
+		ast_mutex_unlock(&sched_lock);	
 		pthread_join(schedthreadid, NULL);
 	}
-
+	
 	/* Call for all threads to halt */
 	AST_LIST_LOCK(&idle_list);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&idle_list, thread, list) {
 		AST_LIST_REMOVE_CURRENT(&idle_list, list);
-		threadid = thread->threadid;
-		thread->halt = 1;
-		signal_condition(&thread->lock, &thread->cond);
-		pthread_join(threadid, NULL);
+		pthread_cancel(thread->threadid);
 	}
 	AST_LIST_TRAVERSE_SAFE_END
 	AST_LIST_UNLOCK(&idle_list);
@@ -9897,10 +9928,7 @@ static int __unload_module(void)
 	AST_LIST_LOCK(&active_list);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&active_list, thread, list) {
 		AST_LIST_REMOVE_CURRENT(&active_list, list);
-		threadid = thread->threadid;
-		thread->halt = 1;
-		signal_condition(&thread->lock, &thread->cond);
-		pthread_join(threadid, NULL);
+		pthread_cancel(thread->threadid);
 	}
 	AST_LIST_TRAVERSE_SAFE_END
 	AST_LIST_UNLOCK(&active_list);
@@ -9908,16 +9936,17 @@ static int __unload_module(void)
 	AST_LIST_LOCK(&dynamic_list);
         AST_LIST_TRAVERSE_SAFE_BEGIN(&dynamic_list, thread, list) {
 		AST_LIST_REMOVE_CURRENT(&dynamic_list, list);
-		threadid = thread->threadid;
-                thread->halt = 1;
-                signal_condition(&thread->lock, &thread->cond);
-		pthread_join(threadid, NULL);
+		pthread_cancel(thread->threadid);
         }
 	AST_LIST_TRAVERSE_SAFE_END
         AST_LIST_UNLOCK(&dynamic_list);
 
 	AST_LIST_HEAD_DESTROY(&iaxq.queue);
 
+	/* Wait for threads to exit */
+	while(0 < iaxactivethreadcount)
+		usleep(10000);
+	
 	ast_netsock_release(netsock);
 	for (x=0;x<IAX_MAX_CALLS;x++)
 		if (iaxs[x])
@@ -9931,12 +9960,17 @@ static int __unload_module(void)
 	delete_users();
 	iax_provision_unload();
 	sched_context_destroy(sched);
+
+	ast_mutex_destroy(&waresl.lock);
+
+	for (x = 0; x < IAX_MAX_CALLS; x++)
+		ast_mutex_destroy(&iaxsl[x]);
+
 	return 0;
 }
 
 static int unload_module(void)
 {
-	ast_mutex_destroy(&waresl.lock);
 	ast_custom_function_unregister(&iaxpeer_function);
 	return __unload_module();
 }

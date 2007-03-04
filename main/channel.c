@@ -668,6 +668,8 @@ int ast_best_codec(int fmts)
 		AST_FORMAT_ULAW,
 		/*! Unless of course, you're a silly European, so then prefer ALAW */
 		AST_FORMAT_ALAW,
+		/*! G.722 is better then all below, but not as common as the above... so give ulaw and alaw priority */
+		AST_FORMAT_G722,
 		/*! Okay, well, signed linear is easy to translate into other stuff */
 		AST_FORMAT_SLINEAR,
 		/*! G.726 is standard ADPCM, in RFC3551 packing order */
@@ -995,7 +997,11 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 				if (c != prev)	/* not this one */
 					continue;
 				/* found, prepare to return c->next */
-				c = AST_LIST_NEXT(c, chan_list);
+				if ((c = AST_LIST_NEXT(c, chan_list)) == NULL) break;
+				/* If prev was the last item on the channel list, then we just
+				 * want to return NULL, instead of trying to deref NULL in the
+				 * next section.
+				 */
 			}
 			if (name) { /* want match by name */
 				if ((!namelen && strcasecmp(c->name, name)) ||
@@ -2215,7 +2221,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			}
 			break;
 		case AST_FRAME_DTMF_END:
-			ast_log(LOG_DTMF, "DTMF end '%c' received on %s\n", f->subclass, chan->name);
+			ast_log(LOG_DTMF, "DTMF end '%c' received on %s, duration %ld ms\n", f->subclass, chan->name, f->len);
 			/* Queue it up if DTMF is deffered, or if DTMF emulation is forced.
 			 * However, only let emulation be forced if the other end cares about BEGIN frames */
 			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF) ||
@@ -2238,7 +2244,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			} else {
 				ast_clear_flag(chan, AST_FLAG_IN_DTMF);
 				if (!f->len)
-					f->len = ast_tvdiff_ms(chan->dtmf_begin_tv, ast_tvnow());
+					f->len = ast_tvdiff_ms(ast_tvnow(), chan->dtmf_begin_tv);
 			}
 			break;
 		case AST_FRAME_DTMF_BEGIN:
@@ -2269,6 +2275,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					chan->emulate_dtmf_duration = 0;
 					f->frametype = AST_FRAME_DTMF_END;
 					f->subclass = chan->emulate_dtmf_digit;
+					f->len = ast_tvdiff_ms(ast_tvnow(), chan->dtmf_begin_tv);
 				} else {
 					chan->emulate_dtmf_duration -= f->samples / 8; /* XXX 8kHz */
 					ast_frfree(f);
@@ -3197,10 +3204,10 @@ int ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clo
 
 	/* each of these channels may be sitting behind a channel proxy (i.e. chan_agent)
 	   and if so, we don't really want to masquerade it, but its proxy */
-	if (original->_bridge && (original->_bridge != ast_bridged_channel(original)))
+	if (original->_bridge && (original->_bridge != ast_bridged_channel(original)) && (original->_bridge->_bridge != original))
 		final_orig = original->_bridge;
 
-	if (clone->_bridge && (clone->_bridge != ast_bridged_channel(clone)))
+	if (clone->_bridge && (clone->_bridge != ast_bridged_channel(clone)) && (clone->_bridge->_bridge != clone))
 		final_clone = clone->_bridge;
 
 	if ((final_orig != original) || (final_clone != clone)) {

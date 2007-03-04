@@ -179,6 +179,7 @@ struct agent_pvt {
 	int abouttograb;               /*!< About to grab */
 	int autologoff;                /*!< Auto timeout time */
 	int ackcall;                   /*!< ackcall */
+	int deferlogoff;               /*!< Defer logoff to hangup */
 	time_t loginstart;             /*!< When agent first logged in (0 when logged off) */
 	time_t start;                  /*!< When call started */
 	struct timeval lastdisc;       /*!< When last disconnected */
@@ -600,7 +601,7 @@ static int agent_indicate(struct ast_channel *ast, int condition, const void *da
 	int res = -1;
 	ast_mutex_lock(&p->lock);
 	if (p->chan)
-		res = ast_indicate_data(p->chan, condition, data, datalen);
+		res = p->chan->tech->indicate ? p->chan->tech->indicate(p->chan, condition, data, datalen) : -1;
 	else
 		res = 0;
 	ast_mutex_unlock(&p->lock);
@@ -770,11 +771,15 @@ static int agent_hangup(struct ast_channel *ast)
 				p->chan = NULL;
 			}
 			ast_log(LOG_DEBUG, "Hungup, howlong is %d, autologoff is %d\n", howlong, p->autologoff);
-			if (howlong  && p->autologoff && (howlong > p->autologoff)) {
+			if ((p->deferlogoff) || (howlong && p->autologoff && (howlong > p->autologoff))) {
 				long logintime = time(NULL) - p->loginstart;
 				p->loginstart = 0;
-				ast_log(LOG_NOTICE, "Agent '%s' didn't answer/confirm within %d seconds (waited %d)\n", p->name, p->autologoff, howlong);
+				if (!p->deferlogoff)
+					ast_log(LOG_NOTICE, "Agent '%s' didn't answer/confirm within %d seconds (waited %d)\n", p->name, p->autologoff, howlong);
+				p->deferlogoff = 0;
 				agent_logoff_maintenance(p, p->loginchan, logintime, ast->uniqueid, "Autologoff");
+				if (persistent_agents)
+					dump_agents();
 			}
 		} else if (p->dead) {
 			ast_channel_lock(p->chan);
@@ -789,9 +794,16 @@ static int agent_hangup(struct ast_channel *ast)
 		}
 	}
 	ast_mutex_unlock(&p->lock);
+
 	/* Only register a device state change if the agent is still logged in */
-	if (p->loginstart)
+	if (!p->loginstart) {
+		p->loginchan[0] = '\0';
+		p->logincallerid[0] = '\0';
+		if (persistent_agents)
+			dump_agents();
+	} else {
 		ast_device_state_changed("Agent/%s", p->agent);
+	}
 
 	if (p->pending) {
 		AST_LIST_LOCK(&agents);
@@ -1513,16 +1525,20 @@ static int agent_logoff(const char *agent, int soft)
 
 	AST_LIST_TRAVERSE(&agents, p, list) {
 		if (!strcasecmp(p->agent, agent)) {
-			if (!soft) {
-				if (p->owner)
-					ast_softhangup(p->owner, AST_SOFTHANGUP_EXPLICIT);
-				if (p->chan) 
-					ast_softhangup(p->chan, AST_SOFTHANGUP_EXPLICIT);
+			ret = 0;
+			if (p->owner || p->chan) {
+				p->deferlogoff = 1;
+				if (!soft) {
+					if (p->owner)
+						ast_softhangup(p->owner, AST_SOFTHANGUP_EXPLICIT);
+					if (p->chan)
+						ast_softhangup(p->chan, AST_SOFTHANGUP_EXPLICIT);
+				}
+			} else {
+				logintime = time(NULL) - p->loginstart;
+				p->loginstart = 0;
+				agent_logoff_maintenance(p, p->loginchan, logintime, NULL, "CommandLogoff");
 			}
-			ret = 0; /* found an agent => return 0 */
-			logintime = time(NULL) - p->loginstart;
-			p->loginstart = 0;
-			agent_logoff_maintenance(p, p->loginchan, logintime, NULL, "CommandLogoff");
 			break;
 		}
 	}

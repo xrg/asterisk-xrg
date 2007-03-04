@@ -322,6 +322,14 @@ struct call_info_message {
 	uint32_t type;
 	char originalCalledPartyName[40];
 	char originalCalledParty[24];
+	char lastRedirectingPartyName[40];
+	char lastRedirectingParty[24];
+	uint32_t originalCalledPartyRedirectReason;
+	uint32_t lastRedirectingReason;
+	char callingPartyVoiceMailbox[24];
+	char calledPartyVoiceMailbox[24];
+	char originalCalledPartyVoiceMailbox[24];
+	char lastRedirectingVoiceMailbox[24];
 };
 
 #define SPEED_DIAL_STAT_RES_MESSAGE 0x0091
@@ -1487,6 +1495,9 @@ static void transmit_callinfo(struct skinnysession *s, const char *fromname, con
 	if (!(req = req_alloc(sizeof(struct call_info_message), CALL_INFO_MESSAGE)))
 		return;
 
+	if (skinnydebug)
+			ast_verbose("Setting Callinfo to %s(%s) from %s(%s) on %s(%d)\n", fromname, fromnum, toname, tonum, s->device->name, instance);
+
 	if (fromname) {
 		ast_copy_string(req->data.callinfo.callingPartyName, fromname, sizeof(req->data.callinfo.callingPartyName));
 	}
@@ -2097,6 +2108,8 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 						ast_copy_string(sd->label, exten, sizeof(sd->label));
 					sd->instance = speeddialInstance++;
 
+					sd->parent = d;
+
 					sd->next = d->speeddials;
 					d->speeddials = sd;
 				}
@@ -2371,14 +2384,12 @@ static int skinny_call(struct ast_channel *ast, char *dest, int timeout)
 		break;
 	}
 
+	transmit_callstate(s, l->instance, SKINNY_RINGIN, sub->callid);
+	transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_RINGIN);
+	transmit_displaypromptstatus(s, "Ring-In", 0, l->instance, sub->callid);
+	transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, l->cid_name, l->cid_num, l->instance, sub->callid, 1);
 	transmit_lamp_indication(s, STIMULUS_LINE, l->instance, SKINNY_LAMP_BLINK);
 	transmit_ringer_mode(s, SKINNY_RING_INSIDE);
-
-	transmit_tone(s, tone);
-	transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, l->cid_name, l->cid_num, l->instance, sub->callid, 1);
-	transmit_callstate(s, l->instance, SKINNY_RINGIN, sub->callid);
-	transmit_displaypromptstatus(s, "Ring-In", 0, l->instance, sub->callid);
-	transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_RINGIN);
 
 	ast_setstate(ast, AST_STATE_RINGING);
 	ast_queue_control(ast, AST_CONTROL_RINGING);
@@ -2455,6 +2466,7 @@ static int skinny_answer(struct ast_channel *ast)
 	   or you won't get keypad messages in some situations. */
 	transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, ast->exten, ast->exten, l->instance, sub->callid, 2);
 	transmit_callstate(s, l->instance, SKINNY_CONNECTED, sub->callid);
+	transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_CONNECTED);
 	transmit_displaypromptstatus(s, "Connected", 0, l->instance, sub->callid);
 	return res;
 }
@@ -3073,6 +3085,9 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 	case STIMULUS_HOLD:
 		if (skinnydebug)
 			ast_verbose("Received Stimulus: Hold(%d)\n", instance);
+
+		if (!sub)
+			break;
 
 		if (sub->onhold) {
 			skinny_unhold(sub);
@@ -3743,7 +3758,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 
 			if (ast_strlen_zero(l->lastnumberdialed)) {
 				ast_log(LOG_WARNING, "Attempted redial, but no previously dialed number found.\n");
-				return 0;
+				break;
 			}
 			if (!ast_ignore_pattern(c->context, l->lastnumberdialed)) {
 				transmit_tone(s, SKINNY_SILENCE);
@@ -3862,7 +3877,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 					}
 				} else if (res) {
 					ast_log(LOG_WARNING, "Transfer attempt failed\n");
-					return 0;
+					break;
 				}
 #endif
 			} else {
