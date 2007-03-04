@@ -1602,16 +1602,6 @@ static struct ast_cli_entry cli_show_version_files_deprecated = {
 	{ "show", "version", "files", NULL },
 	handle_show_version_files_deprecated, NULL,
 	NULL, complete_show_version_files_deprecated };
-
-static struct ast_cli_entry cli_show_profile_deprecated = {
-	{ "show", "profile", NULL },
-	handle_show_profile_deprecated, NULL,
-	NULL };
-
-static struct ast_cli_entry cli_clear_profile_deprecated = {
-	{ "clear", "profile", NULL },
-	handle_show_profile_deprecated, NULL,
-	NULL };
 #endif /* ! LOW_MEMORY */
 
 static struct ast_cli_entry cli_asterisk[] = {
