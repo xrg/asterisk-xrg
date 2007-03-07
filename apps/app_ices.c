@@ -22,12 +22,14 @@
  *
  * \author Mark Spencer <markster@digium.com>
  * 
+ * \extref ICES - http://www.icecast.org/ices.php
+ *
  * \ingroup applications
  */
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 48375 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <string.h>
 #include <stdio.h>
@@ -168,13 +170,15 @@ static int ices_exec(struct ast_channel *chan, void *data)
 			/* Wait for audio, and stream */
 			ms = ast_waitfor(chan, -1);
 			if (ms < 0) {
-				ast_log(LOG_DEBUG, "Hangup detected\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Hangup detected\n");
 				res = -1;
 				break;
 			}
 			f = ast_read(chan);
 			if (!f) {
-				ast_log(LOG_DEBUG, "Null frame == hangup() detected\n");
+				if (option_debug)
+					ast_log(LOG_DEBUG, "Null frame == hangup() detected\n");
 				res = -1;
 				break;
 			}
