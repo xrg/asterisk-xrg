@@ -1040,7 +1040,7 @@ static int action_getconfig(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Filename not specified");
 		return 0;
 	}
-	if (!(cfg = ast_config_load_with_comments(fn))) {
+	if (!(cfg = ast_config_load(fn))) {
 		astman_send_error(s, m, "Config file not found");
 		return 0;
 	}
@@ -1144,7 +1144,7 @@ static int action_updateconfig(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Filename not specified");
 		return 0;
 	}
-	if (!(cfg = ast_config_load_with_comments(sfn))) {
+	if (!(cfg = ast_config_load(sfn))) {
 		astman_send_error(s, m, "Config file not found");
 		return 0;
 	}
