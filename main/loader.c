@@ -531,6 +531,12 @@ int ast_module_reload(const char *name)
 		return -1;	/* reload already in progress */
 	}
 
+	if (ast_lastreloadtime && time(NULL) - ast_lastreloadtime < 5) {
+		ast_verbose("The previous reload was less than 5 seconds ago.\n");
+		ast_mutex_unlock(&reloadlock);
+		return -1;
+	}
+
 	/* Call "predefined" reload here first */
 	for (i = 0; reload_classes[i].name; i++) {
 		if (!name || !strcasecmp(name, reload_classes[i].name)) {
