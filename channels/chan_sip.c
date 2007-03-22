@@ -557,6 +557,8 @@ static int global_t1min;		/*!< T1 roundtrip time minimum */
 static int global_autoframing;          /*!< Turn autoframing on or off. */
 static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction scheme */
 
+static int global_matchexterniplocally; /*!< Match externip/externhost setting against localnet setting */
+
 /*! \brief Codecs that we support by default: */
 static int global_capability = AST_FORMAT_ULAW | AST_FORMAT_ALAW | AST_FORMAT_GSM | AST_FORMAT_H263;
 
@@ -1781,7 +1783,7 @@ static enum sip_result ast_sip_ouraddrfor(struct in_addr *them, struct in_addr *
 
 	if (localaddr && externip.sin_addr.s_addr &&
 	    (ast_apply_ha(localaddr, &theirs)) &&
-	    (!ast_apply_ha(localaddr, &ours))) {
+	    (!global_matchexterniplocally || !ast_apply_ha(localaddr, &ours))) {
 		if (externexpire && time(NULL) >= externexpire) {
 			struct ast_hostent ahp;
 			struct hostent *hp;
@@ -4856,10 +4858,14 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 			} else {
 				/* XXX This could block for a long time, and block the main thread! XXX */
 				if (audio) {
-					if ( !(hp = ast_gethostbyname(host, &audiohp)))
+					if ( !(hp = ast_gethostbyname(host, &audiohp))) {
 						ast_log(LOG_WARNING, "Unable to lookup RTP Audio host in secondary c= line, '%s'\n", c);
-				} else if (!(vhp = ast_gethostbyname(host, &videohp)))
+						return -2;
+					}
+				} else if (!(vhp = ast_gethostbyname(host, &videohp))) {
 					ast_log(LOG_WARNING, "Unable to lookup RTP video host in secondary c= line, '%s'\n", c);
+					return -2;
+				}
 			}
 
 		}
@@ -7303,7 +7309,17 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	
 	/* Fromdomain is what we are registering to, regardless of actual
 	   host name from SRV */
-	snprintf(addr, sizeof(addr), "sip:%s", S_OR(p->fromdomain, r->hostname));
+	if (!ast_strlen_zero(p->fromdomain)) {
+		if (r->portno && r->portno != STANDARD_SIP_PORT)
+			snprintf(addr, sizeof(addr), "sip:%s:%d", p->fromdomain, r->portno);
+		else
+			snprintf(addr, sizeof(addr), "sip:%s", p->fromdomain);
+	} else {
+		if (r->portno && r->portno != STANDARD_SIP_PORT)
+			snprintf(addr, sizeof(addr), "sip:%s:%d", r->hostname, r->portno);
+		else
+			snprintf(addr, sizeof(addr), "sip:%s", r->hostname);
+	}
 	ast_string_field_set(p, uri, addr);
 
 	p->branch ^= ast_random();
@@ -9001,6 +9017,10 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 		if ((c = strchr(of, ':')))
 			*c = '\0';
 		tmp = ast_strdupa(of);
+		/* We need to be able to handle auth-headers looking like
+			<sip:8164444422;phone-context=+1@1.2.3.4:5060;user=phone;tag=SDadkoa01-gK0c3bdb43>
+		*/
+		tmp = strsep(&tmp, ";");
 		if (ast_is_shrinkable_phonenumber(tmp))
 			ast_shrink_phone_number(tmp);
 		ast_string_field_set(p, cid_num, tmp);
@@ -12203,9 +12223,10 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 			break;
 		case 200:	/* 200 OK */
 			p->authtries = 0;	/* Reset authentication counter */
-			if (sipmethod == SIP_MESSAGE) {
-				/* We successfully transmitted a message */
-				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+			if (sipmethod == SIP_MESSAGE || sipmethod == SIP_INFO) {
+				/* We successfully transmitted a message 
+					or a video update request in INFO */
+				/* Nothing happens here - the message is inside a dialog */
 			} else if (sipmethod == SIP_INVITE) {
 				handle_response_invite(p, resp, rest, req, seqno);
 			} else if (sipmethod == SIP_NOTIFY) {
@@ -12334,7 +12355,8 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				if ((option_verbose > 2) && (resp != 487))
 					ast_verbose(VERBOSE_PREFIX_3 "Got SIP response %d \"%s\" back from %s\n", resp, rest, ast_inet_ntoa(p->sa.sin_addr));
 	
-				stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
+				if (sipmethod == SIP_INVITE)
+					stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
 				/* XXX Locking issues?? XXX */
 				switch(resp) {
@@ -12378,14 +12400,15 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 					break;
 				default:
 					/* Send hangup */	
-					if (owner)
+					if (owner && sipmethod != SIP_MESSAGE && sipmethod != SIP_INFO)
 						ast_queue_hangup(p->owner);
 					break;
 				}
 				/* ACK on invite */
 				if (sipmethod == SIP_INVITE) 
 					transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
-				sip_alreadygone(p);
+				if (sipmethod != SIP_MESSAGE && sipmethod != SIP_INFO) 
+					sip_alreadygone(p);
 				if (!p->owner)
 					ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			} else if ((resp >= 100) && (resp < 200)) {
@@ -12441,10 +12464,10 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 				}
 			} else if (sipmethod == SIP_BYE)
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
-			else if (sipmethod == SIP_MESSAGE)
-				/* We successfully transmitted a message */
-				/* XXX Why destroy this pvt after message transfer? Bad */
-				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+			else if (sipmethod == SIP_MESSAGE || sipmethod == SIP_INFO)
+				/* We successfully transmitted a message or
+					a video update request in INFO */
+				;
 			else if (sipmethod == SIP_BYE) 
 				/* Ok, we're ready to go */
 				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
@@ -14331,9 +14354,25 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 			p->subscribed = CPIM_PIDF_XML;    /* RFC 3863 format */
 		} else if (strstr(accept, "application/xpidf+xml")) {
 			p->subscribed = XPIDF_XML;        /* Early pre-RFC 3863 format with MSN additions (Microsoft Messenger) */
+		} else if (ast_strlen_zero(accept)) {
+			if (p->subscribed == NONE) { /* if the subscribed field is not already set, and there is no accept header... */
+				transmit_response(p, "489 Bad Event", req);
+  
+				ast_log(LOG_WARNING,"SUBSCRIBE failure: no Accept header: pvt: stateid: %d, laststate: %d, dialogver: %d, subscribecont: '%s', subscribeuri: '%s'\n",
+					p->stateid, p->laststate, p->dialogver, p->subscribecontext, p->subscribeuri);
+				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+				return 0;
+			}
+			/* if p->subscribed is non-zero, then accept is not obligatory; according to rfc 3265 section 3.1.3, at least.
+			   so, we'll just let it ride, keeping the value from a previous subscription, and not abort the subscription */
 		} else {
 			/* Can't find a format for events that we know about */
-			transmit_response(p, "489 Bad Event", req);
+			char mybuf[200];
+			snprintf(mybuf,sizeof(mybuf),"489 Bad Event (format %s)", accept);
+			transmit_response(p, mybuf, req);
+ 
+			ast_log(LOG_WARNING,"SUBSCRIBE failure: unrecognized format: '%s' pvt: subscribed: %d, stateid: %d, laststate: %d, dialogver: %d, subscribecont: '%s', subscribeuri: '%s'\n",
+				accept, (int)p->subscribed, p->stateid, p->laststate, p->dialogver, p->subscribecontext, p->subscribeuri);
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			return 0;
 		}
@@ -14573,6 +14612,10 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 		if (sscanf(e, "%d %n", &respid, &len) != 1) {
 			ast_log(LOG_WARNING, "Invalid response: '%s'\n", e);
 		} else {
+			if (respid <= 0) {
+				ast_log(LOG_WARNING, "Invalid SIP response code: '%d'\n", respid);
+				return 0;
+			}
 			/* More SIP ridiculousness, we have to ignore bogus contacts in 100 etc responses */
 			if ((respid == 200) || ((respid >= 300) && (respid <= 399)))
 				extract_uri(p, req);
@@ -14643,7 +14686,7 @@ static int handle_request(struct sip_pvt *p, struct sip_request *req, struct soc
 	}
 
 	if (!e && (p->method == SIP_INVITE || p->method == SIP_SUBSCRIBE || p->method == SIP_REGISTER || p->method == SIP_NOTIFY)) {
-		transmit_response(p, "503 Server error", req);
+		transmit_response(p, "400 Bad request", req);
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return -1;
 	}
@@ -16184,6 +16227,8 @@ static int reload_config(enum channelreloadreason reason)
 	global_callevents = FALSE;
 	global_t1min = DEFAULT_T1MIN;		
 
+	global_matchexterniplocally = FALSE;
+
 	/* Copy the default jb config over global_jbconf */
 	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
 
@@ -16257,7 +16302,7 @@ static int reload_config(enum channelreloadreason reason)
 			compactheaders = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifymimetype")) {
 			ast_copy_string(default_notifymime, v->value, sizeof(default_notifymime));
-		} else if (!strcasecmp(v->name, "limitonpeers")) {
+		} else if (!strncasecmp(v->name, "limitonpeer", 11)) {
 			global_limitonpeers = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "directrtpsetup")) {
 			global_directrtpsetup = ast_true(v->value);
@@ -16423,6 +16468,8 @@ static int reload_config(enum channelreloadreason reason)
 			default_maxcallbitrate = atoi(v->value);
 			if (default_maxcallbitrate < 0)
 				default_maxcallbitrate = DEFAULT_MAX_CALL_BITRATE;
+		} else if (!strcasecmp(v->name, "matchexterniplocally")) {
+			global_matchexterniplocally = ast_true(v->value);
 		}
 	}
 
@@ -17040,7 +17087,7 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest)
 static int sip_get_codec(struct ast_channel *chan)
 {
 	struct sip_pvt *p = chan->tech_pvt;
-	return p->peercapability;	
+	return p->peercapability ? p->peercapability : p->capability;	
 }
 
 /*! \brief Send a poke to all known peers 

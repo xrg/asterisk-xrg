@@ -1231,6 +1231,12 @@ static int find_callno(unsigned short callno, unsigned short dcallno, struct soc
 		}
 	}
 	if ((res < 1) && (new >= NEW_ALLOW)) {
+		/* It may seem odd that we look through the peer list for a name for
+		 * this *incoming* call.  Well, it is weird.  However, users don't
+		 * have an IP address/port number that we can match against.  So,
+		 * this is just checking for a peer that has that IP/port and
+		 * assuming that we have a user of the same name.  This isn't always
+		 * correct, but it will be changed if needed after authentication. */
 		if (!iax2_getpeername(*sin, host, sizeof(host), lockpeer))
 			snprintf(host, sizeof(host), "%s:%d", ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
 		gettimeofday(&now, NULL);
@@ -2239,18 +2245,15 @@ static void __get_from_jb(void *p)
 			break;
 		case JB_INTERP:
 		{
-			struct ast_frame af;
+			struct ast_frame af = { 0, };
 			
 			/* create an interpolation frame */
 			af.frametype = AST_FRAME_VOICE;
 			af.subclass = pvt->voiceformat;
-			af.datalen  = 0;
 			af.samples  = frame.ms * 8;
-			af.mallocd  = 0;
 			af.src  = "IAX2 JB interpolation";
-			af.data  = NULL;
 			af.delivery = ast_tvadd(pvt->rxcore, ast_samp2tv(next, 1000));
-			af.offset=AST_FRIENDLY_OFFSET;
+			af.offset = AST_FRIENDLY_OFFSET;
 			
 			/* queue the frame:  For consistency, we would call __do_deliver here, but __do_deliver wants an iax_frame,
 			 * which we'd need to malloc, and then it would free it.  That seems like a drag */
@@ -3671,9 +3674,9 @@ static int decode_frame(aes_decrypt_ctx *dcx, struct ast_iax2_full_hdr *fh, stru
 {
 	int padding;
 	unsigned char *workspace;
+
 	workspace = alloca(*datalen);
-	if (!workspace)
-		return -1;
+	memset(f, 0, sizeof(*f));
 	if (ntohs(fh->scallno) & IAX_FLAG_FULL) {
 		struct ast_iax2_full_enc_hdr *efh = (struct ast_iax2_full_enc_hdr *)fh;
 		if (*datalen < 16 + sizeof(struct ast_iax2_full_hdr))
@@ -4516,15 +4519,14 @@ static int iax2_write(struct ast_channel *c, struct ast_frame *f)
 static int __send_command(struct chan_iax2_pvt *i, char type, int command, unsigned int ts, const unsigned char *data, int datalen, int seqno, 
 		int now, int transfer, int final)
 {
-	struct ast_frame f;
+	struct ast_frame f = { 0, };
+
 	f.frametype = type;
 	f.subclass = command;
 	f.datalen = datalen;
-	f.samples = 0;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = (char *)__FUNCTION__;
-	f.data = (char *)data;
+	f.src = __FUNCTION__;
+	f.data = (void *) data;
+
 	return iax2_send(i, &f, ts, seqno, now, transfer, final);
 }
 
@@ -4864,17 +4866,19 @@ static int authenticate_verify(struct chan_iax2_pvt *p, struct iax_ies *ies)
 	int x;
 	struct iax2_user *user = NULL;
 
-	if (ast_test_flag(p, IAX_MAXAUTHREQ)) {
-		AST_LIST_LOCK(&users);
-		AST_LIST_TRAVERSE(&users, user, entry) {
-			if (!strcmp(user->name, p->username)) {
-				user->curauthreq--;
-				break;
-			}
-		}
-		AST_LIST_UNLOCK(&users);
-		ast_clear_flag(p, IAX_MAXAUTHREQ);
+	AST_LIST_LOCK(&users);
+	AST_LIST_TRAVERSE(&users, user, entry) {
+		if (!strcmp(user->name, p->username))
+			break;
 	}
+	if (user) {
+		if (ast_test_flag(p, IAX_MAXAUTHREQ)) {
+			user->curauthreq--;
+			ast_clear_flag(p, IAX_MAXAUTHREQ);
+		}
+		ast_string_field_set(p, host, user->name);
+	}
+	AST_LIST_UNLOCK(&users);
 
 	if (!ast_test_flag(&p->state, IAX_STATE_AUTHENTICATED))
 		return res;
@@ -6260,7 +6264,7 @@ static int socket_process(struct iax2_thread *thread)
 	struct ast_iax2_meta_trunk_mini *mtm;
 	struct iax_frame *fr;
 	struct iax_frame *cur;
-	struct ast_frame f;
+	struct ast_frame f = { 0, };
 	struct ast_channel *c;
 	struct iax2_dpcache *dp;
 	struct iax2_peer *peer;
@@ -6364,6 +6368,7 @@ static int socket_process(struct iax2_thread *thread)
 					/* If it's a valid call, deliver the contents.  If not, we
 					   drop it, since we don't have a scallno to use for an INVAL */
 					/* Process as a mini frame */
+					memset(&f, 0, sizeof(f));
 					f.frametype = AST_FRAME_VOICE;
 					if (iaxs[fr->callno]) {
 						if (iaxs[fr->callno]->voiceformat > 0) {
@@ -6372,8 +6377,6 @@ static int socket_process(struct iax2_thread *thread)
 							if (f.datalen >= 0) {
 								if (f.datalen)
 									f.data = ptr;
-								else
-									f.data = NULL;
 								if(trunked_ts) {
 									fr->ts = (iaxs[fr->callno]->last & 0xFFFF0000L) | (trunked_ts & 0xffff);
 								} else
@@ -6382,19 +6385,15 @@ static int socket_process(struct iax2_thread *thread)
 								if (ast_test_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED)) {
 									/* Common things */
 									f.src = "IAX2";
-									f.mallocd = 0;
-									f.offset = 0;
 									if (f.datalen && (f.frametype == AST_FRAME_VOICE)) 
 										f.samples = ast_codec_get_samples(&f);
-									else
-										f.samples = 0;
-									fr->outoforder = 0;
 									iax_frame_wrap(fr, &f);
 									duped_fr = iaxfrdup2(fr);
 									if (duped_fr) {
 										schedule_delivery(duped_fr, updatehistory, 1, &fr->ts);
 									}
-									if (iaxs[fr->callno]->last < fr->ts) {
+									/* It is possible for the pvt structure to go away after we call schedule_delivery */
+									if (iaxs[fr->callno] && iaxs[fr->callno]->last < fr->ts) {
 										iaxs[fr->callno]->last = fr->ts;
 #if 1
 										if (option_debug && iaxdebug)
@@ -7565,6 +7564,7 @@ retryowner2:
 	f.src = "IAX2";
 	f.mallocd = 0;
 	f.offset = 0;
+	f.len = 0;
 	if (f.datalen && (f.frametype == AST_FRAME_VOICE)) {
 		f.samples = ast_codec_get_samples(&f);
 		/* We need to byteswap incoming slinear samples from network byte order */

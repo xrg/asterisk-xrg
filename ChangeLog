@@ -1,4 +1,483 @@
-2006-03-02  Russell Bryant  <russell@digium.com>
+2007-03-19  Jason Parker  <jparker@digium.com>
+
+	* Asterisk 1.4.2 released.
+
+2007-03-19 22:29 +0000 [r59049]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* funcs/func_strings.c: Oops, this should have been a %d all along
+
+2007-03-19 15:52 +0000 [r59042]  Joshua Colp <jcolp@digium.com>
+
+	* funcs/func_cdr.c: Fix typo in help for CDR function. (issue #9295
+	  reported by ajohnson)
+
+2007-03-19 15:42 +0000 [r59040]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* configs/sip_notify.conf.sample: Fix unescaped semicolon (reported
+	  via -dev list)
+
+2007-03-18 20:37 +0000 [r59037]  Olle Johansson <oej@edvina.net>
+
+	* channels/chan_sip.c: Issue #9313, Asterisk crash on SIP return
+	  code 0 (reported by qwerty1979)
+
+2007-03-18 16:36 +0000 [r59035]  BJ Weschke <bweschke@btwtech.com>
+
+	* apps/app_followme.c: Don't return a non-zero return code if the
+	  profile doesn't exist, to match what the documentation says it
+	  already does. (#9307 Reported by kkiely)
+
+2007-03-16 16:12 +0000 [r58992]  Joshua Colp <jcolp@digium.com>
+
+	* apps/app_page.c: Wait for the async thread to exit when hanging
+	  up all of the paged phones under all circumstances. (issue #9181
+	  reported by PhilSmith)
+
+2007-03-16 01:42 +0000 [r58947-58957]  Russell Bryant <russell@digium.com>
+
+	* configs/sla.conf.sample: fix a couple SLA documentation
+	  references
+
+	* doc/ajam.tex (removed), doc/manager.tex (removed), doc/misdn.tex
+	  (removed), doc/freetds.txt (added), doc/odbcstorage.txt (added),
+	  doc/sla.tex, doc/cygwin.txt (added), doc/model.txt (added),
+	  doc/channelvariables.txt (added), doc/ael.txt (added),
+	  doc/billing.tex (removed), build_tools/prep_tarball,
+	  doc/callingpres.txt (added), doc/enum.txt (added),
+	  doc/localchannel.tex (removed), doc/musiconhold-fpm.txt (added),
+	  doc/cdrdriver.tex (removed), build_tools/make_buildopts_h,
+	  doc/security.txt (added), doc/imapstorage.txt (added),
+	  doc/PEERING, main/pbx.c, doc/odbcstorage.tex (removed),
+	  doc/freetds.tex (removed), doc/privacy.txt (added), configure.ac,
+	  doc/iax.txt (added), doc/ael.tex (removed),
+	  doc/channelvariables.tex (removed), doc/enum.tex (removed),
+	  doc/security.tex (removed), doc/math.txt (added), Makefile,
+	  doc/imapstorage.tex (removed), doc/privacy.tex (removed),
+	  doc/realtime.txt (added), doc/dundi.txt (added), doc/mysql.txt
+	  (added), apps/app_voicemail.c, doc/cliprompt.txt (added),
+	  doc/chaniax.txt (added), doc/app-sms.txt (added),
+	  doc/ast_appdocs.tex (removed), doc/realtime.tex (removed),
+	  doc/ices.txt (added), doc/dundi.tex (removed),
+	  doc/linkedlists.txt (added), doc/queuelog.txt (added),
+	  doc/extconfig.txt (added), doc/radius.txt (added),
+	  doc/cliprompt.tex (removed), doc/chaniax.tex (removed),
+	  doc/hardware.txt (added), doc/mp3.txt (added), doc/app-sms.tex
+	  (removed), doc/ices.tex (removed), doc/asterisk.tex (removed),
+	  doc/queuelog.tex (removed), doc/configuration.txt (added),
+	  doc/asterisk-conf.txt (added), doc/sla.pdf (added),
+	  doc/ip-tos.txt (added), doc/hardware.tex (removed), doc/h323.txt
+	  (added), doc/mp3.tex (removed), doc/configuration.tex (removed),
+	  doc/asterisk-conf.tex (removed), doc/jitterbuffer.txt (added),
+	  doc/channels.txt (added), doc/ip-tos.tex (removed),
+	  doc/extensions.txt (added), doc/queues-with-callback-members.txt
+	  (added), doc/apps.txt (added), makeopts.in, doc/ajam.txt (added),
+	  doc/misdn.txt (added), doc/manager.txt (added),
+	  doc/jitterbuffer.tex (removed), doc/extensions.tex (removed),
+	  doc/billing.txt (added), doc/localchannel.txt (added),
+	  doc/queues-with-callback-members.tex (removed), doc/cdrdriver.txt
+	  (added), doc/00README.1st (added): Making these documentation
+	  changes in the 1.4 branch upset various people, so these chanes
+	  will only be done in the trunk.
+
+	* build_tools/prep_tarball: Add the --pdf option to the usage of
+	  rubber in prep_tarball
+
+	* Makefile, build_tools/menuselect-deps.in, configure,
+	  include/asterisk/autoconfig.h.in, configure.ac, makeopts.in: Add
+	  configure script checking for GTK2 and some additional Makefile
+	  targets to support gmenuselect
+
+2007-03-15 23:52 +0000 [r58946]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* main/pbx.c, doc/ast_appdocs.tex: Refashion dump command to match
+	  common syntax and update the resulting appdocs TeX file
+
+2007-03-15 23:24 +0000 [r58941]  Russell Bryant <russell@digium.com>
+
+	* doc/asterisk.tex: add a link to the rubber homepage
+
+2007-03-15 23:11 +0000 [r58939]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* apps/app_setcdruserfield.c, main/pbx.c,
+	  apps/app_hasnewvoicemail.c, apps/app_settransfercapability.c:
+	  Expand deprecation warnings from simply warning on use to the
+	  builtin documentation.
+
+2007-03-15 22:51 +0000 [r58935-58937]  Russell Bryant <russell@digium.com>
+
+	* doc/asterisk.tex, Makefile: Add Asterisk version information to
+	  the generated PDF
+
+	* build_tools/prep_tarball: have prep_tarball attempt to build
+	  asterisk.pdf
+
+2007-03-15 22:32 +0000 [r58933]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* funcs/func_realtime.c: Function works fine, but the documentation
+	  is backwards.
+
+2007-03-15 22:25 +0000 [r58931]  Russell Bryant <russell@digium.com>
+
+	* doc/ajam.tex (added), doc/manager.tex (added), doc/misdn.tex
+	  (added), doc/freetds.txt (removed), doc/odbcstorage.txt
+	  (removed), configure, doc/sla.tex, doc/cygwin.txt (removed),
+	  doc/model.txt (removed), doc/channelvariables.txt (removed),
+	  doc/ael.txt (removed), doc/billing.tex (added),
+	  doc/callingpres.txt (removed), doc/enum.txt (removed),
+	  doc/localchannel.tex (added), doc/musiconhold-fpm.txt (removed),
+	  doc/cdrdriver.tex (added), build_tools/make_buildopts_h,
+	  doc/security.txt (removed), doc/imapstorage.txt (removed),
+	  doc/PEERING, main/pbx.c, doc/odbcstorage.tex (added),
+	  doc/freetds.tex (added), doc/privacy.txt (removed), configure.ac,
+	  doc/iax.txt (removed), doc/ael.tex (added),
+	  doc/channelvariables.tex (added), doc/enum.tex (added),
+	  doc/security.tex (added), doc/math.txt (removed), Makefile,
+	  doc/imapstorage.tex (added), doc/privacy.tex (added),
+	  doc/realtime.txt (removed), doc/dundi.txt (removed),
+	  doc/mysql.txt (removed), apps/app_voicemail.c, doc/cliprompt.txt
+	  (removed), doc/chaniax.txt (removed), doc/app-sms.txt (removed),
+	  doc/ast_appdocs.tex (added), doc/realtime.tex (added),
+	  doc/ices.txt (removed), doc/dundi.tex (added),
+	  doc/linkedlists.txt (removed), doc/queuelog.txt (removed),
+	  doc/extconfig.txt (removed), doc/radius.txt (removed),
+	  doc/cliprompt.tex (added), doc/chaniax.tex (added),
+	  doc/hardware.txt (removed), doc/mp3.txt (removed),
+	  doc/app-sms.tex (added), doc/ices.tex (added), doc/asterisk.tex
+	  (added), doc/queuelog.tex (added), doc/configuration.txt
+	  (removed), doc/asterisk-conf.txt (removed), doc/sla.pdf
+	  (removed), doc/ip-tos.txt (removed), doc/hardware.tex (added),
+	  doc/h323.txt (removed), doc/mp3.tex (added),
+	  doc/configuration.tex (added), doc/asterisk-conf.tex (added),
+	  doc/jitterbuffer.txt (removed), doc/channels.txt (removed),
+	  doc/ip-tos.tex (added), doc/extensions.txt (removed),
+	  doc/queues-with-callback-members.txt (removed), doc/apps.txt
+	  (removed), makeopts.in, doc/ajam.txt (removed), doc/misdn.txt
+	  (removed), doc/manager.txt (removed), doc/jitterbuffer.tex
+	  (added), doc/extensions.tex (added), doc/billing.txt (removed),
+	  doc/localchannel.txt (removed),
+	  doc/queues-with-callback-members.tex (added), doc/cdrdriver.txt
+	  (removed), doc/00README.1st (removed): Merge changes from
+	  svn/asterisk/team/russell/LaTeX_docs. * Convert most of the doc
+	  directory into a single LaTeX formatted document so that we can
+	  generate a PDF, HTML, or other formats from this information. *
+	  Add a CLI command to dump the application documentation into
+	  LaTeX format which will only be include if the configure script
+	  is run with --enable-dev-mode. * The PDF turned out to be close
+	  to 1 MB, so it is not included. However, you can simply run "make
+	  asterisk.pdf" to generate it yourself. We may include it in
+	  release tarballs or have automatically generated ones on the web
+	  site, but that has yet to be decided.
+
+2007-03-15 18:13 +0000 [r58923]  Joshua Colp <jcolp@digium.com>
+
+	* channels/chan_iax2.c: Don't assume that the pvt structure will
+	  still exist after calling schedule_delivery as it may not. (issue
+	  #9278 reported by fmachado)
+
+2007-03-14 19:18 +0000 [r58894-58906]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_sip.c: Some people like to put "limitonpeer"
+	  instead of "limitonpeers" in their configuration. While we're at
+	  it, support "limitonpeerz" and "limitonpeerssssss". (inspired by
+	  issue #9172)
+
+	* doc/sla.pdf, doc/sla.tex: Add a more basic example setup to the
+	  examples section
+
+	* doc/security.txt, /: Merged revisions 58896 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r58896 | russell | 2007-03-14 11:38:48 -0500 (Wed, 14 Mar 2007) |
+	  3 lines Add a note to the security file that the Asterisk CLI and
+	  log files may contain sensitive information, and that people
+	  should keep this in mind. ........
+
+	* configs/sla.conf.sample, apps/app_meetme.c: By default, don't
+	  attempt to do any CallerID handling at all with SLA because it is
+	  known to not work properly in some situations. However, add an
+	  option to enable it for those that would like to use it anyway.
+	  The short story behind this is that to properly handle CallerID
+	  with SLA, we need the ability to change the CallerID on an
+	  existing call, and we are not ready to handle that.
+
+2007-03-14 01:47 +0000 [r58880]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* funcs/func_strings.c: Issue 9162 -
+	  pbx_substitute_variables_helper assumes the buffer is initialized
+	  to all zeroes. This fixes a case where it wasn't.
+
+2007-03-13 23:19 +0000 [r58870-58872]  Russell Bryant <russell@digium.com>
+
+	* apps/app_meetme.c: Ensure that the blinky lights show that the
+	  trunk stopped ringing when the trunk hangs up before a station
+	  has answered it. (issue #9234, reported by francesco_r)
+
+	* configs/sla.conf.sample: fix the reference to the SLA
+	  documentation
+
+2007-03-13 11:49 +0000 [r58843-58848]  Olle Johansson <oej@edvina.net>
+
+	* /, channels/chan_sip.c: Merged revisions 58847 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r58847 | oej | 2007-03-13 12:45:52 +0100 (Tue, 13 Mar 2007) | 2
+	  lines Issue #9229 - No port in request URI on register to non
+	  default SIP ports (neelakantan) ........
+
+	* channels/chan_sip.c: Don't hangup the call on OK or errors on
+	  MESSAGE and INFO inside of a dialog (like video update requests).
+
+	* channels/chan_sip.c: Issue #9251 - Clear From URI from user
+	  attributes (tgrman)
+
+2007-03-12 16:52 +0000 [r58833]  Joshua Colp <jcolp@digium.com>
+
+	* /: Blocked revisions 58832 via svnmerge ........ r58832 | file |
+	  2007-03-12 12:49:49 -0400 (Mon, 12 Mar 2007) | 2 lines We can't
+	  use the assembler version of fetchadd_int under Intel Macs.
+	  (issue #9254 reported by darrell budic) ........
+
+2007-03-12 13:08 +0000 [r58825-58826]  Christian Richter <christian.richter@beronet.com>
+
+	* channels/misdn/isdn_lib.c, channels/chan_misdn.c, /: Merged
+	  revisions 57034,57523,57753,58558 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r57034 | crichter | 2007-02-28 17:09:27 +0100 (Mi, 28 Feb 2007) |
+	  1 line fixed bugs.digium.com bugs: #9157 and bugs.beronet.com
+	  bugs: #302, #303, #304 ........ r57523 | crichter | 2007-03-02
+	  19:32:51 +0100 (Fr, 02 Mar 2007) | 1 line fixed typo ........
+	  r57753 | crichter | 2007-03-04 11:39:50 +0100 (So, 04 Mar 2007) |
+	  1 line fixed another place where the out_cause was hardcoded to
+	  16 ........ r58558 | crichter | 2007-03-09 15:43:58 +0100 (Fr, 09
+	  Mar 2007) | 1 line we can free channel 31 as well, since we can
+	  occupy it ........
+
+	* channels/misdn/isdn_lib.c, channels/misdn/isdn_lib.h,
+	  channels/chan_misdn.c, channels/misdn/ie.c,
+	  channels/misdn/isdn_msg_parser.c: added UU transceiving and
+	  corect handling for rdnis
+
+2007-03-12 01:21 +0000 [r58779-58783]  Joshua Colp <jcolp@digium.com>
+
+	* main/rtp.c: Allow RFC2833 compensation to compensate for even
+	  stupider implementations by queueing up the end frame at the
+	  start, not the actual end. (issue #8963 reported by AndrewZ)
+
+	* channels/chan_sip.c, configs/sip.conf.sample: Add
+	  matchexterniplocally setting which only substitutes your
+	  externip/externhost setting if it matches the localnet setting. I
+	  know of at least two people who need opposite settings, so I made
+	  it an option! (issue #8821 reported by kokoskarokoska)
+
+2007-03-10 18:11 +0000 [r58638-58705]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_iax2.c: Fix a few more places in chan_iax2 where
+	  the ast_frame used for receiving a frame was not properly
+	  initialized. - Interpolating a frame when the jitterbuffer is in
+	  use - decrypting a frame when IAX2 encryption is on - frames in
+	  an IAX2 trunk
+
+	* apps/app_meetme.c: Make the compiler happy and initialize a
+	  variable.
+
+	* doc/sla.pdf (added), doc/sla.txt (removed), doc/sla.tex (added):
+	  Merge some updates to the SLA documentation. I plan to keep
+	  working on this to explain all of the expected behavior with call
+	  handling, configuration details for specific phones, and other
+	  things. However, I got tired of doing it in plain text, so I
+	  switched to using LaTeX. I have included the PDF version. I
+	  haven't been able to get a nice looking plain text version out of
+	  it yet, but I'm not terribly concerned since this is supposed to
+	  be more of the manual, while the plain text sample configuration
+	  file is the reference.
+
+2007-03-09 21:08 +0000 [r58584-58604]  Joshua Colp <jcolp@digium.com>
+
+	* apps/app_voicemail.c: Fix spelling of unavailable in voicemail
+	  documentation. (issue #9248 reported by tensai)
+
+	* /, channels/chan_sip.c: Merged revisions 58579 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r58579 | file | 2007-03-09 15:46:43 -0500 (Fri, 09 Mar 2007) | 2
+	  lines If we are unable to lookup the host in a c line we have to
+	  abort, otherwise the previous data is gone and we will
+	  (potentially) have no data when all is said and done. ........
+
+2007-03-08 22:15 +0000 [r58510-58512]  Russell Bryant <russell@digium.com>
+
+	* apps/app_meetme.c: Hang up the channel that put the call on hold
+	  in the event processing thread to avoid a race condition. Also,
+	  if the station originated the call that it is putting on hold,
+	  don't hang up the trunk if it was the only station on the call
+	  and it is hanging up due to hold and not a normal hangup.
+
+	* channels/chan_zap.c: Add a missing break statement so that
+	  handling the above event does not incorrectly destroy the
+	  channel. (issue #9242, andrew)
+
+2007-03-08 21:33 +0000 [r58479]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* res/res_odbc.c: Fix segfault (Issue 9236)
+
+2007-03-08 20:54 +0000 [r58474]  Russell Bryant <russell@digium.com>
+
+	* apps/app_meetme.c: Refactor hold handling a bit so that it does
+	  not require keeping the call up when a call is put on hold.
+
+2007-03-08 18:01 +0000 [r58389-58436]  Joshua Colp <jcolp@digium.com>
+
+	* main/rtp.c: Make early SDP seeding even smarter! We have to check
+	  codecs in the make_compatible function too. (issue #9221 reported
+	  by marcelbarbulescu)
+
+	* main/dsp.c, /: Merged revisions 58388 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r58388 | file | 2007-03-08 11:04:58 -0500 (Thu, 08 Mar 2007) | 2
+	  lines Only print out debug message if the definition that makes
+	  the variables shows up was actually defined. (issue #9233
+	  reported by serginuez) ........
+
+2007-03-08 13:23 +0000 [r58351-58354]  Kevin P. Fleming <kpfleming@digium.com>
+
+	* main/http.c: this change was not needed; fclose() handles closing
+	  the file descriptor already
+
+	* apps/app_meetme.c: fix a compiler warning, and overwriting 'res'
+	  value
+
+	* main/http.c: fix two cases where HTTP session file descriptors
+	  would not be closed
+
+2007-03-08 01:01 +0000 [r58243-58320]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_zap.c, configure, configure.ac: If we receive
+	  ZT_EVENT_REMOVED, destroy the specified channel. (issue #7256,
+	  tzafrir) Also, update the configure script to make sure that we
+	  don't try to build chan_zap if the installed version of zaptel
+	  does not include ZT_EVENT_REMOVED.
+
+	* /, channels/chan_iax2.c: (This bug was reported to me by Kinsey
+	  Moore) Merged revisions 58242 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r58242 | russell | 2007-03-07 12:17:07 -0600 (Wed, 07 Mar 2007) |
+	  7 lines Fix a problem where the Asterisk channel name could be
+	  that of the wrong IAX2 user for a call. This is because the first
+	  step of choosing this name is to look for an IAX2 peer that
+	  happens to have the same IP/port number that this call is coming
+	  from and assuming that is it. However, this is not always
+	  correct. So, I have made it change this name after authentication
+	  happens since at that point, we have an exact match. ........
+
+2007-03-07 17:52 +0000 [r58240]  Joshua Colp <jcolp@digium.com>
+
+	* main/rtp.c, channels/chan_sip.c: Ensure we have (or should have)
+	  at least one matching codec before attempting early bridge SDP
+	  seeding. (issue #9221 reported by marcelbarbulescu)
+
+2007-03-07 00:27 +0000 [r58165-58168]  Russell Bryant <russell@digium.com>
+
+	* /: Blocked revisions 58167 via svnmerge ........ r58167 | russell
+	  | 2007-03-06 18:27:04 -0600 (Tue, 06 Mar 2007) | 2 lines Fix a
+	  misplaced block of code in the 1.2 version of the patch to fix
+	  issue #8977 ........
+
+	* main/manager.c, /: Merged revisions 58164 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r58164 | russell | 2007-03-06 18:20:13 -0600 (Tue, 06 Mar 2007) |
+	  4 lines If the channels acquired using the manager Redirect
+	  action are not up, then don't attempt to do anything with them.
+	  It could lead to weird behavior, including crashes. (issue #8977)
+	  ........
+
+2007-03-06 23:10 +0000 [r58121]  Steve Murphy <murf@digium.com>
+
+	* /, channels/chan_sip.c: Merged revisions 58115 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r58115 | murf | 2007-03-06 15:52:52 -0700 (Tue, 06 Mar 2007) | 1
+	  line Fix for 9220: Eyebeam cannot renew subscriptions for
+	  presence info. Reason: re-SUBSCRIBE requests don't include Accept
+	  headers, which the rfc says are optional (to put it tersely), (it
+	  uses MAY), and luckily, the sip_pvt struct has the format info
+	  stored, so we simply leave it if the format is set, and the
+	  accept header null. ........
+
+2007-03-06 23:00 +0000 [r58119]  Russell Bryant <russell@digium.com>
+
+	* configs/voicemail.conf.sample: Clarify the documentation of the
+	  dialout and sendvoicemail options. (issue #9000, caio1982 and
+	  serge-v)
+
+2007-03-06 20:37 +0000 [r58053]  Olle Johansson <oej@edvina.net>
+
+	* /, channels/chan_sip.c: Merged revisions 58052 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r58052 | oej | 2007-03-06 21:33:21 +0100 (Tue, 06 Mar 2007) | 2
+	  lines Change error message to proper message ........
+
+2007-03-06 18:01 +0000 [r58023]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_skinny.c: Return an error of transmit_response is
+	  called without a session. (issue #9002)
+
+2007-03-05 19:19 +0000 [r57870-57914]  Joshua Colp <jcolp@digium.com>
+
+	* channels/chan_iax2.c: Since chan_iax2 does not support reception
+	  of DTMF with duration ensure that it is set to 0 on the frame.
+	  (issue #8521 reported by gdhgdh)
+
+	* apps/app_meetme.c: Don't create a listen channel and record the
+	  conference unless the option is turned on. (issue #9204 reported
+	  by francesco_r)
+
+	* apps/app_voicemail.c, /: Merged revisions 57869 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r57869 | file | 2007-03-05 12:49:18 -0500 (Mon, 05 Mar 2007) | 2
+	  lines Make create_dirpath use our standard for return values. -1
+	  is failure, 0 is success. (issue #9205 reported by ballares)
+	  ........
+
+2007-03-05 15:20 +0000 [r57826]  Steve Murphy <murf@digium.com>
+
+	* main/pbx.c, /: Merged revisions 57825 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r57825 | murf | 2007-03-05 07:53:57 -0700 (Mon, 05 Mar 2007) | 1
+	  line Fixed a typo introduced via 9156 (either the gotos or their
+	  doc strings are wrong) ........
+
+2007-03-05 04:19 +0000 [r57768-57798]  Joshua Colp <jcolp@digium.com>
+
+	* main/slinfactory.c: Don't allow a NULL pointer to reach
+	  ast_frdup. (issue #9155 reported by cmaj)
+
+	* res/res_jabber.c: Don't reference a potentially NULL pointer.
+	  (issue #9199 reported by klolik)
+
+	* main/rtp.c: Preserve marker bit when P2P bridging. (issue #9198
+	  reported by edgreenberg)
+
+2007-03-03 15:31 +0000 [r57707]  Steve Murphy <murf@digium.com>
+
+	* pbx/ael/ael-test/ref.ael-vtest13, pbx/ael/ael-test/ref.ael-test2,
+	  pbx/ael/ael-test/ref.ael-test4, pbx/ael/ael-test/ref.ael-test7:
+	  Updated the regression tests
+
+2007-03-03 06:45 +0000 [r57649]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* apps/app_voicemail.c, /: Merged revisions 57648 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r57648 | tilghman | 2007-03-03 00:36:55 -0600 (Sat, 03 Mar 2007)
+	  | 2 lines Memory leak of a list, if call recording was abandoned
+	  ........
+
+2007-03-03 00:59 +0000 [r57620]  Dwayne M. Hubbard <dhubbard@digium.com>
+
+	* main/say.c: submitted patch for Georgian language, issue 9010,
+	  submitted by Alexander Shaduri
+
+2007-03-03 00:02 +0000 [r57591]  Russell Bryant <russell@digium.com>
+
+	* configs/sla.conf.sample: add missing configuration template.
+	  Thanks to Lacy Moore on asterisk-users for pointing this out\!
+
+2007-03-02  Russell Bryant  <russell@digium.com>
 
 	* Asterisk 1.4.1 released.
 

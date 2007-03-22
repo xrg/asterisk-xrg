@@ -27,7 +27,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <string.h>
 #include <stdlib.h>
@@ -66,6 +66,7 @@ static char *descrip =
 "  DIGITAL_W_TONES    : 0x11 - Unrestricted digital information with tones/announcements\n"
 "  VIDEO              : 0x18 - Video\n"
 "\n"
+"This application is deprecated in favor of Set(CHANNEL(transfercapability)=...)\n"
 ;
 
 static int settransfercapability_exec(struct ast_channel *chan, void *data)

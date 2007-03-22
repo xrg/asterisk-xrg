@@ -283,7 +283,7 @@ static int acf_sprintf(struct ast_channel *chan, char *cmd, char *data, char *bu
 				formatbuf[&arg.format[i] - formatstart + 1] = '\0';
 
 				/* Convert the argument into the required type */
-				if (sscanf(arg.var[argcount++], "%i", &tmpi) != 1) {
+				if (sscanf(arg.var[argcount++], "%d", &tmpi) != 1) {
 					ast_log(LOG_ERROR, "Argument '%s' is not an integer number for format '%s'\n", arg.var[argcount - 1], formatbuf);
 					goto sprintf_fail;
 				}
@@ -506,7 +506,7 @@ static struct ast_custom_function strptime_function = {
 static int function_eval(struct ast_channel *chan, char *cmd, char *data,
 			 char *buf, size_t len)
 {
-	buf[0] = '\0';
+	memset(buf, 0, len);
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "EVAL requires an argument: EVAL(<string>)\n");

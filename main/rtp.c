@@ -138,7 +138,7 @@ struct ast_rtp {
 
 	/* DTMF Reception Variables */
 	char resp;
-	unsigned int lasteventendseqn;
+	unsigned int lastevent;
 	int dtmfcount;
 	unsigned int dtmfsamples;
 	/* DTMF Transmission Variables */
@@ -705,7 +705,7 @@ static struct ast_frame *process_cisco_dtmf(struct ast_rtp *rtp, unsigned char *
  * \param seqno
  * \returns
  */
-static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *data, int len, unsigned int seqno)
+static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *data, int len, unsigned int seqno, unsigned int timestamp)
 {
 	unsigned int event;
 	unsigned int event_end;
@@ -739,21 +739,23 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 		resp = 'X';	
 	}
 
-	if ((!(rtp->resp) && (!(event_end & 0x80))) || (rtp->resp && rtp->resp != resp)) {
-		rtp->resp = resp;
-		if (!ast_test_flag(rtp, FLAG_DTMF_COMPENSATE))
+	if (ast_test_flag(rtp, FLAG_DTMF_COMPENSATE)) {
+		if ((rtp->lastevent != timestamp) || (rtp->resp && rtp->resp != resp)) {
+			rtp->resp = resp;
+			f = send_dtmf(rtp, AST_FRAME_DTMF_END);
+			f->len = 0;
+			rtp->lastevent = timestamp;
+		}
+	} else {
+		if ((!(rtp->resp) && (!(event_end & 0x80))) || (rtp->resp && rtp->resp != resp)) {
+			rtp->resp = resp;
 			f = send_dtmf(rtp, AST_FRAME_DTMF_BEGIN);
-	} else if (event_end & 0x80 && rtp->lasteventendseqn != seqno && rtp->resp) {
-		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
-		f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
-		rtp->resp = 0;
-		rtp->lasteventendseqn = seqno;
-	} else if (ast_test_flag(rtp, FLAG_DTMF_COMPENSATE) && event_end & 0x80 && rtp->lasteventendseqn != seqno) {
-		rtp->resp = resp;
-		f = send_dtmf(rtp, AST_FRAME_DTMF_END);
-		f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
-		rtp->resp = 0;
-		rtp->lasteventendseqn = seqno;
+		} else if ((event_end & 0x80) && (rtp->lastevent != seqno) && rtp->resp) {
+			f = send_dtmf(rtp, AST_FRAME_DTMF_END);
+			f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
+			rtp->resp = 0;
+			rtp->lastevent = seqno;
+		}
 	}
 
 	rtp->dtmfcount = dtmftimeout;
@@ -1032,7 +1034,7 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 	version = (seqno & 0xC0000000) >> 30;
 	payload = (seqno & 0x7f0000) >> 16;
 	padding = seqno & (1 << 29);
-	mark = seqno & (1 << 23);
+	mark = (seqno & 0x800000) >> 23;
 	ext = seqno & (1 << 28);
 	seqno &= 0xffff;
 
@@ -1240,12 +1242,12 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 				duration &= 0xFFFF;
 				ast_verbose("Got  RTP RFC2833 from   %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u, mark %d, event %08x, end %d, duration %-5.5d) \n", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp, res - hdrlen, (mark?1:0), event, ((event_end & 0x80)?1:0), duration);
 			}
-			f = process_rfc2833(rtp, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno);
+			f = process_rfc2833(rtp, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp);
 		} else if (rtpPT.code == AST_RTP_CISCO_DTMF) {
 			/* It's really special -- process it the Cisco way */
-			if (rtp->lasteventseqn <= seqno || (rtp->lasteventseqn >= 65530 && seqno <= 6)) {
+			if (rtp->lastevent <= seqno || (rtp->lastevent >= 65530 && seqno <= 6)) {
 				f = process_cisco_dtmf(rtp, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen);
-				rtp->lasteventseqn = seqno;
+				rtp->lastevent = seqno;
 			}
 		} else if (rtpPT.code == AST_RTP_CN) {
 			/* Comfort Noise */
@@ -1445,7 +1447,7 @@ int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src)
 	struct ast_rtp_protocol *destpr = NULL, *srcpr = NULL;
 	enum ast_rtp_get_result audio_dest_res = AST_RTP_GET_FAILED, video_dest_res = AST_RTP_GET_FAILED;
 	enum ast_rtp_get_result audio_src_res = AST_RTP_GET_FAILED, video_src_res = AST_RTP_GET_FAILED;
-	int srccodec, nat_active = 0;
+	int srccodec, destcodec, nat_active = 0;
 
 	/* Lock channels */
 	ast_channel_lock(dest);
@@ -1498,6 +1500,17 @@ int ast_rtp_early_bridge(struct ast_channel *dest, struct ast_channel *src)
 		srccodec = srcpr->get_codec(src);
 	else
 		srccodec = 0;
+	if (audio_dest_res == AST_RTP_TRY_NATIVE && destpr->get_codec)
+		destcodec = destpr->get_codec(dest);
+	else
+		destcodec = 0;
+	/* Ensure we have at least one matching codec */
+	if (!(srccodec & destcodec)) {
+		ast_channel_unlock(dest);
+		if (src)
+			ast_channel_unlock(src);
+		return 0;
+	}
 	/* Consider empty media as non-existant */
 	if (audio_src_res == AST_RTP_TRY_NATIVE && !srcp->them.sin_addr.s_addr)
 		srcp = NULL;
@@ -1522,7 +1535,7 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
 	struct ast_rtp_protocol *destpr = NULL, *srcpr = NULL;
 	enum ast_rtp_get_result audio_dest_res = AST_RTP_GET_FAILED, video_dest_res = AST_RTP_GET_FAILED;
 	enum ast_rtp_get_result audio_src_res = AST_RTP_GET_FAILED, video_src_res = AST_RTP_GET_FAILED; 
-	int srccodec;
+	int srccodec, destcodec;
 
 	/* Lock channels */
 	ast_channel_lock(dest);
@@ -1554,8 +1567,18 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
 	audio_src_res = srcpr->get_rtp_info(src, &srcp);
 	video_src_res = srcpr->get_vrtp_info ? srcpr->get_vrtp_info(src, &vsrcp) : AST_RTP_GET_FAILED;
 
+	/* Ensure we have at least one matching codec */
+	if (srcpr->get_codec)
+		srccodec = srcpr->get_codec(src);
+	else
+		srccodec = 0;
+	if (destpr->get_codec)
+		destcodec = destpr->get_codec(dest);
+	else
+		destcodec = 0;
+
 	/* Check if bridge is still possible (In SIP canreinvite=no stops this, like NAT) */
-	if (audio_dest_res != AST_RTP_TRY_NATIVE || audio_src_res != AST_RTP_TRY_NATIVE) {
+	if (audio_dest_res != AST_RTP_TRY_NATIVE || audio_src_res != AST_RTP_TRY_NATIVE || !(srccodec & destcodec)) {
 		/* Somebody doesn't want to play... */
 		ast_channel_unlock(dest);
 		ast_channel_unlock(src);
@@ -1564,10 +1587,6 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
 	ast_rtp_pt_copy(destp, srcp);
 	if (vdestp && vsrcp)
 		ast_rtp_pt_copy(vdestp, vsrcp);
-	if (srcpr->get_codec)
-		srccodec = srcpr->get_codec(src);
-	else
-		srccodec = 0;
 	if (media) {
 		/* Bridge early */
 		if (destpr->set_rtp_peer(dest, srcp, vsrcp, srccodec, ast_test_flag(srcp, FLAG_NAT_ACTIVE)))
@@ -1996,7 +2015,7 @@ void ast_rtp_reset(struct ast_rtp *rtp)
 	rtp->lastividtimestamp = 0;
 	rtp->lastovidtimestamp = 0;
 	rtp->lasteventseqn = 0;
-	rtp->lasteventendseqn = 0;
+	rtp->lastevent = 0;
 	rtp->lasttxformat = 0;
 	rtp->lastrxformat = 0;
 	rtp->dtmfcount = 0;

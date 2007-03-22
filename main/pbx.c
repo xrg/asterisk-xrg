@@ -341,7 +341,7 @@ static struct pbx_builtin {
 	"channel is hung up, and the execution of instructions on the channel is terminated.\n"
 	"Remember that this command can set the current context, and if the context specified\n"
 	"does not exist, then it will not be able to find any 'h' or 'i' extensions there, and\n"
-	"and the channel and call will both be terminated!\n"
+	"the channel and call will both be terminated!\n"
 	},
 
 	{ "GotoIfTime", pbx_builtin_gotoiftime,
@@ -436,6 +436,7 @@ static struct pbx_builtin {
 	"Set a global variable to a given value",
 	"  SetGlobalVar(variable=value): This application sets a given global variable to\n"
 	"the specified value.\n"
+	"\n\nThis application is deprecated in favor of Set(GLOBAL(var)=value)\n"
 	},
 
 	{ "Set", pbx_builtin_setvar,
@@ -450,6 +451,9 @@ static struct pbx_builtin {
 	"  Options:\n"
 	"    g - Set variable globally instead of on the channel\n"
 	"        (applies only to variables, not functions)\n"
+	"\n\nThe use of Set to set multiple variables at once and the g flag have both\n"
+	"been deprecated.  Please use multiple Set calls and the GLOBAL() dialplan\n"
+	"function instead.\n"
 	},
 
 	{ "ImportVar", pbx_builtin_importvar,
