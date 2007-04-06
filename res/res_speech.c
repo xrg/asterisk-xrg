@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 45106 $");
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -289,6 +289,19 @@ int ast_speech_change_state(struct ast_speech *speech, int state)
 		speech->state = state;
 		break;
 	}
+
+	return res;
+}
+
+/*! \brief Change the type of results we want */
+int ast_speech_change_results_type(struct ast_speech *speech, enum ast_speech_results_type results_type)
+{
+	int res = 0;
+
+	speech->results_type = results_type;
+
+	if (speech->engine->change_results_type)
+		res = speech->engine->change_results_type(speech, results_type);
 
 	return res;
 }
