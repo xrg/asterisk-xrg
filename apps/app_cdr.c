@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <stdlib.h>
@@ -51,8 +51,7 @@ static int nocdr_exec(struct ast_channel *chan, void *data)
 	u = ast_module_user_add(chan);
 
 	if (chan->cdr) {
-		ast_cdr_free(chan->cdr);
-		chan->cdr = NULL;
+		ast_set_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED);
 	}
 
 	ast_module_user_remove(u);
