@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <string.h>
@@ -201,7 +201,8 @@ static struct ast_frame  *nbs_xread(struct ast_channel *ast)
 	p->fr.delivery.tv_sec = 0;
 	p->fr.delivery.tv_usec = 0;
 
-	ast_log(LOG_DEBUG, "Returning null frame on %s\n", ast->name);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Returning null frame on %s\n", ast->name);
 
 	return &p->fr;
 }
@@ -232,7 +233,7 @@ static int nbs_xwrite(struct ast_channel *ast, struct ast_frame *frame)
 static struct ast_channel *nbs_new(struct nbs_pvt *i, int state)
 {
 	struct ast_channel *tmp;
-	tmp = ast_channel_alloc(1, state, 0, 0, "NBS/%s", i->stream);
+	tmp = ast_channel_alloc(1, state, 0, 0, "", "s", context, 0, "NBS/%s", i->stream);
 	if (tmp) {
 		tmp->tech = &nbs_tech;
 		tmp->fds[0] = nbs_fd(i->nbs);

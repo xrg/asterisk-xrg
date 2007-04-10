@@ -37,7 +37,7 @@ extern "C" {
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47303 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <string.h>
@@ -105,13 +105,10 @@ static char context[AST_MAX_EXTENSION] = "default";
 
 /* Default language */
 static char language[MAX_LANGUAGE] = "";
-static int usecnt =0;
 
 static int gruntdetect_timeout = 3600000; /* Grunt detect timeout is 1hr. */
 
 static const int prefformat = AST_FORMAT_SLINEAR;
-
-AST_MUTEX_DEFINE_STATIC(usecnt_lock);
 
 /* Protect the interface list (of vpb_pvt's) */
 AST_MUTEX_DEFINE_STATIC(iflock);
@@ -2095,11 +2092,6 @@ static int vpb_hangup(struct ast_channel *ast)
 		p->vad = NULL;
 	}
 
-	ast_mutex_lock(&usecnt_lock); {
-		usecnt--;
-	} ast_mutex_unlock(&usecnt_lock);
-	ast_update_use_count();
-
 	if (option_verbose > 1)
 		ast_verbose(VERBOSE_PREFIX_2 "%s: Hangup complete\n", ast->name);
 
@@ -2634,7 +2626,7 @@ static struct ast_channel *vpb_new(struct vpb_pvt *me, enum ast_channel_state st
 	if (option_verbose > 3)
 		ast_verbose("%s: New call for context [%s]\n",me->dev,context);
 	    
-	tmp = ast_channel_alloc(1, state, 0, 0, me->dev);
+	tmp = ast_channel_alloc(1, state, 0, 0, "", me->exten, me->context, 0, me->dev);
 	if (tmp) {
 		if (use_ast_ind == 1){
 			tmp->tech = &vpb_tech_indicate;
@@ -2683,10 +2675,6 @@ static struct ast_channel *vpb_new(struct vpb_pvt *me, enum ast_channel_state st
 		me->lastgrunt  = ast_tvnow(); /* Assume at least one grunt tone seen now. */
 		me->lastplay  = ast_tvnow(); /* Assume at least one grunt tone seen now. */
 
-		ast_mutex_lock(&usecnt_lock);
-		usecnt++;
-		ast_mutex_unlock(&usecnt_lock);
-		ast_update_use_count();
 		if (state != AST_STATE_DOWN) {
 			if ((me->mode != MODE_FXO)&&(state != AST_STATE_UP)){
 				vpb_answer(tmp);
