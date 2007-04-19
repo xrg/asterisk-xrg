@@ -22,7 +22,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -156,6 +156,9 @@ static int group_list_function_read(struct ast_channel *chan, char *cmd,
 	struct varshead *headp;
 	char tmp1[1024] = "";
 	char tmp2[1024] = "";
+
+	if (!chan)
+		return -1;
 
 	headp = &chan->varshead;
 	AST_LIST_TRAVERSE(headp, current, entries) {

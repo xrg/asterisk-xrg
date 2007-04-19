@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 43933 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -44,6 +44,9 @@ static int timeout_read(struct ast_channel *chan, char *cmd, char *data,
 			char *buf, size_t len)
 {
 	time_t myt;
+
+	if (!chan)
+		return -1;
 
 	if (!data) {
 		ast_log(LOG_ERROR, "Must specify type of timeout to get.\n");
@@ -89,6 +92,9 @@ static int timeout_write(struct ast_channel *chan, char *cmd, char *data,
 	int x;
 	char timestr[64];
 	struct tm myt;
+
+	if (!chan)
+		return -1;
 
 	if (!data) {
 		ast_log(LOG_ERROR, "Must specify type of timeout to set.\n");
