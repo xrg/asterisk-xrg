@@ -2079,7 +2079,7 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 				ast_frfree(f);
 				return NULL;
 			}
-			if ((f->frametype == AST_FRAME_DTMF) && (f->subclass != '*') && valid_exit(qe, f->subclass)) {
+			if ((f->frametype == AST_FRAME_DTMF) && valid_exit(qe, f->subclass)) {
 				if (option_verbose > 3)
 					ast_verbose(VERBOSE_PREFIX_3 "User pressed digit: %c\n", f->subclass);
 				*to = 0;
@@ -2588,7 +2588,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				}
 
 				if (mixmonapp) {
-					if (!ast_strlen_zero(monitor_exec) && !ast_strlen_zero(monitor_options))
+					if (!ast_strlen_zero(monitor_exec))
 						snprintf(mixmonargs, sizeof(mixmonargs)-1, "%s|b%s|%s", tmpid2, monitor_options, monitor_exec);
 					else
 						snprintf(mixmonargs, sizeof(mixmonargs)-1, "%s|b%s", tmpid2, monitor_options);
@@ -2651,7 +2651,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				qe->chan->exten, qe->chan->context, (long) (callstart - qe->start),
 				(long) (time(NULL) - callstart));
 		} else if (qe->chan->_softhangup) {
-			ast_queue_log(queuename, qe->chan->uniqueid, peer->name, "COMPLETECALLER", "%ld|%ld|%d",
+			ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETECALLER", "%ld|%ld|%d",
 				(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
 			if (qe->parent->eventwhencalled)
 				manager_event(EVENT_FLAG_AGENT, "AgentComplete",

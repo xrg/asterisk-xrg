@@ -926,7 +926,8 @@ static int authenticate(struct mansession *s, const struct message *m)
 				} else if (ha)
 					ast_free_ha(ha);
 				if (!strcasecmp(authtype, "MD5")) {
-					if (!ast_strlen_zero(key) && s->challenge) {
+					if (!ast_strlen_zero(key) && 
+					    !ast_strlen_zero(s->challenge) && !ast_strlen_zero(password)) {
 						int x;
 						int len = 0;
 						char md5key[256] = "";
@@ -1068,6 +1069,8 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 	struct ast_variable *v;
 	
 	for (x=0;x<100000;x++) {
+		unsigned int object = 0;
+
 		snprintf(hdr, sizeof(hdr), "Action-%06d", x);
 		action = astman_get_header(m, hdr);
 		if (ast_strlen_zero(action))
@@ -1078,6 +1081,10 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 		var = astman_get_header(m, hdr);
 		snprintf(hdr, sizeof(hdr), "Value-%06d", x);
 		value = astman_get_header(m, hdr);
+		if (!ast_strlen_zero(value) && *value == '>') {
+			object = 1;
+			value++;
+		}
 		snprintf(hdr, sizeof(hdr), "Match-%06d", x);
 		match = astman_get_header(m, hdr);
 		if (!strcasecmp(action, "newcat")) {
@@ -1098,7 +1105,7 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 				ast_category_delete(cfg, (char *) cat);
 		} else if (!strcasecmp(action, "update")) {
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && (category = ast_category_get(cfg, cat)))
-				ast_variable_update(category, (char *) var, (char *) value, (char *) match);
+				ast_variable_update(category, var, value, match, object);
 		} else if (!strcasecmp(action, "delete")) {
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && (category = ast_category_get(cfg, cat)))
 				ast_variable_delete(category, (char *) var, (char *) match);
@@ -1106,7 +1113,7 @@ static void handle_updates(struct mansession *s, const struct message *m, struct
 			if (!ast_strlen_zero(cat) && !ast_strlen_zero(var) && 
 				(category = ast_category_get(cfg, cat)) && 
 				(v = ast_variable_new(var, value))){
-				if (match && !strcasecmp(match, "object"))
+				if (object || (match && !strcasecmp(match, "object")))
 					v->object = 1;
 				ast_variable_append(category, v);
 			}
@@ -1391,7 +1398,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 	const char *varname = astman_get_header(m, "Variable");
 	const char *id = astman_get_header(m,"ActionID");
 	char *varval;
-	char workspace[1024];
+	char workspace[1024] = "";
 
 	if (ast_strlen_zero(varname)) {
 		astman_send_error(s, m, "No variable specified");
@@ -1410,6 +1417,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 		char *copy = ast_strdupa(varname);
 
 		ast_func_read(c, copy, workspace, sizeof(workspace));
+		varval = workspace;
 	} else {
 		pbx_retrieve_variable(c, varname, &varval, workspace, sizeof(workspace), NULL);
 	}
@@ -1558,14 +1566,14 @@ static int action_redirect(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, buf);
 		return 0;
 	}
-	if (chan->_state != AST_STATE_UP) {
+	if (ast_check_hangup(chan)) {
 		astman_send_error(s, m, "Redirect failed, channel not up.\n");
 		ast_channel_unlock(chan);
 		return 0;
 	}
 	if (!ast_strlen_zero(name2))
 		chan2 = ast_get_channel_by_name_locked(name2);
-	if (chan2 && chan2->_state != AST_STATE_UP) {
+	if (chan2 && ast_check_hangup(chan2)) {
 		astman_send_error(s, m, "Redirect failed, extra channel not up.\n");
 		ast_channel_unlock(chan);
 		ast_channel_unlock(chan2);
@@ -2448,6 +2456,43 @@ static struct mansession *find_session(unsigned long ident)
 	return s;
 }
 
+int astman_verify_session_readpermissions(unsigned long ident, int perm)
+{
+	int result = 0;
+	struct mansession *s;
+
+	AST_LIST_LOCK(&sessions);
+	AST_LIST_TRAVERSE(&sessions, s, list) {
+		ast_mutex_lock(&s->__lock);
+		if ((s->managerid == ident) && (s->readperm & perm)) {
+			result = 1;
+			ast_mutex_unlock(&s->__lock);
+			break;
+		}
+		ast_mutex_unlock(&s->__lock);
+	}
+	AST_LIST_UNLOCK(&sessions);
+	return result;
+}
+
+int astman_verify_session_writepermissions(unsigned long ident, int perm)
+{
+	int result = 0;
+	struct mansession *s;
+
+	AST_LIST_LOCK(&sessions);
+	AST_LIST_TRAVERSE(&sessions, s, list) {
+		ast_mutex_lock(&s->__lock);
+		if ((s->managerid == ident) && (s->writeperm & perm)) {
+			result = 1;
+			ast_mutex_unlock(&s->__lock);
+			break;
+		}
+		ast_mutex_unlock(&s->__lock);
+	}
+	AST_LIST_UNLOCK(&sessions);
+	return result;
+}
 
 enum {
 	FORMAT_RAW,

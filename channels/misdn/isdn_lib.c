@@ -431,7 +431,7 @@ static void dump_chan_list(struct misdn_stack *stack)
 
 
 
-static int find_free_chan_in_stack(struct misdn_stack *stack, struct misdn_bchannel *bc, int channel)
+static int find_free_chan_in_stack(struct misdn_stack *stack, struct misdn_bchannel *bc, int channel, int dec)
 {
 	int i;
 
@@ -443,14 +443,27 @@ static int find_free_chan_in_stack(struct misdn_stack *stack, struct misdn_bchan
 	}
 	
 	channel--;
-  
-	for (i = 0; i < stack->b_num; i++) {
-		if (i != 15 && (channel < 0 || i == channel)) { /* skip E1 Dchannel ;) and work with chan preselection */
-			if (!stack->channels[i]) {
-				cb_log (3, stack->port, " --> found chan%s: %d\n", channel>=0?" (preselected)":"", i+1);
-				bc->channel=i+1;
-				cb_event(EVENT_NEW_CHANNEL, bc, NULL);
-				return i+1;
+
+	int bnums=stack->pri?stack->b_num:stack->b_num-1;
+ 
+ 	if (dec) {
+		for (i = bnums; i >=0; i--) {
+			if (i != 15 && (channel < 0 || i == channel)) { /* skip E1 Dchannel ;) and work with chan preselection */
+				if (!stack->channels[i]) {
+					cb_log (3, stack->port, " --> found chan%s: %d\n", channel>=0?" (preselected)":"", i+1);
+					bc->channel=i+1;
+					return i+1;
+				}
+			}
+		}
+	} else {
+		for (i = 0; i <= bnums; i++) {
+			if (i != 15 && (channel < 0 || i == channel)) { /* skip E1 Dchannel ;) and work with chan preselection */
+				if (!stack->channels[i]) {
+					cb_log (3, stack->port, " --> found chan%s: %d\n", channel>=0?" (preselected)":"", i+1);
+					bc->channel=i+1;
+					return i+1;
+				}
 			}
 		}
 	}
@@ -541,6 +554,7 @@ static void empty_bc(struct misdn_bchannel *bc)
 	bc->in_use= 0;
 	bc->cw= 0;
 
+	bc->dec=0;
 	bc->channel = 0;
 
 	bc->sending_complete = 0;
@@ -578,14 +592,13 @@ static void empty_bc(struct misdn_bchannel *bc)
 
 	bc->early_bconnect = 1;
 	
+#ifdef MISDN_1_2
+	*bc->pipeline = 0;
+#else
 	bc->ec_enable = 0;
 	bc->ec_deftaps = 128;
-	bc->ec_whenbridged = 0;
-
-#ifdef EC_TRAIN
-	bc->ec_training = 1;
 #endif
-	
+
 	bc->orig=0;
   
 	bc->cause=16;
@@ -689,7 +702,7 @@ static int set_chan_in_stack(struct misdn_stack *stack, int channel)
 		if (!stack->channels[channel-1])
 			stack->channels[channel-1] = 1;
 		else {
-			cb_log(0,stack->port,"channel already in use:%d\n", channel );
+			cb_log(4,stack->port,"channel already in use:%d\n", channel );
 			return -1;
 		}
 	} else {
@@ -837,7 +850,7 @@ static int create_process (int midev, struct misdn_bchannel *bc) {
 	struct misdn_stack *stack=get_stack_by_bc(bc);
   
 	if (stack->nt) {
-		if (!find_free_chan_in_stack(stack, bc, bc->channel_preselected ? bc->channel : 0))
+		if (!find_free_chan_in_stack(stack, bc, bc->channel_preselected ? bc->channel : 0, 0))
 			return -1;
 		/*bc->channel=free_chan;*/
 
@@ -869,10 +882,11 @@ static int create_process (int midev, struct misdn_bchannel *bc) {
 	} else { 
 		if (stack->ptp || bc->te_choose_channel) {
 			/* we know exactly which channels are in use */
-			if (!find_free_chan_in_stack(stack, bc, bc->channel_preselected ? bc->channel : 0))
+			if (!find_free_chan_in_stack(stack, bc, bc->channel_preselected ? bc->channel : 0, 0))
 				return -1;
 			/*bc->channel=free_chan;*/
 			cb_log(2,stack->port, " -->  found channel: %d\n", bc->channel);
+
 			if (set_chan_in_stack(stack ,bc->channel)<0) return -1;
 		} else {
 			/* other phones could have made a call also on this port (ptmp) */
@@ -1508,7 +1522,7 @@ static int handle_event ( struct misdn_bchannel *bc, enum event_e event, iframe_
 		case EVENT_SETUP:
 		{
 			if (bc->channel == 0xff) {
-				if (!find_free_chan_in_stack(stack, bc, 0)) {
+				if (!find_free_chan_in_stack(stack, bc, 0, 0)) {
 					cb_log(0, stack->port, "Any Channel Requested, but we have no more!!\n");
 					bc->out_cause=34;
 					misdn_lib_send_event(bc,EVENT_RELEASE_COMPLETE);
@@ -1557,7 +1571,7 @@ static int handle_cr ( struct misdn_stack *stack, iframe_t *frm)
 	case CC_NEW_CR|INDICATION:
 		cb_log(7, stack->port, " --> lib: NEW_CR Ind with l3id:%x on this port.\n",frm->dinfo);
 
-		struct misdn_bchannel* bc=misdn_lib_get_free_bc(stack->port, 0, 1);
+		struct misdn_bchannel* bc=misdn_lib_get_free_bc(stack->port, 0, 1, 0);
 		if (!bc) {
 			cb_log(0, stack->port, " --> !! lib: No free channel!\n");
 			return -1;
@@ -1795,7 +1809,7 @@ handle_event_nt(void *dat, void *arg)
       
 		case CC_SETUP|INDICATION:
 		{
-			struct misdn_bchannel* bc=misdn_lib_get_free_bc(stack->port, 0, 1);
+			struct misdn_bchannel* bc=misdn_lib_get_free_bc(stack->port, 0, 1, 0);
 			if (!bc) 
 			ERR_NO_CHANNEL:
 			{
@@ -2039,8 +2053,7 @@ handle_event_nt(void *dat, void *arg)
 			switch (event) {
 				case EVENT_SETUP:
 					if (bc->channel<=0 || bc->channel==0xff) {
-						bc->channel=find_free_chan_in_stack(stack,bc, 0);
-		
+						bc->channel=find_free_chan_in_stack(stack,bc, 0,0);
 						if (bc->channel<=0)
 							goto ERR_NO_CHANNEL;
 					} else if (!stack->ptp) 
@@ -3057,7 +3070,7 @@ static void prepare_bc(struct misdn_bchannel*bc, int channel)
 #endif
 }
 
-struct misdn_bchannel* misdn_lib_get_free_bc(int port, int channel, int inout)
+struct misdn_bchannel* misdn_lib_get_free_bc(int port, int channel, int inout, int dec)
 {
 	struct misdn_stack *stack;
 	int i;
@@ -3090,17 +3103,29 @@ struct misdn_bchannel* misdn_lib_get_free_bc(int port, int channel, int inout)
 			}
 
 			int maxnum=inout&&!stack->pri&&!stack->ptp?stack->b_num+1:stack->b_num;
-			//int maxnum=stack->b_num+1;
 
-			cb_log(0,0,"maxnum:%d",maxnum);
-			for (i = 0; i <maxnum; i++) {
-				if (!stack->bc[i].in_use) {
-					/* 3. channel on bri means CW*/
-					if (!stack->pri && i==stack->b_num)
-						stack->bc[i].cw=1;
+			if (dec) {
+				for (i = maxnum-1; i>=0; i--) {
+					if (!stack->bc[i].in_use) {
+						/* 3. channel on bri means CW*/
+						if (!stack->pri && i==stack->b_num)
+							stack->bc[i].cw=1;
+							
+						prepare_bc(&stack->bc[i], channel);
+						stack->bc[i].dec=1;
+						return &stack->bc[i];
+					}
+				}
+			} else {
+				for (i = 0; i <maxnum; i++) {
+					if (!stack->bc[i].in_use) {
+						/* 3. channel on bri means CW*/
+						if (!stack->pri && i==stack->b_num)
+							stack->bc[i].cw=1;
 
-					prepare_bc(&stack->bc[i], channel);
-					return &stack->bc[i];
+						prepare_bc(&stack->bc[i], channel);
+						return &stack->bc[i];
+					}
 				}
 			}
 
@@ -3222,7 +3247,7 @@ int misdn_lib_send_event(struct misdn_bchannel *bc, enum event_e event )
 
 		if (stack->nt) {
 			if (bc->channel <=0 ) { /*  else we have the channel already */
-				if (!find_free_chan_in_stack(stack, bc, 0)) {
+				if (!find_free_chan_in_stack(stack, bc, 0,0)) {
 					cb_log(0, stack->port, " No free channel at the moment\n");
 					/*FIXME: add disconnect*/
 					err=-ENOCHAN;
@@ -4077,7 +4102,11 @@ void isdn_lib_update_txgain (struct misdn_bchannel *bc)
 
 void isdn_lib_update_ec (struct misdn_bchannel *bc)
 {
+#ifdef MISDN_1_2
+	if (*bc->pipeline)
+#else
 	if (bc->ec_enable)
+#endif
 		manager_ec_enable(bc);
 	else
 		manager_ec_disable(bc);
@@ -4256,19 +4285,24 @@ void misdn_lib_send_tone(struct misdn_bchannel *bc, enum tone_e tone)
 
 void manager_ec_enable(struct misdn_bchannel *bc)
 {
-	int ec_arr[2];
-
 	struct misdn_stack *stack=get_stack_by_bc(bc);
 	
 	cb_log(4, stack?stack->port:0,"ec_enable\n");
 
 	if (!misdn_cap_is_speech(bc->capability)) {
 		cb_log(1, stack?stack->port:0, " --> no speech? cannot enable EC\n");
-		return;
-	}
+	} else {
+
+#ifdef MISDN_1_2
+	if (*bc->pipeline) {
+		cb_log(3, stack?stack->port:0,"Sending Control PIPELINE_CFG %s\n",bc->pipeline);
+		manager_ph_control_block(bc, PIPELINE_CFG, bc->pipeline, strlen(bc->pipeline) + 1);
+ 	}
+#else
+	int ec_arr[2];
 
 	if (bc->ec_enable) {
-		cb_log(3, stack?stack->port:0,"Sending Control ECHOCAN_ON taps:%d training:%d\n",bc->ec_deftaps, bc->ec_training);
+		cb_log(3, stack?stack->port:0,"Sending Control ECHOCAN_ON taps:%d\n",bc->ec_deftaps);
 	
 		switch (bc->ec_deftaps) {
 		case 4:
@@ -4288,13 +4322,11 @@ void manager_ec_enable(struct misdn_bchannel *bc)
 		}
 	
 		ec_arr[0]=bc->ec_deftaps;
-#ifdef EC_TRAIN
-		ec_arr[1]=bc->ec_training;
-#else
 		ec_arr[1]=0;
-#endif
 		
 		manager_ph_control_block(bc,  ECHOCAN_ON,  ec_arr, sizeof(ec_arr));
+	}
+#endif
 	}
 }
 
@@ -4311,10 +4343,14 @@ void manager_ec_disable(struct misdn_bchannel *bc)
 		return;
 	}
 
+#ifdef MISDN_1_2
+	manager_ph_control_block(bc, PIPELINE_CFG, "", 0);
+#else
 	if ( ! bc->ec_enable) {
 		cb_log(3, stack?stack->port:0, "Sending Control ECHOCAN_OFF\n");
 		manager_ph_control(bc,  ECHOCAN_OFF, 0);
 	}
+#endif
 }
 
 struct misdn_stack* get_misdn_stack() {

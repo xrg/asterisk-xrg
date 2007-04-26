@@ -171,6 +171,7 @@ static int max_reg_expire;
 static int timingfd = -1;				/* Timing file descriptor */
 
 static struct ast_netsock_list *netsock;
+static struct ast_netsock_list *outsock;		/*!< used if sourceaddress specified and bindaddr == INADDR_ANY */
 static int defaultsockfd = -1;
 
 int (*iax2_regfunk)(const char *username, int onoff) = NULL;
@@ -2985,8 +2986,8 @@ static int iax2_setoption(struct ast_channel *c, int option, void *data, int dat
 
 static struct ast_frame *iax2_read(struct ast_channel *c) 
 {
-	ast_log(LOG_NOTICE, "I should never be called!\n");
-	return &ast_null_frame;
+	ast_log(LOG_NOTICE, "I should never be called! Hanging up.\n");
+	return NULL;
 }
 
 static int iax2_start_transfer(unsigned short callno0, unsigned short callno1, int mediaonly)
@@ -3269,7 +3270,7 @@ static struct ast_channel *ast_iax2_new(int callno, int state, int capability)
 
 	/* Don't hold call lock */
 	ast_mutex_unlock(&iaxsl[callno]);
-	tmp = ast_channel_alloc(1, state, i->cid_num, i->cid_name, "IAX2/%s-%d", i->host, i->callno);
+	tmp = ast_channel_alloc(1, state, i->cid_num, i->cid_name, i->accountcode, i->exten, i->context, i->amaflags, "IAX2/%s-%d", i->host, i->callno);
 	ast_mutex_lock(&iaxsl[callno]);
 	if (!tmp)
 		return NULL;
@@ -6112,8 +6113,8 @@ static int iax_park(struct ast_channel *chan1, struct ast_channel *chan2)
 	struct iax_dual *d;
 	struct ast_channel *chan1m, *chan2m;
 	pthread_t th;
-	chan1m = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "Parking/%s", chan1->name);
-	chan2m = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "IAXPeer/%s",chan2->name);
+	chan1m = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, chan2->accountcode, chan1->exten, chan1->context, chan1->amaflags, "Parking/%s", chan1->name);
+	chan2m = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, chan2->accountcode, chan2->exten, chan2->context, chan2->amaflags, "IAXPeer/%s",chan2->name);
 	if (chan2m && chan1m) {
 		/* Make formats okay */
 		chan1m->readformat = chan1->readformat;
@@ -8242,20 +8243,40 @@ static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
 		if (res == 0) {
 			/* ip address valid. */
 			sin.sin_port = htons(port);
-			sock = ast_netsock_find(netsock, &sin);
+			if (!(sock = ast_netsock_find(netsock, &sin)))
+				sock = ast_netsock_find(outsock, &sin);
 			if (sock) {
 				sockfd = ast_netsock_sockfd(sock);
 				nonlocal = 0;
+			} else {
+				unsigned int orig_saddr = sin.sin_addr.s_addr;
+				/* INADDR_ANY matches anyway! */
+				sin.sin_addr.s_addr = INADDR_ANY;
+				if (ast_netsock_find(netsock, &sin)) {
+					sin.sin_addr.s_addr = orig_saddr;
+					sock = ast_netsock_bind(outsock, io, srcaddr, port, tos, socket_read, NULL);
+					if (sock) {
+						sockfd = ast_netsock_sockfd(sock);
+						ast_netsock_unref(sock);
+						nonlocal = 0;
+					} else {
+						nonlocal = 2;
+					}
+				}
 			}
 		}
 	}
 		
 	peer->sockfd = sockfd;
 
-	if (nonlocal) {
+	if (nonlocal == 1) {
 		ast_log(LOG_WARNING, "Non-local or unbound address specified (%s) in sourceaddress for '%s', reverting to default\n",
 			srcaddr, peer->name);
 		return -1;
+        } else if (nonlocal == 2) {
+		ast_log(LOG_WARNING, "Unable to bind to sourceaddress '%s' for '%s', reverting to default\n",
+			srcaddr, peer->name);
+			return -1;
 	} else {
 		ast_log(LOG_DEBUG, "Using sourceaddress %s for '%s'\n", srcaddr, peer->name);
 		return 0;
@@ -9051,7 +9072,16 @@ static int set_config(char *config_file, int reload)
 			ast_netsock_unref(ns);
 		}
 	}
-	
+	if (reload) {
+		ast_netsock_release(outsock);
+		outsock = ast_netsock_list_alloc();
+		if (!outsock) {
+			ast_log(LOG_ERROR, "Could not allocate outsock list.\n");
+			return -1;
+		}
+		ast_netsock_init(outsock);
+	}
+
 	if (min_reg_expire > max_reg_expire) {
 		ast_log(LOG_WARNING, "Minimum registration interval of %d is more than maximum of %d, resetting minimum to %d\n",
 			min_reg_expire, max_reg_expire, max_reg_expire);
@@ -9948,6 +9978,7 @@ static int __unload_module(void)
 		usleep(10000);
 	
 	ast_netsock_release(netsock);
+	ast_netsock_release(outsock);
 	for (x=0;x<IAX_MAX_CALLS;x++)
 		if (iaxs[x])
 			iax2_destroy(x);
@@ -10023,6 +10054,13 @@ static int load_module(void)
 	}
 	ast_netsock_init(netsock);
 
+	outsock = ast_netsock_list_alloc();
+	if (!outsock) {
+		ast_log(LOG_ERROR, "Could not allocate outsock list.\n");
+		return -1;
+	}
+	ast_netsock_init(outsock);
+
 	ast_mutex_init(&waresl.lock);
 
 	AST_LIST_HEAD_INIT(&iaxq.queue);
@@ -10053,6 +10091,7 @@ static int load_module(void)
 	} else {
 		ast_log(LOG_ERROR, "Unable to start network thread\n");
 		ast_netsock_release(netsock);
+		ast_netsock_release(outsock);
 	}
 
 	AST_LIST_LOCK(&registrations);

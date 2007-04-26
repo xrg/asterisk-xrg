@@ -88,7 +88,7 @@ static pthread_t cdr_thread = AST_PTHREADT_NULL;
 #define BATCH_SCHEDULER_ONLY_DEFAULT 0
 #define BATCH_SAFE_SHUTDOWN_DEFAULT 1
 
-static int enabled;
+static int enabled;		/*! Is the CDR subsystem enabled ? */
 static int batchmode;
 static int batchsize;
 static int batchtime;
@@ -166,8 +166,11 @@ void ast_cdr_unregister(const char *name)
 */
 struct ast_cdr *ast_cdr_dup(struct ast_cdr *cdr) 
 {
-	struct ast_cdr *newcdr = ast_cdr_alloc();
-
+	struct ast_cdr *newcdr;
+	
+	if (!cdr) /* don't die if we get a null cdr pointer */
+		return NULL;
+	newcdr = ast_cdr_alloc();
 	if (!newcdr)
 		return NULL;
 
@@ -216,6 +219,9 @@ void ast_cdr_getvar(struct ast_cdr *cdr, const char *name, char **ret, char *wor
 {
 	const char *fmt = "%Y-%m-%d %T";
 	const char *varbuf;
+
+	if (!cdr)  /* don't die if the cdr is null */
+		return;
 
 	*ret = NULL;
 	/* special vars (the ones from the struct ast_cdr when requested by name) 
@@ -288,6 +294,9 @@ int ast_cdr_setvar(struct ast_cdr *cdr, const char *name, const char *value, int
 	struct varshead *headp;
 	int x;
 	
+	if (!cdr)  /* don't die if the cdr is null */
+		return -1;
+	
 	for(x = 0; cdr_readonly_vars[x]; x++) {
 		if (!strcasecmp(name, cdr_readonly_vars[x])) {
 			ast_log(LOG_ERROR, "Attempt to set the '%s' read-only variable!.\n", name);
@@ -327,6 +336,9 @@ int ast_cdr_copy_vars(struct ast_cdr *to_cdr, struct ast_cdr *from_cdr)
 	struct varshead *headpa, *headpb;
 	const char *var, *val;
 	int x = 0;
+
+	if (!to_cdr || !from_cdr) /* don't die if one of the pointers is null */
+		return 0;
 
 	headpa = &from_cdr->varshead;
 	headpb = &to_cdr->varshead;
@@ -403,6 +415,8 @@ void ast_cdr_free_vars(struct ast_cdr *cdr, int recur)
 /*! \brief  print a warning if cdr already posted */
 static void check_post(struct ast_cdr *cdr)
 {
+	if (!cdr)
+		return;
 	if (ast_test_flag(cdr, AST_CDR_FLAG_POSTED))
 		ast_log(LOG_NOTICE, "CDR on channel '%s' already posted\n", S_OR(cdr->channel, "<unknown>"));
 }
@@ -410,6 +424,8 @@ static void check_post(struct ast_cdr *cdr)
 /*! \brief  print a warning if cdr already started */
 static void check_start(struct ast_cdr *cdr)
 {
+	if (!cdr)
+		return;
 	if (!ast_tvzero(cdr->start))
 		ast_log(LOG_NOTICE, "CDR on channel '%s' already started\n", S_OR(cdr->channel, "<unknown>"));
 }
@@ -433,9 +449,176 @@ void ast_cdr_free(struct ast_cdr *cdr)
 	}
 }
 
+/*! \brief the same as a cdr_free call, only with no checks; just get rid of it */
+void ast_cdr_discard(struct ast_cdr *cdr)
+{
+	while (cdr) {
+		struct ast_cdr *next = cdr->next;
+
+		ast_cdr_free_vars(cdr, 0);
+		free(cdr);
+		cdr = next;
+	}
+}
+
 struct ast_cdr *ast_cdr_alloc(void)
 {
-	return ast_calloc(1, sizeof(struct ast_cdr));
+	struct ast_cdr *x = ast_calloc(1, sizeof(struct ast_cdr));
+	if (!x)
+		ast_log(LOG_ERROR,"Allocation Failure for a CDR!\n");
+	return x;
+}
+
+static void cdr_merge_vars(struct ast_cdr *to, struct ast_cdr *from)
+{
+	struct ast_var_t *variablesfrom,*variablesto;
+	struct varshead *headpfrom = &to->varshead;
+	struct varshead *headpto = &from->varshead;
+	AST_LIST_TRAVERSE_SAFE_BEGIN(headpfrom, variablesfrom, entries) {
+		/* for every var in from, stick it in to */
+		const char *fromvarname, *fromvarval;
+		const char *tovarname, *tovarval;
+		fromvarname = ast_var_name(variablesfrom);
+		fromvarval = ast_var_value(variablesfrom);
+		tovarname = 0;
+
+		/* now, quick see if that var is in the 'to' cdr already */
+		AST_LIST_TRAVERSE(headpto, variablesto, entries) {
+
+			/* now, quick see if that var is in the 'to' cdr already */
+			if ( strcasecmp(fromvarname, ast_var_name(variablesto)) == 0 ) {
+				tovarname = ast_var_name(variablesto);
+				tovarval = ast_var_value(variablesto);
+				break;
+			}
+		}
+		if (tovarname && strcasecmp(fromvarval,tovarval) != 0) {  /* this message here to see how irritating the userbase finds it */
+			ast_log(LOG_NOTICE, "Merging CDR's: variable %s value %s dropped in favor of value %s\n", tovarname, fromvarval, tovarval);
+			continue;
+		} else if (tovarname && strcasecmp(fromvarval,tovarval) == 0) /* if they are the same, the job is done */
+			continue;
+
+		/*rip this var out of the from cdr, and stick it in the to cdr */
+		AST_LIST_REMOVE_CURRENT(headpfrom, entries);
+		AST_LIST_INSERT_HEAD(headpto, variablesfrom, entries);
+	}
+	AST_LIST_TRAVERSE_SAFE_END;
+}
+
+void ast_cdr_merge(struct ast_cdr *to, struct ast_cdr *from)
+{
+	struct ast_cdr *tcdr;
+	
+	if (!to || !from)
+		return;
+	
+	if (!ast_tvzero(from->start)) {
+		if (!ast_tvzero(to->start)) {
+			if (ast_tvcmp(to->start, from->start) > 0 ) {
+				to->start = from->start; /* use the earliest time */
+				from->start = ast_tv(0,0); /* we actively "steal" these values */
+			}
+			/* else nothing to do */
+		} else {
+			to->start = from->start;
+			from->start = ast_tv(0,0); /* we actively "steal" these values */
+		}
+	}
+	if (!ast_tvzero(from->answer)) {
+		if (!ast_tvzero(to->answer)) {
+			if (ast_tvcmp(to->answer, from->answer) > 0 ) {
+				to->answer = from->answer; /* use the earliest time */
+				from->answer = ast_tv(0,0); /* we actively "steal" these values */
+			}
+			/* we got the earliest answer time, so we'll settle for that? */
+		} else {
+			to->answer = from->answer;
+			from->answer = ast_tv(0,0); /* we actively "steal" these values */
+		}
+	}
+	if (!ast_tvzero(from->end)) {
+		if (!ast_tvzero(to->end)) {
+			if (ast_tvcmp(to->end, from->end) < 0 ) {
+				to->end = from->end; /* use the latest time */
+				from->end = ast_tv(0,0); /* we actively "steal" these values */
+				to->duration = to->end.tv_sec - to->start.tv_sec;  /* don't forget to update the duration, billsec, when we set end */
+				to->billsec = ast_tvzero(to->answer) ? 0 : to->end.tv_sec - to->answer.tv_sec;
+			}
+			/* else, nothing to do */
+		} else {
+			to->end = from->end;
+			from->end = ast_tv(0,0); /* we actively "steal" these values */
+			to->duration = to->end.tv_sec - to->start.tv_sec;
+			to->billsec = ast_tvzero(to->answer) ? 0 : to->end.tv_sec - to->answer.tv_sec;
+		}
+	}
+	if (to->disposition < from->disposition) {
+		to->disposition = from->disposition;
+		from->disposition = AST_CDR_NOANSWER;
+	}
+	if (ast_strlen_zero(to->lastapp) && !ast_strlen_zero(from->lastapp)) {
+		ast_copy_string(to->lastapp, from->lastapp, sizeof(to->lastapp));
+		from->lastapp[0] = 0; /* theft */
+	}
+	if (ast_strlen_zero(to->lastdata) && !ast_strlen_zero(from->lastdata)) {
+		ast_copy_string(to->lastdata, from->lastdata, sizeof(to->lastdata));
+		from->lastdata[0] = 0; /* theft */
+	}
+	if (ast_strlen_zero(to->dcontext) && !ast_strlen_zero(from->dcontext)) {
+		ast_copy_string(to->dcontext, from->dcontext, sizeof(to->dcontext));
+		from->dcontext[0] = 0; /* theft */
+	}
+	if (ast_strlen_zero(to->dstchannel) && !ast_strlen_zero(from->dstchannel)) {
+		ast_copy_string(to->dstchannel, from->dstchannel, sizeof(to->dstchannel));
+		from->dstchannel[0] = 0; /* theft */
+	}
+	if (ast_strlen_zero(to->channel) && !ast_strlen_zero(from->channel)) {
+		ast_copy_string(to->channel, from->channel, sizeof(to->channel));
+		from->channel[0] = 0; /* theft */
+	}
+	if (ast_strlen_zero(to->src) && !ast_strlen_zero(from->src)) {
+		ast_copy_string(to->src, from->src, sizeof(to->src));
+		from->src[0] = 0; /* theft */
+	}
+	if (ast_strlen_zero(to->dst) && !ast_strlen_zero(from->dst)) {
+		ast_copy_string(to->dst, from->dst, sizeof(to->dst));
+		from->dst[0] = 0; /* theft */
+	}
+	if (ast_test_flag(from, AST_CDR_FLAG_LOCKED) || (!to->amaflags && from->amaflags)) {
+		to->amaflags = from->amaflags;
+		from->amaflags = 0; /* theft */
+	}
+	if (ast_test_flag(from, AST_CDR_FLAG_LOCKED) || (ast_strlen_zero(to->accountcode) && !ast_strlen_zero(from->accountcode))) {
+		ast_copy_string(to->accountcode, from->accountcode, sizeof(to->accountcode));
+		from->accountcode[0] = 0; /* theft */
+	}
+	if (ast_test_flag(from, AST_CDR_FLAG_LOCKED) || (ast_strlen_zero(to->userfield) && !ast_strlen_zero(from->userfield))) {
+		ast_copy_string(to->userfield, from->userfield, sizeof(to->userfield));
+		from->userfield[0] = 0; /* theft */
+	}
+	/* flags, varsead, ? */
+	cdr_merge_vars(from, to);
+
+	if (ast_test_flag(from, AST_CDR_FLAG_KEEP_VARS))
+		ast_set_flag(to, AST_CDR_FLAG_KEEP_VARS);
+	if (ast_test_flag(from, AST_CDR_FLAG_POSTED))
+		ast_set_flag(to, AST_CDR_FLAG_POSTED);
+	if (ast_test_flag(from, AST_CDR_FLAG_LOCKED))
+		ast_set_flag(to, AST_CDR_FLAG_LOCKED);
+	if (ast_test_flag(from, AST_CDR_FLAG_CHILD))
+		ast_set_flag(to, AST_CDR_FLAG_CHILD);
+	if (ast_test_flag(from, AST_CDR_FLAG_POST_DISABLED))
+		ast_set_flag(to, AST_CDR_FLAG_POST_DISABLED);
+
+	/* last, but not least, we need to merge any forked CDRs to the 'to' cdr */
+	while (from->next) {
+		/* just rip 'em off the 'from' and insert them on the 'to' */
+		tcdr = from->next;
+		from->next = tcdr->next;
+		tcdr->next = NULL;
+		/* tcdr is now ripped from the current list; */
+		ast_cdr_append(to, tcdr);
+	}
 }
 
 void ast_cdr_start(struct ast_cdr *cdr)
@@ -542,7 +725,8 @@ static void set_one_cid(struct ast_cdr *cdr, struct ast_channel *c)
 {
 	/* Grab source from ANI or normal Caller*ID */
 	const char *num = S_OR(c->cid.cid_ani, c->cid.cid_num);
-	
+	if (!cdr)
+		return;
 	if (!ast_strlen_zero(c->cid.cid_name)) {
 		if (!ast_strlen_zero(num))	/* both name and number */
 			snprintf(cdr->clid, sizeof(cdr->clid), "\"%s\" <%s>", c->cid.cid_name, num);
@@ -640,8 +824,9 @@ int ast_cdr_setaccount(struct ast_channel *chan, const char *account)
 
 	ast_string_field_set(chan, accountcode, account);
 	for ( ; cdr ; cdr = cdr->next) {
-		if (!ast_test_flag(cdr, AST_CDR_FLAG_LOCKED))
+		if (!ast_test_flag(cdr, AST_CDR_FLAG_LOCKED)) {
 			ast_copy_string(cdr->accountcode, chan->accountcode, sizeof(cdr->accountcode));
+		}
 	}
 	return 0;
 }
@@ -729,6 +914,8 @@ static void post_cdr(struct ast_cdr *cdr)
 		if (ast_tvzero(cdr->start))
 			ast_log(LOG_WARNING, "CDR on channel '%s' lacks start\n", chan);
 		ast_set_flag(cdr, AST_CDR_FLAG_POSTED);
+		if (ast_test_flag(cdr, AST_CDR_FLAG_POST_DISABLED))
+			continue;
 		AST_LIST_LOCK(&be_list);
 		AST_LIST_TRAVERSE(&be_list, i, list) {
 			i->be(cdr);
@@ -890,6 +1077,9 @@ void ast_cdr_detach(struct ast_cdr *cdr)
 {
 	struct ast_cdr_batch_item *newtail;
 	int curr;
+
+	if (!cdr)
+		return;
 
 	/* maybe they disabled CDR stuff completely, so just drop it */
 	if (!enabled) {

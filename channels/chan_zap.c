@@ -3580,6 +3580,73 @@ static int get_alarms(struct zt_pvt *p)
 	}
 	return zi.alarms;
 }
+
+static void zt_handle_dtmfup(struct ast_channel *ast, int index, struct ast_frame **dest)
+{
+	struct zt_pvt *p = ast->tech_pvt;
+	struct ast_frame *f = *dest;
+
+	ast_log(LOG_DEBUG, "DTMF digit: %c on %s\n", f->subclass, ast->name);
+	if (p->confirmanswer) {
+		ast_log(LOG_DEBUG, "Confirm answer on %s!\n", ast->name);
+		/* Upon receiving a DTMF digit, consider this an answer confirmation instead
+		   of a DTMF digit */
+		p->subs[index].f.frametype = AST_FRAME_CONTROL;
+		p->subs[index].f.subclass = AST_CONTROL_ANSWER;
+		*dest = &p->subs[index].f;
+		/* Reset confirmanswer so DTMF's will behave properly for the duration of the call */
+		p->confirmanswer = 0;
+	} else if (p->callwaitcas) {
+		if ((f->subclass == 'A') || (f->subclass == 'D')) {
+			ast_log(LOG_DEBUG, "Got some DTMF, but it's for the CAS\n");
+			if (p->cidspill)
+				free(p->cidspill);
+			send_cwcidspill(p);
+		}
+		if ((f->subclass != 'm') && (f->subclass != 'u')) 
+			p->callwaitcas = 0;
+		p->subs[index].f.frametype = AST_FRAME_NULL;
+		p->subs[index].f.subclass = 0;
+		*dest = &p->subs[index].f;
+	} else if (f->subclass == 'f') {
+		/* Fax tone -- Handle and return NULL */
+		if ((p->callprogress & 0x6) && !p->faxhandled) {
+			p->faxhandled++;
+			if (strcmp(ast->exten, "fax")) {
+				const char *target_context = S_OR(ast->macrocontext, ast->context);
+
+				if (ast_exists_extension(ast, target_context, "fax", 1, ast->cid.cid_num)) {
+					if (option_verbose > 2)
+						ast_verbose(VERBOSE_PREFIX_3 "Redirecting %s to fax extension\n", ast->name);
+					/* Save the DID/DNIS when we transfer the fax call to a "fax" extension */
+					pbx_builtin_setvar_helper(ast, "FAXEXTEN", ast->exten);
+					if (ast_async_goto(ast, target_context, "fax", 1))
+						ast_log(LOG_WARNING, "Failed to async goto '%s' into fax of '%s'\n", ast->name, target_context);
+				} else
+					ast_log(LOG_NOTICE, "Fax detected, but no fax extension\n");
+			} else
+				ast_log(LOG_DEBUG, "Already in a fax extension, not redirecting\n");
+		} else
+				ast_log(LOG_DEBUG, "Fax already handled\n");
+		zt_confmute(p, 0);
+		p->subs[index].f.frametype = AST_FRAME_NULL;
+		p->subs[index].f.subclass = 0;
+		*dest = &p->subs[index].f;
+	} else if (f->subclass == 'm') {
+		/* Confmute request */
+		zt_confmute(p, 1);
+		p->subs[index].f.frametype = AST_FRAME_NULL;
+		p->subs[index].f.subclass = 0;
+		*dest = &p->subs[index].f;		
+	} else if (f->subclass == 'u') {
+		/* Unmute */
+		zt_confmute(p, 0);
+		p->subs[index].f.frametype = AST_FRAME_NULL;
+		p->subs[index].f.subclass = 0;
+		*dest = &p->subs[index].f;		
+	} else
+		zt_confmute(p, 0);
+}
 			
 static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 {
@@ -3590,6 +3657,7 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 	pthread_t threadid;
 	pthread_attr_t attr;
 	struct ast_channel *chan;
+	struct ast_frame *f;
 
 	index = zt_get_index(ast, p, 0);
 	mysig = p->sig;
@@ -3603,6 +3671,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 	p->subs[index].f.offset = 0;
 	p->subs[index].f.src = "zt_handle_event";
 	p->subs[index].f.data = NULL;
+	f = &p->subs[index].f;
+
 	if (index < 0)
 		return &p->subs[index].f;
 	if (p->fake_event) {
@@ -3615,6 +3685,7 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 
 	if (res & (ZT_EVENT_PULSEDIGIT | ZT_EVENT_DTMFUP)) {
 		p->pulsedial =  (res & ZT_EVENT_PULSEDIGIT) ? 1 : 0;
+
 		ast_log(LOG_DEBUG, "Detected %sdigit '%c'\n", p->pulsedial ? "pulse ": "", res & 0xff);
 #ifdef HAVE_PRI
 		if (!p->proceeding && p->sig == SIG_PRI && p->pri && p->pri->overlapdial) {
@@ -3626,9 +3697,8 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 #ifdef HAVE_PRI
 		}
 #endif
-		/* Unmute conference, return the captured digit */
-		zt_confmute(p, 0);
-		return &p->subs[index].f;
+		zt_handle_dtmfup(ast, index, &f);
+		return f;
 	}
 
 	if (res & ZT_EVENT_DTMFDOWN) {
@@ -4786,68 +4856,9 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 		}
 	} else 
 		f = &p->subs[index].f; 
-	if (f && (f->frametype == AST_FRAME_DTMF)) {
-		ast_log(LOG_DEBUG, "DTMF digit: %c on %s\n", f->subclass, ast->name);
-		if (p->confirmanswer) {
-			ast_log(LOG_DEBUG, "Confirm answer on %s!\n", ast->name);
-			/* Upon receiving a DTMF digit, consider this an answer confirmation instead
-			   of a DTMF digit */
-			p->subs[index].f.frametype = AST_FRAME_CONTROL;
-			p->subs[index].f.subclass = AST_CONTROL_ANSWER;
-			f = &p->subs[index].f;
-			/* Reset confirmanswer so DTMF's will behave properly for the duration of the call */
-			p->confirmanswer = 0;
-		} else if (p->callwaitcas) {
-			if ((f->subclass == 'A') || (f->subclass == 'D')) {
-				ast_log(LOG_DEBUG, "Got some DTMF, but it's for the CAS\n");
-				if (p->cidspill)
-					free(p->cidspill);
-				send_cwcidspill(p);
-			}
-			if ((f->subclass != 'm') && (f->subclass != 'u')) 
-				p->callwaitcas = 0;
-			p->subs[index].f.frametype = AST_FRAME_NULL;
-			p->subs[index].f.subclass = 0;
-			f = &p->subs[index].f;
-		} else if (f->subclass == 'f') {
-			/* Fax tone -- Handle and return NULL */
-			if (!p->faxhandled) {
-				p->faxhandled++;
-				if (strcmp(ast->exten, "fax")) {
-					const char *target_context = S_OR(ast->macrocontext, ast->context);
 
-					if (ast_exists_extension(ast, target_context, "fax", 1, ast->cid.cid_num)) {
-						if (option_verbose > 2)
-							ast_verbose(VERBOSE_PREFIX_3 "Redirecting %s to fax extension\n", ast->name);
-						/* Save the DID/DNIS when we transfer the fax call to a "fax" extension */
-						pbx_builtin_setvar_helper(ast, "FAXEXTEN", ast->exten);
-						if (ast_async_goto(ast, target_context, "fax", 1))
-							ast_log(LOG_WARNING, "Failed to async goto '%s' into fax of '%s'\n", ast->name, target_context);
-					} else
-						ast_log(LOG_NOTICE, "Fax detected, but no fax extension\n");
-				} else
-					ast_log(LOG_DEBUG, "Already in a fax extension, not redirecting\n");
-			} else
-					ast_log(LOG_DEBUG, "Fax already handled\n");
-			zt_confmute(p, 0);
-			p->subs[index].f.frametype = AST_FRAME_NULL;
-			p->subs[index].f.subclass = 0;
-			f = &p->subs[index].f;
-		} else if (f->subclass == 'm') {
-			/* Confmute request */
-			zt_confmute(p, 1);
-			p->subs[index].f.frametype = AST_FRAME_NULL;
-			p->subs[index].f.subclass = 0;
-			f = &p->subs[index].f;		
-		} else if (f->subclass == 'u') {
-			/* Unmute */
-			zt_confmute(p, 0);
-			p->subs[index].f.frametype = AST_FRAME_NULL;
-			p->subs[index].f.subclass = 0;
-			f = &p->subs[index].f;		
-		} else
-			zt_confmute(p, 0);
-	}
+	if (f && (f->frametype == AST_FRAME_DTMF))
+		zt_handle_dtmfup(ast, index, &f);
 
 	/* If we have a fake_event, trigger exception to handle it */
 	if (p->fake_event)
@@ -5170,7 +5181,7 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 		}
 		y++;
 	} while (x < 3);
-	tmp = ast_channel_alloc(0, state, 0, 0, b2);
+	tmp = ast_channel_alloc(0, state, 0, 0, i->accountcode, i->exten, i->context, i->amaflags, b2);
 	if (b2) /*!> b2 can be freed now, it's been copied into the channel structure */
 		free(b2);
 	if (!tmp)
@@ -6921,14 +6932,8 @@ static int restart_monitor(void)
 		return -1;
 	}
 	if (monitor_thread != AST_PTHREADT_NULL) {
-		/* Just signal it to be sure it wakes up */
-#if 0
-		pthread_cancel(monitor_thread);
-#endif
+		/* Wake up the thread */
 		pthread_kill(monitor_thread, SIGURG);
-#if 0
-		pthread_join(monitor_thread, NULL);
-#endif
 	} else {
 		/* Start a new monitor */
 		if (ast_pthread_create_background(&monitor_thread, &attr, do_monitor, NULL) < 0) {

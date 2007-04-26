@@ -428,7 +428,7 @@ struct ast_channel {
 
 	char emulate_dtmf_digit;			/*!< Digit being emulated */
 	unsigned int emulate_dtmf_duration;	/*!< Number of ms left to emulate DTMF for */
-	struct timeval dtmf_begin_tv;       /*!< The time that an in process digit began */
+	struct timeval dtmf_tv;       /*!< The time that an in process digit began, or the last digit ended */
 
 	/*! \brief Data stores on the channel */
 	AST_LIST_HEAD_NOLOCK(datastores, ast_datastore) datastores;
@@ -581,7 +581,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
 	by default set to the "default" context and
 	extension "s"
  */
-struct ast_channel *ast_channel_alloc(int needalertpipe, int state, const char *cid_num, const char *cid_name, const char *name_fmt, ...);
+struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...);
 
 /*! \brief Queue an outgoing frame */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);

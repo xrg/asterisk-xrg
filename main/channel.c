@@ -104,8 +104,16 @@ unsigned long global_fin, global_fout;
 AST_THREADSTORAGE(state2str_threadbuf, state2str_threadbuf_init);
 #define STATE2STR_BUFSIZE   32
 
-/*! 100ms */
+/*! Default amount of time to use when emulating a digit as a begin and end 
+ *  100ms */
 #define AST_DEFAULT_EMULATE_DTMF_DURATION 100
+
+/*! Minimum allowed digit length - 80ms */
+#define AST_MIN_DTMF_DURATION 80
+
+/*! Minimum amount of time between the end of the last digit and the beginning 
+ *  of a new one - 45ms */
+#define AST_MIN_DTMF_GAP 45
 
 struct chanlist {
 	const struct ast_channel_tech *tech;
@@ -711,7 +719,7 @@ static const struct ast_channel_tech null_tech = {
 };
 
 /*! \brief Create a new channel structure */
-struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *name_fmt, ...)
+struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...)
 {
 	struct ast_channel *tmp;
 	int x;
@@ -822,6 +830,35 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 			      S_OR(cid_name, "<unknown>"),
 			      tmp->uniqueid);
 	}
+
+	/* Reminder for the future: under what conditions do we NOT want to track cdrs on channels? */
+
+	/* These 4 variables need to be set up for the cdr_init() to work right */
+	if (amaflag)
+		tmp->amaflags = amaflag;
+	else
+		tmp->amaflags = ast_default_amaflags;
+	
+	if (!ast_strlen_zero(acctcode))
+		ast_string_field_set(tmp, accountcode, acctcode);
+	else
+		ast_string_field_set(tmp, accountcode, ast_default_accountcode);
+		
+	if (!ast_strlen_zero(context))
+		ast_copy_string(tmp->context, context, sizeof(tmp->context));
+	else
+		strcpy(tmp->context, "default");
+
+	if (!ast_strlen_zero(exten))
+		ast_copy_string(tmp->exten, exten, sizeof(tmp->exten));
+	else
+		strcpy(tmp->exten, "s");
+
+	tmp->priority = 1;
+		
+	tmp->cdr = ast_cdr_alloc();
+	ast_cdr_init(tmp->cdr, tmp);
+	ast_cdr_start(tmp->cdr);
 	
 	headp = &tmp->varshead;
 	AST_LIST_HEAD_INIT_NOLOCK(headp);
@@ -830,13 +867,7 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 	
 	AST_LIST_HEAD_INIT_NOLOCK(&tmp->datastores);
 	
-	strcpy(tmp->context, "default");
-	strcpy(tmp->exten, "s");
-	tmp->priority = 1;
-	
 	ast_string_field_set(tmp, language, defaultlanguage);
-	tmp->amaflags = ast_default_amaflags;
-	ast_string_field_set(tmp, accountcode, ast_default_accountcode);
 
 	tmp->tech = &null_tech;
 
@@ -2090,7 +2121,8 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	prestate = chan->_state;
 
 	if (!ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_EMULATE_DTMF | AST_FLAG_IN_DTMF) && 
-	    !ast_strlen_zero(chan->dtmfq)) {
+	    !ast_strlen_zero(chan->dtmfq) && 
+		(ast_tvzero(chan->dtmf_tv) || ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) > AST_MIN_DTMF_GAP) ) {
 		/* We have DTMF that has been deferred.  Return it now */
 		chan->dtmff.subclass = chan->dtmfq[0];
 		/* Drop first digit from the buffer */
@@ -2103,8 +2135,8 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
 			chan->emulate_dtmf_digit = f->subclass;
 			chan->emulate_dtmf_duration = AST_DEFAULT_EMULATE_DTMF_DURATION;
-			chan->dtmf_begin_tv = ast_tvnow();
 		}
+		chan->dtmf_tv = ast_tvnow();
 		goto done;
 	}
 	
@@ -2216,6 +2248,14 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				} else {
 					/* Answer the CDR */
 					ast_setstate(chan, AST_STATE_UP);
+					if (!chan->cdr) { /* up till now, this insertion hasn't been done. Therefore,
+										 to keep from throwing off the basic order of the universe,
+										 we will try to keep this cdr from getting posted. */
+						chan->cdr = ast_cdr_alloc();
+						ast_cdr_init(chan->cdr, chan);
+						ast_cdr_start(chan->cdr);
+					}
+					
 					ast_cdr_answer(chan->cdr);
 				}
 			}
@@ -2233,28 +2273,50 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				ast_frfree(f);
 				f = &ast_null_frame;
 			} else if (!ast_test_flag(chan, AST_FLAG_IN_DTMF | AST_FLAG_END_DTMF_ONLY)) {
-				f->frametype = AST_FRAME_DTMF_BEGIN;
-				ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
-				chan->emulate_dtmf_digit = f->subclass;
-				chan->dtmf_begin_tv = ast_tvnow();
-				if (f->len)
-					chan->emulate_dtmf_duration = f->len;
-				else
-					chan->emulate_dtmf_duration = AST_DEFAULT_EMULATE_DTMF_DURATION;
+				if (!ast_tvzero(chan->dtmf_tv) && 
+				    ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) {
+					/* If it hasn't been long enough, defer this digit */
+					if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2)
+						chan->dtmfq[strlen(chan->dtmfq)] = f->subclass;
+					else
+						ast_log(LOG_WARNING, "Dropping deferred DTMF digits on %s\n", chan->name);
+					ast_frfree(f);
+					f = &ast_null_frame;
+				} else {
+					/* There was no begin, turn this into a begin and send the end later */
+					f->frametype = AST_FRAME_DTMF_BEGIN;
+					ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
+					chan->emulate_dtmf_digit = f->subclass;
+					chan->dtmf_tv = ast_tvnow();
+					if (f->len && f->len > AST_MIN_DTMF_DURATION)
+						chan->emulate_dtmf_duration = f->len;
+					else
+						chan->emulate_dtmf_duration = AST_MIN_DTMF_DURATION;
+				}
 			} else {
+				struct timeval now = ast_tvnow();
 				ast_clear_flag(chan, AST_FLAG_IN_DTMF);
 				if (!f->len)
-					f->len = ast_tvdiff_ms(ast_tvnow(), chan->dtmf_begin_tv);
+					f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+				if (f->len < AST_MIN_DTMF_DURATION) {
+					ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
+					chan->emulate_dtmf_digit = f->subclass;
+					chan->emulate_dtmf_duration = AST_MIN_DTMF_DURATION - f->len;
+					f = &ast_null_frame;
+				} else
+					chan->dtmf_tv = now;
 			}
 			break;
 		case AST_FRAME_DTMF_BEGIN:
 			ast_log(LOG_DTMF, "DTMF begin '%c' received on %s\n", f->subclass, chan->name);
-			if (ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_END_DTMF_ONLY)) {
+			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_END_DTMF_ONLY) || 
+			    (!ast_tvzero(chan->dtmf_tv) && 
+			      ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) ) {
 				ast_frfree(f);
 				f = &ast_null_frame;
 			} else {
 				ast_set_flag(chan, AST_FLAG_IN_DTMF);
-				chan->dtmf_begin_tv = ast_tvnow();
+				chan->dtmf_tv = ast_tvnow();
 			}
 			break;
 		case AST_FRAME_VOICE:
@@ -2272,10 +2334,12 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				f = &ast_null_frame;
 			} else if (ast_test_flag(chan, AST_FLAG_EMULATE_DTMF)) {
 				if ((f->samples / 8) >= chan->emulate_dtmf_duration) { /* XXX 8kHz */
+					struct timeval now = ast_tvnow();
 					chan->emulate_dtmf_duration = 0;
 					f->frametype = AST_FRAME_DTMF_END;
 					f->subclass = chan->emulate_dtmf_digit;
-					f->len = ast_tvdiff_ms(ast_tvnow(), chan->dtmf_begin_tv);
+					f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+					chan->dtmf_tv = now;
 				} else {
 					chan->emulate_dtmf_duration -= f->samples / 8; /* XXX 8kHz */
 					ast_frfree(f);
@@ -2895,6 +2959,15 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 	}
 	ast_set_callerid(chan, cid_num, cid_name, cid_num);
 
+	
+
+	if (!chan->cdr) { /* up till now, this insertion hasn't been done. Therefore,
+				to keep from throwing off the basic order of the universe,
+				we will try to keep this cdr from getting posted. */
+		chan->cdr = ast_cdr_alloc();
+		ast_cdr_init(chan->cdr, chan);
+		ast_cdr_start(chan->cdr);
+	}
 	if (ast_call(chan, data, 0)) {	/* ast_call failed... */
 		ast_log(LOG_NOTICE, "Unable to call channel %s/%s\n", type, (char *)data);
 	} else {
@@ -3354,6 +3427,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	struct ast_channel *clone = original->masq;
 	struct ast_channel_spy_list *spy_list = NULL;
 	struct ast_channel_spy *spy = NULL;
+	struct ast_cdr *cdr;
 	int rformat = original->readformat;
 	int wformat = original->writeformat;
 	char newn[100];
@@ -3407,6 +3481,11 @@ int ast_do_masquerade(struct ast_channel *original)
 	t = original->tech;
 	original->tech = clone->tech;
 	clone->tech = t;
+
+	/* Swap the cdrs */
+	cdr = original->cdr;
+	original->cdr = clone->cdr;
+	clone->cdr = cdr;
 
 	t_pvt = original->tech_pvt;
 	original->tech_pvt = clone->tech_pvt;

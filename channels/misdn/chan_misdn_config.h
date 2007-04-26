@@ -52,9 +52,8 @@ enum misdn_cfg_elements {
 	MISDN_CFG_EARLY_BCONNECT,      /* int (bool) */
 	MISDN_CFG_INCOMING_EARLY_AUDIO,      /* int (bool) */
 	MISDN_CFG_ECHOCANCEL,          /* int */
-	MISDN_CFG_ECHOCANCELWHENBRIDGED,  /* int (bool) */
-#ifdef WITH_ECHOTRAINGING
-	MISDN_CFG_ECHOTRAINING,        /* int (bool) */
+#ifdef MISDN_1_2
+	MISDN_CFG_PIPELINE,      /* char[] */
 #endif
 
 #ifdef WITH_BEROEC
@@ -66,6 +65,7 @@ enum misdn_cfg_elements {
 	MISDN_CFG_BNEC_ADAPT,
 #endif
 	MISDN_CFG_NEED_MORE_INFOS,     /* bool */
+	MISDN_CFG_NOAUTORESPOND_ON_SETUP,     /* bool */
 	MISDN_CFG_NTTIMEOUT,     /* bool */
 	MISDN_CFG_JITTERBUFFER,              /* int */
 	MISDN_CFG_JITTERBUFFER_UPPER_THRESHOLD,              /* int */
@@ -84,7 +84,9 @@ enum misdn_cfg_elements {
 	
 	/* general config items */
 	MISDN_GEN_FIRST,
+#ifndef MISDN_1_2
 	MISDN_GEN_MISDN_INIT,           /* char[] */
+#endif
 	MISDN_GEN_DEBUG,               /* int */
 	MISDN_GEN_TRACEFILE,           /* char[] */
 	MISDN_GEN_BRIDGING,            /* int (bool) */
@@ -100,7 +102,8 @@ enum misdn_cfg_elements {
 
 enum misdn_cfg_method {
 	METHOD_STANDARD = 0,
-	METHOD_ROUND_ROBIN
+	METHOD_ROUND_ROBIN,
+	METHOD_STANDARD_DEC
 };
 
 /* you must call misdn_cfg_init before any other function of this header file */

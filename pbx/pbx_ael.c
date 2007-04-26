@@ -2220,9 +2220,9 @@ static void check_context_names(void)
 				if ( j->type == PV_CONTEXT || j->type == PV_MACRO ) {
 					if ( !strcmp(i->u1.str, j->u1.str) )
 					{
-						ast_log(LOG_WARNING,"Warning: file %s, line %d-%d: The context name (%s) is also declared in file %s, line %d-%d!\n",
+						ast_log(LOG_ERROR,"Error: file %s, line %d-%d: The context name (%s) is also declared in file %s, line %d-%d!\n",
 								i->filename, i->startline, i->endline, i->u1.str,  j->filename, j->startline, j->endline);
-						warns++;
+						errs++;
 					}
 				}
 			}
@@ -2317,7 +2317,7 @@ void check_pval_item(pval *item, struct argapp *apps, int in_globals)
 		macro_def = find_macro(item->u1.str);
 		if (!macro_def) {
 			/* here is a good place to check to see if the definition is in extensions.conf! */
-			ast_log(LOG_WARNING, "Error: file %s, line %d-%d: macro call to non-existent %s ! Hopefully it is present in extensions.conf! \n",
+			ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: macro call to non-existent %s ! Hopefully it is present in extensions.conf! \n",
 					item->filename, item->startline, item->endline, item->u1.str);
 			warns++;
 		} else if (macro_def->type != PV_MACRO) {
@@ -2993,7 +2993,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			
 			/* now, put the body of the for loop here */
 			exten->loop_break = for_end;
-			exten->loop_continue = for_test;
+			exten->loop_continue = for_inc;
 			
 			gen_prios(exten, new_label, p->u4.for_statements, mother_exten, this_context); /* this will link in all the statements here */
 			
@@ -3055,7 +3055,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			switch_end = new_prio();
 			switch_test->type = AEL_APPCALL;
 			switch_end->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"sw-%d-%s|1",control_statement_count, p->u1.str);
+			snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",control_statement_count, p->u1.str);
 			switch_test->app = strdup("Goto");
 			switch_test->appargs = strdup(buf1);
 			snprintf(buf1,sizeof(buf1),"Finish switch-%s-%d", label, control_statement_count);
@@ -3077,6 +3077,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					/* ok, generate a extension and link it in */
 					switch_case = new_exten();
 					switch_case->context = this_context;
+					switch_case->is_switch = 1;
 					/* the break/continue locations are inherited from parent */
 					switch_case->loop_break = exten->loop_break;
 					switch_case->loop_continue = exten->loop_continue;
@@ -3100,7 +3101,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1",local_control_statement_count, p2->next->u1.str);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, p2->next->u1.str);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3108,14 +3109,14 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1", local_control_statement_count, buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10", local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-.|1",local_control_statement_count);
+							snprintf(buf1,sizeof(buf1),"sw-%d-.|10",local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (!p2->next) {
@@ -3140,6 +3141,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					/* ok, generate a extension and link it in */
 					switch_case = new_exten();
 					switch_case->context = this_context;
+					switch_case->is_switch = 1;
 					/* the break/continue locations are inherited from parent */
 					switch_case->loop_break = exten->loop_break;
 					switch_case->loop_continue = exten->loop_continue;
@@ -3162,7 +3164,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1",local_control_statement_count, p2->next->u1.str);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, p2->next->u1.str);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3170,14 +3172,14 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1",local_control_statement_count, buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-.|1",local_control_statement_count);
+							snprintf(buf1,sizeof(buf1),"sw-%d-.|10",local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (!p2->next) {
@@ -3203,6 +3205,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					/* ok, generate a extension and link it in */
 					switch_case = new_exten();
 					switch_case->context = this_context;
+					switch_case->is_switch = 1;
 					/* the break/continue locations are inherited from parent */
 					switch_case->loop_break = exten->loop_break;
 					switch_case->loop_continue = exten->loop_continue;
@@ -3226,7 +3229,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1",local_control_statement_count, p2->next->u1.str);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, p2->next->u1.str);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3234,14 +3237,14 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|1",local_control_statement_count, buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-.|1",local_control_statement_count);
+							snprintf(buf1,sizeof(buf1),"sw-%d-.|10",local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (!p2->next) {
@@ -3513,7 +3516,9 @@ void set_priorities(struct ael_extension *exten)
 	int i;
 	struct ael_priority *pr;
 	do {
-		if (exten->regexten)
+		if (exten->is_switch)
+			i = 10;
+		else if (exten->regexten)
 			i=2;
 		else
 			i=1;
@@ -3937,7 +3942,7 @@ static int pbx_load_module(void)
 	} else {
 		ast_log(LOG_ERROR, "Sorry, but %d syntax errors and %d semantic errors were detected. It doesn't make sense to compile.\n", errs, sem_err);
 		destroy_pval(parse_tree); /* free up the memory */
-		return AST_MODULE_LOAD_FAILURE;
+		return AST_MODULE_LOAD_DECLINE;
 	}
 	destroy_pval(parse_tree); /* free up the memory */
 	

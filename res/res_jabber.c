@@ -434,7 +434,7 @@ static int aji_send_exec(struct ast_channel *chan, void *data)
 static void aji_log_hook(void *data, const char *xmpp, size_t size, int is_incoming)
 {
 	struct aji_client *client = ASTOBJ_REF((struct aji_client *) data);
-	manager_event(EVENT_FLAG_USER, "JabberEvent", "Account: %s\r\nPacket: %s", client->name, xmpp);
+	manager_event(EVENT_FLAG_USER, "JabberEvent", "Account: %s\r\nPacket: %s\r\n", client->name, xmpp);
 
 	if (client->debug) {
 		if (is_incoming)
@@ -1324,7 +1324,7 @@ static void aji_handle_subscribe(struct aji_client *client, ikspak *pak)
 		if(presence && status) {
 			iks_insert_attrib(presence, "type", "subscribed");
 			iks_insert_attrib(presence, "to", pak->from->full);
-			iks_insert_attrib(presence, "from", iks_find_attrib(pak->x, "to"));
+			iks_insert_attrib(presence, "from", client->jid->full);
 			if(pak->id)
 				iks_insert_attrib(presence, "id", pak->id);
 			iks_insert_cdata(status, "Asterisk has approved subscription", 0);

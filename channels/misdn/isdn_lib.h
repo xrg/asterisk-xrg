@@ -214,6 +214,7 @@ struct misdn_bchannel {
 	int need_release;
 	int need_release_complete;
 
+	int dec;
 	/** var stuff**/
 	int l3_id;
 	int pid;
@@ -345,10 +346,12 @@ struct misdn_bchannel {
   
 	/** list stuf **/
 
+#ifdef MISDN_1_2
+	char pipeline[128];
+#else
 	int ec_enable;
 	int ec_deftaps;
-	int ec_whenbridged;
-	int ec_training;
+#endif
 
 #ifdef WITH_BEROEC
 	beroec_t *ec;
@@ -395,7 +398,7 @@ char *manager_isdn_get_info(enum event_e event);
 
 void misdn_lib_transfer(struct misdn_bchannel* holded_bc);
 
-struct misdn_bchannel* misdn_lib_get_free_bc(int port, int channel, int inout);
+struct misdn_bchannel* misdn_lib_get_free_bc(int port, int channel, int inout, int dec);
 
 void manager_bchannel_activate(struct misdn_bchannel *bc);
 void manager_bchannel_deactivate(struct misdn_bchannel * bc);

@@ -337,6 +337,8 @@ struct ast_conference {
 
 static AST_LIST_HEAD_STATIC(confs, ast_conference);
 
+static unsigned int conf_map[1024] = {0, };
+
 struct volume {
 	int desired;                            /*!< Desired volume adjustment */
 	int actual;                             /*!< Actual volume adjustment (for channels that can't adjust) */
@@ -430,6 +432,9 @@ struct sla_trunk {
 	/*! This option uses the values in the sla_hold_access enum and sets the
 	 * access control type for hold on this trunk. */
 	unsigned int hold_access:1;
+	/*! Whether this trunk is currently on hold, meaning that once a station
+	 *  connects to it, the trunk channel needs to have UNHOLD indicated to it. */
+	unsigned int on_hold:1;
 };
 
 struct sla_trunk_ref {
@@ -726,6 +731,7 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 {
 	struct ast_conference *cnf;
 	struct zt_confinfo ztc = { 0, };
+	int confno_int = 0;
 
 	AST_LIST_LOCK(&confs);
 
@@ -782,6 +788,10 @@ static struct ast_conference *build_conf(char *confno, char *pin, char *pinadmin
 	if (option_verbose > 2)
 		ast_verbose(VERBOSE_PREFIX_3 "Created MeetMe conference %d for conference '%s'\n", cnf->zapconf, cnf->confno);
 	AST_LIST_INSERT_HEAD(&confs, cnf, list);
+
+	/* Reserve conference number in map */
+	if ((sscanf(cnf->confno, "%d", &confno_int) == 1) && (confno_int >= 0 && confno_int < 1024))
+		conf_map[confno_int] = 1;
 	
 cnfout:
 	if (cnf)
@@ -1314,9 +1324,13 @@ static void sla_queue_event_conf(enum sla_event_type type, struct ast_channel *c
 static int dispose_conf(struct ast_conference *conf)
 {
 	int res = 0;
+	int confno_int = 0;
 
 	AST_LIST_LOCK(&confs);
 	if (ast_atomic_dec_and_test(&conf->refcount)) {
+		/* Take the conference room number out of an inuse state */
+		if ((sscanf(conf->confno, "%d", &confno_int) == 1) && (confno_int >= 0 && confno_int < 1024))
+			conf_map[confno_int] = 0;
 		conf_free(conf);
 		res = 1;
 	}
@@ -2513,20 +2527,10 @@ static int conf_exec(struct ast_channel *chan, void *data)
 		if (retrycnt > 3)
 			allowretry = 0;
 		if (empty) {
-			int i, map[1024] = { 0, };
+			int i;
 			struct ast_config *cfg;
 			struct ast_variable *var;
 			int confno_int;
-
-			AST_LIST_LOCK(&confs);
-			AST_LIST_TRAVERSE(&confs, cnf, list) {
-				if (sscanf(cnf->confno, "%d", &confno_int) == 1) {
-					/* Disqualify in use conference */
-					if (confno_int >= 0 && confno_int < 1024)
-						map[confno_int]++;
-				}
-			}
-			AST_LIST_UNLOCK(&confs);
 
 			/* We only need to load the config file for static and empty_no_pin (otherwise we don't care) */
 			if ((empty_no_pin) || (!dynamic)) {
@@ -2539,13 +2543,6 @@ static int conf_exec(struct ast_channel *chan, void *data)
 							if (stringp) {
 								char *confno_tmp = strsep(&stringp, "|,");
 								int found = 0;
-								if (sscanf(confno_tmp, "%d", &confno_int) == 1) {
-									if ((confno_int >= 0) && (confno_int < 1024)) {
-										if (stringp && empty_no_pin) {
-											map[confno_int]++;
-										}
-									}
-								}
 								if (!dynamic) {
 									/* For static:  run through the list and see if this conference is empty */
 									AST_LIST_LOCK(&confs);
@@ -2580,12 +2577,15 @@ static int conf_exec(struct ast_channel *chan, void *data)
 
 			/* Select first conference number not in use */
 			if (ast_strlen_zero(confno) && dynamic) {
-				for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-					if (!map[i]) {
+				AST_LIST_LOCK(&confs);
+				for (i = 0; i < sizeof(conf_map) / sizeof(conf_map[0]); i++) {
+					if (!conf_map[i]) {
 						snprintf(confno, sizeof(confno), "%d", i);
+						conf_map[i] = 1;
 						break;
 					}
 				}
+				AST_LIST_UNLOCK(&confs);
 			}
 
 			/* Not found? */
@@ -3134,12 +3134,14 @@ static struct sla_trunk_ref *sla_find_trunk_ref_byname(const struct sla_station 
 			continue;
 
 		if ( (trunk_ref->trunk->barge_disabled 
-			&& trunk_ref->state != SLA_TRUNK_STATE_IDLE) ||
+			&& trunk_ref->state == SLA_TRUNK_STATE_UP) ||
 			(trunk_ref->trunk->hold_stations 
 			&& trunk_ref->trunk->hold_access == SLA_HOLD_PRIVATE
 			&& trunk_ref->state != SLA_TRUNK_STATE_ONHOLD_BYME) ||
-			sla_check_station_hold_access(trunk_ref->trunk, station) )
+			sla_check_station_hold_access(trunk_ref->trunk, station) ) 
+		{
 			trunk_ref = NULL;
+		}
 
 		break;
 	}
@@ -3228,9 +3230,10 @@ static void *run_station(void *data)
 	}
 	trunk_ref->chan = NULL;
 	if (ast_atomic_dec_and_test((int *) &trunk_ref->trunk->active_stations) &&
-		!trunk_ref->trunk->hold_stations) {
+		trunk_ref->state != SLA_TRUNK_STATE_ONHOLD_BYME) {
 		strncat(conf_name, "|K", sizeof(conf_name) - strlen(conf_name) - 1);
 		admin_exec(NULL, conf_name);
+		trunk_ref->trunk->hold_stations = 0;
 		sla_change_trunk_state(trunk_ref->trunk, SLA_TRUNK_STATE_IDLE, ALL_TRUNK_REFS, NULL);
 	}
 
@@ -3476,6 +3479,8 @@ static int sla_ring_station(struct sla_ringing_trunk *ringing_trunk, struct sla_
 	char *tech, *tech_data;
 	struct ast_dial *dial;
 	struct sla_ringing_station *ringing_station;
+	const char *cid_name = NULL, *cid_num = NULL;
+	enum ast_dial_result res;
 
 	if (!(dial = ast_dial_create()))
 		return -1;
@@ -3489,8 +3494,25 @@ static int sla_ring_station(struct sla_ringing_trunk *ringing_trunk, struct sla_
 		return -1;
 	}
 
-	if (ast_dial_run(dial, sla.attempt_callerid ? ringing_trunk->trunk->chan : NULL, 1) 
-		!= AST_DIAL_RESULT_TRYING) {
+	if (!sla.attempt_callerid && !ast_strlen_zero(ringing_trunk->trunk->chan->cid.cid_name)) {
+		cid_name = ast_strdupa(ringing_trunk->trunk->chan->cid.cid_name);
+		free(ringing_trunk->trunk->chan->cid.cid_name);
+		ringing_trunk->trunk->chan->cid.cid_name = NULL;
+	}
+	if (!sla.attempt_callerid && !ast_strlen_zero(ringing_trunk->trunk->chan->cid.cid_num)) {
+		cid_num = ast_strdupa(ringing_trunk->trunk->chan->cid.cid_num);
+		free(ringing_trunk->trunk->chan->cid.cid_num);
+		ringing_trunk->trunk->chan->cid.cid_num = NULL;
+	}
+
+	res = ast_dial_run(dial, ringing_trunk->trunk->chan, 1);
+	
+	if (cid_name)
+		ringing_trunk->trunk->chan->cid.cid_name = ast_strdup(cid_name);
+	if (cid_num)
+		ringing_trunk->trunk->chan->cid.cid_num = ast_strdup(cid_num);
+	
+	if (res != AST_DIAL_RESULT_TRYING) {
 		struct sla_failed_station *failed_station;
 		ast_dial_destroy(dial);
 		if (!(failed_station = ast_calloc(1, sizeof(*failed_station))))
@@ -3665,7 +3687,14 @@ static void sla_handle_hold_event(struct sla_event *event)
 		event->station->name, event->trunk_ref->trunk->name);
 	sla_change_trunk_state(event->trunk_ref->trunk, SLA_TRUNK_STATE_ONHOLD, 
 		INACTIVE_TRUNK_REFS, event->trunk_ref);
-	
+
+	if (event->trunk_ref->trunk->active_stations == 1) {
+		/* The station putting it on hold is the only one on the call, so start
+		 * Music on hold to the trunk. */
+		event->trunk_ref->trunk->on_hold = 1;
+		ast_indicate(event->trunk_ref->trunk->chan, AST_CONTROL_HOLD);
+	}
+
 	ast_softhangup(event->trunk_ref->chan, AST_CAUSE_NORMAL);
 	event->trunk_ref->chan = NULL;
 }
@@ -3932,6 +3961,7 @@ static void *dial_trunk(void *data)
 	struct ast_conference *conf;
 	struct ast_flags conf_flags = { 0 };
 	struct sla_trunk_ref *trunk_ref = args->trunk_ref;
+	const char *cid_name = NULL, *cid_num = NULL;
 
 	if (!(dial = ast_dial_create())) {
 		ast_mutex_lock(args->cond_lock);
@@ -3950,7 +3980,24 @@ static void *dial_trunk(void *data)
 		return NULL;
 	}
 
-	dial_res = ast_dial_run(dial, sla.attempt_callerid ? trunk_ref->chan : NULL, 1);
+	if (!sla.attempt_callerid && !ast_strlen_zero(trunk_ref->chan->cid.cid_name)) {
+		cid_name = ast_strdupa(trunk_ref->chan->cid.cid_name);
+		free(trunk_ref->chan->cid.cid_name);
+		trunk_ref->chan->cid.cid_name = NULL;
+	}
+	if (!sla.attempt_callerid && !ast_strlen_zero(trunk_ref->chan->cid.cid_num)) {
+		cid_num = ast_strdupa(trunk_ref->chan->cid.cid_num);
+		free(trunk_ref->chan->cid.cid_num);
+		trunk_ref->chan->cid.cid_num = NULL;
+	}
+
+	dial_res = ast_dial_run(dial, trunk_ref->chan, 1);
+
+	if (cid_name)
+		trunk_ref->chan->cid.cid_name = ast_strdup(cid_name);
+	if (cid_num)
+		trunk_ref->chan->cid.cid_num = ast_strdup(cid_num);
+
 	if (dial_res != AST_DIAL_RESULT_TRYING) {
 		ast_mutex_lock(args->cond_lock);
 		ast_cond_signal(args->cond);
@@ -4005,7 +4052,11 @@ static void *dial_trunk(void *data)
 		conf = NULL;
 	}
 
+	/* If the trunk is going away, it is definitely now IDLE. */
+	sla_change_trunk_state(trunk_ref->trunk, SLA_TRUNK_STATE_IDLE, ALL_TRUNK_REFS, NULL);
+
 	trunk_ref->trunk->chan = NULL;
+	trunk_ref->trunk->on_hold = 0;
 
 	ast_dial_join(dial);
 	ast_dial_destroy(dial);
@@ -4127,7 +4178,13 @@ static int sla_station_exec(struct ast_channel *chan, void *data)
 		}
 	}
 
-	ast_atomic_fetchadd_int((int *) &trunk_ref->trunk->active_stations, 1);
+	if (ast_atomic_fetchadd_int((int *) &trunk_ref->trunk->active_stations, 1) == 0 &&
+		trunk_ref->trunk->on_hold) {
+		trunk_ref->trunk->on_hold = 0;
+		ast_indicate(trunk_ref->trunk->chan, AST_CONTROL_UNHOLD);
+		sla_change_trunk_state(trunk_ref->trunk, SLA_TRUNK_STATE_UP, ALL_TRUNK_REFS, NULL);
+	}
+
 	snprintf(conf_name, sizeof(conf_name), "SLA_%s", trunk_ref->trunk->name);
 	ast_set_flag(&conf_flags, 
 		CONFFLAG_QUIET | CONFFLAG_MARKEDEXIT | CONFFLAG_PASS_DTMF | CONFFLAG_SLA_STATION);
@@ -4140,9 +4197,10 @@ static int sla_station_exec(struct ast_channel *chan, void *data)
 	}
 	trunk_ref->chan = NULL;
 	if (ast_atomic_dec_and_test((int *) &trunk_ref->trunk->active_stations) &&
-		!trunk_ref->trunk->hold_stations) {
+		trunk_ref->state != SLA_TRUNK_STATE_ONHOLD_BYME) {
 		strncat(conf_name, "|K", sizeof(conf_name) - strlen(conf_name) - 1);
 		admin_exec(NULL, conf_name);
+		trunk_ref->trunk->hold_stations = 0;
 		sla_change_trunk_state(trunk_ref->trunk, SLA_TRUNK_STATE_IDLE, ALL_TRUNK_REFS, NULL);
 	}
 	
@@ -4229,6 +4287,7 @@ static int sla_trunk_exec(struct ast_channel *chan, void *data)
 	dispose_conf(conf);
 	conf = NULL;
 	trunk->chan = NULL;
+	trunk->on_hold = 0;
 
 	pbx_builtin_setvar_helper(chan, "SLATRUNK_STATUS", "SUCCESS");
 

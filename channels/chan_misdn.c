@@ -114,6 +114,7 @@ enum misdn_chan_state {
 	MISDN_NOTHING=0,	/*!< at beginning */
 	MISDN_WAITING4DIGS, /*!<  when waiting for infos */
 	MISDN_EXTCANTMATCH, /*!<  when asterisk couldnt match our ext */
+	MISDN_INCOMING_SETUP, /*!<  for incoming setups*/
 	MISDN_DIALING, /*!<  when pbx_start */
 	MISDN_PROGRESS, /*!<  we got a progress */
 	MISDN_PROCEEDING, /*!<  we got a progress */
@@ -152,7 +153,9 @@ struct chan_list {
 	int need_hangup;
 	int need_busy;
 	
-	int orginator;
+	int noautorespond_on_setup;
+	
+	int originator;
 
 	int norxtone;
 	int notxtone; 
@@ -285,12 +288,6 @@ static void send_digit_to_chan(struct chan_list *cl, char digit );
 static void hangup_chan(struct chan_list *ch);
 static int pbx_start_chan(struct chan_list *ch);
 
-
-#define AST_CID_P(ast) ast->cid.cid_num
-#define AST_BRIDGED_P(ast) ast_bridged_channel(ast) 
-#define AST_LOAD_CFG ast_config_load
-#define AST_DESTROY_CFG ast_config_destroy
-
 #define MISDN_ASTERISK_TECH_PVT(ast) ast->tech_pvt
 #define MISDN_ASTERISK_PVT(ast) 1
 
@@ -301,9 +298,6 @@ static int pbx_start_chan(struct chan_list *ch);
 static const char misdn_type[] = "mISDN";
 
 static int tracing = 0 ;
-
-static char **misdn_key_vector=NULL;
-static int misdn_key_vector_size=0;
 
 /* Only alaw and mulaw is allowed for now */
 static int prefformat =  AST_FORMAT_ALAW ; /*  AST_FORMAT_SLINEAR ;  AST_FORMAT_ULAW | */
@@ -354,7 +348,11 @@ int add_out_calls(int port);
 int add_in_calls(int port);
 
 
+#ifdef MISDN_1_2
+static int update_pipeline_config(struct misdn_bchannel *bc);
+#else
 static int update_ec_config(struct misdn_bchannel *bc);
+#endif
 
 
 
@@ -440,37 +438,37 @@ static void print_facility(struct FacParm *fac, struct misdn_bchannel *bc)
 {
 	switch (fac->Function) {
 	case Fac_CD:
-		chan_misdn_log(0,bc->port," --> calldeflect to: %s, screened: %s\n", fac->u.CDeflection.DeflectedToNumber,
+		chan_misdn_log(1,bc->port," --> calldeflect to: %s, screened: %s\n", fac->u.CDeflection.DeflectedToNumber,
 					   fac->u.CDeflection.PresentationAllowed ? "yes" : "no");
 		break;
 	case Fac_AOCDCurrency:
 		if (fac->u.AOCDcur.chargeNotAvailable)
-			chan_misdn_log(0,bc->port," --> AOCD currency: charge not available\n");
+			chan_misdn_log(1,bc->port," --> AOCD currency: charge not available\n");
 		else if (fac->u.AOCDcur.freeOfCharge)
-			chan_misdn_log(0,bc->port," --> AOCD currency: free of charge\n");
+			chan_misdn_log(1,bc->port," --> AOCD currency: free of charge\n");
 		else if (fac->u.AOCDchu.billingId >= 0)
-			chan_misdn_log(0,bc->port," --> AOCD currency: currency:%s amount:%d multiplier:%d typeOfChargingInfo:%d billingId:%d\n",
+			chan_misdn_log(1,bc->port," --> AOCD currency: currency:%s amount:%d multiplier:%d typeOfChargingInfo:%d billingId:%d\n",
 						   fac->u.AOCDcur.currency, fac->u.AOCDcur.currencyAmount, fac->u.AOCDcur.multiplier,
 						   (fac->u.AOCDcur.typeOfChargingInfo == 0) ? "subTotal" : "total", fac->u.AOCDcur.billingId);
 		else
-			chan_misdn_log(0,bc->port," --> AOCD currency: currency:%s amount:%d multiplier:%d typeOfChargingInfo:%d\n",
+			chan_misdn_log(1,bc->port," --> AOCD currency: currency:%s amount:%d multiplier:%d typeOfChargingInfo:%d\n",
 						   fac->u.AOCDcur.currency, fac->u.AOCDcur.currencyAmount, fac->u.AOCDcur.multiplier,
 						   (fac->u.AOCDcur.typeOfChargingInfo == 0) ? "subTotal" : "total");
 		break;
 	case Fac_AOCDChargingUnit:
 		if (fac->u.AOCDchu.chargeNotAvailable)
-			chan_misdn_log(0,bc->port," --> AOCD charging unit: charge not available\n");
+			chan_misdn_log(1,bc->port," --> AOCD charging unit: charge not available\n");
 		else if (fac->u.AOCDchu.freeOfCharge)
-			chan_misdn_log(0,bc->port," --> AOCD charging unit: free of charge\n");
+			chan_misdn_log(1,bc->port," --> AOCD charging unit: free of charge\n");
 		else if (fac->u.AOCDchu.billingId >= 0)
-			chan_misdn_log(0,bc->port," --> AOCD charging unit: recordedUnits:%d typeOfChargingInfo:%s billingId:%d\n",
+			chan_misdn_log(1,bc->port," --> AOCD charging unit: recordedUnits:%d typeOfChargingInfo:%s billingId:%d\n",
 						   fac->u.AOCDchu.recordedUnits, (fac->u.AOCDchu.typeOfChargingInfo == 0) ? "subTotal" : "total", fac->u.AOCDchu.billingId);
 		else
-			chan_misdn_log(0,bc->port," --> AOCD charging unit: recordedUnits:%d typeOfChargingInfo:%s\n",
+			chan_misdn_log(1,bc->port," --> AOCD charging unit: recordedUnits:%d typeOfChargingInfo:%s\n",
 						   fac->u.AOCDchu.recordedUnits, (fac->u.AOCDchu.typeOfChargingInfo == 0) ? "subTotal" : "total");
 		break;
 	default:
-		chan_misdn_log(0,bc->port," --> unknown\n");
+		chan_misdn_log(1,bc->port," --> unknown\n");
 	}
 }
 
@@ -488,6 +486,62 @@ static void print_bearer(struct misdn_bchannel *bc)
 		break;
 	}
 }
+
+static void export_aoc_vars(int originator, struct ast_channel *ast, struct misdn_bchannel *bc)
+{
+	char buf[128];
+
+	if (!ast)
+		return;
+
+	if (originator == ORG_AST) {
+		ast = ast_bridged_channel(ast);
+		if (!ast)
+			return;
+	}
+
+	switch (bc->AOCDtype) {
+	case Fac_AOCDCurrency:
+		pbx_builtin_setvar_helper(ast, "AOCD_Type", "currency");
+		if (bc->AOCD.currency.chargeNotAvailable)
+			pbx_builtin_setvar_helper(ast, "AOCD_ChargeAvailable", "no");
+		else {
+			pbx_builtin_setvar_helper(ast, "AOCD_ChargeAvailable", "yes");
+			if (bc->AOCD.currency.freeOfCharge)
+				pbx_builtin_setvar_helper(ast, "AOCD_FreeOfCharge", "yes");
+			else {
+				pbx_builtin_setvar_helper(ast, "AOCD_FreeOfCharge", "no");
+				if (snprintf(buf, sizeof(buf), "%d %s", bc->AOCD.currency.currencyAmount * bc->AOCD.currency.multiplier, bc->AOCD.currency.currency) < sizeof(buf)) {
+					pbx_builtin_setvar_helper(ast, "AOCD_Amount", buf);
+					if (bc->AOCD.currency.billingId >= 0 && snprintf(buf, sizeof(buf), "%d", bc->AOCD.currency.billingId) < sizeof(buf))
+						pbx_builtin_setvar_helper(ast, "AOCD_BillingId", buf);
+				}
+			}
+		}
+		break;
+	case Fac_AOCDChargingUnit:
+		pbx_builtin_setvar_helper(ast, "AOCD_Type", "charging_unit");
+		if (bc->AOCD.chargingUnit.chargeNotAvailable)
+			pbx_builtin_setvar_helper(ast, "AOCD_ChargeAvailable", "no");
+		else {
+			pbx_builtin_setvar_helper(ast, "AOCD_ChargeAvailable", "yes");
+			if (bc->AOCD.chargingUnit.freeOfCharge)
+				pbx_builtin_setvar_helper(ast, "AOCD_FreeOfCharge", "yes");
+			else {
+				pbx_builtin_setvar_helper(ast, "AOCD_FreeOfCharge", "no");
+				if (snprintf(buf, sizeof(buf), "%d", bc->AOCD.chargingUnit.recordedUnits) < sizeof(buf)) {
+					pbx_builtin_setvar_helper(ast, "AOCD_RecordedUnits", buf);
+					if (bc->AOCD.chargingUnit.billingId >= 0 && snprintf(buf, sizeof(buf), "%d", bc->AOCD.chargingUnit.billingId) < sizeof(buf))
+						pbx_builtin_setvar_helper(ast, "AOCD_BillingId", buf);
+				}
+			}
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 /*************** Helpers END *************/
 
 static void sighandler(int sig)
@@ -945,6 +999,7 @@ static struct state_struct state_array[] = {
 	{MISDN_NOTHING,"NOTHING"}, /* at beginning */
 	{MISDN_WAITING4DIGS,"WAITING4DIGS"}, /*  when waiting for infos */
 	{MISDN_EXTCANTMATCH,"EXTCANTMATCH"}, /*  when asterisk couldnt match our ext */
+	{MISDN_INCOMING_SETUP,"INCOMING SETUP"}, /*  when pbx_start */
 	{MISDN_DIALING,"DIALING"}, /*  when pbx_start */
 	{MISDN_PROGRESS,"PROGRESS"}, /*  when pbx_start */
 	{MISDN_PROCEEDING,"PROCEEDING"}, /*  when pbx_start */
@@ -1019,9 +1074,9 @@ static void print_bc_info (int fd, struct chan_list* help, struct misdn_bchannel
 
 		bc->pid, bc->port, bc->channel,
 		bc->nt?"NT":"TE",
-		help->orginator == ORG_AST?"*":"I",
+		help->originator == ORG_AST?"*":"I",
 		ast?ast->exten:NULL,
-		ast?AST_CID_P(ast):NULL,
+		ast?ast->cid.cid_num:NULL,
 		bc->rad,
 		ast?ast->context:NULL,
 		misdn_get_ch_state(help)
@@ -1037,7 +1092,11 @@ static void print_bc_info (int fd, struct chan_list* help, struct misdn_bchannel
 			"  --> activated: %d\n"
 			"  --> state: %s\n"
 			"  --> capability: %s\n"
+#ifdef MISDN_1_2
+			"  --> pipeline: %s\n"
+#else
 			"  --> echo_cancel: %d\n"
+#endif
 			"  --> notone : rx %d tx:%d\n"
 			"  --> bc_hold: %d\n",
 			help->ast->name,
@@ -1050,7 +1109,11 @@ static void print_bc_info (int fd, struct chan_list* help, struct misdn_bchannel
 			bc->active,
 			bc_state2str(bc->bc_state),
 			bearer2str(bc->capability),
-			bc->ec_enable,
+#ifdef MISDN_1_2
+			bc->pipeline,
+#else
+ 			bc->ec_enable,
+#endif
 
 			help->norxtone,help->notxtone,
 			bc->holded
@@ -1080,12 +1143,12 @@ static int misdn_show_cls (int fd, int argc, char *argv[])
 				
 						,help->l3id
 						,ast->exten
-						,AST_CID_P(ast)
+						,ast->cid.cid_num
 						,help->hold_info.port
 						,help->hold_info.channel
 						);
 			} else {
-				ast_cli(fd,"* Channel in unknown STATE !!! Exten:%s, Callerid:%s\n", ast->exten, AST_CID_P(ast));
+				ast_cli(fd,"* Channel in unknown STATE !!! Exten:%s, Callerid:%s\n", ast->exten, ast->cid.cid_num);
 			}
 		}
 	}
@@ -1278,7 +1341,11 @@ static int misdn_toggle_echocancel (int fd, int argc, char *argv[])
 			tmp->toggle_ec=tmp->toggle_ec?0:1;
 
 			if (tmp->toggle_ec) {
+#ifdef MISDN_1_2
+				update_pipeline_config(tmp->bc);
+#else
 				update_ec_config(tmp->bc);
+#endif
 				manager_ec_enable(tmp->bc);
 			} else {
 				manager_ec_disable(tmp->bc);
@@ -1619,6 +1686,25 @@ void debug_numplan(int port, int numplan, char *type)
 
 
 
+#ifdef MISDN_1_2
+static int update_pipeline_config(struct misdn_bchannel *bc)
+{
+	int ec;
+
+	misdn_cfg_get(bc->port, MISDN_CFG_PIPELINE, bc->pipeline, sizeof(bc->pipeline));
+
+	if (*bc->pipeline)
+		return 0;
+
+	misdn_cfg_get(bc->port, MISDN_CFG_ECHOCANCEL, &ec, sizeof(int));
+	if (ec == 1)
+		snprintf(bc->pipeline, sizeof(bc->pipeline) - 1, "mg2ec");
+	else if (ec > 1)
+		snprintf(bc->pipeline, sizeof(bc->pipeline) - 1, "mg2ec(deftaps=%d)", ec);
+
+	return 0;
+}
+#else
 static int update_ec_config(struct misdn_bchannel *bc)
 {
 	int ec;
@@ -1632,17 +1718,10 @@ static int update_ec_config(struct misdn_bchannel *bc)
 		bc->ec_enable=1;
 		bc->ec_deftaps=ec;
 	}
-#ifdef WITH_ECHOTRAINING 
-	int ectr;
-	misdn_cfg_get( port, MISDN_CFG_ECHOTRAINING, &ectr, sizeof(int));
-	
-	if ( ectr >= 0 ) {
-		bc->ec_training=ectr;
-	}
-#endif
 
 	return 0;
 }
+#endif
 
 
 static int read_config(struct chan_list *ch, int orig) {
@@ -1685,6 +1764,8 @@ static int read_config(struct chan_list *ch, int orig) {
 	misdn_cfg_get( port, MISDN_CFG_NEED_MORE_INFOS, &bc->need_more_infos, sizeof(int));
 	misdn_cfg_get( port, MISDN_CFG_NTTIMEOUT, &ch->nttimeout, sizeof(int));
 	
+	misdn_cfg_get( port, MISDN_CFG_NOAUTORESPOND_ON_SETUP, &ch->noautorespond_on_setup, sizeof(int));
+	
 	misdn_cfg_get( port, MISDN_CFG_FAR_ALERTING, &ch->far_alerting, sizeof(int));
 
 	misdn_cfg_get( port, MISDN_CFG_ALLOWED_BEARERS, &ch->allowed_bearers, BUFFERSIZE);
@@ -1717,7 +1798,11 @@ static int read_config(struct chan_list *ch, int orig) {
 	
 	ast_copy_string (ast->context,ch->context,sizeof(ast->context));	
 
+#ifdef MISDN_1_2
+	update_pipeline_config(bc);
+#else
 	update_ec_config(bc);
+#endif
 
 	{
 		int eb3;
@@ -1953,12 +2038,12 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 	else 
 		newbc->rad[0]=0;
 
-	chan_misdn_log(3, port, " --> * adding2newbc callerid %s\n",AST_CID_P(ast));
-	if (ast_strlen_zero(newbc->oad) && AST_CID_P(ast) ) {
+	chan_misdn_log(3, port, " --> * adding2newbc callerid %s\n",ast->cid.cid_num);
+	if (ast_strlen_zero(newbc->oad) && ast->cid.cid_num ) {
 
-		if (AST_CID_P(ast)) {
+		if (ast->cid.cid_num) {
 			int l = sizeof(newbc->oad);
-			strncpy(newbc->oad,AST_CID_P(ast), l);
+			strncpy(newbc->oad,ast->cid.cid_num, l);
 			newbc->oad[l-1] = 0;
 		}
 	}
@@ -1990,9 +2075,15 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 		int bridging;
 		misdn_cfg_get( 0, MISDN_GEN_BRIDGING, &bridging, sizeof(int));
 		if (bridging && ch->other_ch) {
-			chan_misdn_log(0, port, "Disabling EC on both Sides\n");	
+#ifdef MISDN_1_2
+			chan_misdn_log(1, port, "Disabling EC (aka Pipeline) on both Sides\n");
+			*ch->bc->pipeline=0;
+			*ch->other_ch->bc->pipeline=0;
+#else
+			chan_misdn_log(1, port, "Disabling EC on both Sides\n");
 			ch->bc->ec_enable=0;
 			ch->other_ch->bc->ec_enable=0;
+#endif
 		}
 		
 		r=misdn_lib_send_event( newbc, EVENT_SETUP );
@@ -2228,7 +2319,7 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 				chan_misdn_log(3, p->bc->port, " --> * SEND: State Ring pid:%d\n",p->bc?p->bc->pid:-1);
 				ast_setstate(ast,AST_STATE_RINGING);
 			
-				if ( !p->bc->nt && (p->orginator==ORG_MISDN) && !p->incoming_early_audio ) 
+				if ( !p->bc->nt && (p->originator==ORG_MISDN) && !p->incoming_early_audio ) 
 					chan_misdn_log(2,p->bc->port, " --> incoming_early_audio off\n");
 				else 
 					return -1;
@@ -2309,13 +2400,9 @@ static int misdn_hangup(struct ast_channel *ast)
 	
 	bc=p->bc;
 
-
-	
 	MISDN_ASTERISK_TECH_PVT(ast)=NULL;
 	p->ast=NULL;
 
-	bc=p->bc;
-	
 	if (ast->_state == AST_STATE_RESERVED || 
 		p->state == MISDN_NOTHING || 
 		p->state == MISDN_HOLDED || 
@@ -2362,13 +2449,14 @@ static int misdn_hangup(struct ast_channel *ast)
 			bc->out_cause=tmpcause?tmpcause:16;
 		}
     
-		chan_misdn_log(1, bc->port, "* IND : HANGUP\tpid:%d ctx:%s dad:%s oad:%s State:%s\n",p->bc?p->bc->pid:-1, ast->context, ast->exten, AST_CID_P(ast), misdn_get_ch_state(p));
+		chan_misdn_log(1, bc->port, "* IND : HANGUP\tpid:%d ctx:%s dad:%s oad:%s State:%s\n",p->bc?p->bc->pid:-1, ast->context, ast->exten, ast->cid.cid_num, misdn_get_ch_state(p));
 		chan_misdn_log(3, bc->port, " --> l3id:%x\n",p->l3id);
 		chan_misdn_log(3, bc->port, " --> cause:%d\n",bc->cause);
 		chan_misdn_log(2, bc->port, " --> out_cause:%d\n",bc->out_cause);
 		chan_misdn_log(2, bc->port, " --> state:%s\n", misdn_get_ch_state(p));
 		
 		switch (p->state) {
+		case MISDN_INCOMING_SETUP:
 		case MISDN_CALLING:
 			p->state=MISDN_CLEANING;
 			misdn_lib_send_event( bc, EVENT_RELEASE_COMPLETE);
@@ -2393,7 +2481,7 @@ static int misdn_hangup(struct ast_channel *ast)
 		case MISDN_ALERTING:
 		case MISDN_PROGRESS:
 		case MISDN_PROCEEDING:
-			if (p->orginator != ORG_AST) 
+			if (p->originator != ORG_AST) 
 				hanguptone_indicate(p);
       
 			/*p->state=MISDN_CLEANING;*/
@@ -2485,7 +2573,11 @@ static struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame
  			isdn_lib_update_rxgain(tmp->bc);
  			tmp->bc->txgain = 0;
  			isdn_lib_update_txgain(tmp->bc);
+#ifdef MISDN_1_2
+			*tmp->bc->pipeline = 0;
+#else
  			tmp->bc->ec_enable = 0;
+#endif
  			isdn_lib_update_ec(tmp->bc);
  			isdn_lib_stop_dtmf(tmp->bc);
  			switch (tmp->faxdetect) {
@@ -2495,7 +2587,7 @@ static struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame
  					char context_tmp[BUFFERSIZE];
  					misdn_cfg_get(tmp->bc->port, MISDN_CFG_FAXDETECT_CONTEXT, &context_tmp, sizeof(context_tmp));
  					context = ast_strlen_zero(context_tmp) ? (ast_strlen_zero(ast->macrocontext) ? ast->context : ast->macrocontext) : context_tmp;
- 					if (ast_exists_extension(ast, context, "fax", 1, AST_CID_P(ast))) {
+ 					if (ast_exists_extension(ast, context, "fax", 1, ast->cid.cid_num)) {
   						if (option_verbose > 2)
  							ast_verbose(VERBOSE_PREFIX_3 "Redirecting %s to fax extension (context:%s)\n", ast->name, context);
   						/* Save the DID/DNIS when we transfer the fax call to a "fax" extension */
@@ -2873,7 +2965,7 @@ static struct chan_list *init_chan_list(int orig)
 	
 	memset(cl,0,sizeof(struct chan_list));
 
-	cl->orginator=orig;
+	cl->originator=orig;
 	cl->need_queue_hangup=1;
 	cl->need_hangup=1;
 	cl->need_busy=1;
@@ -2893,6 +2985,7 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 	char *tokb=NULL, *p=NULL;
 	int channel=0, port=0;
 	struct misdn_bchannel *newbc = NULL;
+	int dec=0;
 	
 	struct chan_list *cl=init_chan_list(ORG_AST);
 	
@@ -2921,11 +3014,14 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 		else {
 			port = atoi(port_str);
 		}
-		
-		
 	} else {
 		ast_log(LOG_WARNING, " --> ! IND : CALL dad:%s WITHOUT PORT/Group, check extension.conf\n",ext);
 		return NULL;
+	}
+
+	if (misdn_cfg_is_group_method(group, METHOD_STANDARD_DEC)) {
+		chan_misdn_log(4, port, " --> STARTING STANDARDDEC...\n");
+		dec=1;
 	}
 
 	if (!ast_strlen_zero(group)) {
@@ -2934,10 +3030,11 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 		struct robin_list *rr = NULL;
 
 		if (misdn_cfg_is_group_method(group, METHOD_ROUND_ROBIN)) {
-			chan_misdn_log(4, port, " --> STARTING ROUND ROBIN...");
+			chan_misdn_log(4, port, " --> STARTING ROUND ROBIN...\n");
 			rr = get_robin_position(group);
 		}
 		
+			
 		if (rr) {
 			int robin_channel = rr->channel;
 			int port_start;
@@ -2979,7 +3076,7 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 						
 						
 						if ( port_up>0 )	{
-							newbc = misdn_lib_get_free_bc(port, robin_channel,0);
+							newbc = misdn_lib_get_free_bc(port, robin_channel,0, 0);
 							if (newbc) {
 								chan_misdn_log(4, port, " Success! Found port:%d channel:%d\n", newbc->port, newbc->channel);
 								if (port_up)
@@ -2995,9 +3092,7 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 			
 			if (!newbc)
 				chan_misdn_log(-1, port, " Failed! No free channel in group %d!", group);
-		}
-		
-		else {		
+		} else {		
 			for (port=misdn_cfg_get_next_port(0); port > 0;
 				 port=misdn_cfg_get_next_port(port)) {
 				
@@ -3013,18 +3108,17 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 					chan_misdn_log(4, port, "portup:%d\n", port_up);
 					
 					if ( port_up>0 ) {
-						newbc = misdn_lib_get_free_bc(port, 0, 0);
+						newbc = misdn_lib_get_free_bc(port, 0, 0, dec);
 						if (newbc)
 							break;
 					}
 				}
 			}
 		}
-		
 	} else {
 		if (channel)
 			chan_misdn_log(1, port," --> preselected_channel: %d\n",channel);
-		newbc = misdn_lib_get_free_bc(port, channel, 0);
+		newbc = misdn_lib_get_free_bc(port, channel, 0, dec);
 	}
 	
 	if (!newbc) {
@@ -3140,7 +3234,7 @@ static struct ast_channel *misdn_new(struct chan_list *chlist, int state,  char 
 	if (callerid) 
 		ast_callerid_parse(callerid, &cid_name, &cid_num);
 
-	tmp = ast_channel_alloc(1, state, cid_num, cid_name, "%s/%d-u%d", misdn_type, chan_offset + c, glob_channel++);
+	tmp = ast_channel_alloc(1, state, cid_num, cid_name, "", exten, "", 0, "%s/%d-u%d", misdn_type, chan_offset + c, glob_channel++);
 	
 	if (tmp) {
 		chan_misdn_log(2, 0, " --> * NEW CHANNEL dad:%s oad:%s\n",exten,callerid);
@@ -3394,7 +3488,7 @@ static void release_chan(struct misdn_bchannel *bc) {
 			ast_mutex_destroy(&ch->overlap_tv_lock);
 		}
 
-		if (ch->orginator == ORG_AST) {
+		if (ch->originator == ORG_AST) {
 			misdn_out_calls[bc->port]--;
 		} else {
 			misdn_in_calls[bc->port]--;
@@ -3407,7 +3501,7 @@ static void release_chan(struct misdn_bchannel *bc) {
 
 			
 			if (ast && MISDN_ASTERISK_TECH_PVT(ast)) {
-				chan_misdn_log(1, bc->port, "* RELEASING CHANNEL pid:%d ctx:%s dad:%s oad:%s state: %s\n",bc?bc->pid:-1, ast->context, ast->exten,AST_CID_P(ast),misdn_get_ch_state(ch));
+				chan_misdn_log(1, bc->port, "* RELEASING CHANNEL pid:%d ctx:%s dad:%s oad:%s state: %s\n",bc?bc->pid:-1, ast->context, ast->exten,ast->cid.cid_num,misdn_get_ch_state(ch));
 				chan_misdn_log(3, bc->port, " --> * State Down\n");
 				MISDN_ASTERISK_TECH_PVT(ast)=NULL;
 				
@@ -3435,11 +3529,11 @@ static void misdn_transfer_bc(struct chan_list *tmp_ch, struct chan_list *holded
 	
 	tmp_ch->state=MISDN_HOLD_DISCONNECT;
   
-	ast_moh_stop(AST_BRIDGED_P(holded_chan->ast));
+	ast_moh_stop(ast_bridged_channel(holded_chan->ast));
 
 	holded_chan->state=MISDN_CONNECTED;
 	//misdn_lib_transfer(holded_chan->bc);
-	ast_channel_masquerade(holded_chan->ast, AST_BRIDGED_P(tmp_ch->ast));
+	ast_channel_masquerade(holded_chan->ast, ast_bridged_channel(tmp_ch->ast));
 }
 
 
@@ -3454,24 +3548,28 @@ static void do_immediate_setup(struct misdn_bchannel *bc,struct chan_list *ch , 
   
 	ch->state=MISDN_DIALING;
 
-	if (bc->nt) {
-		int ret; 
-		ret = misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
-	} else {
-		int ret;
-		if ( misdn_lib_is_ptp(bc->port)) {
+	if (!ch->noautorespond_on_setup) {
+		if (bc->nt) {
+			int ret; 
 			ret = misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
 		} else {
-			ret = misdn_lib_send_event(bc, EVENT_PROCEEDING );
+			int ret;
+			if ( misdn_lib_is_ptp(bc->port)) {
+				ret = misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
+			} else {
+				ret = misdn_lib_send_event(bc, EVENT_PROCEEDING );
+			}
 		}
+	} else {
+		ch->state = MISDN_INCOMING_SETUP;
 	}
 
-	if ( !bc->nt && (ch->orginator==ORG_MISDN) && !ch->incoming_early_audio ) 
+	if ( !bc->nt && (ch->originator==ORG_MISDN) && !ch->incoming_early_audio ) 
 		chan_misdn_log(1,bc->port, " --> incoming_early_audio off\n");
 	 else  
 		dialtone_indicate(ch);
   
-	chan_misdn_log(1, bc->port, "* Starting Ast ctx:%s dad:%s oad:%s with 's' extension\n", ast->context, ast->exten, AST_CID_P(ast));
+	chan_misdn_log(1, bc->port, "* Starting Ast ctx:%s dad:%s oad:%s with 's' extension\n", ast->context, ast->exten, ast->cid.cid_num);
   
 	strncpy(ast->exten,"s", 2);
   
@@ -3941,7 +4039,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		ch->bc = bc;
 		ch->l3id=bc->l3_id;
 		ch->addr=bc->addr;
-		ch->orginator = ORG_MISDN;
+		ch->originator = ORG_MISDN;
 
 		chan=misdn_new(ch, AST_STATE_RESERVED,bc->dad, bc->oad, AST_FORMAT_ALAW, bc->port, bc->channel);
 		ch->ast = chan;
@@ -4025,8 +4123,12 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		
 		/* Check for Pickup Request first */
 		if (!strcmp(chan->exten, ast_pickup_ext())) {
-			int ret;/** Sending SETUP_ACK**/
-			ret = misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
+			if (!ch->noautorespond_on_setup) {
+				int ret;/** Sending SETUP_ACK**/
+				ret = misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
+			} else {
+				ch->state = MISDN_INCOMING_SETUP;
+			}
 			if (ast_pickup_call(chan)) {
 				hangup_chan(ch);
 			} else {
@@ -4084,14 +4186,19 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		}
 		
 		if (!ch->overlap_dial && ast_exists_extension(ch->ast, ch->context, bc->dad, 1, bc->oad)) {
-			ch->state=MISDN_DIALING;
 			
-			if (bc->nt || (bc->need_more_infos && misdn_lib_is_ptp(bc->port)) ) {
-				int ret; 
-				ret = misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
+			if (!ch->noautorespond_on_setup) {
+				ch->state=MISDN_DIALING;
+
+				if (bc->nt || (bc->need_more_infos && misdn_lib_is_ptp(bc->port)) ) {
+					int ret; 
+					ret = misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
+				} else {
+					int ret;
+					ret= misdn_lib_send_event(bc, EVENT_PROCEEDING );
+				}
 			} else {
-				int ret;
-				ret= misdn_lib_send_event(bc, EVENT_PROCEEDING );
+				ch->state = MISDN_INCOMING_SETUP;
 			}
 	
 			if (pbx_start_chan(ch)<0) {
@@ -4121,7 +4228,6 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				}
 
 			} else {
-
 				int ret= misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
 				if (ret == -ENOCHAN) {
 					ast_log(LOG_WARNING,"Channel was catched, before we could Acknowledge\n");
@@ -4260,7 +4366,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 
 		if (!ch->ast) break;
 
-		struct ast_channel *bridged=AST_BRIDGED_P(ch->ast);
+		struct ast_channel *bridged=ast_bridged_channel(ch->ast);
 		stop_indicate(ch);
 
 		if (bridged && !strcasecmp(bridged->tech->type,"mISDN")) {
@@ -4294,8 +4400,8 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 	if (ch) {
 		struct chan_list *holded_ch=find_holded(cl_te, bc);
 		
-		chan_misdn_log(3,bc->port," --> org:%d nt:%d, inbandavail:%d state:%d\n", ch->orginator, bc->nt, misdn_inband_avail(bc), ch->state);
-		if ( ch->orginator==ORG_AST && !bc->nt && misdn_inband_avail(bc) && ch->state != MISDN_CONNECTED) {
+		chan_misdn_log(3,bc->port," --> org:%d nt:%d, inbandavail:%d state:%d\n", ch->originator, bc->nt, misdn_inband_avail(bc), ch->state);
+		if ( ch->originator==ORG_AST && !bc->nt && misdn_inband_avail(bc) && ch->state != MISDN_CONNECTED) {
 			/* If there's inband information available (e.g. a
 			   recorded message saying what was wrong with the
 			   dialled number, or perhaps even giving an
@@ -4308,7 +4414,8 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 
 			if (ch->ast) {
 				ch->ast->hangupcause=bc->cause;
-				ast_queue_control(ch->ast, AST_CONTROL_BUSY);
+				if (bc->cause == 17)
+					ast_queue_control(ch->ast, AST_CONTROL_BUSY);
 			}
 			ch->need_busy=0;
 			break;
@@ -4322,6 +4429,8 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			cb_log(1,bc->port," --> found holded ch\n");
 			misdn_transfer_bc(ch, holded_ch) ;
 		}
+
+		bc->need_disconnect=0;
 		
 		stop_bc_tones(ch);
 		hangup_chan(ch);
@@ -4338,6 +4447,9 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 	
 	case EVENT_RELEASE:
 		{
+			bc->need_disconnect=0;
+			bc->need_release=0;
+
 			hangup_chan(ch);
 			release_chan(bc);
 		
@@ -4347,6 +4459,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		break;
 	case EVENT_RELEASE_COMPLETE:
 	{
+		bc->need_disconnect=0;
+		bc->need_release=0;
+		bc->need_release_complete=0;
+
 		stop_bc_tones(ch);
 		hangup_chan(ch);
 		release_chan(bc);
@@ -4532,7 +4648,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		ch->hold_info.port=0;
 		ch->hold_info.channel=0;
 		
-		struct ast_channel *hold_ast=AST_BRIDGED_P(ch->ast);
+		struct ast_channel *hold_ast=ast_bridged_channel(ch->ast);
 		
 		if (hold_ast) {
 			ast_moh_stop(hold_ast);
@@ -4555,7 +4671,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			break;
 		}
 		
-		struct ast_channel *bridged=AST_BRIDGED_P(ch->ast);
+		struct ast_channel *bridged=ast_bridged_channel(ch->ast);
 
 		if (bridged) {
 			chan_misdn_log(2,bc->port,"Bridge Partner is of type: %s\n",bridged->tech->type);
@@ -4581,12 +4697,18 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 	break;
 	
 	case EVENT_FACILITY:
+		if (!ch) {
+			/* This may come from a call we don't know nothing about, so we ignore it. */
+			chan_misdn_log(-1, bc->port, "Got EVENT_FACILITY but we don't have a ch!\n");
+			break;
+		}
+
 		print_facility(&(bc->fac_in), bc);
 		
 		switch (bc->fac_in.Function) {
 		case Fac_CD:
 			{
-				struct ast_channel *bridged=AST_BRIDGED_P(ch->ast);
+				struct ast_channel *bridged=ast_bridged_channel(ch->ast);
 				struct chan_list *ch_br;
 				if (bridged && MISDN_ASTERISK_TECH_PVT(bridged)) {
 					ch_br=MISDN_ASTERISK_TECH_PVT(bridged);
@@ -4607,10 +4729,12 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		case Fac_AOCDCurrency:
 			bc->AOCDtype = Fac_AOCDCurrency;
 			memcpy(&(bc->AOCD.currency), &(bc->fac_in.u.AOCDcur), sizeof(struct FacAOCDCurrency));
+			export_aoc_vars(ch->originator, ch->ast, bc);
 			break;
 		case Fac_AOCDChargingUnit:
 			bc->AOCDtype = Fac_AOCDChargingUnit;
 			memcpy(&(bc->AOCD.chargingUnit), &(bc->fac_in.u.AOCDchu), sizeof(struct FacAOCDChargingUnit));
+			export_aoc_vars(ch->originator, ch->ast, bc);
 			break;
 		default:
 			chan_misdn_log(0, bc->port," --> not yet handled: facility type:%p\n", bc->fac_in.Function);
@@ -4954,16 +5078,22 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 		case 'c':
 			keyidx=atoi(++tok);
       
-			if (keyidx > misdn_key_vector_size  || keyidx < 0 ) {
-				ast_log(LOG_WARNING, "You entered the keyidx: %d but we have only %d keys\n",keyidx, misdn_key_vector_size );
-				continue; 
+			char keys[4096];
+			char *key=NULL, *tmp;
+			int i;
+			misdn_cfg_get( 0, MISDN_GEN_CRYPT_KEYS, keys, sizeof(keys));
+
+			tmp=keys;
+
+			for (i=0; i<keyidx; i++) {
+				key=strsep(&tmp,",");
 			}
-      
-			{
-				ast_copy_string(ch->bc->crypt_key,  misdn_key_vector[keyidx], sizeof(ch->bc->crypt_key));
+
+			if (key) {
+				ast_copy_string(ch->bc->crypt_key, key, sizeof(ch->bc->crypt_key));
 			}
 			
-			chan_misdn_log(0, ch->bc->port, "SETOPT: crypt with key:%s\n",misdn_key_vector[keyidx]);
+			chan_misdn_log(0, ch->bc->port, "SETOPT: crypt with key:%s\n",ch->bc->crypt_key);
 			break;
 
 		case 'e':
@@ -4971,14 +5101,22 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 			
 			if (neglect) {
 				chan_misdn_log(1, ch->bc->port, " --> disabled\n");
+#ifdef MISDN_1_2
+				*ch->bc->pipeline=0;
+#else
 				ch->bc->ec_enable=0;
+#endif
 			} else {
+#ifdef MISDN_1_2
+				update_pipeline_config(ch->bc);
+#else
 				ch->bc->ec_enable=1;
-				ch->bc->orig=ch->orginator;
+				ch->bc->orig=ch->originator;
 				tok++;
-				if (tok) {
+				if (*tok) {
 					ch->bc->ec_deftaps=atoi(tok);
 				}
+#endif
 			}
 			
 			break;

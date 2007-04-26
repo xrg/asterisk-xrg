@@ -21,8 +21,9 @@
  * \brief http server for AMI access
  *
  * \author Mark Spencer <markster@digium.com>
- * This program implements a tiny http server supporting the "get" method
- * only and was inspired by micro-httpd by Jef Poskanzer 
+ *
+ * This program implements a tiny http server
+ * and was inspired by micro-httpd by Jef Poskanzer 
  * 
  * \ref AstHTTP - AMI over the http protocol
  */
@@ -54,6 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 #include "asterisk/config.h"
 #include "asterisk/version.h"
+#include "asterisk/manager.h"
 
 #define MAX_PREFIX 80
 #define DEFAULT_PREFIX "/asterisk"
@@ -77,17 +79,20 @@ static int enablestatic;
 
 /*! \brief Limit the kinds of files we're willing to serve up */
 static struct {
-	char *ext;
-	char *mtype;
+	const char *ext;
+	const char *mtype;
 } mimetypes[] = {
 	{ "png", "image/png" },
 	{ "jpg", "image/jpeg" },
 	{ "js", "application/x-javascript" },
 	{ "wav", "audio/x-wav" },
 	{ "mp3", "audio/mpeg" },
+	{ "svg", "image/svg+xml" },
+	{ "svgz", "image/svg+xml" },
+	{ "gif", "image/gif" },
 };
 
-static char *ftype2mtype(const char *ftype, char *wkspace, int wkspacelen)
+static const char *ftype2mtype(const char *ftype, char *wkspace, int wkspacelen)
 {
 	int x;
 	if (ftype) {
@@ -105,7 +110,8 @@ static char *static_callback(struct sockaddr_in *req, const char *uri, struct as
 	char result[4096];
 	char *c=result;
 	char *path;
-	char *ftype, *mtype;
+	char *ftype;
+	const char *mtype;
 	char wkspace[80];
 	struct stat st;
 	int len;
@@ -124,7 +130,7 @@ static char *static_callback(struct sockaddr_in *req, const char *uri, struct as
 		
 	if ((ftype = strrchr(uri, '.')))
 		ftype++;
-	mtype=ftype2mtype(ftype, wkspace, sizeof(wkspace));
+	mtype = ftype2mtype(ftype, wkspace, sizeof(wkspace));
 	
 	/* Cap maximum length */
 	len = strlen(uri) + strlen(ast_config_AST_DATA_DIR) + strlen("/static-http/") + 5;
@@ -635,7 +641,9 @@ static int __ast_http_load(int reload)
 
 	memset(&sin, 0, sizeof(sin));
 	sin.sin_port = htons(8088);
+
 	strcpy(newprefix, DEFAULT_PREFIX);
+
 	cfg = ast_config_load("http.conf");
 	if (cfg) {
 		v = ast_variable_browse(cfg, "general");
@@ -672,15 +680,20 @@ static int __ast_http_load(int reload)
 		prefix_len = strlen(prefix);
 	}
 	enablestatic = newenablestatic;
+
 	http_server_start(&sin);
+
+
 	return 0;
 }
 
 static int handle_show_http(int fd, int argc, char *argv[])
 {
 	struct ast_http_uri *urih;
+
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
+
 	ast_cli(fd, "HTTP Server Status:\n");
 	ast_cli(fd, "Prefix: %s\n", prefix);
 	if (oldsin.sin_family)
@@ -699,6 +712,7 @@ static int handle_show_http(int fd, int argc, char *argv[])
 	if (!uris)
 		ast_cli(fd, "None.\n");
 	ast_rwlock_unlock(&uris_lock);
+
 	return RESULT_SUCCESS;
 }
 
@@ -722,5 +736,6 @@ int ast_http_init(void)
 	ast_http_uri_link(&statusuri);
 	ast_http_uri_link(&staticuri);
 	ast_cli_register_multiple(cli_http, sizeof(cli_http) / sizeof(struct ast_cli_entry));
+
 	return __ast_http_load(0);
 }
