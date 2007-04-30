@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 43933 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -249,7 +249,7 @@ int iax_provision_version(unsigned int *version, const char *template, int force
 	if (sscanf(tmp, "v%x", version) != 1) {
 		if (strcmp(tmp, "u")) {
 			ret = iax_provision_build(&ied, version, template, force);
-			if (ret)
+			if (ret && option_debug)
 				ast_log(LOG_DEBUG, "Unable to create provisioning packet for '%s'\n", template);
 		} else
 			ret = -1;
@@ -332,7 +332,7 @@ static int iax_template_parse(struct iax_template *cur, struct ast_config *cfg, 
 				ast_log(LOG_WARNING, "Ignoring invalid codec '%s' for '%s' at line %d\n", v->value, s, v->lineno);
 		} else if (!strcasecmp(v->name, "tos")) {
 			if (ast_str2tos(v->value, &cur->tos))
-				ast_log(LOG_WARNING, "Invalid tos value at line %d, see doc/ip-tos.txt for more information.\n", v->lineno);
+				ast_log(LOG_WARNING, "Invalid tos value at line %d, see doc/qos.tex for more information.\n", v->lineno);
 		} else if (!strcasecmp(v->name, "user")) {
 			strncpy(cur->user, v->value, sizeof(cur->user) - 1);
 			if (strcmp(cur->user, v->value))
@@ -399,7 +399,7 @@ static int iax_process_template(struct ast_config *cfg, char *s, char *def)
 	return 0;
 }
 
-static char show_provisioning_usage[] = 
+static const char show_provisioning_usage[] = 
 "Usage: iax list provisioning [template]\n"
 "       Lists all known IAX provisioning templates or a\n"
 "       specific one if specified.\n";
