@@ -1,3 +1,118 @@
+2007-04-27  Russell Bryant <russell@digium.com>
+
+	* Asterisk 1.4.4 released.
+
+2007-04-27 21:10 +0000 [r62218]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_agent.c: Fix a weird problem where when a caller
+	  talking to someone sitting behind an agent channel sent a digit,
+	  the digit would be played to the agent for forever. This is
+	  because chan_agent always returned -1 from its send_digit_begin
+	  and _end callbacks. This non-zero return value indicates to the
+	  Asterisk core that it would like an inband DTMF generator put on
+	  the channel. However, this is the wrong thing to do. It should
+	  *always* return 0, instead. When the digit begin and end
+	  functions are called on the proxied channel, the underlying
+	  channel will indicate whether inband DTMF is needed or not, and
+	  the generator will be put on that one, and not the Agent channel.
+	  (issue #9615, #9616, reported by jiddings and BigJimmy, and fixed
+	  by me)
+
+2007-04-27 16:17 +0000 [r62174]  Jason Parker <jparker@digium.com>
+
+	* /, codecs/codec_zap.c: Merged revisions 62173 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r62173 | qwell | 2007-04-27 11:16:16 -0500 (Fri, 27 Apr 2007) | 3
+	  lines This transcoder message needn't be a NOTICE. I've seen it
+	  cause confusion more than a few times. ........
+
+2007-04-27 16:14 +0000 [r62171]  Russell Bryant <russell@digium.com>
+
+	* main/pbx.c: If no variables were passed into
+	  pbx_substitute_variables_helper_full(), then don't even bother
+	  creating a temporary bogus channel, since that is only for
+	  allowing certain functions to operate on the variables as if they
+	  were on a channel. Most importantly, this fixes a crash. (issue
+	  #9613, reported by callguy, fixed by me)
+
+2007-04-27 14:04 +0000 [r62095-62137]  Olle Johansson <oej@edvina.net>
+
+	* /, channels/chan_sip.c: Merged revisions 62126 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r62126 | oej | 2007-04-27 15:57:45 +0200 (Fri, 27 Apr 2007) | 4
+	  lines Issue #7351 - SIP Cancel fails due to the wrong contact
+	  uri. Reported by PPYY, failed to fix by OEJ final fix by wojtekka
+	  - THANKS!!!! THis was a hard one to catch. ........
+
+	* channels/chan_zap.c, main/manager.c: Issue #9608 - fix some
+	  annoying DEBUG messages not controlled by option_debug (DEA).
+	  Thanks!
+
+2007-04-26 16:33 +0000 [r61959-62038]  Joshua Colp <jcolp@digium.com>
+
+	* /, channels/chan_iax2.c: Merged revisions 62037 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r62037 | file | 2007-04-26 12:30:57 -0400 (Thu, 26 Apr 2007) | 2
+	  lines Revert previous fix for when the IAX2 channel goes funky
+	  (that's the technical term). This is causing legit calls to be
+	  prematurely hung up. (issue #9600 reported by justdave) ........
+
+	* main/channel.c: Missed an ast_app_group_discard during merge.
+	  Thanks blitzrage!
+
+	* res/res_monitor.c: Don't always say that the channel is being
+	  paused if it is actually being unpaused in the Manager ack
+	  message. (reported by jsmith in #asterisk-bugs)
+
+	* main/config.c, /: Merged revisions 61958 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r61958 | file | 2007-04-25 21:25:03 -0400 (Wed, 25 Apr 2007) | 2
+	  lines Don't count failed include attempts against the
+	  configuration include level. (issue #9593 reported by mostyn)
+	  ........
+
+2007-04-25 22:29 +0000 [r61914]  Kevin P. Fleming <kpfleming@digium.com>
+
+	* channels/chan_zap.c, /: Merged revisions 61913 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r61913 | kpfleming | 2007-04-25 17:24:59 -0500 (Wed, 25 Apr 2007)
+	  | 2 lines handle a very bizarre race condition with channels
+	  being redirected before a simple switch can be started on them
+	  (issue #9286) ........
+
+2007-04-25 21:59 +0000 [r61863-61870]  Russell Bryant <russell@digium.com>
+
+	* /, channels/chan_iax2.c: Merged revisions 61866 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r61866 | russell | 2007-04-25 16:55:23 -0500 (Wed, 25 Apr 2007) |
+	  2 lines If the callerid= option is specified, but empty, clear
+	  any previous data. ........
+
+	* /, channels/chan_iax2.c: Merged revisions 61862 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r61862 | russell | 2007-04-25 16:06:22 -0500 (Wed, 25 Apr 2007) |
+	  2 lines Ensure that callerid settings are reset on a reload.
+	  ........
+
+2007-04-25 19:21 +0000 [r61805]  Joshua Colp <jcolp@digium.com>
+
+	* main/cli.c, main/channel.c, include/asterisk/app.h,
+	  funcs/func_groupcount.c, /, main/app.c: Merged revisions 61804
+	  via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r61804 | file | 2007-04-25 14:52:50 -0400 (Wed, 25 Apr 2007) | 2
+	  lines Merge rewritten group counting support. No more storing
+	  data on the variable list of the channels. That was bad, mmmk?
+	  (issue #7497 reported by sabbathbh) ........
+
+2007-04-25 16:22 +0000 [r61799]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_zap.c, /: Merged revisions 61798 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r61798 | russell | 2007-04-25 11:20:38 -0500 (Wed, 25 Apr 2007) |
+	  3 lines Fix a typo where cid_num got copied instead of cid_ani.
+	  (issue #9587, reported and patched by xrg) ........
+
 2007-04-24  Russell Bryant <russell@digium.com>
 
 	* Asterisk 1.4.3 released.

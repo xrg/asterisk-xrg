@@ -1399,7 +1399,8 @@ static int update_conf(struct zt_pvt *p)
 		   Kill it. */
 		p->confno = -1;
 	}
-	ast_log(LOG_DEBUG, "Updated conferencing on %d, with %d conference users\n", p->channel, needconf);
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Updated conferencing on %d, with %d conference users\n", p->channel, needconf);
 	return 0;
 }
 
@@ -1544,7 +1545,8 @@ static int set_actual_txgain(int fd, int chan, float gain, int law)
 	g.chan = chan;
 	res = ioctl(fd, ZT_GETGAINS, &g);
 	if (res) {
-		ast_log(LOG_DEBUG, "Failed to read gains: %s\n", strerror(errno));
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Failed to read gains: %s\n", strerror(errno));
 		return res;
 	}
 
@@ -2440,7 +2442,8 @@ static int zt_hangup(struct ast_channel *ast)
 	if (p->exten)
 		p->exten[0] = '\0';
 
-	ast_log(LOG_DEBUG, "Hangup: channel: %d index = %d, normal = %d, callwait = %d, thirdcall = %d\n",
+	if (option_debug)
+		ast_log(LOG_DEBUG, "Hangup: channel: %d index = %d, normal = %d, callwait = %d, thirdcall = %d\n",
 		p->channel, index, p->subs[SUB_REAL].zfd, p->subs[SUB_CALLWAIT].zfd, p->subs[SUB_THREEWAY].zfd);
 	p->ignoredtmf = 0;
 	
@@ -2867,7 +2870,8 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 		cp = (char *) data;
 		p->mate = 0;
 		if (!*cp) { /* turn it off */
-			ast_log(LOG_DEBUG, "Set option TDD MODE, value: OFF(0) on %s\n",chan->name);
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Set option TDD MODE, value: OFF(0) on %s\n",chan->name);
 			if (p->tdd)
 				tdd_free(p->tdd);
 			p->tdd = 0;
@@ -5401,6 +5405,15 @@ static void *ss_thread(void *data)
 	int len = 0;
 	int res;
 	int index;
+
+	/* in the bizarre case where the channel has become a zombie before we
+	   even get started here, abort safely
+	*/
+	if (!p) {
+		ast_log(LOG_WARNING, "Channel became a zombie before simple switch could be started (%s)\n", chan->name);
+		ast_hangup(chan);
+		return NULL;
+	}
 
 	if (option_verbose > 2) 
 		ast_verbose( VERBOSE_PREFIX_3 "Starting simple switch on '%s'\n", chan->name);
