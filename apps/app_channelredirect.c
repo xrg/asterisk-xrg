@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -137,4 +137,4 @@ static int load_module(void)
 	return ast_register_application(app, asyncgoto_exec, synopsis, descrip);
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Channel Redirect");
+AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Redirects a given channel to a dialplan target");
