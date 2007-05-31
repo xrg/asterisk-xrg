@@ -20,7 +20,7 @@
  *
  * \brief Skeleton application
  *
- * \author <Your Name Here> <<Your Email Here>>
+ * \author\verbatim <Your Name Here> <<Your Email Here>> \endvebatim
  * 
  * This is a skeleton for development of an Asterisk application 
  * \ingroup applications
@@ -32,7 +32,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
