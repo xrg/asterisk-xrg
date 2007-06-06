@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40864 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,7 +56,7 @@ struct ast_var_t *ast_var_assign(const char *name, const char *value)
 void ast_var_delete(struct ast_var_t *var)
 {
 	if (var)
-		free(var);
+		ast_free(var);
 }
 
 const char *ast_var_name(const struct ast_var_t *var)
