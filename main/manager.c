@@ -68,6 +68,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/http.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/term.h"
 
 struct fast_originate_helper {
 	char tech[AST_MAX_EXTENSION];
@@ -126,6 +127,11 @@ static struct permalias {
 	{ EVENT_FLAG_CONFIG, "config" },
 	{ -1, "all" },
 	{ 0, "none" },
+};
+
+static const char *command_blacklist[] = {
+	"module load",
+	"module unload",
 };
 
 struct mansession {
@@ -478,7 +484,7 @@ static int handle_showmanager(int fd, int argc, char *argv[])
 		"          write: %s\n"
 		"displayconnects: %s\n",
 		(user->username ? user->username : "(N/A)"),
-		(user->secret ? user->secret : "(N/A)"),
+		(user->secret ? "<Set>" : "(N/A)"),
 		(user->deny ? user->deny : "(N/A)"),
 		(user->permit ? user->permit : "(N/A)"),
 		(user->read ? user->read : "(N/A)"),
@@ -945,6 +951,11 @@ static int authenticate(struct mansession *s, const struct message *m)
 							ast_config_destroy(cfg);
 							return -1;
 						}
+					} else {
+						ast_log(LOG_DEBUG, "MD5 authentication is not possible.  challenge: '%s'\n", 
+							S_OR(s->challenge, ""));
+						ast_config_destroy(cfg);
+						return -1;
 					}
 				} else if (password && !strcmp(password, pass)) {
 					break;
@@ -1612,11 +1623,34 @@ static int action_command(struct mansession *s, const struct message *m)
 {
 	const char *cmd = astman_get_header(m, "Command");
 	const char *id = astman_get_header(m, "ActionID");
+	char *buf, *final_buf;
+	char template[] = "/tmp/ast-ami-XXXXXX";	/* template for temporary file */
+	int fd = mkstemp(template), i = 0;
+	off_t l;
+
+	for (i = 0; i < sizeof(command_blacklist) / sizeof(command_blacklist[0]); i++) {
+		if (!strncmp(cmd, command_blacklist[i], strlen(command_blacklist[i]))) {
+			astman_send_error(s, m, "Command blacklisted");
+			return 0;
+		}
+	}
+
 	astman_append(s, "Response: Follows\r\nPrivilege: Command\r\n");
 	if (!ast_strlen_zero(id))
 		astman_append(s, "ActionID: %s\r\n", id);
 	/* FIXME: Wedge a ActionID response in here, waiting for later changes */
-	ast_cli_command(s->fd, cmd);
+	ast_cli_command(fd, cmd);	/* XXX need to change this to use a FILE * */
+	l = lseek(fd, 0, SEEK_END);	/* how many chars available */
+	buf = alloca(l + 1);
+	final_buf = alloca(l + 1);
+	lseek(fd, 0, SEEK_SET);
+	read(fd, buf, l);
+	buf[l] = '\0';
+	close(fd);
+	unlink(template);
+	term_strip(final_buf, buf, l);
+	final_buf[l] = '\0';
+	astman_append(s, final_buf);
 	astman_append(s, "--END COMMAND--\r\n\r\n");
 	return 0;
 }

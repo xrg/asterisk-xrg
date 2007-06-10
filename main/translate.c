@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 47992 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -174,7 +174,9 @@ static int framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 				pvt->samples += l;
 				pvt->datalen = pvt->samples * 2;	/* SLIN has 2bytes for 1sample */
 			}
-			return 0;
+			/* We don't want generic PLC. If the codec has native PLC, then do that */
+			if (!pvt->t->native_plc)
+				return 0;
 		}
 		if (pvt->samples + f->samples > pvt->t->buffer_samples) {
 			ast_log(LOG_WARNING, "Out of buffer space\n");
@@ -671,7 +673,7 @@ int __ast_register_translator(struct ast_translator *t, struct ast_module *mod)
 				t->plc_samples, t->buffer_samples);
 			return -1;
 		}
-		if (t->dstfmt != AST_FORMAT_SLINEAR)
+		if (t->dstfmt != powerof(AST_FORMAT_SLINEAR))
 			ast_log(LOG_WARNING, "plc_samples %d format %x\n",
 				t->plc_samples, t->dstfmt);
 	}

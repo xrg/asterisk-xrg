@@ -33,7 +33,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 42477 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -220,6 +220,7 @@ static int speextolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 		}
 #endif
 		pvt->samples += tmp->framesize;
+		pvt->datalen += 2 * tmp->framesize; /* 2 bytes/sample */
 		return 0;
 	}
 
@@ -354,6 +355,7 @@ static struct ast_translator speextolin = {
 	.desc_size = sizeof(struct speex_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2,
+	.native_plc = 1,
 };
 
 static struct ast_translator lintospeex = {

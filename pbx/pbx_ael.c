@@ -2208,6 +2208,33 @@ void check_switch_expr(pval *item, struct argapp *apps)
 			warns++;
 		}
 	}
+#else
+	pval *t,*tl=0,*p2;
+	int def= 0;
+	
+	/* first of all, does this switch have a default case ? */
+	for (t=item->u2.statements; t; t=t->next) {
+		if (t->type == PV_DEFAULT) {
+			def =1;
+			break;
+		}
+		tl = t;
+	}
+	if (def) /* nothing to check. All cases accounted for! */
+		return;
+	/* if no default, warn and insert a default case at the end */
+	p2 = tl->next = calloc(1, sizeof(struct pval));
+	
+	p2->type = PV_DEFAULT;
+	p2->startline = tl->startline;
+	p2->endline = tl->endline;
+	p2->startcol = tl->startcol;
+	p2->endcol = tl->endcol;
+	p2->filename = strdup(tl->filename);
+	ast_log(LOG_WARNING,"Warning: file %s, line %d-%d: A default case was automatically added to the switch.\n",
+			p2->filename, p2->startline, p2->endline);
+	warns++;
+
 #endif
 }
 
@@ -3753,7 +3780,29 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct pval *root)
 				np2->appargs = strdup(buf);
 				linkprio(exten, np2);
 			}
-			
+			/* add any includes */
+			for (p2=p->u3.macro_statements; p2; p2=p2->next) {
+				pval *p3;
+				
+				switch (p2->type) {
+				case PV_INCLUDES:
+					for (p3 = p2->u1.list; p3 ;p3=p3->next) {
+						if ( p3->u2.arglist ) {
+							snprintf(buf,sizeof(buf), "%s|%s|%s|%s|%s", 
+									 p3->u1.str,
+									 p3->u2.arglist->u1.str,
+									 p3->u2.arglist->next->u1.str,
+									 p3->u2.arglist->next->next->u1.str,
+									 p3->u2.arglist->next->next->next->u1.str);
+							ast_context_add_include2(context, buf, registrar);
+						} else
+							ast_context_add_include2(context, p3->u1.str, registrar);
+					}
+					break;
+				default:
+					break;
+				}
+			}
 			/* CONTAINS APPCALLS, CATCH, just like extensions... */
 			gen_prios(exten, p->u1.str, p->u3.macro_statements, 0, context );
 			if (exten->return_needed) {

@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 42477 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <fcntl.h>
 #include <stdlib.h>
@@ -203,6 +203,7 @@ static struct ast_translator ilbctolin = {
 	.sample = ilbctolin_sample,
 	.desc_size = sizeof(struct ilbc_coder_pvt),
 	.buf_size = BUFFER_SAMPLES * 2,
+	.native_plc = 1,
 };
 
 static struct ast_translator lintoilbc = {

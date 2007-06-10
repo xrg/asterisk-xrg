@@ -80,17 +80,15 @@ static unsigned int embedding = 1; /* we always start out by registering embedde
 				      since they are here before we dlopen() any
 				   */
 
-enum flags {
-	FLAG_RUNNING = (1 << 1),		/* module successfully initialized */
-	FLAG_DECLINED = (1 << 2),		/* module declined to initialize */
-};
-
 struct ast_module {
 	const struct ast_module_info *info;
 	void *lib;					/* the shared lib, or NULL if embedded */
 	int usecount;					/* the number of 'users' currently in this module */
 	struct module_user_list users;			/* the list of users in the module */
-	unsigned int flags;				/* flags for this module */
+	struct {
+		unsigned int running:1;
+		unsigned int declined:1;
+	} flags;
 	AST_LIST_ENTRY(ast_module) entry;
 	char resource[0];
 };
@@ -429,6 +427,31 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 }
 #endif
 
+void ast_module_shutdown(void)
+{
+	struct ast_module *mod;
+	AST_LIST_HEAD_NOLOCK_STATIC(local_module_list, ast_module);
+
+	/* We have to call the unload() callbacks in reverse order that the modules
+	 * exist in the module list so it is the reverse order of how they were
+	 * loaded. */
+
+	AST_LIST_LOCK(&module_list);
+	while ((mod = AST_LIST_REMOVE_HEAD(&module_list, entry)))
+		AST_LIST_INSERT_HEAD(&local_module_list, mod, entry);
+	AST_LIST_UNLOCK(&module_list);
+
+	while ((mod = AST_LIST_REMOVE_HEAD(&local_module_list, entry))) {
+		if (mod->info->unload)
+			mod->info->unload();
+		/* Since this should only be called when shutting down "gracefully",
+		 * all channels should be down before we get to this point, meaning
+		 * there will be no module users left. */
+		AST_LIST_HEAD_DESTROY(&mod->users);
+		free(mod);
+	}
+}
+
 int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode force)
 {
 	struct ast_module *mod;
@@ -442,7 +465,7 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 		return 0;
 	}
 
-	if (!ast_test_flag(mod, FLAG_RUNNING | FLAG_DECLINED))
+	if (!(mod->flags.running || mod->flags.declined))
 		error = 1;
 
 	if (!mod->lib) {
@@ -475,7 +498,7 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 	}
 
 	if (!error)
-		ast_clear_flag(mod, FLAG_RUNNING | FLAG_DECLINED);
+		mod->flags.running = mod->flags.declined = 0;
 
 	AST_LIST_UNLOCK(&module_list);
 
@@ -552,7 +575,7 @@ int ast_module_reload(const char *name)
 		if (name && resource_name_match(name, cur->resource))
 			continue;
 
-		if (!ast_test_flag(cur, FLAG_RUNNING | FLAG_DECLINED))
+		if (!(cur->flags.running || cur->flags.declined))
 			continue;
 
 		if (!info->reload) {	/* cannot be reloaded */
@@ -600,7 +623,7 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 	char tmp[256];
 
 	if ((mod = find_resource(resource_name, 0))) {
-		if (ast_test_flag(mod, FLAG_RUNNING)) {
+		if (mod->flags.running) {
 			ast_log(LOG_WARNING, "Module '%s' already exists.\n", resource_name);
 			return AST_MODULE_LOAD_DECLINE;
 		}
@@ -631,7 +654,7 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	ast_clear_flag(mod, FLAG_DECLINED);
+	mod->flags.declined = 0;
 
 	if (mod->info->load)
 		res = mod->info->load();
@@ -648,12 +671,12 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 				ast_verbose(VERBOSE_PREFIX_1 "Loaded %s => (%s)\n", resource_name, mod->info->description);
 		}
 
-		ast_set_flag(mod, FLAG_RUNNING);
+		mod->flags.running = 1;
 
 		ast_update_use_count();
 		break;
 	case AST_MODULE_LOAD_DECLINE:
-		ast_set_flag(mod, FLAG_DECLINED);
+		mod->flags.declined = 1;
 		break;
 	case AST_MODULE_LOAD_FAILURE:
 		break;
@@ -719,17 +742,14 @@ int load_modules(unsigned int preload_only)
 	if (option_verbose)
 		ast_verbose("Asterisk Dynamic Loader Starting:\n");
 
-	AST_LIST_TRAVERSE(&module_list, mod, entry) {
-		if (option_debug > 1)
-			ast_log(LOG_DEBUG, "Embedded module found: %s\n", mod->resource);
-	}
+	AST_LIST_HEAD_INIT_NOLOCK(&load_order);
+
+	AST_LIST_LOCK(&module_list);
 
 	if (!(cfg = ast_config_load(AST_MODULE_CONFIG))) {
 		ast_log(LOG_WARNING, "No '%s' found, no modules will be loaded.\n", AST_MODULE_CONFIG);
-		return 0;
+		goto done;
 	}
-
-	AST_LIST_HEAD_INIT_NOLOCK(&load_order);
 
 	/* first, find all the modules we have been explicitly requested to load */
 	for (v = ast_variable_browse(cfg, "modules"); v; v = v->next) {
@@ -739,9 +759,17 @@ int load_modules(unsigned int preload_only)
 
 	/* check if 'autoload' is on */
 	if (!preload_only && ast_true(ast_variable_retrieve(cfg, "modules", "autoload"))) {
-		/* if so, first add all the embedded modules to the load order */
-		AST_LIST_TRAVERSE(&module_list, mod, entry)
+		/* if so, first add all the embedded modules that are not already running to the load order */
+		AST_LIST_TRAVERSE(&module_list, mod, entry) {
+			/* if it's not embedded, skip it */
+			if (mod->lib)
+				continue;
+
+			if (mod->flags.running)
+				continue;
+
 			order = add_to_load_order(mod->resource, &load_order);
+		}
 
 #if LOADABLE_MODULES
 		/* if we are allowed to load dynamic modules, scan the directory for
@@ -756,10 +784,14 @@ int load_modules(unsigned int preload_only)
 					continue;
 
 				if (strcasecmp(dirent->d_name + ld - 3, ".so"))
-				    continue;
+					continue;
+
+				/* if there is already a module by this name in the module_list,
+				   skip this file */
+				if (find_resource(dirent->d_name, 0))
+					continue;
 
 				add_to_load_order(dirent->d_name, &load_order);
-
 			}
 
 			closedir(dir);
@@ -841,6 +873,8 @@ done:
 		free(order->resource);
 		free(order);
 	}
+
+	AST_LIST_UNLOCK(&module_list);
 
 	return res;
 }

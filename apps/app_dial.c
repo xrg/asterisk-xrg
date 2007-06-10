@@ -549,7 +549,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 						senddialevent(in, c);
 						/* After calling, set callerid to extension */
 						if (!ast_test_flag(peerflags, OPT_ORIGINAL_CLID)) {
-							char cidname[AST_MAX_EXTENSION];
+							char cidname[AST_MAX_EXTENSION] = "";
 							ast_set_callerid(c, S_OR(in->macroexten, in->exten), get_cid_name(cidname, sizeof(cidname), in), NULL);
 						}
 					}
@@ -696,6 +696,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 			if (!f || ((f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_HANGUP))) {
 				/* Got hung up */
 				*to = -1;
+				ast_cdr_noanswer(in->cdr);
 				strcpy(status, "CANCEL");
 				if (f)
 					ast_frfree(f);
@@ -709,6 +710,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 						if (option_verbose > 2)
 							ast_verbose(VERBOSE_PREFIX_3 "User hit %c to disconnect call.\n", f->subclass);
 						*to=0;
+						ast_cdr_noanswer(in->cdr);
 						*result = f->subclass;
 						strcpy(status, "CANCEL");
 						ast_frfree(f);
@@ -721,6 +723,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					if (option_verbose > 2)
 						ast_verbose(VERBOSE_PREFIX_3 "User hit %c to disconnect call.\n", f->subclass);
 					*to=0;
+					ast_cdr_noanswer(in->cdr);
 					strcpy(status, "CANCEL");
 					ast_frfree(f);
 					return NULL;
@@ -749,6 +752,10 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 		}
 		if (!*to && (option_verbose > 2))
 			ast_verbose(VERBOSE_PREFIX_3 "Nobody picked up in %d ms\n", orig);
+		if (!*to || ast_check_hangup(in)) {
+			ast_cdr_noanswer(in->cdr);
+		}
+		
 	}
 
 	return peer;
@@ -786,8 +793,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	int numcongestion = 0;
 	int numnochan = 0;
 	int cause;
-	char numsubst[AST_MAX_EXTENSION];
-	char cidname[AST_MAX_EXTENSION];
+	char numsubst[256];
+	char cidname[AST_MAX_EXTENSION] = "";
 	int privdb_val = 0;
 	unsigned int calldurationlimit = 0;
 	long timelimit = 0;
@@ -1678,8 +1685,11 @@ out:
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Exiting with DIALSTATUS=%s.\n", status);
 	
-	if ((ast_test_flag(peerflags, OPT_GO_ON)) && (!chan->_softhangup) && (res != AST_PBX_KEEPALIVE))
+	if ((ast_test_flag(peerflags, OPT_GO_ON)) && (!chan->_softhangup) && (res != AST_PBX_KEEPALIVE)) {
+		if (calldurationlimit)
+			chan->whentohangup = 0;
 		res = 0;
+	}
 
 done:
 	ast_module_user_remove(u);    

@@ -235,7 +235,7 @@ static char *app_ql_descrip =
 "Example: QueueLog(101|${UNIQUEID}|${AGENT}|WENTONBREAK|600)\n";
 
 /*! \brief Persistent Members astdb family */
-static const char *pm_family = "/Queue/PersistentMembers";
+static const char *pm_family = "Queue/PersistentMembers";
 /* The maximum length of each persistent member queue database entry */
 #define PM_MAX_LEN 8192
 
@@ -586,6 +586,8 @@ static void *changethread(void *data)
 		ast_mutex_unlock(&q->lock);
 	}
 	AST_LIST_UNLOCK(&queues);
+
+	free(sc);
 
 	return NULL;
 }
@@ -2936,10 +2938,14 @@ static void reload_queue_members(void)
 				break;
 			ast_mutex_unlock(&cur_queue->lock);
 		}
+		
+		if (!cur_queue)
+			cur_queue = load_realtime_queue(queue_name);
 
 		if (!cur_queue) {
 			/* If the queue no longer exists, remove it from the
 			 * database */
+			ast_log(LOG_WARNING, "Error loading persistent queue: '%s': it does not exist\n", queue_name);
 			ast_db_del(pm_family, queue_name);
 			continue;
 		} else
@@ -4469,6 +4475,7 @@ static int unload_module(void)
 	res |= ast_custom_function_unregister(&queuemembercount_function);
 	res |= ast_custom_function_unregister(&queuememberlist_function);
 	res |= ast_custom_function_unregister(&queuewaitingcount_function);
+	ast_devstate_del(statechange_queue, NULL);
 
 	ast_module_user_hangup_all();
 

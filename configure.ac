@@ -111,7 +111,6 @@ then
    AC_CHECK_TOOL(CXX, g++, :)
    AC_CHECK_TOOL(LD, ld, :)
    AC_CHECK_TOOL(RANLIB, ranlib, :)
-   AC_CHECK_TOOL(AR, ar, :)
 fi
 
 # Checks for programs.
@@ -128,6 +127,9 @@ AC_PROG_LN_S
 AC_PROG_RANLIB
 AST_CHECK_GNU_MAKE
 
+AC_PATH_TOOL([STRIP], [strip], :)
+AC_PATH_TOOL([AR], [ar], :)
+
 GNU_LD=0
 if test "x$with_gnu_ld" = "xyes" ; then
    GNU_LD=1
@@ -135,7 +137,6 @@ fi
 AC_SUBST(GNU_LD)
 
 AC_PATH_PROG([GREP], [grep], :)
-AC_PATH_PROG([AR], [ar], :)
 AC_PATH_PROG([FIND], [find], :)
 AC_PATH_PROG([COMPRESS], [compress], :)
 AC_PATH_PROG([BASENAME], [basename], :)
@@ -144,7 +145,6 @@ AC_PATH_PROG([DIRNAME], [dirname], :)
 AC_PATH_PROG([SHELL], [sh], :)
 AC_PATH_PROG([LN], [ln], :)
 AC_PATH_PROG([DOT], [dot], :)
-AC_PATH_PROG([STRIP], [strip], :)
 AC_PATH_PROG([WGET], [wget], :)
 if test "${WGET}" != ":" ; then
   DOWNLOAD=${WGET}
@@ -428,10 +428,7 @@ fi
 AST_EXT_LIB_CHECK([IKSEMEL], [iksemel], [iks_start_sasl], [iksemel.h])
 
 if test "${PBX_IKSEMEL}" = 1; then
-   AST_EXT_LIB_CHECK([GNUTLS], [gnutls], [gnutls_bye])
-   if test "${PBX_GNUTLS}" = 1; then
-      IKSEMEL_LIB="${IKSEMEL_LIB} -lgnutls -lz -lgcrypt -lgpg-error"
-   fi
+   AST_EXT_LIB_CHECK([GNUTLS], [gnutls], [gnutls_bye], [gnutls/gnutls.h], [-lz -lgcrypt -lgpg-error])
 fi
 
 if test "${USE_IMAP_TK}" != "no"; then
@@ -701,8 +698,6 @@ AST_EXT_LIB_CHECK([UNIXODBC], [odbc], [SQLConnect], [sql.h], [-lltdl])
 
 AST_EXT_LIB_CHECK([OGG], [ogg], [ogg_sync_init], [])
 
-AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
-
 if test "${USE_OSS}" != "no"; then
 PBX_OSS=0
 AC_CHECK_HEADER([linux/soundcard.h],
@@ -912,6 +907,10 @@ AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 AST_EXT_LIB_CHECK([SQLITE], [sqlite], [sqlite_exec], [sqlite.h])
 
 AST_EXT_LIB_CHECK([OPENSSL], [ssl], [ssl2_connect], [openssl/ssl.h], [-lcrypto])
+if test "$PBX_OPENSSL" = "1";
+then
+    AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
+fi
 
 AST_EXT_LIB_CHECK([FREETDS], [tds_mssql], [tds_version], [freetds_mssql/tds.h])
 if test "${PBX_FREETDS}" != "0";
@@ -1137,8 +1136,27 @@ if test "${USE_CURL}" != "no"; then
       if test $(printf "%d" 0x$(${CURL_CONFIG} --vernum)) -ge $(printf "%d" 0x070907); then
          CURL_INCLUDE=$(${CURL_CONFIG} --cflags)
          CURL_LIB=$(${CURL_CONFIG} --libs)
-         PBX_CURL=1
-         AC_DEFINE([HAVE_CURL], 1, [Define if your system has the curl libraries.])
+
+         AC_MSG_CHECKING(for curl_version() in curl/curl.h)
+         saved_cppflags="${CPPFLAGS}"
+         CPPFLAGS="${CPPFLAGS} ${CURL_INCLUDE}"
+         AC_COMPILE_IFELSE(
+            [AC_LANG_PROGRAM(
+                [#include <curl/curl.h>],
+                    [curl_version();])
+            ],[
+                AC_MSG_RESULT(yes)
+                ac_cv_curl_h="yes"
+            ],[
+                AC_MSG_RESULT(no)
+                ac_cv_curl_h="no"
+            ]
+	 )
+	 CPPFLAGS="${saved_cppflags}"
+         if test "${ac_cv_curl_h}" = "yes"; then
+             PBX_CURL=1
+             AC_DEFINE([HAVE_CURL], 1, [Define if your system has the curl libraries.])
+         fi
       fi
    fi
 fi

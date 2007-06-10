@@ -831,10 +831,10 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 	struct timeval now;
 	unsigned int length;
 	int rc;
-	double rtt = 0;
-	double a;
-	double dlsr;
-	double lsr;
+	double rttsec;
+	uint64_t rtt = 0;
+	unsigned int dlsr;
+	unsigned int lsr;
 	unsigned int msw;
 	unsigned int lsw;
 	unsigned int comp;
@@ -914,26 +914,44 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 				break;
 			/* Intentional fall through */
 		case RTCP_PT_RR:
-			/* This is the place to calculate RTT */
 			/* Don't handle multiple reception reports (rc > 1) yet */
+			/* Calculate RTT per RFC */
 			gettimeofday(&now, NULL);
 			timeval2ntp(now, &msw, &lsw);
-			/* Use the one we sent them in our SR instead, rtcp->txlsr could have been rewritten if the dlsr is large */
-			if (ntohl(rtcpheader[i + 4])) { /* We must have the LSR */
+			if (ntohl(rtcpheader[i + 4]) && ntohl(rtcpheader[i + 5])) { /* We must have the LSR && DLSR */
 				comp = ((msw & 0xffff) << 16) | ((lsw & 0xffff0000) >> 16);
-				a = (double)((comp & 0xffff0000) >> 16) + (double)((double)(comp & 0xffff)/1000000.);
-				lsr = (double)((ntohl(rtcpheader[i + 4]) & 0xffff0000) >> 16) + (double)((double)(ntohl(rtcpheader[i + 4]) & 0xffff) / 1000000.);
-				dlsr = (double)(ntohl(rtcpheader[i + 5])/65536.);
-				rtt = a - dlsr - lsr;
-				if (rtt >= 0) {
-					rtp->rtcp->accumulated_transit += rtt;
-					rtp->rtcp->rtt = rtt;
-					if (rtp->rtcp->maxrtt < rtt)
-						rtp->rtcp->maxrtt = rtt;
-					if (rtp->rtcp->minrtt > rtt)
-						rtp->rtcp->minrtt = rtt;
+				lsr = ntohl(rtcpheader[i + 4]);
+				dlsr = ntohl(rtcpheader[i + 5]);
+				rtt = comp - lsr - dlsr;
+
+				/* Convert end to end delay to usec (keeping the calculation in 64bit space)
+				   sess->ee_delay = (eedelay * 1000) / 65536; */
+				if (rtt < 4294) {
+				    rtt = (rtt * 1000000) >> 16;
+				} else {
+				    rtt = (rtt * 1000) >> 16;
+				    rtt *= 1000;
+				}
+				rtt = rtt / 1000.;
+				rttsec = rtt / 1000.;
+
+				if (comp - dlsr >= lsr) {
+					rtp->rtcp->accumulated_transit += rttsec;
+					rtp->rtcp->rtt = rttsec;
+					if (rtp->rtcp->maxrtt<rttsec)
+						rtp->rtcp->maxrtt = rttsec;
+					if (rtp->rtcp->minrtt>rttsec)
+						rtp->rtcp->minrtt = rttsec;
+				} else {
+					ast_verbose("Internal RTCP NTP clock skew detected: "
+							   "lsr=%u, now=%u, dlsr=%u (%d:%03dms), "
+							   "diff=%d\n",
+							   lsr, comp, dlsr, dlsr / 65536,
+							   (dlsr % 65536) * 1000 / 65536,
+							   dlsr - (comp - lsr));
 				}
 			}
+
 			rtp->rtcp->reported_jitter = ntohl(rtcpheader[i + 3]);
 			rtp->rtcp->reported_lost = ntohl(rtcpheader[i + 1]) & 0xffffff;
 			if (rtcp_debug_test_addr(&sin)) {
@@ -945,7 +963,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 				ast_verbose("  Last SR(our NTP): %lu.%010lu\n",(unsigned long) ntohl(rtcpheader[i + 4]) >> 16,((unsigned long) ntohl(rtcpheader[i + 4]) << 16) * 4096);
 				ast_verbose("  DLSR: %4.4f (sec)\n",ntohl(rtcpheader[i + 5])/65536.0);
 				if (rtt)
-					ast_verbose("  RTT: %f(sec)\n", rtt);
+					ast_verbose("  RTT: %lu(sec)\n", (unsigned long) rtt);
 			}
 			break;
 		case RTCP_PT_FUR:
@@ -2725,7 +2743,7 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 			ast_smoother_feed(rtp->smoother, _f);
 		}
 
-		while((f = ast_smoother_read(rtp->smoother)))
+		while((f = ast_smoother_read(rtp->smoother)) && (f->data))
 			ast_rtp_raw_write(rtp, f, codec);
 	} else {
 	        /* Don't buffer outgoing frames; send them one-per-packet: */
@@ -2734,7 +2752,8 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 		} else {
 			f = _f;
 		}
-		ast_rtp_raw_write(rtp, f, codec);
+		if (f->data)
+			ast_rtp_raw_write(rtp, f, codec);
 		if (f != _f)
 			ast_frfree(f);
 	}
@@ -2866,8 +2885,13 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 
 		/* Wait for frame to come in on the channels */
 		if (!(who = ast_waitfor_n(cs, 2, &timeoutms))) {
-			if (!timeoutms)
+			if (!timeoutms) {
+				if (pr0->set_rtp_peer(c0, NULL, NULL, 0, 0))
+					ast_log(LOG_WARNING, "Channel '%s' failed to break RTP bridge\n", c0->name);
+				if (pr1->set_rtp_peer(c1, NULL, NULL, 0, 0))
+					ast_log(LOG_WARNING, "Channel '%s' failed to break RTP bridge\n", c1->name);
 				return AST_BRIDGE_RETRY;
+			}
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Ooh, empty read...\n");
 			if (ast_check_hangup(c0) || ast_check_hangup(c1))

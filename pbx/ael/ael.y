@@ -24,7 +24,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44380 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -153,7 +153,7 @@ static pval *update_last(pval *, YYLTYPE *);
 
 /* there will be two shift/reduce conflicts, they involve the if statement, where a single statement occurs not wrapped in curlies in the "true" section
    the default action to shift will attach the else to the preceeding if. */
-%expect 7
+%expect 8
 %error-verbose
 
 /*
@@ -577,6 +577,7 @@ macro_statements: /* empty */ { $$ = NULL; }
 	;
 
 macro_statement : statement {$$=$1;}
+	| includes { $$=$1;}
 	| KW_CATCH word LC statements RC {
 		$$ = npval2(PV_CATCH, &@1, &@5);
 		$$->u1.str = $2;
@@ -595,6 +596,8 @@ eswitches : KW_ESWITCHES LC switchlist RC {
 
 switchlist : /* empty */ { $$ = NULL; }
 	| word SEMI switchlist { $$ = linku1(nword($1, &@1), $3); }
+	| word AT word SEMI switchlist { char *x; asprintf(&x,"%s@%s", $1,$3); free($1); free($3);
+									  $$ = linku1(nword(x, &@1), $5);}
 	| switchlist error {$$=$1;}
 	;
 

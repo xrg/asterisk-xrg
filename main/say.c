@@ -67,7 +67,7 @@ static int say_character_str_full(struct ast_channel *chan, const char *str, con
 	int num = 0;
 	int res = 0;
 
-	while (str[num]) {
+	while (str[num] && !res) {
 		fn = NULL;
 		switch (str[num]) {
 		case ('*'):
@@ -125,8 +125,12 @@ static int say_character_str_full(struct ast_channel *chan, const char *str, con
 			fn = fnbuf;
 		}
 		res = ast_streamfile(chan, fn, lang);
-		if (!res) 
-			res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+		if (!res) {
+			if ((audiofd  > -1) && (ctrlfd > -1))
+				res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+			else
+				res = ast_waitstream(chan, ints);
+		}
 		ast_stopstream(chan);
 		num++;
 	}
@@ -142,7 +146,7 @@ static int say_phonetic_str_full(struct ast_channel *chan, const char *str, cons
 	int num = 0;
 	int res = 0;
 
-	while (str[num]) {
+	while (str[num] && !res) {
 		fn = NULL;
 		switch (str[num]) {
 		case ('*'):
@@ -199,8 +203,12 @@ static int say_phonetic_str_full(struct ast_channel *chan, const char *str, cons
 			fn = fnbuf;
 		}
 		res = ast_streamfile(chan, fn, lang);
-		if (!res) 
-			res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+		if (!res) {
+			if ((audiofd  > -1) && (ctrlfd > -1))
+				res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+			else
+				res = ast_waitstream(chan, ints);
+		}
 		ast_stopstream(chan);
 		num++;
 	}
@@ -244,8 +252,12 @@ static int say_digit_str_full(struct ast_channel *chan, const char *str, const c
 		}
 		if (fn) {
 			res = ast_streamfile(chan, fn, lang);
-			if (!res) 
-				res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+			if (!res) {
+				if ((audiofd  > -1) && (ctrlfd > -1))
+                                        res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+                                else
+                                        res = ast_waitstream(chan, ints);
+			}
 			ast_stopstream(chan);
 		}
 		num++;
@@ -4633,32 +4645,7 @@ int ast_say_date_with_format_nl(struct ast_channel *chan, time_t time, const cha
 				break;
 			case 'S':
 				/* Seconds */
-				if (tm.tm_sec == 0) {
-					snprintf(nextmsg,sizeof(nextmsg), "digits/%d", tm.tm_sec);
-					res = wait_file(chan,ints,nextmsg,lang);
-				} else if (tm.tm_sec < 10) {
-					res = wait_file(chan,ints, "digits/oh",lang);
-					if (!res) {
-						snprintf(nextmsg,sizeof(nextmsg), "digits/%d", tm.tm_sec);
-						res = wait_file(chan,ints,nextmsg,lang);
-					}
-				} else if ((tm.tm_sec < 21) || (tm.tm_sec % 10 == 0)) {
-					snprintf(nextmsg,sizeof(nextmsg), "digits/%d", tm.tm_sec);
-					res = wait_file(chan,ints,nextmsg,lang);
-				} else {
-					int ten, one;
-					ten = (tm.tm_sec / 10) * 10;
-					one = (tm.tm_sec % 10);
-					snprintf(nextmsg,sizeof(nextmsg), "digits/%d", ten);
-					res = wait_file(chan,ints,nextmsg,lang);
-					if (!res) {
-						/* Fifty, not fifty-zero */
-						if (one != 0) {
-							snprintf(nextmsg,sizeof(nextmsg), "digits/%d", one);
-							res = wait_file(chan,ints,nextmsg,lang);
-						}
-					}
-				}
+				res = ast_say_number(chan, tm.tm_sec, ints, lang, (char *) NULL);
 				break;
 			case 'T':
 				res = ast_say_date_with_format_nl(chan, time, ints, lang, "HMS", timezone);

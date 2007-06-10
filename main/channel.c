@@ -427,15 +427,21 @@ static int ast_check_hangup_locked(struct ast_channel *chan)
 /*! \brief printf the string into a correctly sized mallocd buffer, and return the buffer */
 char *ast_safe_string_alloc(const char *fmt, ...)
 {
-	char *b2,buf[1];
+	char *b2, buf[1];
 	int len;
-
 	va_list args;
+
 	va_start(args, fmt);
 	len = vsnprintf(buf, 1, fmt, args);
-	b2 = ast_malloc(len+1);
-	vsnprintf(b2, len+1,  fmt, args);
 	va_end(args);
+
+	if (!(b2 = ast_malloc(len + 1)))
+		return NULL;
+
+	va_start(args, fmt);
+	vsnprintf(b2, len + 1,  fmt, args);
+	va_end(args);
+
 	return b2;
 }
 
@@ -742,7 +748,11 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 		return NULL;
 	}
 	
-	ast_string_field_init(tmp, 128);
+	if ((ast_string_field_init(tmp, 128))) {
+		sched_context_destroy(tmp->sched);
+		free(tmp);
+		return NULL;
+	}
 
 	/* Don't bother initializing the last two FD here, because they
 	   will *always* be set just a few lines down (AST_TIMING_FD,
@@ -800,6 +810,9 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 			(long) time(NULL), ast_atomic_fetchadd_int(&uniqueint, 1));
 	}
 
+	tmp->cid.cid_name = ast_strdup(cid_name);
+	tmp->cid.cid_num = ast_strdup(cid_num);
+	
 	if (!ast_strlen_zero(name_fmt)) {
 		/* Almost every channel is calling this function, and setting the name via the ast_string_field_build() call.
 		 * And they all use slightly different formats for their name string.
@@ -1033,6 +1046,11 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 				 * want to return NULL, instead of trying to deref NULL in the
 				 * next section.
 				 */
+				prev = NULL;
+				/* We want prev to be NULL in case we end up doing more searching through
+				 * the channel list to find the channel (ie: name searching). If we didn't
+				 * set this to NULL the logic would just blow up
+				 */
 			}
 			if (name) { /* want match by name */
 				if ((!namelen && strcasecmp(c->name, name)) ||
@@ -1163,7 +1181,10 @@ void ast_channel_free(struct ast_channel *chan)
 	headp=&chan->varshead;
 	
 	AST_LIST_LOCK(&channels);
-	AST_LIST_REMOVE(&channels, chan, chan_list);
+	if (!AST_LIST_REMOVE(&channels, chan, chan_list)) {
+		AST_LIST_UNLOCK(&channels);
+		ast_log(LOG_ERROR, "Unable to find channel in list to free. Assuming it has already been done.\n");
+	}
 	/* Lock and unlock the channel just to be sure nobody
 	   has it locked still */
 	ast_channel_lock(chan);
@@ -2290,10 +2311,13 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
 					chan->emulate_dtmf_digit = f->subclass;
 					chan->dtmf_tv = ast_tvnow();
-					if (f->len && f->len > AST_MIN_DTMF_DURATION)
-						chan->emulate_dtmf_duration = f->len;
-					else
-						chan->emulate_dtmf_duration = AST_MIN_DTMF_DURATION;
+					if (f->len) {
+						if (f->len > AST_MIN_DTMF_DURATION)
+							chan->emulate_dtmf_duration = f->len;
+						else 
+							chan->emulate_dtmf_duration = AST_MIN_DTMF_DURATION;
+					} else
+						chan->emulate_dtmf_duration = AST_DEFAULT_EMULATE_DTMF_DURATION;
 				}
 			} else {
 				struct timeval now = ast_tvnow();
@@ -2321,9 +2345,25 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				chan->dtmf_tv = ast_tvnow();
 			}
 			break;
+		case AST_FRAME_NULL:
+			if (ast_test_flag(chan, AST_FLAG_EMULATE_DTMF)) {
+				struct timeval now = ast_tvnow();
+				if (ast_tvdiff_ms(now, chan->dtmf_tv) >= chan->emulate_dtmf_duration) {
+					chan->emulate_dtmf_duration = 0;
+					ast_frfree(f);
+					f = &chan->dtmff;
+					f->frametype = AST_FRAME_DTMF_END;
+					f->subclass = chan->emulate_dtmf_digit;
+					f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+					chan->dtmf_tv = now;
+					ast_clear_flag(chan, AST_FLAG_EMULATE_DTMF);
+					chan->emulate_dtmf_digit = 0;
+				}
+			}
+			break;
 		case AST_FRAME_VOICE:
-			/* The EMULATE_DTMF flag must be cleared here as opposed to when the samples
-			 * first get to zero, because we want to make sure we pass at least one
+			/* The EMULATE_DTMF flag must be cleared here as opposed to when the duration
+			 * is reached , because we want to make sure we pass at least one
 			 * voice frame through before starting the next digit, to ensure a gap
 			 * between DTMF digits. */
 			if (ast_test_flag(chan, AST_FLAG_EMULATE_DTMF) && !chan->emulate_dtmf_duration) {
@@ -2335,15 +2375,17 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				ast_frfree(f);
 				f = &ast_null_frame;
 			} else if (ast_test_flag(chan, AST_FLAG_EMULATE_DTMF)) {
-				if ((f->samples / 8) >= chan->emulate_dtmf_duration) { /* XXX 8kHz */
-					struct timeval now = ast_tvnow();
+				struct timeval now = ast_tvnow();
+				if (ast_tvdiff_ms(now, chan->dtmf_tv) >= chan->emulate_dtmf_duration) {
 					chan->emulate_dtmf_duration = 0;
+					ast_frfree(f);
+					f = &chan->dtmff;
 					f->frametype = AST_FRAME_DTMF_END;
 					f->subclass = chan->emulate_dtmf_digit;
 					f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
 					chan->dtmf_tv = now;
 				} else {
-					chan->emulate_dtmf_duration -= f->samples / 8; /* XXX 8kHz */
+					/* Drop voice frames while we're still in the middle of the digit */
 					ast_frfree(f);
 					f = &ast_null_frame;
 				}
@@ -2574,46 +2616,45 @@ int ast_sendtext(struct ast_channel *chan, const char *text)
 
 int ast_senddigit_begin(struct ast_channel *chan, char digit)
 {
-	int res = -1;
+	/* Device does not support DTMF tones, lets fake
+	 * it by doing our own generation. */
+	static const char* dtmf_tones[] = {
+		"941+1336", /* 0 */
+		"697+1209", /* 1 */
+		"697+1336", /* 2 */
+		"697+1477", /* 3 */
+		"770+1209", /* 4 */
+		"770+1336", /* 5 */
+		"770+1477", /* 6 */
+		"852+1209", /* 7 */
+		"852+1336", /* 8 */
+		"852+1477", /* 9 */
+		"697+1633", /* A */
+		"770+1633", /* B */
+		"852+1633", /* C */
+		"941+1633", /* D */
+		"941+1209", /* * */
+		"941+1477"  /* # */
+	};
 
-	if (chan->tech->send_digit_begin)
-		res = chan->tech->send_digit_begin(chan, digit);
+	if (!chan->tech->send_digit_begin)
+		return 0;
 
-	if (res) {
-		/*
-		 * Device does not support DTMF tones, lets fake
-		 * it by doing our own generation. (PM2002)
-		 */
-		static const char* dtmf_tones[] = {
-			"!941+1336/100,!0/100",	/* 0 */
-			"!697+1209/100,!0/100",	/* 1 */
-			"!697+1336/100,!0/100",	/* 2 */
-			"!697+1477/100,!0/100",	/* 3 */
-			"!770+1209/100,!0/100",	/* 4 */
-			"!770+1336/100,!0/100",	/* 5 */
-			"!770+1477/100,!0/100",	/* 6 */
-			"!852+1209/100,!0/100",	/* 7 */
-			"!852+1336/100,!0/100",	/* 8 */
-			"!852+1477/100,!0/100",	/* 9 */
-			"!697+1633/100,!0/100",	/* A */
-			"!770+1633/100,!0/100",	/* B */
-			"!852+1633/100,!0/100",	/* C */
-			"!941+1633/100,!0/100",	/* D */
-			"!941+1209/100,!0/100",	/* * */
-			"!941+1477/100,!0/100" };	/* # */
-		if (digit >= '0' && digit <='9')
-			ast_playtones_start(chan, 0, dtmf_tones[digit-'0'], 0);
-		else if (digit >= 'A' && digit <= 'D')
-			ast_playtones_start(chan, 0, dtmf_tones[digit-'A'+10], 0);
-		else if (digit == '*')
-			ast_playtones_start(chan, 0, dtmf_tones[14], 0);
-		else if (digit == '#')
-			ast_playtones_start(chan, 0, dtmf_tones[15], 0);
-		else {
-			/* not handled */
-			if (option_debug)
-				ast_log(LOG_DEBUG, "Unable to generate DTMF tone '%c' for '%s'\n", digit, chan->name);
-		}
+	if (!chan->tech->send_digit_begin(chan, digit))
+		return 0;
+
+	if (digit >= '0' && digit <='9')
+		ast_playtones_start(chan, 0, dtmf_tones[digit-'0'], 0);
+	else if (digit >= 'A' && digit <= 'D')
+		ast_playtones_start(chan, 0, dtmf_tones[digit-'A'+10], 0);
+	else if (digit == '*')
+		ast_playtones_start(chan, 0, dtmf_tones[14], 0);
+	else if (digit == '#')
+		ast_playtones_start(chan, 0, dtmf_tones[15], 0);
+	else {
+		/* not handled */
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Unable to generate DTMF tone '%c' for '%s'\n", digit, chan->name);
 	}
 
 	return 0;
@@ -2634,7 +2675,7 @@ int ast_senddigit_end(struct ast_channel *chan, char digit, unsigned int duratio
 
 int ast_senddigit(struct ast_channel *chan, char digit)
 {
-	if (!ast_test_flag(chan, AST_FLAG_END_DTMF_ONLY)) {
+	if (chan->tech->send_digit_begin) {
 		ast_senddigit_begin(chan, digit);
 		ast_safe_sleep(chan, 100); /* XXX 100ms ... probably should be configurable */
 	}
@@ -2694,6 +2735,20 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		if (ast_test_flag(chan, AST_FLAG_WRITE_INT))
 			ast_deactivate_generator(chan);
 		else {
+			if (fr->frametype == AST_FRAME_DTMF_END) {
+				/* There is a generator running while we're in the middle of a digit.
+				 * It's probably inband DTMF, so go ahead and pass it so it can
+				 * stop the generator */
+				ast_clear_flag(chan, AST_FLAG_BLOCKING);
+				ast_channel_unlock(chan);
+				res = ast_senddigit_end(chan, fr->subclass, fr->len);
+				ast_channel_lock(chan);
+				CHECK_BLOCKING(chan);
+			} else if (fr->frametype == AST_FRAME_CONTROL && fr->subclass == AST_CONTROL_UNHOLD) {
+				/* This is a side case where Echo is basically being called and the person put themselves on hold and took themselves off hold */
+				res = (chan->tech->indicate == NULL) ? 0 :
+					chan->tech->indicate(chan, fr->subclass, fr->data, fr->datalen);
+			}
 			res = 0;	/* XXX explain, why 0 ? */
 			goto done;
 		}
@@ -3082,6 +3137,7 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 		res = ast_translator_best_choice(&fmt, &capabilities);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "No translator path exists for channel type %s (native %d) to %d\n", type, chan->tech->capabilities, format);
+			*cause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
 			AST_LIST_UNLOCK(&channels);
 			return NULL;
 		}
@@ -3580,7 +3636,7 @@ int ast_do_masquerade(struct ast_channel *original)
 			original->fds[x] = clone->fds[x];
 	}
 
-	ast_app_group_discard(original);
+	ast_app_group_update(clone, original);
 
 	/* move any whisperer over */
 	ast_channel_whisper_stop(original);
