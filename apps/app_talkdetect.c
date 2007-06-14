@@ -27,7 +27,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -42,6 +42,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
 #include "asterisk/translate.h"
 #include "asterisk/utils.h"
 #include "asterisk/dsp.h"
+#include "asterisk/options.h"
 
 static char *app = "BackgroundDetect";
 
@@ -102,8 +103,7 @@ static int background_detect_exec(struct ast_channel *chan, void *data)
 			}
 		}
 	}
-	ast_log(LOG_DEBUG, "Preparing detect of '%s', sil=%d,min=%d,max=%d\n", 
-						tmp, sil, min, max);
+	ast_debug(1, "Preparing detect of '%s', sil=%d,min=%d,max=%d\n", tmp, sil, min, max);
 	if (chan->_state != AST_STATE_UP) {
 		/* Otherwise answer unless we're supposed to send this while on-hook */
 		res = ast_answer(chan);
@@ -162,7 +162,7 @@ static int background_detect_exec(struct ast_channel *chan, void *data)
 									ms = 0;
 								if ((ms > min) && ((max < 0) || (ms < max))) {
 									char ms_str[10];
-									ast_log(LOG_DEBUG, "Found qualified token of %d ms\n", ms);
+									ast_debug(1, "Found qualified token of %d ms\n", ms);
 
 									/* Save detected talk time (in milliseconds) */ 
 									sprintf(ms_str, "%d", ms );	
@@ -172,15 +172,16 @@ static int background_detect_exec(struct ast_channel *chan, void *data)
 									res = 0;
 									ast_frfree(fr);
 									break;
-								} else
-									ast_log(LOG_DEBUG, "Found unqualified token of %d ms\n", ms);
+								} else {
+									ast_debug(1, "Found unqualified token of %d ms\n", ms);
+								}
 								notsilent = 0;
 							}
 						} else {
 							if (!notsilent) {
 								/* Heard some audio, mark the begining of the token */
 								start = ast_tvnow();
-								ast_log(LOG_DEBUG, "Start of voice token!\n");
+								ast_debug(1, "Start of voice token!\n");
 								notsilent = 1;
 							}
 						}

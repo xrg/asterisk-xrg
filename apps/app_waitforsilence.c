@@ -34,7 +34,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 41915 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -135,13 +135,13 @@ static int do_waiting(struct ast_channel *chan, int silencereqd, time_t waitstar
 			/* Ended happily with silence */
 			res = 1;
 			pbx_builtin_setvar_helper(chan, "WAITSTATUS", "SILENCE");
-			ast_log(LOG_DEBUG, "WAITSTATUS was set to SILENCE\n");
+			ast_debug(1, "WAITSTATUS was set to SILENCE\n");
 			break;
 		}
 
 		if ( timeout && (difftime(time(&now),waitstart) >= timeout) ) {
 			pbx_builtin_setvar_helper(chan, "WAITSTATUS", "TIMEOUT");
-			ast_log(LOG_DEBUG, "WAITSTATUS was set to TIMEOUT\n");
+			ast_debug(1, "WAITSTATUS was set to TIMEOUT\n");
 			res = 0;
 			break;
 		}
