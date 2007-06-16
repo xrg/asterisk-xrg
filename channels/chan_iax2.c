@@ -147,7 +147,7 @@ static char regcontext[AST_MAX_CONTEXT] = "";
 
 static int maxauthreq = 3;
 static int max_retries = 4;
-static int ping_time = 20;
+static int ping_time = 21;
 static int lagrq_time = 10;
 static int maxtrunkcall = TRUNK_CALL_START;
 static int maxnontrunkcall = 1;
@@ -1139,7 +1139,7 @@ static int match(struct sockaddr_in *sin, unsigned short callno, unsigned short 
 	if ((cur->transfer.sin_addr.s_addr == sin->sin_addr.s_addr) &&
 	    (cur->transfer.sin_port == sin->sin_port) && (cur->transferring)) {
 		/* We're transferring */
-		if (dcallno == cur->callno)
+		if ((dcallno == cur->callno) || (cur->transferring == TRANSFER_MEDIAPASS && cur->transfercallno == callno))
 			return 1;
 	}
 	return 0;
@@ -1226,6 +1226,7 @@ static int find_callno(unsigned short callno, unsigned short dcallno, struct soc
 	int x;
 	struct timeval now;
 	char host[80];
+
 	if (new <= NEW_ALLOW) {
 		/* Look for an existing connection first */
 		for (x=1;(res < 1) && (x<maxnontrunkcall);x++) {
@@ -2760,9 +2761,10 @@ static unsigned int iax2_datetime(const char *tz)
 	struct tm tm;
 	unsigned int tmp;
 	time(&t);
-	localtime_r(&t, &tm);
 	if (!ast_strlen_zero(tz))
 		ast_localtime(&t, &tm, tz);
+	else
+		ast_localtime(&t, &tm, NULL);
 	tmp  = (tm.tm_sec >> 1) & 0x1f;			/* 5 bits of seconds */
 	tmp |= (tm.tm_min & 0x3f) << 5;			/* 6 bits of minutes */
 	tmp |= (tm.tm_hour & 0x1f) << 11;		/* 5 bits of hours */
@@ -6319,7 +6321,8 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 		if (cur) {
 			/* we found another thread processing a full frame for this call,
 			   so we can't accept this frame */
-			ast_log(LOG_WARNING, "Dropping frame from %s (callno %d) of type %d (subclass %d) due to frame of type %d (subclass %d) already in process\n",
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Dropping frame from %s (callno %d) of type %d (subclass %d) due to frame of type %d (subclass %d) already in process\n",
 				ast_inet_ntoa(thread->iosin.sin_addr), cur->ffinfo.callno,
 				fh->type, uncompress_subclass(fh->csub),
 				cur->ffinfo.type, uncompress_subclass(cur->ffinfo.csub));
@@ -6548,7 +6551,7 @@ static int socket_process(struct iax2_thread *thread)
 	if (!fr->callno)
 		fr->callno = find_callno(ntohs(mh->callno) & ~IAX_FLAG_FULL, dcallno, &sin, new, 1, fd);
 
-	if (fr->callno > 0) 
+	if (fr->callno > 0)
 		ast_mutex_lock(&iaxsl[fr->callno]);
 
 	if (!fr->callno || !iaxs[fr->callno]) {
@@ -6903,11 +6906,18 @@ retryowner:
 						ast_log(LOG_NOTICE, "Rejected connect attempt from %s, who was trying to reach '%s@%s'\n", ast_inet_ntoa(sin.sin_addr), iaxs[fr->callno]->exten, iaxs[fr->callno]->context);
 					break;
 				}
-				/* This might re-enter the IAX code and need the lock */
 				if (strcasecmp(iaxs[fr->callno]->exten, "TBD")) {
+					const char *context, *exten, *cid_num;
+
+					context = ast_strdupa(iaxs[fr->callno]->context);
+					exten = ast_strdupa(iaxs[fr->callno]->exten);
+					cid_num = ast_strdupa(iaxs[fr->callno]->cid_num);
+
+					/* This might re-enter the IAX code and need the lock */
 					ast_mutex_unlock(&iaxsl[fr->callno]);
-					exists = ast_exists_extension(NULL, iaxs[fr->callno]->context, iaxs[fr->callno]->exten, 1, iaxs[fr->callno]->cid_num);
+					exists = ast_exists_extension(NULL, context, exten, 1, cid_num);
 					ast_mutex_lock(&iaxsl[fr->callno]);
+
 					if (!iaxs[fr->callno]) {
 						ast_mutex_unlock(&iaxsl[fr->callno]);
 						return 1;
@@ -7596,6 +7606,14 @@ retryowner2:
 				break;	
 			case IAX_COMMAND_TXMEDIA:
 				if (iaxs[fr->callno]->transferring == TRANSFER_READY) {
+                                        AST_LIST_LOCK(&iaxq.queue);
+                                        AST_LIST_TRAVERSE(&iaxq.queue, cur, list) {
+                                                /* Cancel any outstanding frames and start anew */
+                                                if ((fr->callno == cur->callno) && (cur->transfer)) {
+                                                        cur->retries = -1;
+                                                }
+                                        }
+                                        AST_LIST_UNLOCK(&iaxq.queue);
 					/* Start sending our media to the transfer address, but otherwise leave the call as-is */
 					iaxs[fr->callno]->transferring = TRANSFER_MEDIAPASS;
 				}

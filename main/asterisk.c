@@ -1785,8 +1785,9 @@ static char *cli_prompt(EditLine *el)
 				case 'd': /* date */
 					memset(&tm, 0, sizeof(tm));
 					time(&ts);
-					if (localtime_r(&ts, &tm)) 
+					if (ast_localtime(&ts, &tm, NULL)) {
 						strftime(p, sizeof(prompt) - strlen(prompt), "%Y-%m-%d", &tm);
+					}
 					break;
 				case 'h': /* hostname */
 					if (!gethostname(hostname, sizeof(hostname) - 1))
@@ -1842,8 +1843,9 @@ static char *cli_prompt(EditLine *el)
 				case 't': /* time */
 					memset(&tm, 0, sizeof(tm));
 					time(&ts);
-					if (localtime_r(&ts, &tm))
+					if (ast_localtime(&ts, &tm, NULL)) {
 						strftime(p, sizeof(prompt) - strlen(prompt), "%H:%M:%S", &tm);
+					}
 					break;
 				case '#': /* process console or remote? */
 					if (!ast_opt_remote) 

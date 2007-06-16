@@ -2924,8 +2924,8 @@ int ast_say_date_pt(struct ast_channel *chan, time_t t, const char *ints, const 
 	struct tm tm;
 	char fn[256];
 	int res = 0;
-	ast_localtime(&t,&tm,NULL);
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
 	if (!res)
 		res = wait_file(chan, ints, fn, lang);
@@ -5183,7 +5183,7 @@ int ast_say_date_with_format_tw(struct ast_channel *chan, time_t time, const cha
 	char sndfile[256], nextmsg[256];
 
 	if (format == NULL)
-		format = "YBdA 'digits/at' HM";
+		format = "YBdAkM";
 
 	ast_localtime(&time,&tm,timezone);
 
@@ -5221,16 +5221,17 @@ int ast_say_date_with_format_tw(struct ast_channel *chan, time_t time, const cha
 			case 'e':
 				/* First - Thirtyfirst */
 				if (!(tm.tm_mday % 10) || (tm.tm_mday < 10)) {
-					snprintf(nextmsg,sizeof(nextmsg), "digits/h-%d", tm.tm_mday);
+					snprintf(nextmsg,sizeof(nextmsg), "digits/%d", tm.tm_mday);
 					res = wait_file(chan,ints,nextmsg,lang);
 				} else {
-					snprintf(nextmsg,sizeof(nextmsg), "digits/h-%dh", tm.tm_mday - (tm.tm_mday % 10));
+					snprintf(nextmsg,sizeof(nextmsg), "digits/%d", tm.tm_mday - (tm.tm_mday % 10));
 					res = wait_file(chan,ints,nextmsg,lang);
 					if(!res) {
-						snprintf(nextmsg,sizeof(nextmsg), "digits/h-%d", tm.tm_mday % 10);
+						snprintf(nextmsg,sizeof(nextmsg), "digits/%d", tm.tm_mday % 10);
 						res = wait_file(chan,ints,nextmsg,lang);
 					}
 				}
+                if(!res) res = wait_file(chan,ints,"ri",lang);
 				break;
 			case 'Y':
 				/* Year */
@@ -5300,12 +5301,12 @@ int ast_say_date_with_format_tw(struct ast_channel *chan, time_t time, const cha
 				}
 				break;
 			case 'H':
+                if (tm.tm_hour < 10) {
+                    res = wait_file(chan, ints, "digits/0", lang);
+                }
 			case 'k':
 				/* 24-Hour */
 				if (!(tm.tm_hour % 10) || tm.tm_hour < 10) {
-					if (tm.tm_hour < 10) {
-						res = wait_file(chan, ints, "digits/0", lang);
-					}
 					snprintf(nextmsg,sizeof(nextmsg), "digits/%d", tm.tm_hour);
 					res = wait_file(chan,ints,nextmsg,lang);
 				} else {
@@ -5406,7 +5407,7 @@ int ast_say_date_with_format_tw(struct ast_channel *chan, time_t time, const cha
 				}
 				break;
 			case 'R':
-				res = ast_say_date_with_format_tw(chan, time, ints, lang, "HM", timezone);
+				res = ast_say_date_with_format_tw(chan, time, ints, lang, "kM", timezone);
 				break;
 			case 'S':
 				/* Seconds */
@@ -5479,7 +5480,8 @@ int ast_say_time_en(struct ast_channel *chan, time_t t, const char *ints, const 
 	struct tm tm;
 	int res = 0;
 	int hour, pm=0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	hour = tm.tm_hour;
 	if (!hour)
 		hour = 12;
@@ -5525,7 +5527,8 @@ int ast_say_time_de(struct ast_channel *chan, time_t t, const char *ints, const 
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	if (!res)
 		res = ast_say_number(chan, tm.tm_hour, ints, lang, "n");
 	if (!res)
@@ -5543,7 +5546,8 @@ int ast_say_time_fr(struct ast_channel *chan, time_t t, const char *ints, const 
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 
 	res = ast_say_number(chan, tm.tm_hour, ints, lang, "f");
 	if (!res)
@@ -5560,7 +5564,8 @@ int ast_say_time_nl(struct ast_channel *chan, time_t t, const char *ints, const 
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	if (!res)
 		res = ast_say_number(chan, tm.tm_hour, ints, lang, (char *) NULL);
 	if (!res)
@@ -5579,7 +5584,8 @@ int ast_say_time_pt(struct ast_channel *chan, time_t t, const char *ints, const 
 	struct tm tm;
 	int res = 0;
 	int hour;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	hour = tm.tm_hour;
 	if (!res)
 		res = ast_say_number(chan, hour, ints, lang, "f");
@@ -5605,7 +5611,8 @@ int ast_say_time_pt_BR(struct ast_channel *chan, time_t t, const char *ints, con
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 
 	res = ast_say_number(chan, tm.tm_hour, ints, lang, "f");
 	if (!res) {
@@ -5634,7 +5641,8 @@ int ast_say_time_tw(struct ast_channel *chan, time_t t, const char *ints, const 
 	struct tm tm;
 	int res = 0;
 	int hour, pm=0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	hour = tm.tm_hour;
 	if (!hour)
 		hour = 12;
@@ -5701,7 +5709,8 @@ int ast_say_datetime_en(struct ast_channel *chan, time_t t, const char *ints, co
 	char fn[256];
 	int res = 0;
 	int hour, pm=0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	if (!res) {
 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
 		res = ast_streamfile(chan, fn, lang);
@@ -5764,7 +5773,8 @@ int ast_say_datetime_de(struct ast_channel *chan, time_t t, const char *ints, co
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	res = ast_say_date(chan, t, ints, lang);
 	if (!res) 
 		ast_say_time(chan, t, ints, lang);
@@ -5778,7 +5788,8 @@ int ast_say_datetime_fr(struct ast_channel *chan, time_t t, const char *ints, co
 	struct tm tm;
 	char fn[256];
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 
 	if (!res)
 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char *) NULL);
@@ -5816,7 +5827,8 @@ int ast_say_datetime_nl(struct ast_channel *chan, time_t t, const char *ints, co
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	res = ast_say_date(chan, t, ints, lang);
 	if (!res) {
 		res = ast_streamfile(chan, "digits/nl-om", lang);
@@ -5835,7 +5847,8 @@ int ast_say_datetime_pt(struct ast_channel *chan, time_t t, const char *ints, co
 	char fn[256];
 	int res = 0;
 	int hour, pm=0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	if (!res) {
 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
 		res = ast_streamfile(chan, fn, lang);
@@ -5898,7 +5911,8 @@ int ast_say_datetime_pt_BR(struct ast_channel *chan, time_t t, const char *ints,
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	res = ast_say_date(chan, t, ints, lang);
 	if (!res)
 		res = ast_say_time(chan, t, ints, lang);
@@ -5912,7 +5926,8 @@ int ast_say_datetime_tw(struct ast_channel *chan, time_t t, const char *ints, co
 	char fn[256];
 	int res = 0;
 	int hour, pm=0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	if (!res)
 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
 	if (!res) {
@@ -5991,8 +6006,8 @@ int ast_say_datetime_from_now_en(struct ast_channel *chan, time_t t, const char 
 
 	time(&nowt);
 
-	localtime_r(&t,&tm);
-	localtime_r(&nowt,&now);
+	ast_localtime(&t, &tm, NULL);
+	ast_localtime(&nowt,&now, NULL);
 	daydiff = now.tm_yday - tm.tm_yday;
 	if ((daydiff < 0) || (daydiff > 6)) {
 		/* Day of month and month */
@@ -6031,8 +6046,8 @@ int ast_say_datetime_from_now_fr(struct ast_channel *chan, time_t t, const char 
 
 	time(&nowt);
 
-	localtime_r(&t,&tm);
-	localtime_r(&nowt,&now);
+	ast_localtime(&t, &tm, NULL);
+	ast_localtime(&nowt, &now, NULL);
 	daydiff = now.tm_yday - tm.tm_yday;
 	if ((daydiff < 0) || (daydiff > 6)) {
 		/* Day of month and month */
@@ -6071,8 +6086,8 @@ int ast_say_datetime_from_now_pt(struct ast_channel *chan, time_t t, const char 
 
 	time(&nowt);
 
-	localtime_r(&t,&tm);
-	localtime_r(&nowt,&now);
+	ast_localtime(&t, &tm, NULL);
+	ast_localtime(&nowt, &now, NULL);
 	daydiff = now.tm_yday - tm.tm_yday;
 	if ((daydiff < 0) || (daydiff > 6)) {
 		/* Day of month and month */
@@ -6295,7 +6310,7 @@ static int ast_say_time_gr(struct ast_channel *chan, time_t t, const char *ints,
 	int res = 0;
 	int hour, pm=0;
 
-	localtime_r(&t,&tm);
+	ast_localtime(&t, &tm, NULL);
 	hour = tm.tm_hour;
 
 	if (!hour)
@@ -6340,7 +6355,8 @@ static int ast_say_datetime_gr(struct ast_channel *chan, time_t t, const char *i
 	struct tm tm;
 	char fn[256];
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 
 	
 	/* W E E K - D A Y */
@@ -6828,7 +6844,8 @@ static int ast_say_time_ge(struct ast_channel *chan, time_t t, const char *ints,
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 
 	res = ast_say_number(chan, tm.tm_hour, ints, lang, (char*)NULL);
 	if (!res) {
@@ -6858,7 +6875,8 @@ static int ast_say_datetime_ge(struct ast_channel *chan, time_t t, const char *i
 {
 	struct tm tm;
 	int res = 0;
-	localtime_r(&t,&tm);
+
+	ast_localtime(&t, &tm, NULL);
 	res = ast_say_date(chan, t, ints, lang);
 	if (!res)
 		ast_say_time(chan, t, ints, lang);
@@ -6881,8 +6899,8 @@ static int ast_say_datetime_from_now_ge(struct ast_channel *chan, time_t t, cons
 
 	time(&nowt);
 
-	localtime_r(&t,&tm);
-	localtime_r(&nowt,&now);
+	ast_localtime(&t, &tm, NULL);
+	ast_localtime(&nowt, &now, NULL);
 	daydiff = now.tm_yday - tm.tm_yday;
 	if ((daydiff < 0) || (daydiff > 6)) {
 		/* Day of month and month */

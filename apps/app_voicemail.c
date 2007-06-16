@@ -1931,10 +1931,10 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	fprintf(p, "MIME-Version: 1.0" ENDL);
 	if (attach_user_voicemail) {
 		/* Something unique. */
-		snprintf(bound, sizeof(bound), "voicemail_%d%s%d%d", msgnum + 1, mailbox, getpid(), (unsigned int)ast_random());
+		snprintf(bound, sizeof(bound), "----voicemail_%d%s%d%d", msgnum + 1, mailbox, getpid(), (unsigned int)ast_random());
 
-		fprintf(p, "Content-Type: multipart/mixed; boundary=\"%s\"" ENDL ENDL ENDL, bound);
-
+		fprintf(p, "Content-Type: multipart/mixed; boundary=\"%s\"" ENDL, bound);
+		fprintf(p, ENDL ENDL "This is a multi-part message in MIME format." ENDL ENDL);
 		fprintf(p, "--%s" ENDL, bound);
 	}
 	fprintf(p, "Content-Type: text/plain; charset=%s" ENDL "Content-Transfer-Encoding: 8bit" ENDL ENDL, charset);
@@ -1985,7 +1985,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 		fprintf(p, "Content-Disposition: attachment; filename=\"msg%04d.%s\"" ENDL ENDL, msgnum + 1, format);
 		snprintf(fname, sizeof(fname), "%s.%s", attach, format);
 		base_encode(fname, p);
-		fprintf(p, ENDL ENDL "--%s--" ENDL "." ENDL, bound);
+		fprintf(p, ENDL "--%s--" ENDL "." ENDL, bound);
 		if (tmpfd > -1)
 			close(tmpfd);
 		unlink(newtmp);
@@ -2111,7 +2111,7 @@ static int get_date(char *s, int len)
 	struct tm tm;
 	time_t t;
 	t = time(0);
-	localtime_r(&t,&tm);
+	ast_localtime(&t, &tm, NULL);
 	return strftime(s, len, "%a %b %e %r %Z %Y", &tm);
 }
 
@@ -4223,10 +4223,10 @@ static int play_message_datetime(struct ast_channel *chan, struct ast_vm_user *v
 /* No internal variable parsing for now, so we'll comment it out for the time being */
 #if 0
 	/* Set the DIFF_* variables */
-	localtime_r(&t, &time_now);
+	ast_localtime(&t, &time_now, NULL);
 	tv_now = ast_tvnow();
 	tnow = tv_now.tv_sec;
-	localtime_r(&tnow,&time_then);
+	ast_localtime(&tnow, &time_then, NULL);
 
 	/* Day difference */
 	if (time_now.tm_year == time_then.tm_year)
