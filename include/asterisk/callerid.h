@@ -58,6 +58,7 @@
 
 #define CID_START_RING	1
 #define CID_START_POLARITY 2
+#define CID_START_POLARITY_IN 3
 
 
 #define AST_LIN2X(a) ((codec == AST_FORMAT_ALAW) ? (AST_LIN2A(a)) : (AST_LIN2MU(a)))
@@ -311,6 +312,7 @@ static inline float callerid_getcarrier(float *cr, float *ci, int bit)
 
 int ast_parse_caller_presentation(const char *data);
 const char *ast_describe_caller_presentation(int data);
+const char *ast_named_caller_presentation(int data);
 
 /*! \page Def_CallerPres Caller ID Presentation
 
