@@ -1879,6 +1879,10 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				break;
 			}
 
+			/* Perform an extra hangup check just in case */
+			if (ast_check_hangup(chan))
+				break;
+
 			if (c) {
 				if (c->fds[0] != origfd) {
 					if (using_pseudo) {
@@ -2137,8 +2141,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						chan->name, f->frametype, f->subclass);
 				}
 				ast_frfree(f);
-				if (ast_check_hangup(chan))
-					break;
 			} else if (outfd > -1) {
 				res = read(outfd, buf, CONF_SIZE);
 				if (res > 0) {
@@ -2256,7 +2258,7 @@ bailoutandtrynormal:
 				      user->user_no,
 				      S_OR(user->chan->cid.cid_num, "<unknown>"),
 				      S_OR(user->chan->cid.cid_name, "<unknown>"),
-				      (now - user->jointime));
+				      (long)(now - user->jointime));
 		}
 
 		conf->users--;
@@ -4275,14 +4277,12 @@ static int sla_trunk_exec(struct ast_channel *chan, void *data)
 	AST_RWLIST_UNLOCK(&sla_trunks);
 	if (!trunk) {
 		ast_log(LOG_ERROR, "SLA Trunk '%s' not found!\n", trunk_name);
-		AST_RWLIST_UNLOCK(&sla_trunks);
 		pbx_builtin_setvar_helper(chan, "SLATRUNK_STATUS", "FAILURE");
 		return 0;
 	}
 	if (trunk->chan) {
 		ast_log(LOG_ERROR, "Call came in on %s, but the trunk is already in use!\n",
 			trunk_name);
-		AST_RWLIST_UNLOCK(&sla_trunks);
 		pbx_builtin_setvar_helper(chan, "SLATRUNK_STATUS", "FAILURE");
 		return 0;
 	}

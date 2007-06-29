@@ -511,7 +511,7 @@ static struct zt_pvt {
 	char callwait_name[AST_MAX_EXTENSION];
 	char rdnis[AST_MAX_EXTENSION];
 	char dnid[AST_MAX_EXTENSION];
-	unsigned int group;
+	ast_group_t group;
 	int law;
 	int confno;					/*!< Our conference */
 	int confusers;					/*!< Who is using our conference */
@@ -9084,13 +9084,25 @@ static void *pri_dchannel(void *vpri)
 							else if (pri->pvts[chanpos]->owner) {
 								/* Queue a BUSY instead of a hangup if our cause is appropriate */
 								pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
-
 								if (pri->pvts[chanpos]->owner->_state == AST_STATE_UP)
 									pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
-								else if (pri->pvts[chanpos]->owner->hangupcause == PRI_CAUSE_USER_BUSY)
-									pri->pvts[chanpos]->subs[SUB_REAL].needbusy = 1;
-								else
-									pri->pvts[chanpos]->subs[SUB_REAL].needcongestion = 1;
+								else {
+									switch (e->hangup.cause) {
+										case PRI_CAUSE_USER_BUSY:
+											pri->pvts[chanpos]->subs[SUB_REAL].needbusy =1;
+											break;
+										case PRI_CAUSE_CALL_REJECTED:
+										case PRI_CAUSE_NETWORK_OUT_OF_ORDER:
+										case PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION:
+										case PRI_CAUSE_SWITCH_CONGESTION:
+										case PRI_CAUSE_DESTINATION_OUT_OF_ORDER:
+										case PRI_CAUSE_NORMAL_TEMPORARY_FAILURE:
+											pri->pvts[chanpos]->subs[SUB_REAL].needcongestion =1;
+											break;
+										default:
+											pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
+									}
+								}
 							}
 							if (option_verbose > 2) 
 								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d got hangup, cause %d\n", 
@@ -9143,11 +9155,23 @@ static void *pri_dchannel(void *vpri)
 
 							if (pri->pvts[chanpos]->owner->_state == AST_STATE_UP)
 								pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
-							else if (pri->pvts[chanpos]->owner->hangupcause == PRI_CAUSE_USER_BUSY)
-								pri->pvts[chanpos]->subs[SUB_REAL].needbusy = 1;
-							else
-								pri->pvts[chanpos]->subs[SUB_REAL].needcongestion = 1;
-
+							else {
+								switch (e->hangup.cause) {
+									case PRI_CAUSE_USER_BUSY:
+										pri->pvts[chanpos]->subs[SUB_REAL].needbusy =1;
+										break;
+									case PRI_CAUSE_CALL_REJECTED:
+									case PRI_CAUSE_NETWORK_OUT_OF_ORDER:
+									case PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION:
+									case PRI_CAUSE_SWITCH_CONGESTION:
+									case PRI_CAUSE_DESTINATION_OUT_OF_ORDER:
+									case PRI_CAUSE_NORMAL_TEMPORARY_FAILURE:
+										pri->pvts[chanpos]->subs[SUB_REAL].needcongestion =1;
+										break;
+									default:
+										pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
+								}
+							}
 							if (option_verbose > 2) 
 								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d got hangup request, cause %d\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span, e->hangup.cause);
 							if (e->hangup.aoc_units > -1)
@@ -10468,9 +10492,10 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 		    || !strcasecmp(v->name, "crv")
 #endif			
 			) {
+			int iscrv;
 			if (skipchannels)
 				continue;
-			int iscrv = !strcasecmp(v->name, "crv");
+			iscrv = !strcasecmp(v->name, "crv");
 			if (build_channels(*confp, iscrv, v->value, reload, v->lineno, &found_pseudo))
 					return -1;
 		} else if (!strcasecmp(v->name, "zapchan")) {

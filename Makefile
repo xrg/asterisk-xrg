@@ -117,8 +117,9 @@ else
   ASTLOGDIR=/var/log/asterisk
   ASTVARRUNDIR=/var/run
   ASTMANDIR=$(mandir)
-ifeq ($(OSARCH),FreeBSD)
+ifneq ($(findstring BSD,$(OSARCH)),)
   ASTVARLIBDIR=$(prefix)/share/asterisk
+  ASTVARRUNDIR=$(localstatedir)/run/asterisk
 else
   ASTVARLIBDIR=/var/lib/asterisk
 endif
@@ -191,7 +192,7 @@ ASTCFLAGS+=-pipe -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declar
 ASTCFLAGS+=-include $(ASTTOPDIR)/include/asterisk/autoconfig.h
 
 ifeq ($(AST_DEVMODE),yes)
-  ASTCFLAGS+=-Werror -Wunused
+  ASTCFLAGS+=-Werror  -Wunused $(AST_DECLARATION_AFTER_STATEMENT)
 endif
 
 ifneq ($(findstring BSD,$(OSARCH)),)

@@ -1697,6 +1697,7 @@ static void free_translation(struct ast_channel *clone)
 int ast_hangup(struct ast_channel *chan)
 {
 	int res = 0;
+	struct ast_cdr *cdr = NULL;
 
 	/* Don't actually hang up a channel that will masquerade as someone else, or
 	   if someone is going to masquerade as us */
@@ -1743,7 +1744,7 @@ int ast_hangup(struct ast_channel *chan)
 	chan->generator = NULL;
 	if (chan->cdr) {		/* End the CDR if it hasn't already */
 		ast_cdr_end(chan->cdr);
-		ast_cdr_detach(chan->cdr);	/* Post and Free the CDR */
+		cdr = chan->cdr;
 		chan->cdr = NULL;
 	}
 	if (ast_test_flag(chan, AST_FLAG_BLOCKING)) {
@@ -1774,6 +1775,10 @@ int ast_hangup(struct ast_channel *chan)
 			ast_cause2str(chan->hangupcause)
 			);
 	ast_channel_free(chan);
+
+	if (cdr)
+		ast_cdr_detach(cdr);
+
 	return res;
 }
 
@@ -2127,6 +2132,36 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 	return 0; /* Time is up */
 }
 
+static void ast_read_generator_actions(struct ast_channel *chan, struct ast_frame *f)
+{
+	if (chan->generatordata &&  !ast_internal_timing_enabled(chan)) {
+		void *tmp = chan->generatordata;
+		int res;
+
+		if (chan->timingfunc) {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "Generator got voice, switching to phase locked mode\n");
+			ast_settimeout(chan, 0, NULL, NULL);
+		}
+
+		chan->generatordata = NULL;     /* reset, to let writes go through */
+		res = chan->generator->generate(chan, tmp, f->datalen, f->samples);
+		chan->generatordata = tmp;
+		if (res) {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "Auto-deactivating generator\n");
+			ast_deactivate_generator(chan);
+		}
+
+	} else if (f->frametype == AST_FRAME_CNG) {
+		if (chan->generator && !chan->timingfunc && (chan->timingfd > -1)) {
+			if (option_debug > 1)
+				ast_log(LOG_DEBUG, "Generator got CNG, switching to timed mode\n");
+			ast_settimeout(chan, 160, generator_force, chan);
+		}
+	}
+}
+
 static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 {
 	struct ast_frame *f = NULL;	/* the return value */
@@ -2382,9 +2417,13 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			}
 
 			if (dropaudio || ast_test_flag(chan, AST_FLAG_IN_DTMF)) {
+				if (dropaudio)
+					ast_read_generator_actions(chan, f);
 				ast_frfree(f);
 				f = &ast_null_frame;
-			} else if (ast_test_flag(chan, AST_FLAG_EMULATE_DTMF)) {
+			}
+
+			if (ast_test_flag(chan, AST_FLAG_EMULATE_DTMF) && !ast_test_flag(chan, AST_FLAG_IN_DTMF)) {
 				struct timeval now = ast_tvnow();
 				if (ast_tvdiff_ms(now, chan->dtmf_tv) >= chan->emulate_dtmf_duration) {
 					chan->emulate_dtmf_duration = 0;
@@ -2399,14 +2438,14 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					ast_frfree(f);
 					f = &ast_null_frame;
 				}
-			} else if (!(f->subclass & chan->nativeformats)) {
+			} else if ((f->frametype == AST_FRAME_VOICE) && !(f->subclass & chan->nativeformats)) {
 				/* This frame can't be from the current native formats -- drop it on the
 				   floor */
 				ast_log(LOG_NOTICE, "Dropping incompatible voice frame on %s of format %s since our native format has changed to %s\n",
 					chan->name, ast_getformatname(f->subclass), ast_getformatname(chan->nativeformats));
 				ast_frfree(f);
 				f = &ast_null_frame;
-			} else {
+			} else if ((f->frametype == AST_FRAME_VOICE)) {
 				if (chan->spies)
 					queue_frame_to_spies(chan, f, SPY_READ);
 				
@@ -2441,32 +2480,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 
 				/* Run generator sitting on the line if timing device not available
 				* and synchronous generation of outgoing frames is necessary       */
-				if (chan->generatordata &&  !ast_internal_timing_enabled(chan)) {
-					void *tmp = chan->generatordata;
-					int res;
-
-					if (chan->timingfunc) {
-						if (option_debug > 1)
-							ast_log(LOG_DEBUG, "Generator got voice, switching to phase locked mode\n");
-						ast_settimeout(chan, 0, NULL, NULL);
-					}
-
-					chan->generatordata = NULL;	/* reset, to let writes go through */
-					res = chan->generator->generate(chan, tmp, f->datalen, f->samples);
-					chan->generatordata = tmp;
-					if (res) {
-						if (option_debug > 1)
-							ast_log(LOG_DEBUG, "Auto-deactivating generator\n");
-						ast_deactivate_generator(chan);
-					}
-
-				} else if (f->frametype == AST_FRAME_CNG) {
-					if (chan->generator && !chan->timingfunc && (chan->timingfd > -1)) {
-						if (option_debug > 1)
-							ast_log(LOG_DEBUG, "Generator got CNG, switching to timed mode\n");
-						ast_settimeout(chan, 160, generator_force, chan);
-					}
-				}
+				ast_read_generator_actions(chan, f);
 			}
 		default:
 			/* Just pass it on! */
@@ -3461,10 +3475,20 @@ void ast_channel_inherit_variables(const struct ast_channel *parent, struct ast_
 */
 static void clone_variables(struct ast_channel *original, struct ast_channel *clone)
 {
+	struct ast_var_t *current, *newvar;
 	/* Append variables from clone channel into original channel */
 	/* XXX Is this always correct?  We have to in order to keep MACROS working XXX */
 	if (AST_LIST_FIRST(&clone->varshead))
 		AST_LIST_APPEND_LIST(&original->varshead, &clone->varshead, entries);
+	AST_LIST_HEAD_INIT_NOLOCK(&clone->varshead);
+
+	/* then, dup the varshead list into the clone */
+	
+	AST_LIST_TRAVERSE(&original->varshead, current, entries) {
+		newvar = ast_var_assign(current->name, current->value);
+		if (newvar)
+			AST_LIST_INSERT_TAIL(&clone->varshead, newvar, entries);
+	}
 }
 
 /*!
@@ -3668,7 +3692,6 @@ int ast_do_masquerade(struct ast_channel *original)
 	AST_LIST_HEAD_INIT_NOLOCK(&clone->datastores);
 
 	clone_variables(original, clone);
-	AST_LIST_HEAD_INIT_NOLOCK(&clone->varshead);
 	/* Presense of ADSI capable CPE follows clone */
 	original->adsicpe = clone->adsicpe;
 	/* Bridge remains the same */
@@ -4162,7 +4185,13 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 					ast_check_hangup(c1) ? "Yes" : "No");
 			break;
 		}
-
+		
+		/* See if the BRIDGEPEER variable needs to be updated */
+		if (!ast_strlen_zero(pbx_builtin_getvar_helper(c0, "BRIDGEPEER")))
+			pbx_builtin_setvar_helper(c0, "BRIDGEPEER", c1->name);
+		if (!ast_strlen_zero(pbx_builtin_getvar_helper(c1, "BRIDGEPEER")))
+			pbx_builtin_setvar_helper(c1, "BRIDGEPEER", c0->name);
+		
 		if (c0->tech->bridge &&
 		    (config->timelimit == 0) &&
 		    (c0->tech->bridge == c1->tech->bridge) &&

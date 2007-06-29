@@ -1372,11 +1372,6 @@ static int action_setvar(struct mansession *s, const struct message *m)
 		return 0;
 	}
 	
-	if (ast_strlen_zero(varval)) {
-		astman_send_error(s, m, "No value specified");
-		return 0;
-	}
-
 	if (!ast_strlen_zero(name)) {
 		c = ast_get_channel_by_name_locked(name);
 		if (!c) {
@@ -1385,7 +1380,7 @@ static int action_setvar(struct mansession *s, const struct message *m)
 		}
 	}
 	
-	pbx_builtin_setvar_helper(c, varname, varval);
+	pbx_builtin_setvar_helper(c, varname, S_OR(varval, ""));
 	  
 	if (c)
 		ast_channel_unlock(c);
@@ -1641,17 +1636,26 @@ static int action_command(struct mansession *s, const struct message *m)
 	/* FIXME: Wedge a ActionID response in here, waiting for later changes */
 	ast_cli_command(fd, cmd);	/* XXX need to change this to use a FILE * */
 	l = lseek(fd, 0, SEEK_END);	/* how many chars available */
-	buf = alloca(l + 1);
-	final_buf = alloca(l + 1);
-	lseek(fd, 0, SEEK_SET);
-	read(fd, buf, l);
-	buf[l] = '\0';
+
+	/* This has a potential to overflow the stack.  Hence, use the heap. */
+	buf = ast_calloc(1, l + 1);
+	final_buf = ast_calloc(1, l + 1);
+	if (buf) {
+		lseek(fd, 0, SEEK_SET);
+		read(fd, buf, l);
+		buf[l] = '\0';
+		if (final_buf) {
+			term_strip(final_buf, buf, l);
+			final_buf[l] = '\0';
+		}
+		astman_append(s, S_OR(final_buf, buf));
+		ast_free(buf);
+	}
 	close(fd);
 	unlink(template);
-	term_strip(final_buf, buf, l);
-	final_buf[l] = '\0';
-	astman_append(s, final_buf);
 	astman_append(s, "--END COMMAND--\r\n\r\n");
+	if (final_buf)
+		ast_free(final_buf);
 	return 0;
 }
 

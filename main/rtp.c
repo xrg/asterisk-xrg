@@ -942,7 +942,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 						rtp->rtcp->maxrtt = rttsec;
 					if (rtp->rtcp->minrtt>rttsec)
 						rtp->rtcp->minrtt = rttsec;
-				} else {
+				} else if (rtcp_debug_test_addr(&sin)) {
 					ast_verbose("Internal RTCP NTP clock skew detected: "
 							   "lsr=%u, now=%u, dlsr=%u (%d:%03dms), "
 							   "diff=%d\n",
@@ -1047,18 +1047,13 @@ static void calc_rxstamp(struct timeval *tv, struct ast_rtp *rtp, unsigned int t
 /*! \brief Perform a Packet2Packet RTP write */
 static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, unsigned int *rtpheader, int len, int hdrlen)
 {
-	int res = 0, payload = 0, bridged_payload = 0, version, padding, mark, ext;
+	int res = 0, payload = 0, bridged_payload = 0, mark;
 	struct rtpPayloadType rtpPT;
-	unsigned int seqno;
-	
+	int reconstruct = ntohl(rtpheader[0]);
+
 	/* Get fields from packet */
-	seqno = ntohl(rtpheader[0]);
-	version = (seqno & 0xC0000000) >> 30;
-	payload = (seqno & 0x7f0000) >> 16;
-	padding = seqno & (1 << 29);
-	mark = (seqno & 0x800000) >> 23;
-	ext = seqno & (1 << 28);
-	seqno &= 0xffff;
+	payload = (reconstruct & 0x7f0000) >> 16;
+	mark = (((reconstruct & 0x800000) >> 23) != 0);
 
 	/* Check what the payload value should be */
 	rtpPT = ast_rtp_lookup_pt(rtp, payload);
@@ -1077,7 +1072,10 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 	}
 
 	/* Reconstruct part of the packet */
-	rtpheader[0] = htonl((version << 30) | (mark << 23) | (bridged_payload << 16) | (seqno));
+	reconstruct &= 0xFF80FFFF;
+	reconstruct |= (bridged_payload << 16);
+	reconstruct |= (mark << 23);
+	rtpheader[0] = htonl(reconstruct);
 
 	/* Send the packet back out */
 	res = sendto(bridged->s, (void *)rtpheader, len, 0, (struct sockaddr *)&bridged->them, sizeof(bridged->them));
@@ -1108,6 +1106,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	int padding;
 	int mark;
 	int ext;
+	int cc;
 	unsigned int ssrc;
 	unsigned int timestamp;
 	unsigned int *rtpheader;
@@ -1186,6 +1185,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	padding = seqno & (1 << 29);
 	mark = seqno & (1 << 23);
 	ext = seqno & (1 << 28);
+	cc = (seqno & 0xF000000) >> 24;
 	seqno &= 0xffff;
 	timestamp = ntohl(rtpheader[1]);
 	ssrc = ntohl(rtpheader[2]);
@@ -1203,10 +1203,15 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		res -= rtp->rawdata[AST_FRIENDLY_OFFSET + res - 1];
 	}
 	
+	if (cc) {
+		/* CSRC fields present */
+		hdrlen += cc*4;
+	}
+
 	if (ext) {
 		/* RTP Extension present */
+		hdrlen += (ntohl(rtpheader[hdrlen/4]) & 0xffff) << 2;
 		hdrlen += 4;
-		hdrlen += (ntohl(rtpheader[3]) & 0xffff) << 2;
 	}
 
 	if (res < hdrlen) {
@@ -2520,6 +2525,9 @@ static int ast_rtcp_write(void *data)
 	struct ast_rtp *rtp = data;
 	int res;
 	
+	if (!rtp || !rtp->rtcp)
+		return 0;
+
 	if (rtp->txcount > rtp->rtcp->lastsrtxcount)
 		res = ast_rtcp_write_sr(data);
 	else
@@ -2723,7 +2731,7 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 		rtp->smoother = NULL;
 	}
 
-	if (!rtp->smoother) {
+	if (!rtp->smoother && subclass != AST_FORMAT_SPEEX) {
 		struct ast_format_list fmt = ast_codec_pref_getsize(&rtp->pref, subclass);
 		if (fmt.inc_ms) { /* if codec parameters is set / avoid division by zero */
 			if (!(rtp->smoother = ast_smoother_new((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms))) {
@@ -3309,6 +3317,8 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 
 	/* If either side can only do a partial bridge, then don't try for a true native bridge */
 	if (audio_p0_res == AST_RTP_TRY_PARTIAL || audio_p1_res == AST_RTP_TRY_PARTIAL) {
+		struct ast_format_list fmt0, fmt1;
+
 		/* In order to do Packet2Packet bridging both sides must be in the same rawread/rawwrite */
 		if (c0->rawreadformat != c1->rawwriteformat || c1->rawreadformat != c0->rawwriteformat) {
 			if (option_debug)
@@ -3317,6 +3327,17 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 			ast_channel_unlock(c1);
 			return AST_BRIDGE_FAILED_NOWARN;
 		}
+		/* They must also be using the same packetization */
+		fmt0 = ast_codec_pref_getsize(&p0->pref, c0->rawreadformat);
+		fmt1 = ast_codec_pref_getsize(&p1->pref, c1->rawreadformat);
+		if (fmt0.cur_ms != fmt1.cur_ms) {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Cannot packet2packet bridge - packetization settings prevent it\n");
+			ast_channel_unlock(c0);
+			ast_channel_unlock(c1);
+			return AST_BRIDGE_FAILED_NOWARN;
+		}
+
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Packet2Packet bridging %s and %s\n", c0->name, c1->name);
 		res = bridge_p2p_loop(c0, c1, p0, p1, timeoutms, flags, fo, rc, pvt0, pvt1);

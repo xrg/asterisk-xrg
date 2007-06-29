@@ -355,7 +355,7 @@ static int add_codec_to_answer(const struct gtalk_pvt *p, int codec, iks *dcodec
 			ast_log(LOG_WARNING,"Failed to allocate iks node");
 			return -1;
 		}
-		iks_insert_attrib(payload_ilbc, "id", "102");
+		iks_insert_attrib(payload_ilbc, "id", "97");
 		iks_insert_attrib(payload_ilbc, "name", "iLBC");
 		iks_insert_attrib(payload_ilbc, "clockrate","8000");
 		iks_insert_attrib(payload_ilbc, "bitrate","13300");
@@ -379,7 +379,7 @@ static int add_codec_to_answer(const struct gtalk_pvt *p, int codec, iks *dcodec
 			ast_log(LOG_WARNING,"Failed to allocate iks node");
 			return -1;
 		}
-		iks_insert_attrib(payload_speex, "id", "98");
+		iks_insert_attrib(payload_speex, "id", "110");
 		iks_insert_attrib(payload_speex, "name", "speex");
 		iks_insert_attrib(payload_speex, "clockrate","8000");
 		iks_insert_attrib(payload_speex, "bitrate","11000");
@@ -691,10 +691,10 @@ static int gtalk_hangup_farend(struct gtalk *client, ikspak *pak)
 	if(!from)
 		from = client->connection->jid->full;
 
-
 	if (tmp) {
 		tmp->alreadygone = 1;
-		ast_queue_hangup(tmp->owner);
+		if (tmp->owner)
+			ast_queue_hangup(tmp->owner);
 	} else
 		ast_log(LOG_NOTICE, "Whoa, didn't find call!\n");
 	gtalk_response(client, from, pak, NULL, NULL);
@@ -963,15 +963,14 @@ static struct ast_channel *gtalk_new(struct gtalk *client, struct gtalk_pvt *i, 
 	/* Don't use ast_set_callerid() here because it will
 	 * generate a needless NewCallerID event */
 	if (!strcasecmp(client->name, "guest")) {
-		if (strchr(i->them, '/')) {
-			char *aux;
-			data = ast_strdupa((char *)i->them);
-			aux = data;
-			cid = strsep(&aux, "/");
+		data = ast_strdupa(i->them);
+		if (strchr(data, '/')) {
+			cid = strsep(&data, "/");
 		} else
-			cid = i->them;
+			cid = data;
 	} else {
-		cid = client->user;
+		data =  ast_strdupa(client->user);
+		cid = data;
 	}
 	cid = strsep(&cid, "@");
 	tmp->cid.cid_num = ast_strdup(cid);

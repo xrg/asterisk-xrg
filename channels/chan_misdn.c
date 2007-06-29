@@ -1140,7 +1140,7 @@ static int misdn_show_cls (int fd, int argc, char *argv[])
 		}
 	}
   
-  
+ 	misdn_dump_chanlist();
 	return 0;
 }
 
@@ -2234,10 +2234,14 @@ static int misdn_digit_end(struct ast_channel *ast, char digit, unsigned int dur
 		}
 		break;
 		
-		default:
-			if ( bc->send_dtmf ) {
+		default:	
+			/* Do not send Digits in CONNECTED State, when
+			 * the other side is too mISDN. */
+			if (p->other_ch ) 
+				return 0;
+
+			if ( bc->send_dtmf ) 
 				send_digit_to_chan(p,digit);
-			}
 		break;
 	}
 	
@@ -2464,8 +2468,14 @@ static int misdn_hangup(struct ast_channel *ast)
 		chan_misdn_log(2, bc->port, " --> state:%s\n", misdn_get_ch_state(p));
 		
 		switch (p->state) {
-		case MISDN_INCOMING_SETUP:
 		case MISDN_CALLING:
+		case MISDN_INCOMING_SETUP:
+			/* This is the only place in misdn_hangup, where we 
+			 * can call release_chan, else it might create lot's of trouble
+			 * */
+			ast_log(LOG_NOTICE, "release channel, in CALLING/INCOMING_SETUP state.. no other events happened\n");
+			release_chan(bc);
+
 			p->state=MISDN_CLEANING;
 			misdn_lib_send_event( bc, EVENT_RELEASE_COMPLETE);
 			break;
@@ -3369,6 +3379,8 @@ static struct chan_list *find_chan_by_pid(struct chan_list *list, int pid)
 static struct chan_list *find_holded(struct chan_list *list, struct misdn_bchannel *bc)
 {
 	struct chan_list *help=list;
+
+	if (bc->pri) return NULL;
 	
 	chan_misdn_log(6, bc->port, "$$$ find_holded: channel:%d oad:%s dad:%s\n",bc->channel, bc->oad,bc->dad);
 	for (;help; help=help->next) {
@@ -3795,13 +3807,6 @@ int add_out_calls(int port)
 	return 0;
 }
 
-static void wait_for_digits(struct chan_list *ch, struct misdn_bchannel *bc, struct ast_channel *chan) {
-	ch->state=MISDN_WAITING4DIGS;
-	misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
-	if (bc->nt)
-		dialtone_indicate(ch);
-}
-
 static void start_pbx(struct chan_list *ch, struct misdn_bchannel *bc, struct ast_channel *chan) {
 	if (pbx_start_chan(ch)<0) {
 		hangup_chan(ch);
@@ -3813,6 +3818,14 @@ static void start_pbx(struct chan_list *ch, struct misdn_bchannel *bc, struct as
 			misdn_lib_send_event(bc, EVENT_RELEASE);
 	}
 }
+
+static void wait_for_digits(struct chan_list *ch, struct misdn_bchannel *bc, struct ast_channel *chan) {
+	ch->state=MISDN_WAITING4DIGS;
+	misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE );
+	if (bc->nt && !bc->dad[0])
+		dialtone_indicate(ch);
+}
+
 
 /************************************************************/
 /*  Receive Events from isdn_lib  here                     */
@@ -5284,7 +5297,6 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 				chan_misdn_log(1, ch->bc->port, "SETOPT: HDLC \n");
 				if (!ch->bc->hdlc) {
 					ch->bc->hdlc=1;
-					misdn_lib_setup_bc(ch->bc);
 				}
 			}  
 			ch->bc->capability=INFO_CAPABILITY_DIGITAL_UNRESTRICTED;

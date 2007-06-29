@@ -86,8 +86,9 @@ static int pgsql_log(struct ast_cdr *cdr)
 			connected = 1;
 		} else {
 			pgerror = PQerrorMessage(conn);
+			PQfinish(conn);
 			ast_log(LOG_ERROR, "cdr_pgsql: Unable to connect to database server %s.  Calls will not be logged!\n", pghostname);
-                        ast_log(LOG_ERROR, "cdr_pgsql: Reason: %s\n", pgerror);
+			ast_log(LOG_ERROR, "cdr_pgsql: Reason: %s\n", pgerror);
 		}
 	}
 
@@ -145,6 +146,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 				connected = 1;
 			} else {
 				pgerror = PQerrorMessage(conn);
+				PQfinish(conn);
 				ast_log(LOG_ERROR, "cdr_pgsql: Unable to reconnect to database server %s. Calls will not be logged!\n", pghostname);
 				ast_log(LOG_ERROR, "cdr_pgsql: Reason: %s\n", pgerror);
 				connected = 0;
@@ -162,6 +164,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 			if (PQstatus(conn) == CONNECTION_OK) {
 				ast_log(LOG_ERROR, "cdr_pgsql: Connection reestablished.\n");
 				connected = 1;
+				PQclear(result);
 				result = PQexec(conn, sqlcmd);
 				if (PQresultStatus(result) != PGRES_COMMAND_OK) {
 					pgerror = PQresultErrorMessage(result);
@@ -311,8 +314,12 @@ static int unload_module(void)
 
 static int reload(void)
 {
+	int res;
+	ast_mutex_lock(&pgsql_lock);
 	my_unload_module();
-	return my_load_module();
+	res = my_load_module();
+	ast_mutex_unlock(&pgsql_lock);
+	return res;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "PostgreSQL CDR Backend",

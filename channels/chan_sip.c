@@ -1579,6 +1579,7 @@ static const struct ast_channel_tech sip_tech_info = {
 	.send_digit_end = sip_senddigit_end,
 	.bridge = ast_rtp_bridge,
 	.send_text = sip_sendtext,
+	.func_channel_read = acf_channel_read,
 };
 
 /**--- some list management macros. **/
@@ -2693,7 +2694,7 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		ast_rtp_set_rtpkeepalive(dialog->vrtp, peer->rtpkeepalive);
 	}
 
-	ast_string_field_set(dialog, peername, peer->username);
+	ast_string_field_set(dialog, peername, peer->name);
 	ast_string_field_set(dialog, authname, peer->username);
 	ast_string_field_set(dialog, username, peer->username);
 	ast_string_field_set(dialog, peersecret, peer->secret);
@@ -7921,10 +7922,8 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	/* Save SIP options profile */
 	peer->sipoptions = pvt->sipoptions;
 
-	if (curi)	/* Overwrite the default username from config at registration */
+	if (curi && ast_strlen_zero(peer->username))
 		ast_copy_string(peer->username, curi, sizeof(peer->username));
-	else
-		peer->username[0] = '\0';
 
 	if (peer->expire > -1) {
 		ast_sched_del(sched, peer->expire);
@@ -8280,6 +8279,8 @@ static int cb_extensionstate(char *context, char* exten, int state, void *data)
 {
 	struct sip_pvt *p = data;
 
+	ast_mutex_lock(&p->lock);
+
 	switch(state) {
 	case AST_EXTENSION_DEACTIVATED:	/* Retry after a while */
 	case AST_EXTENSION_REMOVED:	/* Extension is gone */
@@ -8300,6 +8301,9 @@ static int cb_extensionstate(char *context, char* exten, int state, void *data)
 
 	if (option_verbose > 1)
 		ast_verbose(VERBOSE_PREFIX_1 "Extension Changed %s new state %s for Notify User %s\n", exten, ast_extension_state2str(state), p->username);
+	
+	ast_mutex_unlock(&p->lock);
+
 	return 0;
 }
 
@@ -11634,10 +11638,12 @@ static struct ast_custom_function sipchaninfo_function = {
 static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req)
 {
 	char tmp[BUFSIZ];
-	char *s, *e, *uri;
+	char *s, *e, *uri, *t;
 	char *domain;
 
 	ast_copy_string(tmp, get_header(req, "Contact"), sizeof(tmp));
+	if ((t = strchr(tmp, ',')))
+		*t = '\0';
 	s = get_in_brackets(tmp);
 	uri = ast_strdupa(s);
 	if (ast_test_flag(&p->flags[0], SIP_PROMISCREDIR)) {
@@ -12918,7 +12924,7 @@ static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target
 			ast_softhangup_nolock(transferer->chan1, AST_SOFTHANGUP_DEV);
 		if (target->chan1)
 			ast_softhangup_nolock(target->chan1, AST_SOFTHANGUP_DEV);
-		return -1;
+		return -2;
 	}
 	return 0;
 }
@@ -13858,13 +13864,16 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 	ast_mutex_unlock(&targetcall_pvt->lock);
 	if (res) {
 		/* Failed transfer */
-		/* Could find better message, but they will get the point */
-		transmit_notify_with_sipfrag(transferer, seqno, "486 Busy", TRUE);
+		transmit_notify_with_sipfrag(transferer, seqno, "486 Busy Here", TRUE);
 		append_history(transferer, "Xfer", "Refer failed");
+		transferer->refer->status = REFER_FAILED;
 		if (targetcall_pvt->owner)
 			ast_channel_unlock(targetcall_pvt->owner);
 		/* Right now, we have to hangup, sorry. Bridge is destroyed */
-		ast_hangup(transferer->owner);
+		if (res != -2)
+			ast_hangup(transferer->owner);
+		else
+			ast_clear_flag(&transferer->flags[0], SIP_DEFER_BYE_ON_TRANSFER);
 	} else {
 		/* Transfer succeeded! */
 
@@ -14157,7 +14166,6 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
     	   be accessible after the transfer! */
 	*nounlock = 1;
 	ast_channel_unlock(current.chan1);
-	ast_channel_unlock(current.chan2);
 
 	/* Connect the call */
 
@@ -14272,6 +14280,12 @@ static int acf_channel_read(struct ast_channel *chan, char *funcname, char *prep
 
 	if (strcasecmp(args.param, "rtpqos"))
 		return 0;
+
+	/* Default arguments of audio,all */
+	if (ast_strlen_zero(args.type))
+		args.type = "audio";
+	if (ast_strlen_zero(args.field))
+		args.field = "all";
 
 	memset(buf, 0, buflen);
 	memset(&qos, 0, sizeof(qos));
@@ -15174,7 +15188,8 @@ restartsearch:
 			/* Check RTP timeouts and kill calls if we have a timeout set and do not get RTP */
 			if (sip->rtp && sip->owner &&
 			    (sip->owner->_state == AST_STATE_UP) &&
-			    !sip->redirip.sin_addr.s_addr) {
+			    !sip->redirip.sin_addr.s_addr &&
+			    sip->t38.state != T38_ENABLED) {
 				if (sip->lastrtptx &&
 				    ast_rtp_get_rtpkeepalive(sip->rtp) &&
 				    (t > sip->lastrtptx + ast_rtp_get_rtpkeepalive(sip->rtp))) {
@@ -17085,14 +17100,16 @@ static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struc
 		memset(&p->vredirip, 0, sizeof(p->vredirip));
 		changed = 1;
 	}
-	if (codecs && (p->redircodecs != codecs)) {
-		p->redircodecs = codecs;
-		changed = 1;
-	}
-	if ((p->capability & codecs) != p->capability) {
-		p->jointcapability &= codecs;
-		p->capability &= codecs;
-		changed = 1;
+	if (codecs) {
+		if ((p->redircodecs != codecs)) {
+			p->redircodecs = codecs;
+			changed = 1;
+		}
+		if ((p->capability & codecs) != p->capability) {
+			p->jointcapability &= codecs;
+			p->capability &= codecs;
+			changed = 1;
+		}
 	}
 	if (changed && !ast_test_flag(&p->flags[0], SIP_GOTREFER)) {
 		if (chan->_state != AST_STATE_UP) {	/* We are in early state */

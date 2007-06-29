@@ -421,13 +421,13 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 		con = ast_context_create(NULL, parking_con, registrar);
 	if (!con)	/* Still no context? Bad */
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", parking_con);
-	else {		/* Add extension to context */
-		if (!ast_add_extension2(con, 1, pu->parkingexten, 1, NULL, NULL, parkedcall, strdup(pu->parkingexten), ast_free, registrar))
-			notify_metermaids(pu->parkingexten, parking_con);
-	}
 	/* Tell the peer channel the number of the parking space */
 	if (peer && pu->parkingnum != -1) /* Only say number if it's a number */
 		ast_say_digits(peer, pu->parkingnum, "", peer->language);
+	if (con) {
+		if (!ast_add_extension2(con, 1, pu->parkingexten, 1, NULL, NULL, parkedcall, strdup(pu->parkingexten), ast_free, registrar))
+			notify_metermaids(pu->parkingexten, parking_con);
+	}
 	if (pu->notquiteyet) {
 		/* Wake up parking thread if we're really done */
 		ast_indicate_data(pu->chan, AST_CONTROL_HOLD, 
@@ -1558,11 +1558,14 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 
 			/* absorb the channel cdr */
 			ast_cdr_merge(bridge_cdr, chan->cdr);
-			ast_cdr_discard(chan->cdr); /* no posting these guys */
+			if (!ast_test_flag(chan->cdr, AST_CDR_FLAG_LOCKED))
+				ast_cdr_discard(chan->cdr); /* if locked cdrs are in chan, they are taken over in the merge */
 			
 			/* absorb the peer cdr */
 			ast_cdr_merge(bridge_cdr, peer->cdr);
-			ast_cdr_discard(peer->cdr); /* no posting these guys */
+			if (ast_test_flag(peer->cdr, AST_CDR_FLAG_LOCKED))
+				ast_cdr_discard(peer->cdr); /* if locked cdrs are in peer, they are taken over in the merge */
+			
 			peer->cdr = NULL;
 			chan->cdr = bridge_cdr; /* make this available to the rest of the world via the chan while the call is in progress */
 		} else if (chan->cdr) {
@@ -1570,14 +1573,16 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			ast_cdr_init(bridge_cdr,chan);
 			/* absorb this data */
 			ast_cdr_merge(bridge_cdr, chan->cdr);
-			ast_cdr_discard(chan->cdr); /* no posting these guys */
+			if (!ast_test_flag(chan->cdr, AST_CDR_FLAG_LOCKED))
+				ast_cdr_discard(chan->cdr); /* if locked cdrs are in chan, they are taken over in the merge */
 			chan->cdr = bridge_cdr; /* make this available to the rest of the world via the chan while the call is in progress */
 		} else if (peer->cdr) {
 			/* take the cdr from the peer - literally */
 			ast_cdr_init(bridge_cdr,peer);
 			/* absorb this data */
 			ast_cdr_merge(bridge_cdr, peer->cdr);
-			ast_cdr_discard(peer->cdr); /* no posting these guys */
+			if (!ast_test_flag(peer->cdr, AST_CDR_FLAG_LOCKED))
+				ast_cdr_discard(peer->cdr); /* if locked cdrs are in chan, they are taken over in the merge */
 			peer->cdr = NULL;
 			peer->cdr = bridge_cdr; /* make this available to the rest of the world via the chan while the call is in progress */
 		} else {

@@ -22,7 +22,7 @@ AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
 
 AC_GNU_SOURCE
-AC_USE_SYSTEM_EXTENSIONS
+AC_USE_SYSTEM_EXTENSIONS	# note- does not work on FreeBSD
 
 case "${host_os}" in
      freebsd*)
@@ -120,7 +120,7 @@ AC_PROG_CPP
 AC_PROG_CXXCPP
 # This macro is just copied into our local acinclude.m4 from libtool.m4 so that
 # the developers regenerating the configure script don't have to install libtool.
-AST_PROG_LD
+AST_PROG_LD 	# note - does not work on freebsd
 AC_PROG_AWK
 AC_PROG_INSTALL
 AC_PROG_LN_S
@@ -180,6 +180,7 @@ AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
 AST_EXT_LIB_SETUP([IMAP_TK], [UW IMAP Toolkit], [imap])
 AST_EXT_LIB_SETUP([ISDNNET], [ISDN4Linux Library], [isdnnet])
 AST_EXT_LIB_SETUP([KDE], [KDE], [kde])
+AST_EXT_LIB_SETUP([LTDL], [libtool], [ltdl])
 AST_EXT_LIB_SETUP([MISDN], [mISDN User Library], [misdn])
 AST_EXT_LIB_SETUP([NBS], [Network Broadcast Sound], [nbs])
 AST_EXT_LIB_SETUP([NCURSES], [ncurses], [ncurses])
@@ -262,6 +263,9 @@ AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
 AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent floor ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap pow putenv re_comp regcomp rint select setenv socket sqrt strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
 
+# some systems already have gethostbyname_r so we don't need to build ours in main/utils.c
+AC_CHECK_FUNCS([gethostbyname_r])
+
 AC_MSG_CHECKING(for PTHREAD_RWLOCK_INITIALIZER)
 AC_LINK_IFELSE(
         AC_LANG_PROGRAM([#include <pthread.h>],
@@ -316,6 +320,16 @@ AC_COMPILE_IFELSE(
 CFLAGS="${saved_CFLAGS}"
 AC_SUBST(GC_CFLAGS)
 AC_SUBST(GC_LDFLAGS)
+
+AC_MSG_CHECKING(for -Wdeclaration-after-statement support)
+if $(${CC} -Wdeclaration-after-statement -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
+   AC_MSG_RESULT(yes)
+   AST_DECLARATION_AFTER_STATEMENT=-Wdeclaration-after-statement
+else
+	AC_MSG_RESULT(no)
+	AST_DECLARATION_AFTER_STATEMENT=
+fi
+AC_SUBST(AST_DECLARATION_AFTER_STATEMENT)
 
 AC_MSG_CHECKING(for res_ninit)
 AC_LINK_IFELSE(
@@ -582,6 +596,9 @@ if test "${USE_IMAP_TK}" != "no"; then
    fi
 fi
 
+# Needed by unixodbc
+AST_EXT_LIB_CHECK([LTDL], [ltdl], [lt_dlinit], [ltdl.h], [])
+
 AC_LANG_PUSH(C++)
 
 if test "${USE_KDE}" != "no"; then
@@ -694,7 +711,7 @@ fi
 
 AST_EXT_LIB_CHECK([NEWT], [newt], [newtBell], [newt.h])
 
-AST_EXT_LIB_CHECK([UNIXODBC], [odbc], [SQLConnect], [sql.h], [-lltdl])
+AST_EXT_LIB_CHECK([UNIXODBC], [odbc], [SQLConnect], [sql.h], [])
 
 AST_EXT_LIB_CHECK([OGG], [ogg], [ogg_sync_init], [])
 

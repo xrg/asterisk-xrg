@@ -111,6 +111,9 @@
 /* Define to 1 if you have the `gethostbyname' function. */
 #undef HAVE_GETHOSTBYNAME
 
+/* Define to 1 if you have the `gethostbyname_r' function. */
+#undef HAVE_GETHOSTBYNAME_R
+
 /* Define to 1 if you have the `gethostname' function. */
 #undef HAVE_GETHOSTNAME
 
@@ -180,6 +183,9 @@
 
 /* Define to 1 if you have the `localtime_r' function. */
 #undef HAVE_LOCALTIME_R
+
+/* Define to indicate the ${LTDL_DESCRIP} library */
+#undef HAVE_LTDL
 
 /* Define to 1 if you have the <malloc.h> header file. */
 #undef HAVE_MALLOC_H
