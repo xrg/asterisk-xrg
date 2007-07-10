@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -216,7 +216,11 @@ int ast_search_dns(void *context,
 			ret = 1;
 	}
 #if HAVE_RES_NINIT
+#if HAVE_RES_NDESTROY
+	res_ndestroy(&dnsstate);
+#else
 	res_nclose(&dnsstate);
+#endif
 #else
 #ifndef __APPLE__
 	res_close();
