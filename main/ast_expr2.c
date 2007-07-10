@@ -1,9 +1,7 @@
-/* A Bison parser, made by GNU Bison 2.3.  */
+/* A Bison parser, made by GNU Bison 2.1a.  */
 
-/* Skeleton implementation for Bison's Yacc-like parsers in C
-
-   Copyright (C) 1984, 1989, 1990, 2000, 2001, 2002, 2003, 2004, 2005, 2006
-   Free Software Foundation, Inc.
+/* Skeleton parser for Yacc-like parsing with Bison,
+   Copyright (C) 1984, 1989, 1990, 2000, 2001, 2002, 2003, 2004, 2005, 2006 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -20,18 +18,10 @@
    Foundation, Inc., 51 Franklin Street, Fifth Floor,
    Boston, MA 02110-1301, USA.  */
 
-/* As a special exception, you may create a larger work that contains
-   part or all of the Bison parser skeleton and distribute that work
-   under terms of your choice, so long as that work isn't itself a
-   parser generator using the skeleton or a modified version thereof
-   as a parser skeleton.  Alternatively, if you modify or redistribute
-   the parser skeleton itself, you may (at your option) remove this
-   special exception, which will cause the skeleton and the resulting
-   Bison output files to be licensed under the GNU General Public
-   License without this special exception.
-
-   This special exception was added by the Free Software Foundation in
-   version 2.2 of Bison.  */
+/* As a special exception, when this file is copied by Bison into a
+   Bison output file, you may use that output file without restriction.
+   This special exception was added by the Free Software Foundation
+   in version 1.24 of Bison.  */
 
 /* C LALR(1) parser skeleton written by Richard Stallman, by
    simplifying the original so-called "semantic" parser.  */
@@ -47,7 +37,7 @@
 #define YYBISON 1
 
 /* Bison version.  */
-#define YYBISON_VERSION "2.3"
+#define YYBISON_VERSION "2.1a"
 
 /* Skeleton name.  */
 #define YYSKELETON_NAME "yacc.c"
@@ -131,7 +121,7 @@
  *
  * Largely rewritten by J.T. Conklin (jtc@wimsey.com)
  *
- * And then overhauled twice by Steve Murphy (murf@e-tools.com)
+ * And then overhauled twice by Steve Murphy (murf@digium.com)
  * to add double-quoted strings, allow mult. spaces, improve
  * error messages, and then to fold in a flex scanner for the 
  * yylex operation.
@@ -288,8 +278,8 @@ typedef union YYSTYPE
 {
 	struct val *val;
 }
-/* Line 193 of yacc.c.  */
-#line 293 "ast_expr2.c"
+/* Line 198 of yacc.c.  */
+#line 283 "ast_expr2.c"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
@@ -316,8 +306,8 @@ typedef struct YYLTYPE
 extern int		ast_yylex __P((YYSTYPE *, YYLTYPE *, yyscan_t));
 
 
-/* Line 216 of yacc.c.  */
-#line 321 "ast_expr2.c"
+/* Line 221 of yacc.c.  */
+#line 311 "ast_expr2.c"
 
 #ifdef short
 # undef short
@@ -447,13 +437,8 @@ YYID (i)
 #  ifndef YYSTACK_ALLOC_MAXIMUM
 #   define YYSTACK_ALLOC_MAXIMUM YYSIZE_MAXIMUM
 #  endif
-#  if (defined __cplusplus && ! defined _STDLIB_H \
-       && ! ((defined YYMALLOC || defined malloc) \
-	     && (defined YYFREE || defined free)))
-#   include <stdlib.h> /* INFRINGES ON USER NAME SPACE */
-#   ifndef _STDLIB_H
-#    define _STDLIB_H 1
-#   endif
+#  ifdef __cplusplus
+extern "C" {
 #  endif
 #  ifndef YYMALLOC
 #   define YYMALLOC malloc
@@ -468,6 +453,9 @@ void *malloc (YYSIZE_T); /* INFRINGES ON USER NAME SPACE */
      || defined __cplusplus || defined _MSC_VER)
 void free (void *); /* INFRINGES ON USER NAME SPACE */
 #   endif
+#  endif
+#  ifdef __cplusplus
+}
 #  endif
 # endif
 #endif /* ! defined yyoverflow || YYERROR_VERBOSE */
@@ -872,14 +860,14 @@ do {									  \
 #if (defined __STDC__ || defined __C99__FUNC__ \
      || defined __cplusplus || defined _MSC_VER)
 static void
-yy_symbol_value_print (FILE *yyoutput, int yytype, YYSTYPE const * const yyvaluep, YYLTYPE const * const yylocationp)
+yy_symbol_value_print (FILE *yyoutput, int yytype, const YYSTYPE * const yyvaluep, const YYLTYPE * const yylocationp)
 #else
 static void
 yy_symbol_value_print (yyoutput, yytype, yyvaluep, yylocationp)
     FILE *yyoutput;
     int yytype;
-    YYSTYPE const * const yyvaluep;
-    YYLTYPE const * const yylocationp;
+    const YYSTYPE * const yyvaluep;
+    const YYLTYPE * const yylocationp;
 #endif
 {
   if (!yyvaluep)
@@ -906,14 +894,14 @@ yy_symbol_value_print (yyoutput, yytype, yyvaluep, yylocationp)
 #if (defined __STDC__ || defined __C99__FUNC__ \
      || defined __cplusplus || defined _MSC_VER)
 static void
-yy_symbol_print (FILE *yyoutput, int yytype, YYSTYPE const * const yyvaluep, YYLTYPE const * const yylocationp)
+yy_symbol_print (FILE *yyoutput, int yytype, const YYSTYPE * const yyvaluep, const YYLTYPE * const yylocationp)
 #else
 static void
 yy_symbol_print (yyoutput, yytype, yyvaluep, yylocationp)
     FILE *yyoutput;
     int yytype;
-    YYSTYPE const * const yyvaluep;
-    YYLTYPE const * const yylocationp;
+    const YYSTYPE * const yyvaluep;
+    const YYLTYPE * const yylocationp;
 #endif
 {
   if (yytype < YYNTOKENS)
@@ -966,7 +954,8 @@ static void
 yy_reduce_print (YYSTYPE *yyvsp, YYLTYPE *yylsp, int yyrule)
 #else
 static void
-yy_reduce_print (yyvsp, yylsp, yyrule)
+yy_reduce_print (yyvsp, yylsp, yyrule
+		   )
     YYSTYPE *yyvsp;
     YYLTYPE *yylsp;
     int yyrule;
@@ -1089,7 +1078,7 @@ yytnamerr (char *yyres, const char *yystr)
 {
   if (*yystr == '"')
     {
-      YYSIZE_T yyn = 0;
+      size_t yyn = 0;
       char const *yyp = yystr;
 
       for (;;)
@@ -1136,7 +1125,7 @@ yysyntax_error (char *yyresult, int yystate, int yychar)
 {
   int yyn = yypact[yystate];
 
-  if (! (YYPACT_NINF < yyn && yyn <= YYLAST))
+  if (! (YYPACT_NINF < yyn && yyn < YYLAST))
     return 0;
   else
     {
@@ -1174,7 +1163,7 @@ yysyntax_error (char *yyresult, int yystate, int yychar)
       int yyxbegin = yyn < 0 ? -yyn : 0;
 
       /* Stay within bounds of both yycheck and yytname.  */
-      int yychecklim = YYLAST - yyn + 1;
+      int yychecklim = YYLAST - yyn;
       int yyxend = yychecklim < YYNTOKENS ? yychecklim : YYNTOKENS;
       int yycount = 1;
 
@@ -1264,112 +1253,112 @@ yydestruct (yymsg, yytype, yyvaluep, yylocationp)
       case 3: /* "TOK_COLONCOLON" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1268 "ast_expr2.c"
+#line 1257 "ast_expr2.c"
 	break;
       case 4: /* "TOK_COND" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1273 "ast_expr2.c"
+#line 1262 "ast_expr2.c"
 	break;
       case 5: /* "TOK_OR" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1278 "ast_expr2.c"
+#line 1267 "ast_expr2.c"
 	break;
       case 6: /* "TOK_AND" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1283 "ast_expr2.c"
+#line 1272 "ast_expr2.c"
 	break;
       case 7: /* "TOK_NE" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1288 "ast_expr2.c"
+#line 1277 "ast_expr2.c"
 	break;
       case 8: /* "TOK_LE" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1293 "ast_expr2.c"
+#line 1282 "ast_expr2.c"
 	break;
       case 9: /* "TOK_GE" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1298 "ast_expr2.c"
+#line 1287 "ast_expr2.c"
 	break;
       case 10: /* "TOK_LT" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1303 "ast_expr2.c"
+#line 1292 "ast_expr2.c"
 	break;
       case 11: /* "TOK_GT" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1308 "ast_expr2.c"
+#line 1297 "ast_expr2.c"
 	break;
       case 12: /* "TOK_EQ" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1313 "ast_expr2.c"
+#line 1302 "ast_expr2.c"
 	break;
       case 13: /* "TOK_MINUS" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1318 "ast_expr2.c"
+#line 1307 "ast_expr2.c"
 	break;
       case 14: /* "TOK_PLUS" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1323 "ast_expr2.c"
+#line 1312 "ast_expr2.c"
 	break;
       case 15: /* "TOK_MOD" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1328 "ast_expr2.c"
+#line 1317 "ast_expr2.c"
 	break;
       case 16: /* "TOK_DIV" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1333 "ast_expr2.c"
+#line 1322 "ast_expr2.c"
 	break;
       case 17: /* "TOK_MULT" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1338 "ast_expr2.c"
+#line 1327 "ast_expr2.c"
 	break;
       case 18: /* "TOK_COMPL" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1343 "ast_expr2.c"
+#line 1332 "ast_expr2.c"
 	break;
       case 19: /* "TOK_EQTILDE" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1348 "ast_expr2.c"
+#line 1337 "ast_expr2.c"
 	break;
       case 20: /* "TOK_COLON" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1353 "ast_expr2.c"
+#line 1342 "ast_expr2.c"
 	break;
       case 21: /* "TOK_LP" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1358 "ast_expr2.c"
+#line 1347 "ast_expr2.c"
 	break;
       case 22: /* "TOK_RP" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1363 "ast_expr2.c"
+#line 1352 "ast_expr2.c"
 	break;
       case 23: /* "TOKEN" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1368 "ast_expr2.c"
+#line 1357 "ast_expr2.c"
 	break;
       case 26: /* "expr" */
 #line 169 "ast_expr2.y"
 	{  free_value((yyvaluep->val)); };
-#line 1373 "ast_expr2.c"
+#line 1362 "ast_expr2.c"
 	break;
 
       default:
@@ -1870,8 +1859,8 @@ yyreduce:
     break;
 
 
-/* Line 1267 of yacc.c.  */
-#line 1875 "ast_expr2.c"
+/* Line 1270 of yacc.c.  */
+#line 1864 "ast_expr2.c"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -2086,8 +2075,7 @@ yyreturn:
   if (yymsg != yymsgbuf)
     YYSTACK_FREE (yymsg);
 #endif
-  /* Make sure YYID is used.  */
-  return YYID (yyresult);
+  return yyresult;
 }
 
 

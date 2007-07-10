@@ -4,7 +4,7 @@
  *
  * Largely rewritten by J.T. Conklin (jtc@wimsey.com)
  *
- * And then overhauled twice by Steve Murphy (murf@e-tools.com)
+ * And then overhauled twice by Steve Murphy (murf@digium.com)
  * to add double-quoted strings, allow mult. spaces, improve
  * error messages, and then to fold in a flex scanner for the 
  * yylex operation.

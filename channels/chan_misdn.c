@@ -110,6 +110,10 @@ of data. */
 int misdn_jb_empty(struct misdn_jb *jb, char *data, int len);
 
 
+/* BEGIN: chan_misdn.h */
+
+ast_mutex_t release_lock;
+
 enum misdn_chan_state {
 	MISDN_NOTHING=0,	/*!< at beginning */
 	MISDN_WAITING4DIGS, /*!<  when waiting for infos */
@@ -2424,11 +2428,13 @@ static int misdn_hangup(struct ast_channel *ast)
 		/* between request and call */
 		ast_log(LOG_DEBUG, "State Reserved (or nothing) => chanIsAvail\n");
 		MISDN_ASTERISK_TECH_PVT(ast)=NULL;
-		
+	
+		ast_mutex_lock(&release_lock);
 		cl_dequeue_chan(&cl_te, p);
 		close(p->pipe[0]);
 		close(p->pipe[1]);
 		free(p);
+		ast_mutex_unlock(&release_lock);
 		
 		if (bc)
 			misdn_lib_release(bc);
@@ -3516,10 +3522,13 @@ static void hangup_chan(struct chan_list *ch)
 /** Isdn asks us to release channel, pendant to misdn_hangup **/
 static void release_chan(struct misdn_bchannel *bc) {
 	struct ast_channel *ast=NULL;
+
+	ast_mutex_lock(&release_lock);
 	{
 		struct chan_list *ch=find_chan_by_bc(cl_te, bc);
 		if (!ch)  {
 			chan_misdn_log(1, bc->port, "release_chan: Ch not found!\n");
+			ast_mutex_unlock(&release_lock);
 			return;
 		}
 		
@@ -3578,6 +3587,8 @@ static void release_chan(struct misdn_bchannel *bc) {
 			/* chan is already cleaned, so exiting  */
 		}
 	}
+
+	ast_mutex_unlock(&release_lock);
 }
 /*** release end **/
 
@@ -3997,6 +4008,8 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				if (ast_exists_extension(ch->ast, ch->context, "i", 1, bc->oad)) {
 					ast_log(LOG_WARNING, "Extension can never match, So jumping to 'i' extension. port(%d)\n",bc->port);
 					strcpy(ch->ast->exten, "i");
+
+					ch->state = MISDN_DIALING;
 					start_pbx(ch, bc, ch->ast);
 					break;
 				}
@@ -4025,8 +4038,11 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				break;
 			}
 
-			if (ast_exists_extension(ch->ast, ch->context, bc->dad, 1, bc->oad)) 
+			if (ast_exists_extension(ch->ast, ch->context, bc->dad, 1, bc->oad))  {
+				
+				ch->state = MISDN_DIALING;
 				start_pbx(ch, bc, ch->ast);
+			}
 		} else {
 			/*  sending INFOS as DTMF-Frames :) */
 			struct ast_frame fr;
@@ -4814,8 +4830,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 
 	case EVENT_RESTART:
 
-		stop_bc_tones(ch);
-		release_chan(bc);
+		if (!bc->dummy) {
+			stop_bc_tones(ch);
+			release_chan(bc);
+		}
 		
 		break;
 				
@@ -4915,6 +4933,7 @@ static int load_module(void)
 	}
 	
 	ast_mutex_init(&cl_te_lock);
+	ast_mutex_init(&release_lock);
 
 	misdn_cfg_update_ptp();
 	misdn_cfg_get_ports_string(ports);
@@ -5074,11 +5093,6 @@ static int misdn_facility_exec(struct ast_channel *chan, void *data)
 
 static int misdn_check_l2l1(struct ast_channel *chan, void *data)
 {
-	if (strcasecmp(chan->tech->type,"mISDN")) {
-		ast_log(LOG_WARNING, "misdn_check_l2l1 makes only sense with chan_misdn channels!\n");
-		return -1;
-	}
-
 	AST_DECLARE_APP_ARGS(args,
 			AST_APP_ARG(grouppar);
 			AST_APP_ARG(timeout);

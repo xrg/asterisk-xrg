@@ -2357,8 +2357,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			ast_set_flag(&(bridge_config.features_caller), AST_FEATURE_DISCONNECT);
 			break;
 		case 'n':
-			if ((now - qe->start >= qe->parent->timeout))
-				*go_on = 1;
+			*go_on = 1;
 			break;
 		case 'i':
 			forwardsallowed = 0;
@@ -3468,6 +3467,17 @@ check_turns:
 
 				stat = get_member_status(qe.parent, qe.max_penalty);
 
+				/* exit after 'timeout' cycle if 'n' option enabled */
+				if (go_on) {
+					if (option_verbose > 2)
+						ast_verbose(VERBOSE_PREFIX_3 "Exiting on time-out cycle\n");
+					ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
+					record_abandoned(&qe);
+					reason = QUEUE_TIMEOUT;
+					res = 0;
+					break;
+				}
+
 				/* leave the queue if no agents, if enabled */
 				if (qe.parent->leavewhenempty && (stat == QUEUE_NO_MEMBERS)) {
 					record_abandoned(&qe);
@@ -3510,16 +3520,7 @@ check_turns:
 					ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHKEY", "%s|%d", qe.digits, qe.pos);
 					break;
 				}
-				/* exit after 'timeout' cycle if 'n' option enabled */
-				if (go_on) {
-					if (option_verbose > 2)
-						ast_verbose(VERBOSE_PREFIX_3 "Exiting on time-out cycle\n");
-					ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
-					record_abandoned(&qe);
-					reason = QUEUE_TIMEOUT;
-					res = 0;
-					break;
-				}
+
 				/* Since this is a priority queue and
 				 * it is not sure that we are still at the head
 				 * of the queue, go and check for our turn again.
@@ -4050,6 +4051,13 @@ static char *complete_queue(const char *line, const char *word, int pos, int sta
 	return ret;
 }
 
+static char *complete_queue_show(const char *line, const char *word, int pos, int state)
+{
+	if (pos == 2)
+		return complete_queue(line, word, pos, state);
+	return NULL;
+}
+
 /*!\brief callback to display queues status in manager
    \addtogroup Group_AMI
  */
@@ -4088,8 +4096,7 @@ static int manager_queues_status(struct mansession *s, const struct message *m)
 
 		/* List queue properties */
 		if (ast_strlen_zero(queuefilter) || !strcmp(q->name, queuefilter)) {
-			if (q->callscompleted > 0)
-				sl = 100 * ((float) q->callscompletedinsl / (float) q->callscompleted);
+			sl = ((q->callscompleted > 0) ? 100 * ((float)q->callscompletedinsl / (float)q->callscompleted) : 0);
 			astman_append(s, "Event: QueueParams\r\n"
 				"Queue: %s\r\n"
 				"Max: %d\r\n"
@@ -4425,7 +4432,7 @@ static char qrm_cmd_usage[] =
 static struct ast_cli_entry cli_show_queue_deprecated = {
 	{ "show", "queue", NULL },
 	queue_show, NULL,
-	NULL, complete_queue };
+	NULL, complete_queue_show };
 
 static struct ast_cli_entry cli_add_queue_member_deprecated = {
 	{ "add", "queue", "member", NULL },
@@ -4445,7 +4452,7 @@ static struct ast_cli_entry cli_queue[] = {
 
 	{ { "queue", "show", NULL },
 	queue_show, "Show status of a specified queue",
-	queue_show_usage, complete_queue, &cli_show_queue_deprecated },
+	queue_show_usage, complete_queue_show, &cli_show_queue_deprecated },
 
 	{ { "queue", "add", "member", NULL },
 	handle_queue_add_member, "Add a channel to a specified queue",

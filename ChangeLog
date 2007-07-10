@@ -1,3 +1,342 @@
+2007-07-09  Russell Bryant <russell@digium.com>
+
+	* Asterisk 1.4.7 released.
+
+2007-07-09 21:31 +0000 [r74162-74211]  Russell Bryant <russell@digium.com>
+
+	* configure, configure.ac: Update the configure script to check for
+	  a required function that is not present in the 1.2 version of
+	  libpri. This will prevent the configure script from thinking that
+	  it has compatible libpri support for Asterisk 1.4, when it
+	  actually does not because the installed version is from 1.2.
+
+	* /: Blocked revisions 74165 via svnmerge ........ r74165 | russell
+	  | 2007-07-09 16:00:17 -0500 (Mon, 09 Jul 2007) | 4 lines When the
+	  specified class isn't found, properly fall back to the channel's
+	  music class or the default. (issue #10123, reported by blitzrage,
+	  patches from juggie, qwell, and me) ........
+
+	* res/res_musiconhold.c: (closes issue #10123) Reported by:
+	  blitzrage Patches submitted by: juggie, qwell, me Tested by:
+	  blitzrage When trying to find a music on hold class to use, try
+	  all of the options, instead of only the first one that is set.
+	  Also, change the MusicOnHold applications to not hang up on the
+	  channel when a class can not be found.
+
+2007-07-09 20:19 +0000 [r74159]  Jason Parker <jparker@digium.com>
+
+	* channels/chan_zap.c, /: Merged revisions 74158 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r74158 | qwell | 2007-07-09 15:18:15 -0500 (Mon, 09 Jul 2007) | 8
+	  lines Several chan_zap options were not working on reload because
+	  they were arbitrarily disallowed when reloading some/most PRI
+	  options (such as signalling) was disallowed. Options such as
+	  polarityonanswerdelay and answeronpolarityswitch can safely be
+	  changed on a reload. This corrects that behavior. Issue 9186,
+	  patch by tzafrir. ........
+
+2007-07-09 18:38 +0000 [r74120-74122]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_queue.c: Forgot to get rid of an extraneous debug
+	  message.
+
+	* apps/app_queue.c: The n option for Queue should make the queue
+	  exit immediately after failure to reach any members and should
+	  not be dependent on the timeout value passed to Queue (closes
+	  issue #10127, reported by bcnit, repaired by me)
+
+2007-07-09 15:32 +0000 [r74082]  Joshua Colp <jcolp@digium.com>
+
+	* channels/chan_skinny.c: Only destroy the scheduler context if it
+	  was allocated. (issue #10124 reported by gzero)
+
+2007-07-09 14:57 +0000 [r74047]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Fixed a logic error in leave_voicemail.
+	  Pass the mailbox instead of the context to inbox_count when the
+	  context is "default." (closes issue #10135, reported by yannj,
+	  repaired by me)
+
+2007-07-09 14:49 +0000 [r74043-74045]  Joshua Colp <jcolp@digium.com>
+
+	* channels/chan_skinny.c, pbx/pbx_dundi.c: Few minor thread
+	  synchronization tweaks. (issue #10124 reported by gzero)
+
+	* configure, acinclude.m4: Use AC_CHECK_HEADER to check for
+	  ptlib/openh323 to allow for cross compiling. (issue #9675
+	  reported by zandbelt)
+
+2007-07-09 04:03 +0000 [r73985]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* main/ast_expr2f.c: Doxygen formatting fixes; fixes errors while
+	  'make progdocs'. (Closes issue #10104)
+
+2007-07-09 03:13 +0000 [r73930-73980]  Joshua Colp <jcolp@digium.com>
+
+	* main/cdr.c: Give Agent channel names priority when doing CDR
+	  merging. (issue #10011 reported by krtorio)
+
+	* pbx/pbx_config.c: Add a few sanity checks when writing out the
+	  dialplan. (issue #10157 reported by dome)
+
+2007-07-08 09:47 +0000 [r73849]  Olle Johansson <oej@edvina.net>
+
+	* channels/chan_sip.c: While tracking down a bug, I need some more
+	  history. Dumphistory is very useful, indeed.
+
+2007-07-06 23:02 +0000 [r73769]  Russell Bryant <russell@digium.com>
+
+	* /, channels/chan_sip.c: Merged revisions 73768 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r73768 | russell | 2007-07-06 18:01:22 -0500 (Fri, 06 Jul 2007) |
+	  4 lines If a sip_pvt struct has already registered an extension
+	  state callback, remove the old one before adding a new one. If
+	  this isn't done, Asterisk will crash. (issue #10120) ........
+
+2007-07-06 16:36 +0000 [r73727]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Fixing a rare case which causes voicemail
+	  to crash when compiled with IMAP storage. inboxcount has the
+	  possibility of finding an "interactive" vm_state when no
+	  persistent "non-interactive" vm_state exists for that mailbox. If
+	  this should happen when someone attempts to leave a message, it
+	  results in a crash. This patch, along with my commit in revision
+	  72670 fix issue 10053, reported by jaroth. closes issue #10053
+
+2007-07-06 16:12 +0000 [r73679-73696]  Russell Bryant <russell@digium.com>
+
+	* res/res_config_odbc.c, /: Merged revisions 73684 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r73684 | russell | 2007-07-06 11:06:27 -0500 (Fri, 06
+	  Jul 2007) | 8 lines (closes issue #10075) Reported by: apsaras
+	  Patches submitted by: Corydon76 Tested by: apsaras Fix a problem
+	  with MSSQL 2005 by explicitly stating that '\' is being used as
+	  an escape character. ........
+
+	* /, channels/chan_sip.c: Merged revisions 73678 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r73678 | russell | 2007-07-06 10:55:41 -0500 (Fri, 06 Jul 2007) |
+	  7 lines (closes issue #10125) Reported by: makoto Patches
+	  submitted by: makoto This fixes a crash in chan_sip that happens
+	  when the bindaddr setting is not valid on Asterisk startup, gets
+	  fixed, and then a reload gets issued. ........
+
+2007-07-06 15:27 +0000 [r73675]  Mark Michelson <mmichelson@digium.com>
+
+	* /, channels/chan_agent.c: Merged revisions 73674 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r73674 | mmichelson | 2007-07-06 10:26:40 -0500 (Fri, 06
+	  Jul 2007) | 5 lines Fixed a bug wherein agents get stuck busy.
+	  (issue 9618, reported by jiddings, patched by moi) closes issue
+	  #9618 ........
+
+2007-07-06 03:34 +0000 [r73551-73629]  Russell Bryant <russell@digium.com>
+
+	* BUGS: fix a little spelling error
+
+	* channels/chan_sip.c: Fix a crash in chan_sip. Don't try to stop
+	  the monitor thread if it was never started. (closes issue #10124,
+	  reported by gzero, fixed by me)
+
+	* channels/chan_iax2.c: copy from the correct buffer when deferring
+	  a full frame (related to issue #9937)
+
+	* channels/chan_iax2.c: * Store the call number that a thread is
+	  processing without the full frame bit set to ease debugging *
+	  When deferring a full frame for processing, stick it into the
+	  queue for the thread that is processing frames for that call, not
+	  the one that read the current frame and is about to go back into
+	  the idle list (related to issue #9937)
+
+2007-07-05 22:20 +0000 [r73548]  Kevin P. Fleming <kpfleming@digium.com>
+
+	* /, channels/chan_sip.c: Merged revisions 73547 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r73547 | kpfleming | 2007-07-05 17:11:51 -0500 (Thu, 05 Jul 2007)
+	  | 2 lines we shouldn't allow G.723.1 endpoints to use VAD, just
+	  like we don't support it for G.729 ........
+
+2007-07-05 20:50 +0000 [r73512]  Russell Bryant <russell@digium.com>
+
+	* res/res_features.c: Pass HOLD and UNHOLD frames to the other
+	  channel when they are returned from a native bridge function.
+	  This fixes a problem where when two zap channels are natively
+	  bridged and one does a flash hook, the other channel did not
+	  receive music on hold. (Reported to me directly by Doug Bailey at
+	  Digium)
+
+2007-07-05 19:18 +0000 [r73467]  Joshua Colp <jcolp@digium.com>
+
+	* /, channels/chan_sip.c: Merged revisions 73466 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r73466 | file | 2007-07-05 16:15:18 -0300 (Thu, 05 Jul 2007) | 2
+	  lines Copy language information to the dialog structure when
+	  calling a peer for situations where a PBX may be started on the
+	  dialed channel. (issue #10121 reported by clegall_proformatique)
+	  ........
+
+2007-07-05 15:59 +0000 [r73400]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_queue.c: Correcting a minor CLI bug I found. When
+	  issuing the queue show command, if you type queue show and then
+	  press tab, you can continue pressing tab and it will keep
+	  auto-completing queue names even though only 1 queue can be used
+	  as an argument.
+
+2007-07-05 15:28 +0000 [r73398]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_vpb.cc, channels/Makefile: Make this module build
+	  for me in dev-mode
+
+2007-07-05 14:21 +0000 [r73316-73355]  Joshua Colp <jcolp@digium.com>
+
+	* apps/app_chanspy.c, main/channel.c, /: Merged revisions 73349 via
+	  svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r73349 | file | 2007-07-05 11:19:14 -0300 (Thu, 05 Jul 2007) | 2
+	  lines Tweak spy locking. (issue #9951 reported by welles)
+	  ........
+
+	* channels/chan_local.c, /: Merged revisions 73318 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r73318 | file | 2007-07-05 10:26:02 -0300 (Thu, 05 Jul
+	  2007) | 2 lines Actually check to make sure a PBX was started on
+	  one of the Local channels instead of blindly assuming it was.
+	  (issue #10112 reported by makoto) ........
+
+	* /, apps/app_queue.c: Merged revisions 73315 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r73315 | file | 2007-07-05 10:19:17 -0300 (Thu, 05 Jul 2007) | 2
+	  lines Reset ServicelevelPerf variable back to 0 if we are unable
+	  to calculate it each time... otherwise we will get previous
+	  values. (issue #10117 reported by noriyuki) ........
+
+2007-07-04 14:53 +0000 [r73208-73253]  Christian Richter <christian.richter@beronet.com>
+
+	* channels/misdn/isdn_lib.c, /: Merged revisions 73252 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r73252 | crichter | 2007-07-04 16:50:58 +0200 (Mi, 04
+	  Jul 2007) | 1 line bchannel configurations like echocancel and
+	  volume control, need to be setuped on inbound calls too. ........
+
+	* channels/chan_misdn.c, /: Merged revisions 73207 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r73207 | crichter | 2007-07-04 10:20:54 +0200 (Mi, 04
+	  Jul 2007) | 1 line bad bug in overlapdial case, we called
+	  start_pbx multiple times, because the state wasn't changed..
+	  ........
+
+2007-07-03 20:17 +0000 [r73143]  Steve Murphy <murf@digium.com>
+
+	* main/ast_expr2.fl, main/ast_expr2.c, main/Makefile,
+	  main/ast_expr2.h, main/ast_expr2.y, main/ast_expr2f.c: Removing
+	  expr floating patch from 1.4; too much of a behavior change. If
+	  you want this fix, try trunk instead. bug 9508.
+
+2007-07-03 15:42 +0000 [r73104-73106]  Jason Parker <jparker@digium.com>
+
+	* /: What the heck. This should not have happened.
+
+	* /: use autotagged externals
+
+2007-07-03 12:38 +0000 [r73053]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* apps/app_dial.c, /: Merged revisions 73052 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r73052 | tilghman | 2007-07-03 07:34:14 -0500 (Tue, 03 Jul 2007)
+	  | 2 lines RetryDial should accept a 0 argument, but it does not,
+	  because atoi does not distinguish between 0 and error (closes
+	  issue #10106) ........
+
+2007-07-03 08:17 +0000 [r73005]  Christian Richter <christian.richter@beronet.com>
+
+	* channels/chan_misdn.c, /: Merged revisions 73004 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r73004 | crichter | 2007-07-03 10:04:35 +0200 (Di, 03
+	  Jul 2007) | 1 line fixed issue, that misdn_l2l1_check could only
+	  be called from mISDN Source channels.. #9449 ........
+
+2007-07-02 20:16 +0000 [r72933]  Steve Murphy <murf@digium.com>
+
+	* main/ast_expr2.fl, main/ast_expr2.c, utils/expr2.testinput,
+	  main/Makefile, main/ast_expr2.h, main/ast_expr2.y,
+	  main/ast_expr2f.c, doc/channelvariables.txt, UPGRADE.txt: support
+	  for floating point numbers added to ast_expr2 $\[...\] exprs.
+	  Fixes bug 9508, where the expr code fails with fp numbers. The
+	  MATH function returns fp numbers by default, so this fix is
+	  considered necessary.
+
+2007-07-02 18:18 +0000 [r72926]  Russell Bryant <russell@digium.com>
+
+	* main/manager.c: Remove a bogus comment and add proper locking to
+	  the handler function for the CLI command to show information on
+	  manager actions.
+
+2007-07-02 17:59 +0000 [r72925]  Jason Parker <jparker@digium.com>
+
+	* /: Blocked revisions 72924 via svnmerge ........ r72924 | qwell |
+	  2007-07-02 12:58:25 -0500 (Mon, 02 Jul 2007) | 4 lines Fix an
+	  issue with playing "oclock" multiple times in French with 24 hour
+	  time format. Issue 10101 ........
+
+2007-07-02 14:32 +0000 [r72888]  Joshua Colp <jcolp@digium.com>
+
+	* main/channel.c: Added additional DTMF debug messages for when
+	  emulation occurs.
+
+2007-07-02 08:41 +0000 [r72850-72852]  Christian Richter <christian.richter@beronet.com>
+
+	* channels/misdn/isdn_lib.c, channels/chan_misdn.c, /: Merged
+	  revisions 72585 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r72585 | crichter | 2007-06-29 15:08:26 +0200 (Fr, 29 Jun 2007) |
+	  1 line check if the bchannel stack id is already used, if so
+	  don't use it a second time. Also added a release_chan lock, so
+	  that the same chan_list object cannot be freed twice. chan_misdn
+	  does not crash anymore on heavy load with these changes. ........
+
+	* channels/misdn/isdn_lib.c, channels/misdn/isdn_lib.h,
+	  channels/chan_misdn.c, /, channels/misdn/isdn_msg_parser.c:
+	  Merged revisions 72099 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r72099 | crichter | 2007-06-27 15:22:37 +0200 (Mi, 27 Jun 2007) |
+	  1 line simplified generation for dummy bchannels, also we mark
+	  them as dummies, so they are not used later as real-bchannels,
+	  optimized the RESTART mechanisms, we block a channel now on
+	  cause:44, and send out a RESTART automatically, then on reception
+	  of RESTART_ACKNOWLEDGE we unblock the channel again. ........
+
+	* channels/misdn/isdn_lib.c, channels/misdn/isdn_lib.h, /: Merged
+	  revisions 72087 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r72087 | crichter | 2007-06-27 11:26:53 +0200 (Mi, 27 Jun 2007) |
+	  1 line simplified channel finding and locking a lot. removed
+	  unnecessary #ifdefed areas. ........
+
+2007-07-01 23:52 +0000 [r72806]  Russell Bryant <russell@digium.com>
+
+	* pbx/pbx_spool.c, /: Merged revisions 72805 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r72805 | russell | 2007-07-01 18:51:34 -0500 (Sun, 01 Jul 2007) |
+	  5 lines When appending lines to call files to keep track of
+	  retries, write a leading newline just in case the original call
+	  file did not have a newline at the end. This fix is in response
+	  to a problem I saw reported on the asterisk-users mailing list.
+	  ........
+
+2007-06-30 16:50 +0000 [r72705-72766]  Russell Bryant <russell@digium.com>
+
+	* configure, configure.ac: Tweak the configure script so that error
+	  output isn't spewed to the console when searching for GTK2 libs,
+	  and they aren't found.
+
+	* formats/format_pcm.c: give format_pcm a more concise destription
+
+2007-06-29 19:07 +0000 [r72665]  Luigi Rizzo <rizzo@icir.org>
+
+	* main/utils.c: Use !defined(HAVE_GETHOSTBYNAME_R) to check for
+	  absence of the function. This was already done in trunk.
+
 2007-06-29  Russell Bryant <russell@digium.com>
 
 	* Asterisk 1.4.6 released.

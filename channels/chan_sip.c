@@ -2719,6 +2719,8 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		ast_string_field_set(dialog, fromdomain, peer->fromdomain);
 	if (!ast_strlen_zero(peer->fromuser))
 		ast_string_field_set(dialog, fromuser, peer->fromuser);
+	if (!ast_strlen_zero(peer->language))
+		ast_string_field_set(dialog, language, peer->language);
 	dialog->maxtime = peer->maxms;
 	dialog->callgroup = peer->callgroup;
 	dialog->pickupgroup = peer->pickupgroup;
@@ -3389,6 +3391,8 @@ static int sip_hangup(struct ast_channel *ast)
 	}
 
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
+
+	append_history(p, needcancel ? "Cancel" : "Hangup", "Cause %s", p->owner ? ast_cause2str(p->owner->hangupcause) : "Unknown");
 
 	/* Disconnect */
 	if (p->vad)
@@ -6011,6 +6015,9 @@ static void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate
 	if (codec == AST_FORMAT_G729A) {
 		/* Indicate that we don't support VAD (G.729 annex B) */
 		ast_build_string(a_buf, a_size, "a=fmtp:%d annexb=no\r\n", rtp_code);
+	} else if (codec == AST_FORMAT_G723_1) {
+		/* Indicate that we don't support VAD (G.723.1 annex A) */
+		ast_build_string(a_buf, a_size, "a=fmtp:%d annexa=no\r\n", rtp_code);
 	} else if (codec == AST_FORMAT_ILBC) {
 		/* Add information about us using only 20/30 ms packetization */
 		ast_build_string(a_buf, a_size, "a=fmtp:%d mode=%d\r\n", rtp_code, fmt.cur_ms);
@@ -14619,8 +14626,11 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 		return 0;
 	}
 
-	if (p->subscribed != MWI_NOTIFICATION && !resubscribe)
+	if (p->subscribed != MWI_NOTIFICATION && !resubscribe) {
+		if (p->stateid > -1)
+			ast_extension_state_del(p->stateid, cb_extensionstate);
 		p->stateid = ast_extension_state_add(p->context, p->exten, cb_extensionstate, p);
+	}
 
 	if (!ast_test_flag(req, SIP_PKT_IGNORE) && p)
 		p->lastinvite = seqno;
@@ -15172,8 +15182,12 @@ static void *do_monitor(void *data)
 			sip_do_reload(sip_reloadreason);
 
 			/* Change the I/O fd of our UDP socket */
-			if (sipsock > -1)
-				sipsock_read_id = ast_io_change(io, sipsock_read_id, sipsock, NULL, 0, NULL);
+			if (sipsock > -1) {
+				if (sipsock_read_id)
+					sipsock_read_id = ast_io_change(io, sipsock_read_id, sipsock, NULL, 0, NULL);
+				else
+					sipsock_read_id = ast_io_add(io, sipsock, sipsock_read, AST_IO_IN, NULL);
+			}
 		}
 		/* Check for interfaces needing to be killed */
 		ast_mutex_lock(&iflock);
@@ -17637,7 +17651,7 @@ static int unload_module(void)
 	ast_mutex_unlock(&iflock);
 
 	ast_mutex_lock(&monlock);
-	if (monitor_thread && (monitor_thread != AST_PTHREADT_STOP)) {
+	if (monitor_thread && (monitor_thread != AST_PTHREADT_STOP) && (monitor_thread != AST_PTHREADT_NULL)) {
 		pthread_cancel(monitor_thread);
 		pthread_kill(monitor_thread, SIGURG);
 		pthread_join(monitor_thread, NULL);

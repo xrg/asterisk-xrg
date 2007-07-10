@@ -790,7 +790,7 @@ fi
 
 AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
-AST_EXT_LIB_CHECK([PRI], [pri], [pri_call], [libpri.h])
+AST_EXT_LIB_CHECK([PRI], [pri], [pri_keypad_facility], [libpri.h])
 
 if test "${USE_PWLIB}" != "no"; then
 	if test -n "${PWLIB_DIR}"; then
@@ -1137,7 +1137,7 @@ AC_SUBST(GTK_LIB)
 PBX_GTK2=0
 AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)
 if test ! "x${PKGCONFIG}" = xNo; then
-   GTK2_INCLUDE=$(${PKGCONFIG} gtk+-2.0 --cflags)
+   GTK2_INCLUDE=$(${PKGCONFIG} gtk+-2.0 --cflags 2>/dev/null)
    GTK2_LIB=$(${PKGCONFIG} gtk+-2.0 --libs)
    PBX_GTK2=1
    AC_DEFINE([HAVE_GTK2], 1, [Define if your system has the GTK2 libraries.])

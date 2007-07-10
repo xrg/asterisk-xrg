@@ -1432,23 +1432,21 @@ static void spy_cleanup(struct ast_channel *chan)
 /* Detach a spy from it's channel */
 static void spy_detach(struct ast_channel_spy *spy, struct ast_channel *chan)
 {
-	ast_mutex_lock(&spy->lock);
-
 	/* We only need to poke them if they aren't already done */
 	if (spy->status != CHANSPY_DONE) {
+		ast_mutex_lock(&spy->lock);
 		/* Indicate to the spy to stop */
 		spy->status = CHANSPY_STOP;
 		spy->chan = NULL;
 		/* Poke the spy if needed */
 		if (ast_test_flag(spy, CHANSPY_TRIGGER_MODE) != CHANSPY_TRIGGER_NONE)
 			ast_cond_signal(&spy->trigger);
+		ast_mutex_unlock(&spy->lock);
 	}
 
 	/* Print it out while we still have a lock so the structure can't go away (if signalled above) */
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Spy %s removed from channel %s\n", spy->type, chan->name);
-
-	ast_mutex_unlock(&spy->lock);
 
 	return;
 }
@@ -1461,13 +1459,10 @@ void ast_channel_spy_stop_by_type(struct ast_channel *chan, const char *type)
 		return;
 
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->spies->list, spy, list) {
-		ast_mutex_lock(&spy->lock);
 		if ((spy->type == type) && (spy->status == CHANSPY_RUNNING)) {
-			ast_mutex_unlock(&spy->lock);
 			AST_LIST_REMOVE_CURRENT(&chan->spies->list, list);
 			spy_detach(spy, chan);
-		} else
-			ast_mutex_unlock(&spy->lock);
+		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END
 	spy_cleanup(chan);
@@ -1579,6 +1574,9 @@ static void queue_frame_to_spies(struct ast_channel *chan, struct ast_frame *f, 
 	AST_LIST_TRAVERSE(&chan->spies->list, spy, list) {
 		struct ast_channel_spy_queue *queue;
 		struct ast_frame *duped_fr;
+
+		if (spy->status != CHANSPY_RUNNING)
+			continue;
 
 		ast_mutex_lock(&spy->lock);
 
@@ -2196,9 +2194,11 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		/* Drop first digit from the buffer */
 		memmove(chan->dtmfq, chan->dtmfq + 1, sizeof(chan->dtmfq) - 1);
 		f = &chan->dtmff;
-		if (ast_test_flag(chan, AST_FLAG_END_DTMF_ONLY))
+		if (ast_test_flag(chan, AST_FLAG_END_DTMF_ONLY)) {
+			ast_log(LOG_DTMF, "DTMF end emulation of '%c' queued on %s\n", f->subclass, chan->name);
 			chan->dtmff.frametype = AST_FRAME_DTMF_END;
-		else {
+		} else {
+			ast_log(LOG_DTMF, "DTMF begin emulation of '%c' with duration %d queued on %s\n", f->subclass, AST_DEFAULT_EMULATE_DTMF_DURATION, chan->name);
 			chan->dtmff.frametype = AST_FRAME_DTMF_BEGIN;
 			ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
 			chan->emulate_dtmf_digit = f->subclass;
@@ -2363,6 +2363,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 							chan->emulate_dtmf_duration = AST_MIN_DTMF_DURATION;
 					} else
 						chan->emulate_dtmf_duration = AST_DEFAULT_EMULATE_DTMF_DURATION;
+					ast_log(LOG_DTMF, "DTMF begin emulation of '%c' with duration %d queued on %s\n", f->subclass, chan->emulate_dtmf_duration, chan->name);
 				}
 			} else {
 				struct timeval now = ast_tvnow();
@@ -2403,6 +2404,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					chan->dtmf_tv = now;
 					ast_clear_flag(chan, AST_FLAG_EMULATE_DTMF);
 					chan->emulate_dtmf_digit = 0;
+					ast_log(LOG_DTMF, "DTMF end emulation of '%c' queued on %s\n", f->subclass, chan->name);
 				}
 			}
 			break;
@@ -2433,6 +2435,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					f->subclass = chan->emulate_dtmf_digit;
 					f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
 					chan->dtmf_tv = now;
+					ast_log(LOG_DTMF, "DTMF end emulation of '%c' queued on %s\n", f->subclass, chan->name);
 				} else {
 					/* Drop voice frames while we're still in the middle of the digit */
 					ast_frfree(f);
