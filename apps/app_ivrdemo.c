@@ -31,7 +31,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -115,13 +115,7 @@ static int skel_exec(struct ast_channel *chan, void *data)
 
 static int unload_module(void)
 {
-	int res;
-	
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-	
-	return res;
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)

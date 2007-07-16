@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,8 +107,6 @@ static int unload_module(void)
 	
 	res = ast_unregister_application(app_sayunixtime);
 	res |= ast_unregister_application(app_datetime);
-
-	ast_module_user_hangup_all();
 	
 	return res;
 }
