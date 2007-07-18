@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46200 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -211,7 +211,7 @@ static int realtime_exec(struct ast_channel *chan, const char *context, const ch
 							  "Application: %s\r\n"
 							  "AppData: %s\r\n"
 							  "Uniqueid: %s\r\n",
-							  chan->name, chan->context, chan->exten, chan->priority, app, appdata ? appdata : "(NULL)", chan->uniqueid);
+							  chan->name, chan->context, chan->exten, chan->priority, app, !ast_strlen_zero(appdata) ? appdata : "(NULL)", chan->uniqueid);
 				
 				res = pbx_exec(chan, a, appdata);
 			} else
