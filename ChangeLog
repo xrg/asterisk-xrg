@@ -1,3 +1,315 @@
+2007-07-17  Russell Bryant <russell@digium.com>
+
+	* Asterisk 1.4.8 released.
+
+2007-07-17 20:57 +0000 [r75441-75450]  Russell Bryant <russell@digium.com>
+
+	* /, channels/chan_skinny.c: Merged revisions 75449 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r75449 | russell | 2007-07-17 15:57:09 -0500 (Tue, 17
+	  Jul 2007) | 3 lines Properly check for the length in the skinny
+	  packet to prevent an invalid memcpy. (ASA-2007-016) ........
+
+	* main/rtp.c: cast arguments to ast_log so that it builds without
+	  warnings for me
+
+	* channels/iax2-parser.c, channels/iax2-parser.h, /,
+	  channels/chan_iax2.c: Merged revisions 75444 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r75444 | russell | 2007-07-17 15:45:27 -0500 (Tue, 17 Jul 2007) |
+	  5 lines Ensure that when encoding the contents of an ast_frame
+	  into an iax_frame, that the size of the destination buffer is
+	  known in the iax_frame so that code won't write past the end of
+	  the allocated buffer when sending outgoing frames. (ASA-2007-014)
+	  ........
+
+	* /, channels/chan_iax2.c: Merged revisions 75440 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r75440 | russell | 2007-07-17 15:41:41 -0500 (Tue, 17 Jul 2007) |
+	  4 lines After parsing information elements in IAX frames, set the
+	  data length to zero, so that code later on does not think it has
+	  data to copy. (ASA-2007-015) ........
+
+2007-07-17 20:40 +0000 [r75439]  Joshua Colp <jcolp@digium.com>
+
+	* main/rtp.c: Ensure that the pointer to STUN data does not go to
+	  unaccessible memory. (ASA-2007-017)
+
+2007-07-17 20:33 +0000 [r75437]  Russell Bryant <russell@digium.com>
+
+	* res/res_agi.c: (issue #10210) Reported by: juggie Patches:
+	  10210-1.4-grr.patch uploaded by juggie (license #24) Tested by:
+	  juggie, blitzrage Log a warning if someone uses DeadAGI on a live
+	  channel.
+
+2007-07-17 20:03 +0000 [r75405]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_dial.c: Fixing an error I made earlier. ast_fileexists
+	  can return -1 on failure, so I need to be sure that we only enter
+	  the if statement if it is successful. Related to my fix to issue
+	  #10186
+
+2007-07-17 20:01 +0000 [r75401-75403]  Russell Bryant <russell@digium.com>
+
+	* main/pbx.c: (closes issue #10209) Reported by: juggie Patches:
+	  10209-trunk-2.patch uploaded by juggie Tested by: juggie,
+	  blitzrage In ast_pbx_run(), mark a channel as hung up after an
+	  application returned -1, or when it runs out of extensions to
+	  execute. This is so that code can detect that this channel has
+	  been hung up for things like making sure DeadAGI is used on
+	  actual dead channels, and is beneficial for other things, like
+	  making sure someone doesn't try to start spying on a channel that
+	  is about to go away.
+
+	* res/res_agi.c: Remove a duplicated newline character in AGI debug
+	  output. (closes issue #10207, patch by seanbright)
+
+2007-07-16 20:53 +0000 [r75258-75306]  Kevin P. Fleming <kpfleming@digium.com>
+
+	* main/dns.c, /: Merged revisions 75304 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r75304 | kpfleming | 2007-07-16 15:46:58 -0500 (Mon, 16 Jul 2007)
+	  | 3 lines provide proper copyright/license attribution for this
+	  structure that was copied from a BSD-licensed header file long,
+	  long ago... ........
+
+	* /: another fix that is not needed here (finishing up 75251)
+
+2007-07-16 18:16 +0000 [r75253]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_dial.c: Restoring functionality from 1.2 wherein
+	  Retrydial will not exit if there is no announce file specified.
+	  This change makes it so that if there is no announce file
+	  specified, the application will continue until finished (or
+	  caller hangs up). If a bogus announce file is specified, then a
+	  warning message will be printed saying that the file could not be
+	  found, but execution will still continue. (closes issue #10186,
+	  reported by jon, patched by me)
+
+2007-07-16 18:12 +0000 [r75252]  Kevin P. Fleming <kpfleming@digium.com>
+
+	* /: block change that is not relevant here
+
+2007-07-13 20:36 +0000 [r75108]  Russell Bryant <russell@digium.com>
+
+	* /, res/res_musiconhold.c: Merged revisions 75107 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r75107 | russell | 2007-07-13 15:35:22 -0500 (Fri, 13
+	  Jul 2007) | 3 lines Fix a couple potential minor memory leaks.
+	  load_moh_classes() could return without destroying the loaded
+	  configuration. ........
+
+2007-07-13 20:15 +0000 [r75078]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_chanspy.c, /: Merged revisions 75066 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r75066 | mmichelson | 2007-07-13 15:10:39 -0500 (Fri, 13 Jul
+	  2007) | 5 lines Fixed an issue where chanspy flags were
+	  uninitialized if no options were passed. What triggered this
+	  investigation was an IRC chat where some people's quiet flags
+	  were set while others' weren't even though none of them had
+	  specified the q option. ........
+
+2007-07-13 20:10 +0000 [r75053-75067]  Russell Bryant <russell@digium.com>
+
+	* /, res/res_musiconhold.c: Merged revisions 75059 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r75059 | russell | 2007-07-13 15:07:21 -0500 (Fri, 13
+	  Jul 2007) | 6 lines Ensure that adding a user to the list of
+	  users of a specific music on hold class is not done at the same
+	  time as any of the other operations on this list to prevent list
+	  corruption. Using the global moh_data lock for this is not ideal,
+	  but it is what is used to protect these lists everywhere else in
+	  the module, and I am only changing what is necessary to fix the
+	  bug. ........
+
+	* channels/chan_zap.c, /: Merged revisions 75052 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r75052 | russell | 2007-07-13 14:10:00 -0500 (Fri, 13 Jul 2007) |
+	  12 lines (closes issue #9660) Reported by: mmacvicar Patches
+	  submitted by: bbryant, russell Tested by: mmacvicar, marco,
+	  arcivanov, jmhunter, explidous When using a TDM400P (and probably
+	  other analog cards) there was a chance that you could hang up and
+	  pick the phone back up where it has been long enough to be not
+	  considered a flash hook, but too soon such that the device
+	  reports that it is busy and the person on the phone will only
+	  hear silence. This patch makes chan_zap more tolerant of this and
+	  gives the device a couple of seconds to succeed so the person on
+	  the phone happily gets their dialtone. ........
+
+2007-07-12 23:00 +0000 [r74998]  Mark Michelson <mmichelson@digium.com>
+
+	* channels/chan_agent.c: Change to my previous fix regarding agent
+	  logoff soft. Now uses deferlogoff instead of loginstart since
+	  loginstart is used after logoff. Thanks to makoto for pointing
+	  this out and suggesting the fix. (closes issue #10178, reported
+	  and patched by makoto, with modification by me)
+
+2007-07-12 20:42 +0000 [r74955]  Steve Murphy <murf@digium.com>
+
+	* channels/chan_sip.c: This patch resolves 10143; thanks to irroot
+	  for the patch; looked acceptable. Let the community decide if it
+	  messes things up
+
+2007-07-12 19:17 +0000 [r74888-74922]  Joshua Colp <jcolp@digium.com>
+
+	* main/channel.c: Whoops... didn't want this to be returned to 0
+	  each iteration.
+
+	* main/channel.c: When waiting for a digit ensure that a begin
+	  frame was received with it, not just an end frame. (issue #10084
+	  reported by rushowr)
+
+2007-07-12 16:53 +0000 [r74839-74866]  Jason Parker <jparker@digium.com>
+
+	* channels/chan_skinny.c: It helps if I actually add this stuff for
+	  the 7921 too - otherwise it won't actually do much of anything.
+
+	* channels/chan_skinny.c: Add device ID for 7921 wireless skinny
+	  phone
+
+	* channels/chan_skinny.c: Fix dialing in skinny that was broken in
+	  some cases. Issue 10136, fix provided by DEA.
+
+2007-07-12 15:53 +0000 [r74815]  Joshua Colp <jcolp@digium.com>
+
+	* /, res/res_musiconhold.c: Merged revisions 74814 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r74814 | file | 2007-07-12 12:51:24 -0300 (Thu, 12 Jul
+	  2007) | 2 lines Only print out a warning for situations where it
+	  is actually helpful. (issue #10187 reported by denke) ........
+
+2007-07-11 22:57 +0000 [r74767]  Russell Bryant <russell@digium.com>
+
+	* /, channels/chan_iax2.c: Merged revisions 74766 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r74766 | russell | 2007-07-11 17:53:26 -0500 (Wed, 11 Jul 2007) |
+	  5 lines The function make_trunk() can fail and return -1 instead
+	  of a valid new call number. Fix the uses of this function to
+	  handle this instead of treating it as the new call number. This
+	  would cause a deadlock and memory corruption. (possible cause of
+	  issue #9614 and others, patch by me) ........
+
+2007-07-11 21:14 +0000 [r74722]  Mark Michelson <mmichelson@digium.com>
+
+	* /, channels/chan_agent.c: Merged revisions 74719 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r74719 | mmichelson | 2007-07-11 16:12:30 -0500 (Wed, 11
+	  Jul 2007) | 5 lines The cli command "agent logoff Agent/x soft"
+	  did not work...at all. Now it does. (closes issue #10178,
+	  reported and patched by makoto, with slight modification for 1.4
+	  and trunk by me) ........
+
+2007-07-11 18:34 +0000 [r74657]  Russell Bryant <russell@digium.com>
+
+	* res/res_config_odbc.c, /: Merged revisions 74656 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r74656 | russell | 2007-07-11 13:33:23 -0500 (Wed, 11
+	  Jul 2007) | 4 lines Make sure that the ESCAPE immediately follows
+	  the condition that uses LIKE. This fixes realtime extensions with
+	  ODBC. (closes issue #10175, reported by stuarth, patch by me)
+	  ........
+
+2007-07-11 18:18 +0000 [r74628-74642]  Steve Murphy <murf@digium.com>
+
+	* Makefile: This fixes 10172, where the entire man8 dir gets
+	  removed during an uninstall of asterisk
+
+	* utils/expr2.testinput, doc/channelvariables.txt, UPGRADE.txt:
+	  further reversion of previously applied floating point stuff for
+	  expr2
+
+2007-07-11 17:16 +0000 [r74515-74590]  Joshua Colp <jcolp@digium.com>
+
+	* /: Blocked revisions 74587 via svnmerge ........ r74587 | file |
+	  2007-07-11 14:15:11 -0300 (Wed, 11 Jul 2007) | 2 lines Use some
+	  Makefile magic to determine if linux/compiler.h is present.
+	  (issue #10174 reported by francesco_r) ........
+
+	* channels/chan_phone.c, configure,
+	  include/asterisk/autoconfig.h.in, configure.ac: Instead of
+	  figuring out kernel versions that have compiler.h and not...
+	  let's just use autoconf to check for it's presence. (issue #10174
+	  reported by francesco_r)
+
+	* channels/chan_phone.c: Only check if we need to do a SIGMA based
+	  tone generation if we have a card. (issue #10179 reported by
+	  mikowhy)
+
+2007-07-10 23:32 +0000 [r74476]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Forwarding a message with IMAP storage was
+	  storing the message in the sender's box instead of the forwarded
+	  mailbox. (closes issue #10138, reported and patched by jaroth)
+
+2007-07-10 19:58 +0000 [r74374-74428]  Jason Parker <jparker@digium.com>
+
+	* /, apps/app_queue.c: Merged revisions 74427 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r74427 | qwell | 2007-07-10 14:57:20 -0500 (Tue, 10 Jul 2007) | 6
+	  lines Fix an issue where it was possible to have a service level
+	  of over 100% Between the time recalc_holdtime and update_queue
+	  was called, it was possible that the call could have been hungup.
+	  Move both additions to the same place, so this won't happen.
+	  Issue 10158, initial patch by makoto, modified by me. ........
+
+	* main/dns.c: Don't use #if to check if something is defined - use
+	  #ifdef instead. Pointed out by kpfleming
+
+	* /, channels/chan_agent.c: Merged revisions 74376 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r74376 | qwell | 2007-07-10 14:03:45 -0500 (Tue, 10 Jul
+	  2007) | 4 lines Fix an issue with wrapuptime not working when
+	  using AgentLogin. Issue 10169, patch by makoto, with a minor mod
+	  by me to not re-break issue 9618 ........
+
+	* main/dns.c, /, configure, include/asterisk/autoconfig.h.in,
+	  configure.ac: Merged revisions 74373 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r74373 | qwell | 2007-07-10 13:37:23 -0500 (Tue, 10 Jul 2007) | 5
+	  lines Use res_ndestroy on systems that have it. Otherwise, use
+	  res_nclose. This prevents a memleak on NetBSD - and possibly
+	  others. Issue 10133, patch by me, reported and tested by scw
+	  ........
+
+2007-07-10  Russell Bryant <russell@digium.com>
+
+	* Asterisk 1.4.7.1 released.
+
+2007-07-10 16:00 +0000 [r74323]  Russell Bryant <russell@digium.com>
+
+	* res/res_musiconhold.c: fix an uninitialized variable
+
+2007-07-10 15:38 +0000 [r74317]  Jason Parker <jparker@digium.com>
+
+	* apps/app_voicemail.c, /: Merged revisions 74316 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r74316 | qwell | 2007-07-10 10:37:54 -0500 (Tue, 10 Jul 2007) | 4
+	  lines Fix a small typo in description in of Voicemail()
+	  application. Issue 10170, patch by casper. ........
+
+2007-07-10 15:31 +0000 [r74314]  Russell Bryant <russell@digium.com>
+
+	* res/res_config_odbc.c, /: Merged revisions 74313 via svnmerge
+	  from https://origsvn.digium.com/svn/asterisk/branches/1.2
+	  ........ r74313 | russell | 2007-07-10 10:30:20 -0500 (Tue, 10
+	  Jul 2007) | 3 lines Only use ESCAPE when LIKE is used. (issue
+	  #10075, this part reported by jmls on IRC, patch by me) ........
+
+2007-07-10 14:50 +0000 [r74262-74265]  Joshua Colp <jcolp@digium.com>
+
+	* /, main/app.c: Merged revisions 74264 via svnmerge from
+	  https://origsvn.digium.com/svn/asterisk/branches/1.2 ........
+	  r74264 | file | 2007-07-10 11:48:00 -0300 (Tue, 10 Jul 2007) | 2
+	  lines Ensure the group information category exists before trying
+	  to do a string comparison with it. (issue #10171 reported by
+	  mlegas) ........
+
+	* channels/chan_sip.c: Only spit out an inringing warning message
+	  when it is applicable. Since call limits are already toast in
+	  realtime let's not scare the user if they are using it. (issue
+	  #10166 reported by bcnit)
+
 2007-07-09  Russell Bryant <russell@digium.com>
 
 	* Asterisk 1.4.7 released.

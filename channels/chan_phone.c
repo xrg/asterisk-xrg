@@ -45,6 +45,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <signal.h>
+#ifdef HAVE_LINUX_COMPILER_H
+#include <linux/compiler.h>
+#endif
 #include <linux/telephony.h>
 /* Still use some IXJ specific stuff */
 #include <linux/version.h>
@@ -1044,7 +1047,7 @@ static void *do_monitor(void *data)
 		ast_mutex_unlock(&iflock);
 
 		/* Wait indefinitely for something to happen */
-		if (dotone && i->mode != MODE_SIGMA) {
+		if (dotone && i && i->mode != MODE_SIGMA) {
 			/* If we're ready to recycle the time, set it to 30 ms */
 			tonepos += 240;
 			if (tonepos >= sizeof(DialTone))

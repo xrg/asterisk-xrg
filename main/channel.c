@@ -2072,6 +2072,7 @@ int ast_settimeout(struct ast_channel *c, int samples, int (*func)(void *data), 
 
 int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 {
+	int begin_digit = 0;
 
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(c, AST_FLAG_ZOMBIE) || ast_check_hangup(c))
@@ -2098,7 +2099,12 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 				return -1;
 
 			switch(f->frametype) {
-			case AST_FRAME_DTMF:
+			case AST_FRAME_DTMF_BEGIN:
+				begin_digit = f->subclass;
+				break;
+			case AST_FRAME_DTMF_END:
+				if (begin_digit != f->subclass)
+					break;
 				res = f->subclass;
 				ast_frfree(f);
 				return res;

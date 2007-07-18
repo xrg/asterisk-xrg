@@ -817,6 +817,7 @@ static int callnums = 1;
 #define SKINNY_DEVICE_7911		307
 #define SKINNY_DEVICE_7961GE		308
 #define SKINNY_DEVICE_7941GE		309
+#define SKINNY_DEVICE_7921		365
 #define SKINNY_DEVICE_7905		20000
 #define SKINNY_DEVICE_7920		30002
 #define SKINNY_DEVICE_7970		30006
@@ -1163,6 +1164,7 @@ static void *get_button_template(struct skinnysession *s, struct button_definiti
 			(btn++)->buttonDefinition = BT_HOLD;
 			break;
 		case SKINNY_DEVICE_7920:
+		case SKINNY_DEVICE_7921:
 			/* XXX I don't know if this is right. */
 			for (i = 0; i < 4; i++)
 				(btn++)->buttonDefinition = BT_CUST_LINESPEEDDIAL;
@@ -1906,6 +1908,8 @@ static char *device2str(int type)
 		return "7961GE";
 	case SKINNY_DEVICE_7941GE:
 		return "7941GE";
+	case SKINNY_DEVICE_7921:
+		return "7921";
 	case SKINNY_DEVICE_7905:
 		return "7905";
 	case SKINNY_DEVICE_7920:
@@ -4099,7 +4103,7 @@ static int handle_message(struct skinny_req *req, struct skinnysession *s)
 			len = strlen(d->exten);
 			if (len < sizeof(d->exten) - 1) {
 				d->exten[len] = dgt;
-				d->exten[len] = '\0';
+				d->exten[len+1] = '\0';
 			} else {
 				ast_log(LOG_WARNING, "Dropping digit with value %d because digit queue is full\n", dgt);
 			}
@@ -4282,7 +4286,7 @@ static int get_input(struct skinnysession *s)
 		}
 		
 		dlen = letohl(*(int *)s->inbuf);
-		if (dlen < 0) {
+		if (dlen < 4) {
 			ast_log(LOG_WARNING, "Skinny Client sent invalid data.\n");
 			ast_mutex_unlock(&s->lock);
 			return -1;

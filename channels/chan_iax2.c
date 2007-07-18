@@ -1121,10 +1121,10 @@ static struct iax_frame *iaxfrdup2(struct iax_frame *fr)
 {
 	struct iax_frame *new = iax_frame_new(DIRECTION_INGRESS, fr->af.datalen, fr->cacheable);
 	if (new) {
-		size_t mallocd_datalen = new->mallocd_datalen;
+		size_t afdatalen = new->afdatalen;
 		memcpy(new, fr, sizeof(*new));
 		iax_frame_wrap(new, &fr->af);
-		new->mallocd_datalen = mallocd_datalen;
+		new->afdatalen = afdatalen;
 		new->data = NULL;
 		new->datalen = 0;
 		new->direction = DIRECTION_INGRESS;
@@ -3877,7 +3877,9 @@ static int iax2_send(struct chan_iax2_pvt *pvt, struct ast_frame *f, unsigned in
 	int sendmini=0;
 	unsigned int lastsent;
 	unsigned int fts;
-		
+
+	frb.fr2.afdatalen = sizeof(frb.buffer);
+
 	if (!pvt) {
 		ast_log(LOG_WARNING, "No private structure for packet?\n");
 		return -1;
@@ -6462,6 +6464,7 @@ static int socket_process(struct iax2_thread *thread)
 	/* allocate an iax_frame with 4096 bytes of data buffer */
 	fr = alloca(sizeof(*fr) + 4096);
 	fr->callno = 0;
+	fr->afdatalen = 4096; /* From alloca() above */
 
 	/* Copy frequently used parameters to the stack */
 	res = thread->buf_len;
@@ -6819,6 +6822,7 @@ static int socket_process(struct iax2_thread *thread)
 					return 1;
 				}
 				f.data = NULL;
+				f.datalen = 0;
 			} else
 				f.data = thread->buf + sizeof(*fh);
 		} else {
@@ -6969,7 +6973,9 @@ retryowner:
 					check_provisioning(&sin, fd, ies.serviceident, ies.provver);
 				/* If we're in trunk mode, do it now, and update the trunk number in our frame before continuing */
 				if (ast_test_flag(iaxs[fr->callno], IAX_TRUNK)) {
-					fr->callno = make_trunk(fr->callno, 1);
+					int new_callno;
+					if ((new_callno = make_trunk(fr->callno, 1)) != -1)
+						fr->callno = new_callno;
 				}
 				/* For security, always ack immediately */
 				if (delayreject)
@@ -8229,8 +8235,11 @@ static struct ast_channel *iax2_request(const char *type, int format, void *data
 
 	/* If this is a trunk, update it now */
 	ast_copy_flags(iaxs[callno], &cai, IAX_TRUNK | IAX_SENDANI | IAX_NOTRANSFER | IAX_TRANSFERMEDIA | IAX_USEJITTERBUF | IAX_FORCEJITTERBUF);	
-	if (ast_test_flag(&cai, IAX_TRUNK))
-		callno = make_trunk(callno, 1);
+	if (ast_test_flag(&cai, IAX_TRUNK)) {
+		int new_callno;
+		if ((new_callno = make_trunk(callno, 1)) != -1)
+			callno = new_callno;
+	}
 	iaxs[callno]->maxtime = cai.maxtime;
 	if (cai.found)
 		ast_string_field_set(iaxs[callno], host, pds.peer);

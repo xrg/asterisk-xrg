@@ -3095,7 +3095,7 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 			if (ast_test_flag(&fup->flags[1], SIP_PAGE2_INC_RINGING)) {
 				if (*inringing > 0)
 					(*inringing)--;
-				else
+				else if (!ast_test_flag(&fup->flags[0], SIP_REALTIME) || ast_test_flag(&fup->flags[1], SIP_PAGE2_RTCACHEFRIENDS))
 					ast_log(LOG_WARNING, "Inringing for peer '%s' < 0?\n", fup->peername);
 				ast_clear_flag(&fup->flags[1], SIP_PAGE2_INC_RINGING);
 			}
@@ -3138,7 +3138,7 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 			if (ast_test_flag(&fup->flags[1], SIP_PAGE2_INC_RINGING)) {
 				if (*inringing > 0)
 					(*inringing)--;
-				else
+				else if (!ast_test_flag(&fup->flags[0], SIP_REALTIME) || ast_test_flag(&fup->flags[1], SIP_PAGE2_RTCACHEFRIENDS))
 					ast_log(LOG_WARNING, "Inringing for peer '%s' < 0?\n", p->name);
 				ast_clear_flag(&fup->flags[1], SIP_PAGE2_INC_RINGING);
 			}
@@ -13201,7 +13201,8 @@ static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, in
 	ast_mutex_unlock(&p->refer->refer_call->lock);
 
 	/* Make sure that the masq does not free our PVT for the old call */
-	ast_set_flag(&p->refer->refer_call->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Delay hangup */
+	if (! earlyreplace && ! oneleggedreplace )
+		ast_set_flag(&p->refer->refer_call->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Delay hangup */
 		
 	/* Prepare the masquerade - if this does not happen, we will be gone */
 	if(ast_channel_masquerade(replacecall, c))
@@ -13418,7 +13419,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			error = 1;
 		}
 
-		if (!error && p->refer->refer_call->owner->_state != AST_STATE_RING && p->refer->refer_call->owner->_state != AST_STATE_UP ) {
+		if (!error && p->refer->refer_call->owner->_state != AST_STATE_RINGING && p->refer->refer_call->owner->_state != AST_STATE_RING && p->refer->refer_call->owner->_state != AST_STATE_UP ) {
 			ast_log(LOG_NOTICE, "Supervised transfer attempted to replace non-ringing or active call id (%s)!\n", replace_id);
 			transmit_response(p, "603 Declined (Replaces)", req);
 			error = 1;
