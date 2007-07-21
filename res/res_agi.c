@@ -1825,7 +1825,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 {
 	struct ast_channel *c;
 	int outfd;
-	int ms;
+	int ms, needhup = 0;
 	enum agi_result returnstatus = AGI_RESULT_SUCCESS;
 	struct ast_frame *f;
 	char buf[2048];
@@ -1844,6 +1844,11 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	setlinebuf(readf);
 	setup_env(chan, request, agi->fd, (agi->audio > -1));
 	for (;;) {
+		if (needhup) {
+			needhup = 0;
+			dead = 1;
+			kill(pid, SIGHUP);
+		}
 		ms = -1;
 		c = ast_waitfor_nandfds(&chan, dead ? 0 : 1, &agi->ctrl, 1, NULL, &outfd, &ms);
 		if (c) {
@@ -1853,7 +1858,8 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 			if (!f) {
 				ast_log(LOG_DEBUG, "%s hungup\n", chan->name);
 				returnstatus = AGI_RESULT_HANGUP;
-				break;
+				needhup = 1;
+				continue;
 			} else {
 				/* If it's voice, write it to the audio pipe */
 				if ((agi->audio > -1) && (f->frametype == AST_FRAME_VOICE)) {
@@ -1866,7 +1872,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 			retry = RETRY;
 			if (!fgets(buf, sizeof(buf), readf)) {
 				/* Program terminated */
-				if (returnstatus)
+				if (returnstatus && returnstatus != AST_PBX_KEEPALIVE)
 					returnstatus = -1;
 				if (option_verbose > 2) 
 					ast_verbose(VERBOSE_PREFIX_3 "AGI Script %s completed, returning %d\n", request, returnstatus);
@@ -1884,7 +1890,8 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 			returnstatus |= agi_handle_command(chan, agi, buf);
 			/* If the handle_command returns -1, we need to stop */
 			if ((returnstatus < 0) || (returnstatus == AST_PBX_KEEPALIVE)) {
-				break;
+				needhup = 1;
+				continue;
 			}
 		} else {
 			if (--retry <= 0) {
