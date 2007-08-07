@@ -1607,20 +1607,14 @@ static int restore_gains(struct zt_pvt *p)
 
 static inline int zt_set_hook(int fd, int hs)
 {
-	int x, res, count = 0;
+	int x, res;
 
 	x = hs;
 	res = ioctl(fd, ZT_HOOK, &x);
 
-	while (res < 0 && count < 20) {
-		usleep(100000); /* 1/10 sec. */
-		x = hs;
-		res = ioctl(fd, ZT_HOOK, &x);
-		count++;
-	}
-
 	if (res < 0) {
-		if (errno == EINPROGRESS) return 0;
+		if (errno == EINPROGRESS)
+			return 0;
 		ast_log(LOG_WARNING, "zt hook failed: %s\n", strerror(errno));
 	}
 
@@ -2956,7 +2950,9 @@ static int zt_setoption(struct ast_channel *chan, int option, void *data, int da
 		cp = (char *) data;
 		ast_log(LOG_DEBUG, "Set option RELAX DTMF, value: %s(%d) on %s\n",
 			*cp ? "ON" : "OFF", (int) *cp, chan->name);
-		ast_dsp_digitmode(p->dsp, ((*cp) ? DSP_DIGITMODE_RELAXDTMF : DSP_DIGITMODE_DTMF) | p->dtmfrelax);
+                p->dtmfrelax = 0;
+                if (*cp) p->dtmfrelax = DSP_DIGITMODE_RELAXDTMF;
+                ast_dsp_digitmode(p->dsp, DSP_DIGITMODE_DTMF | p->dtmfrelax);
 		break;
 	case AST_OPTION_AUDIO_MODE:  /* Set AUDIO mode (or not) */
 		cp = (char *) data;
@@ -6610,7 +6606,7 @@ static int handle_init_event(struct zt_pvt *i, int event)
 					else
 						res = tone_zone_play_tone(i->subs[SUB_REAL].zfd, ZT_TONE_DIALTONE);
 					if (res < 0) 
-						ast_log(LOG_WARNING, "Unable to play dialtone on channel %d\n", i->channel);
+						ast_log(LOG_WARNING, "Unable to play dialtone on channel %d, do you have defaultzone and loadzone defined?\n", i->channel);
 					if (ast_pthread_create(&threadid, &attr, ss_thread, chan)) {
 						ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
 						res = tone_zone_play_tone(i->subs[SUB_REAL].zfd, ZT_TONE_CONGESTION);

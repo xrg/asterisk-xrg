@@ -115,7 +115,7 @@ enum agi_result {
 	AGI_RESULT_HANGUP
 };
 
-static void agi_debug_cli(int fd, char *fmt, ...)
+static int agi_debug_cli(int fd, char *fmt, ...)
 {
 	char *stuff;
 	int res = 0;
@@ -129,9 +129,11 @@ static void agi_debug_cli(int fd, char *fmt, ...)
 	} else {
 		if (agidebug)
 			ast_verbose("AGI Tx >> %s", stuff); /* \n provided by caller */
-		ast_carefulwrite(fd, stuff, strlen(stuff), 100);
+		res = ast_carefulwrite(fd, stuff, strlen(stuff), 100);
 		free(stuff);
 	}
+
+	return res;
 }
 
 /* launch_netscript: The fastagi handler.
@@ -210,8 +212,8 @@ static enum agi_result launch_netscript(char *agiurl, char *argv[], int *fds, in
 			return AGI_RESULT_FAILURE;
 		}
 	}
-	/* XXX in theory should check for partial writes... */
-	while (write(s, "agi_network: yes\n", strlen("agi_network: yes\n")) < 0) {
+
+	if (fdprintf(s, "agi_network: yes\n") < 0) {
 		if (errno != EINTR) {
 			ast_log(LOG_WARNING, "Connect to '%s' failed: %s\n", agiurl, strerror(errno));
 			close(s);
@@ -1110,7 +1112,8 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 	}
 	fdprintf(agi->fd, "200 result=%d\n", res);
 
-	return res >= 0 ? RESULT_SUCCESS : RESULT_FAILURE;
+	/* Even though this is wrong, users are depending upon this result. */
+	return res;
 }
 
 static int handle_setcallerid(struct ast_channel *chan, AGI *agi, int argc, char **argv)

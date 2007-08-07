@@ -353,6 +353,14 @@ static struct ast_category *next_available_category(struct ast_category *cat)
 	return cat;
 }
 
+struct ast_variable *ast_category_root(struct ast_config *config, char *cat)
+{
+	struct ast_category *category = ast_category_get(config, cat);
+	if (category)
+		return category->root;
+	return NULL;
+}
+
 char *ast_category_browse(struct ast_config *config, const char *prev)
 {	
 	struct ast_category *cat = NULL;
@@ -854,9 +862,8 @@ static struct ast_config *config_text_file_load(const char *database, const char
 				
 				while ((comment_p = strchr(new_buf, COMMENT_META))) {
 					if ((comment_p > new_buf) && (*(comment_p-1) == '\\')) {
-						/* Yuck, gotta memmove */
-						memmove(comment_p - 1, comment_p, strlen(comment_p) + 1);
-						new_buf = comment_p;
+						/* Escaped semicolons aren't comments. */
+						new_buf = comment_p + 1;
 					} else if(comment_p[1] == COMMENT_TAG && comment_p[2] == COMMENT_TAG && (comment_p[3] != '-')) {
 						/* Meta-Comment start detected ";--" */
 						if (comment < MAX_NESTED_COMMENTS) {

@@ -71,13 +71,14 @@ static PGconn	*conn = NULL;
 static int pgsql_log(struct ast_cdr *cdr)
 {
 	struct tm tm;
+	time_t t = cdr->start.tv_sec;
 	char sqlcmd[2048] = "", timestr[128];
 	char *pgerror;
 	PGresult *result;
 
 	ast_mutex_lock(&pgsql_lock);
 
-	ast_localtime(&cdr->start.tv_sec, &tm, NULL);
+	ast_localtime(&t, &tm, NULL);
 	strftime(timestr, sizeof(timestr), DATE_FORMAT, &tm);
 
 	if ((!connected) && pghostname && pgdbuser && pgpassword && pgdbname) {
@@ -86,9 +87,10 @@ static int pgsql_log(struct ast_cdr *cdr)
 			connected = 1;
 		} else {
 			pgerror = PQerrorMessage(conn);
-			PQfinish(conn);
 			ast_log(LOG_ERROR, "cdr_pgsql: Unable to connect to database server %s.  Calls will not be logged!\n", pghostname);
 			ast_log(LOG_ERROR, "cdr_pgsql: Reason: %s\n", pgerror);
+			PQfinish(conn);
+			conn = NULL;
 		}
 	}
 
@@ -146,9 +148,10 @@ static int pgsql_log(struct ast_cdr *cdr)
 				connected = 1;
 			} else {
 				pgerror = PQerrorMessage(conn);
-				PQfinish(conn);
 				ast_log(LOG_ERROR, "cdr_pgsql: Unable to reconnect to database server %s. Calls will not be logged!\n", pghostname);
 				ast_log(LOG_ERROR, "cdr_pgsql: Reason: %s\n", pgerror);
+				PQfinish(conn);
+				conn = NULL;
 				connected = 0;
 				ast_mutex_unlock(&pgsql_lock);
 				return -1;
@@ -184,8 +187,7 @@ static int pgsql_log(struct ast_cdr *cdr)
 
 static int my_unload_module(void)
 { 
-	if (conn)
-		PQfinish(conn);
+	PQfinish(conn);
 	if (pghostname)
 		free(pghostname);
 	if (pgdbname)

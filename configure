@@ -16003,37 +16003,18 @@ done
 
 
 # some systems already have gethostbyname_r so we don't need to build ours in main/utils.c
-
-for ac_func in gethostbyname_r
-do
-as_ac_var=`echo "ac_cv_func_$ac_func" | $as_tr_sh`
-{ echo "$as_me:$LINENO: checking for $ac_func" >&5
-echo $ECHO_N "checking for $ac_func... $ECHO_C" >&6; }
-if { as_var=$as_ac_var; eval "test \"\${$as_var+set}\" = set"; }; then
+{ echo "$as_me:$LINENO: checking for library containing gethostbyname_r" >&5
+echo $ECHO_N "checking for library containing gethostbyname_r... $ECHO_C" >&6; }
+if test "${ac_cv_search_gethostbyname_r+set}" = set; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
-  cat >conftest.$ac_ext <<_ACEOF
+  ac_func_search_save_LIBS=$LIBS
+cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-/* Define $ac_func to an innocuous variant, in case <limits.h> declares $ac_func.
-   For example, HP-UX 11i <limits.h> declares gettimeofday.  */
-#define $ac_func innocuous_$ac_func
-
-/* System header to define __stub macros and hopefully few prototypes,
-    which can conflict with char $ac_func (); below.
-    Prefer <limits.h> to <assert.h> if __STDC__ is defined, since
-    <limits.h> exists even on freestanding compilers.  */
-
-#ifdef __STDC__
-# include <limits.h>
-#else
-# include <assert.h>
-#endif
-
-#undef $ac_func
 
 /* Override any GCC internal prototype to avoid an error.
    Use char because int might match the return type of a GCC
@@ -16041,18 +16022,101 @@ cat >>conftest.$ac_ext <<_ACEOF
 #ifdef __cplusplus
 extern "C"
 #endif
-char $ac_func ();
-/* The GNU C library defines this for functions which it implements
-    to always fail with ENOSYS.  Some functions are actually named
-    something starting with __ and the normal name is an alias.  */
-#if defined __stub_$ac_func || defined __stub___$ac_func
-choke me
-#endif
-
+char gethostbyname_r ();
 int
 main ()
 {
-return $ac_func ();
+return gethostbyname_r ();
+  ;
+  return 0;
+}
+_ACEOF
+for ac_lib in '' socket nsl; do
+  if test -z "$ac_lib"; then
+    ac_res="none required"
+  else
+    ac_res=-l$ac_lib
+    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
+  fi
+  rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_cv_search_gethostbyname_r=$ac_res
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext
+  if test "${ac_cv_search_gethostbyname_r+set}" = set; then
+  break
+fi
+done
+if test "${ac_cv_search_gethostbyname_r+set}" = set; then
+  :
+else
+  ac_cv_search_gethostbyname_r=no
+fi
+rm conftest.$ac_ext
+LIBS=$ac_func_search_save_LIBS
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_search_gethostbyname_r" >&5
+echo "${ECHO_T}$ac_cv_search_gethostbyname_r" >&6; }
+ac_res=$ac_cv_search_gethostbyname_r
+if test "$ac_res" != no; then
+  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
+
+fi
+
+
+{ echo "$as_me:$LINENO: checking for gethostbyname_r with 6 arguments" >&5
+echo $ECHO_N "checking for gethostbyname_r with 6 arguments... $ECHO_C" >&6; }
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <stdlib.h>
+                         #include <netdb.h>
+int
+main ()
+{
+struct hostent *he = gethostbyname_r((const char *)NULL, (struct hostent *)NULL, (char *)NULL, (int)0, (struct hostent **)NULL, (int *)NULL);
   ;
   return 0;
 }
@@ -16091,28 +16155,95 @@ eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
   ac_status=$?
   echo "$as_me:$LINENO: \$? = $ac_status" >&5
   (exit $ac_status); }; }; then
-  eval "$as_ac_var=yes"
+  { echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6; }
+
+cat >>confdefs.h <<\_ACEOF
+#define HAVE_GETHOSTBYNAME_R_6 1
+_ACEOF
+
 else
   echo "$as_me: failed program was:" >&5
 sed 's/^/| /' conftest.$ac_ext >&5
 
-	eval "$as_ac_var=no"
+	{ echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6; }
+
 fi
 
 rm -f core conftest.err conftest.$ac_objext \
       conftest$ac_exeext conftest.$ac_ext
-fi
-ac_res=`eval echo '${'$as_ac_var'}'`
-	       { echo "$as_me:$LINENO: result: $ac_res" >&5
-echo "${ECHO_T}$ac_res" >&6; }
-if test `eval echo '${'$as_ac_var'}'` = yes; then
-  cat >>confdefs.h <<_ACEOF
-#define `echo "HAVE_$ac_func" | $as_tr_cpp` 1
+
+{ echo "$as_me:$LINENO: checking for gethostbyname_r with 5 arguments" >&5
+echo $ECHO_N "checking for gethostbyname_r with 5 arguments... $ECHO_C" >&6; }
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <stdlib.h>
+	                 #include <netdb.h>
+int
+main ()
+{
+struct hostent *he = gethostbyname_r((const char *)NULL, (struct hostent *)NULL, (char *)NULL, (int)0, (int *)NULL);
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  { echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6; }
+
+cat >>confdefs.h <<\_ACEOF
+#define HAVE_GETHOSTBYNAME_R_5 1
 _ACEOF
 
-fi
-done
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
 
+	{ echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6; }
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext conftest.$ac_ext
 
 { echo "$as_me:$LINENO: checking for PTHREAD_RWLOCK_INITIALIZER" >&5
 echo $ECHO_N "checking for PTHREAD_RWLOCK_INITIALIZER... $ECHO_C" >&6; }
@@ -28754,6 +28885,7 @@ fi
 
   if test "${HAS_OPENH323:-unset}" != "unset" ; then
     OPENH323DIR="${PWLIBDIR}/../openh323"
+<<<<<<< HEAD:acinclude.m4
     as_ac_File=`echo "ac_cv_file_${OPENH323DIR}/include/h323.h" | $as_tr_sh`
 { echo "$as_me:$LINENO: checking for ${OPENH323DIR}/include/h323.h" >&5
 echo $ECHO_N "checking for ${OPENH323DIR}/include/h323.h... $ECHO_C" >&6; }
@@ -28779,7 +28911,83 @@ else
   OPENH323_INCDIR="${PWLIB_INCDIR}/openh323"; OPENH323_LIBDIR="${PWLIB_LIBDIR}"
 fi
 
+=======
+    saved_cppflags="${CPPFLAGS}"
+    CPPFLAGS="${CPPFLAGS} -I${PWLIB_INCDIR}/openh323 -I${PWLIB_INCDIR}"
+    as_ac_Header=`echo "ac_cv_header_${OPENH323DIR}/include/h323.h" | $as_tr_sh`
+{ echo "$as_me:$LINENO: checking for ${OPENH323DIR}/include/h323.h" >&5
+echo $ECHO_N "checking for ${OPENH323DIR}/include/h323.h... $ECHO_C" >&6; }
+if { as_var=$as_ac_Header; eval "test \"\${$as_var+set}\" = set"; }; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <ptlib.h>
+
+#include <${OPENH323DIR}/include/h323.h>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  eval "$as_ac_Header=yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	eval "$as_ac_Header=no"
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+ac_res=`eval echo '${'$as_ac_Header'}'`
+	       { echo "$as_me:$LINENO: result: $ac_res" >&5
+echo "${ECHO_T}$ac_res" >&6; }
+if test `eval echo '${'$as_ac_Header'}'` = yes; then
+  :
+else
+  OPENH323_INCDIR="${PWLIB_INCDIR}/openh323"; OPENH323_LIBDIR="${PWLIB_LIBDIR}"
+fi
+
+
+    CPPFLAGS="${saved_cppflags}"
+>>>>>>> 1.4.10:acinclude.m4
   else
+<<<<<<< HEAD:acinclude.m4
     as_ac_File=`echo "ac_cv_file_${HOME}/openh323/include/h323.h" | $as_tr_sh`
 { echo "$as_me:$LINENO: checking for ${HOME}/openh323/include/h323.h" >&5
 echo $ECHO_N "checking for ${HOME}/openh323/include/h323.h... $ECHO_C" >&6; }
@@ -28803,9 +29011,172 @@ if test `eval echo '${'$as_ac_File'}'` = yes; then
   HAS_OPENH323=1
 fi
 
+=======
+    saved_cppflags="${CPPFLAGS}"
+    CPPFLAGS="${CPPFLAGS} -I${HOME}/openh323/include -I${PWLIB_INCDIR}"
+    as_ac_Header=`echo "ac_cv_header_${HOME}/openh323/include/h323.h" | $as_tr_sh`
+if { as_var=$as_ac_Header; eval "test \"\${$as_var+set}\" = set"; }; then
+  { echo "$as_me:$LINENO: checking for ${HOME}/openh323/include/h323.h" >&5
+echo $ECHO_N "checking for ${HOME}/openh323/include/h323.h... $ECHO_C" >&6; }
+if { as_var=$as_ac_Header; eval "test \"\${$as_var+set}\" = set"; }; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+fi
+ac_res=`eval echo '${'$as_ac_Header'}'`
+	       { echo "$as_me:$LINENO: result: $ac_res" >&5
+echo "${ECHO_T}$ac_res" >&6; }
+else
+  # Is the header compilable?
+{ echo "$as_me:$LINENO: checking ${HOME}/openh323/include/h323.h usability" >&5
+echo $ECHO_N "checking ${HOME}/openh323/include/h323.h usability... $ECHO_C" >&6; }
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+$ac_includes_default
+#include <${HOME}/openh323/include/h323.h>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_header_compiler=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_header_compiler=no
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+{ echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
+echo "${ECHO_T}$ac_header_compiler" >&6; }
+
+# Is the header present?
+{ echo "$as_me:$LINENO: checking ${HOME}/openh323/include/h323.h presence" >&5
+echo $ECHO_N "checking ${HOME}/openh323/include/h323.h presence... $ECHO_C" >&6; }
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <${HOME}/openh323/include/h323.h>
+_ACEOF
+if { (ac_try="$ac_cpp conftest.$ac_ext"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_cpp conftest.$ac_ext") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } >/dev/null; then
+  if test -s conftest.err; then
+    ac_cpp_err=$ac_c_preproc_warn_flag
+    ac_cpp_err=$ac_cpp_err$ac_c_werror_flag
+  else
+    ac_cpp_err=
+  fi
+else
+  ac_cpp_err=yes
+fi
+if test -z "$ac_cpp_err"; then
+  ac_header_preproc=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+  ac_header_preproc=no
+fi
+
+rm -f conftest.err conftest.$ac_ext
+{ echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
+echo "${ECHO_T}$ac_header_preproc" >&6; }
+
+# So?  What about this header?
+case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
+  yes:no: )
+    { echo "$as_me:$LINENO: WARNING: ${HOME}/openh323/include/h323.h: accepted by the compiler, rejected by the preprocessor!" >&5
+echo "$as_me: WARNING: ${HOME}/openh323/include/h323.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
+    { echo "$as_me:$LINENO: WARNING: ${HOME}/openh323/include/h323.h: proceeding with the compiler's result" >&5
+echo "$as_me: WARNING: ${HOME}/openh323/include/h323.h: proceeding with the compiler's result" >&2;}
+    ac_header_preproc=yes
+    ;;
+  no:yes:* )
+    { echo "$as_me:$LINENO: WARNING: ${HOME}/openh323/include/h323.h: present but cannot be compiled" >&5
+echo "$as_me: WARNING: ${HOME}/openh323/include/h323.h: present but cannot be compiled" >&2;}
+    { echo "$as_me:$LINENO: WARNING: ${HOME}/openh323/include/h323.h:     check for missing prerequisite headers?" >&5
+echo "$as_me: WARNING: ${HOME}/openh323/include/h323.h:     check for missing prerequisite headers?" >&2;}
+    { echo "$as_me:$LINENO: WARNING: ${HOME}/openh323/include/h323.h: see the Autoconf documentation" >&5
+echo "$as_me: WARNING: ${HOME}/openh323/include/h323.h: see the Autoconf documentation" >&2;}
+    { echo "$as_me:$LINENO: WARNING: ${HOME}/openh323/include/h323.h:     section \"Present But Cannot Be Compiled\"" >&5
+echo "$as_me: WARNING: ${HOME}/openh323/include/h323.h:     section \"Present But Cannot Be Compiled\"" >&2;}
+    { echo "$as_me:$LINENO: WARNING: ${HOME}/openh323/include/h323.h: proceeding with the preprocessor's result" >&5
+echo "$as_me: WARNING: ${HOME}/openh323/include/h323.h: proceeding with the preprocessor's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: ${HOME}/openh323/include/h323.h: in the future, the compiler will take precedence" >&5
+echo "$as_me: WARNING: ${HOME}/openh323/include/h323.h: in the future, the compiler will take precedence" >&2;}
+
+    ;;
+esac
+{ echo "$as_me:$LINENO: checking for ${HOME}/openh323/include/h323.h" >&5
+echo $ECHO_N "checking for ${HOME}/openh323/include/h323.h... $ECHO_C" >&6; }
+if { as_var=$as_ac_Header; eval "test \"\${$as_var+set}\" = set"; }; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  eval "$as_ac_Header=\$ac_header_preproc"
+fi
+ac_res=`eval echo '${'$as_ac_Header'}'`
+	       { echo "$as_me:$LINENO: result: $ac_res" >&5
+echo "${ECHO_T}$ac_res" >&6; }
+
+fi
+if test `eval echo '${'$as_ac_Header'}'` = yes; then
+  HAS_OPENH323=1
+fi
+
+
+    CPPFLAGS="${saved_cppflags}"
+>>>>>>> 1.4.10:acinclude.m4
     if test "${HAS_OPENH323:-unset}" != "unset" ; then
       OPENH323DIR="${HOME}/openh323"
     else
+<<<<<<< HEAD:acinclude.m4
       { echo "$as_me:$LINENO: checking for /usr/local/include/openh323/h323.h" >&5
 echo $ECHO_N "checking for /usr/local/include/openh323/h323.h... $ECHO_C" >&6; }
 if test "${ac_cv_file__usr_local_include_openh323_h323_h+set}" = set; then
@@ -28827,6 +29198,165 @@ if test $ac_cv_file__usr_local_include_openh323_h323_h = yes; then
   HAS_OPENH323=1
 fi
 
+=======
+      saved_cppflags="${CPPFLAGS}"
+      CPPFLAGS="${CPPFLAGS} -I/usr/local/include/openh323 -I${PWLIB_INCDIR}"
+      if test "${ac_cv_header__usr_local_include_openh323_h323_h+set}" = set; then
+  { echo "$as_me:$LINENO: checking for /usr/local/include/openh323/h323.h" >&5
+echo $ECHO_N "checking for /usr/local/include/openh323/h323.h... $ECHO_C" >&6; }
+if test "${ac_cv_header__usr_local_include_openh323_h323_h+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_header__usr_local_include_openh323_h323_h" >&5
+echo "${ECHO_T}$ac_cv_header__usr_local_include_openh323_h323_h" >&6; }
+else
+  # Is the header compilable?
+{ echo "$as_me:$LINENO: checking /usr/local/include/openh323/h323.h usability" >&5
+echo $ECHO_N "checking /usr/local/include/openh323/h323.h usability... $ECHO_C" >&6; }
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+$ac_includes_default
+#include </usr/local/include/openh323/h323.h>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_header_compiler=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_header_compiler=no
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+{ echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
+echo "${ECHO_T}$ac_header_compiler" >&6; }
+
+# Is the header present?
+{ echo "$as_me:$LINENO: checking /usr/local/include/openh323/h323.h presence" >&5
+echo $ECHO_N "checking /usr/local/include/openh323/h323.h presence... $ECHO_C" >&6; }
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include </usr/local/include/openh323/h323.h>
+_ACEOF
+if { (ac_try="$ac_cpp conftest.$ac_ext"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_cpp conftest.$ac_ext") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } >/dev/null; then
+  if test -s conftest.err; then
+    ac_cpp_err=$ac_c_preproc_warn_flag
+    ac_cpp_err=$ac_cpp_err$ac_c_werror_flag
+  else
+    ac_cpp_err=
+  fi
+else
+  ac_cpp_err=yes
+fi
+if test -z "$ac_cpp_err"; then
+  ac_header_preproc=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+  ac_header_preproc=no
+fi
+
+rm -f conftest.err conftest.$ac_ext
+{ echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
+echo "${ECHO_T}$ac_header_preproc" >&6; }
+
+# So?  What about this header?
+case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
+  yes:no: )
+    { echo "$as_me:$LINENO: WARNING: /usr/local/include/openh323/h323.h: accepted by the compiler, rejected by the preprocessor!" >&5
+echo "$as_me: WARNING: /usr/local/include/openh323/h323.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
+    { echo "$as_me:$LINENO: WARNING: /usr/local/include/openh323/h323.h: proceeding with the compiler's result" >&5
+echo "$as_me: WARNING: /usr/local/include/openh323/h323.h: proceeding with the compiler's result" >&2;}
+    ac_header_preproc=yes
+    ;;
+  no:yes:* )
+    { echo "$as_me:$LINENO: WARNING: /usr/local/include/openh323/h323.h: present but cannot be compiled" >&5
+echo "$as_me: WARNING: /usr/local/include/openh323/h323.h: present but cannot be compiled" >&2;}
+    { echo "$as_me:$LINENO: WARNING: /usr/local/include/openh323/h323.h:     check for missing prerequisite headers?" >&5
+echo "$as_me: WARNING: /usr/local/include/openh323/h323.h:     check for missing prerequisite headers?" >&2;}
+    { echo "$as_me:$LINENO: WARNING: /usr/local/include/openh323/h323.h: see the Autoconf documentation" >&5
+echo "$as_me: WARNING: /usr/local/include/openh323/h323.h: see the Autoconf documentation" >&2;}
+    { echo "$as_me:$LINENO: WARNING: /usr/local/include/openh323/h323.h:     section \"Present But Cannot Be Compiled\"" >&5
+echo "$as_me: WARNING: /usr/local/include/openh323/h323.h:     section \"Present But Cannot Be Compiled\"" >&2;}
+    { echo "$as_me:$LINENO: WARNING: /usr/local/include/openh323/h323.h: proceeding with the preprocessor's result" >&5
+echo "$as_me: WARNING: /usr/local/include/openh323/h323.h: proceeding with the preprocessor's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: /usr/local/include/openh323/h323.h: in the future, the compiler will take precedence" >&5
+echo "$as_me: WARNING: /usr/local/include/openh323/h323.h: in the future, the compiler will take precedence" >&2;}
+
+    ;;
+esac
+{ echo "$as_me:$LINENO: checking for /usr/local/include/openh323/h323.h" >&5
+echo $ECHO_N "checking for /usr/local/include/openh323/h323.h... $ECHO_C" >&6; }
+if test "${ac_cv_header__usr_local_include_openh323_h323_h+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  ac_cv_header__usr_local_include_openh323_h323_h=$ac_header_preproc
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_header__usr_local_include_openh323_h323_h" >&5
+echo "${ECHO_T}$ac_cv_header__usr_local_include_openh323_h323_h" >&6; }
+
+fi
+if test $ac_cv_header__usr_local_include_openh323_h323_h = yes; then
+  HAS_OPENH323=1
+fi
+
+
+      CPPFLAGS="${saved_cppflags}"
+>>>>>>> 1.4.10:acinclude.m4
       if test "${HAS_OPENH323:-unset}" != "unset" ; then
         OPENH323DIR="/usr/local/share/openh323"
         OPENH323_INCDIR="/usr/local/include/openh323"
@@ -28836,6 +29366,7 @@ fi
           OPENH323_LIBDIR="/usr/local/lib"
         fi
       else
+<<<<<<< HEAD:acinclude.m4
         { echo "$as_me:$LINENO: checking for /usr/include/openh323/h323.h" >&5
 echo $ECHO_N "checking for /usr/include/openh323/h323.h... $ECHO_C" >&6; }
 if test "${ac_cv_file__usr_include_openh323_h323_h+set}" = set; then
@@ -28857,6 +29388,77 @@ if test $ac_cv_file__usr_include_openh323_h323_h = yes; then
   HAS_OPENH323=1
 fi
 
+=======
+        saved_cppflags="${CPPFLAGS}"
+        CPPFLAGS="${CPPFLAGS} -I/usr/include/openh323 -I${PWLIB_INCDIR}"
+        { echo "$as_me:$LINENO: checking for /usr/include/openh323/h323.h" >&5
+echo $ECHO_N "checking for /usr/include/openh323/h323.h... $ECHO_C" >&6; }
+if test "${ac_cv_header__usr_include_openh323_h323_h+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <ptlib.h>
+
+#include </usr/include/openh323/h323.h>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_cv_header__usr_include_openh323_h323_h=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_header__usr_include_openh323_h323_h=no
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_header__usr_include_openh323_h323_h" >&5
+echo "${ECHO_T}$ac_cv_header__usr_include_openh323_h323_h" >&6; }
+if test $ac_cv_header__usr_include_openh323_h323_h = yes; then
+  HAS_OPENH323=1
+fi
+
+
+        CPPFLAGS="${saved_cppflags}"
+>>>>>>> 1.4.10:acinclude.m4
         if test "${HAS_OPENH323:-unset}" != "unset" ; then
           OPENH323DIR="/usr/share/openh323"
           OPENH323_INCDIR="/usr/include/openh323"

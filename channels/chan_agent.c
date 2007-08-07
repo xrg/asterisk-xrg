@@ -212,9 +212,9 @@ static AST_LIST_HEAD_STATIC(agents, agent_pvt);	/*!< Holds the list of agents (l
 			ast_set_read_format(ast, ast->readformat); \
 			ast_set_write_format(ast, ast->writeformat); \
 		} \
-		if (p->chan->readformat != ast->rawreadformat)  \
+		if (p->chan->readformat != ast->rawreadformat && !p->chan->generator)  \
 			ast_set_read_format(p->chan, ast->rawreadformat); \
-		if (p->chan->writeformat != ast->rawwriteformat) \
+		if (p->chan->writeformat != ast->rawwriteformat && !p->chan->generator) \
 			ast_set_write_format(p->chan, ast->rawwriteformat); \
 	} \
 } while(0)
@@ -411,10 +411,10 @@ static int __agent_start_monitoring(struct ast_channel *ast, struct agent_pvt *p
 		/* substitute . for - */
 		if ((pointer = strchr(filename, '.')))
 			*pointer = '-';
-		snprintf(tmp, sizeof(tmp), "%s%s",savecallsin ? savecallsin : "", filename);
+		snprintf(tmp, sizeof(tmp), "%s%s", savecallsin, filename);
 		ast_monitor_start(ast, recordformat, tmp, needlock);
 		ast_monitor_setjoinfiles(ast, 1);
-		snprintf(tmp2, sizeof(tmp2), "%s%s.%s", urlprefix ? urlprefix : "", filename, recordformatext);
+		snprintf(tmp2, sizeof(tmp2), "%s%s.%s", urlprefix, filename, recordformatext);
 #if 0
 		ast_verbose("name is %s, link is %s\n",tmp, tmp2);
 #endif

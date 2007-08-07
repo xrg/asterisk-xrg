@@ -57,7 +57,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/unaligned.h"
 #include "asterisk/utils.h"
 
-#define MAX_TIMESTAMP_SKEW	640
+#define MAX_TIMESTAMP_SKEW	20
 
 #define RTP_SEQ_MOD     (1<<16) 	/*!< A sequence number can't be more than 16 bits */
 #define RTCP_DEFAULT_INTERVALMS   5000	/*!< Default milli-seconds between RTCP reports we send */
@@ -1295,6 +1295,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	rtp->f.datalen = res - hdrlen;
 	rtp->f.data = rtp->rawdata + hdrlen + AST_FRIENDLY_OFFSET;
 	rtp->f.offset = hdrlen + AST_FRIENDLY_OFFSET;
+	rtp->f.seqno = seqno;
 	if (rtp->f.subclass < AST_FORMAT_MAX_AUDIO) {
 		rtp->f.samples = ast_codec_get_samples(&rtp->f);
 		if (rtp->f.subclass == AST_FORMAT_SLINEAR) 
@@ -1304,7 +1305,6 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		rtp->f.has_timing_info = 1;
 		rtp->f.ts = timestamp / 8;
 		rtp->f.len = rtp->f.samples / 8;
-		rtp->f.seqno = seqno;
 	} else {
 		/* Video -- samples is # of samples vs. 90000 */
 		if (!rtp->lastividtimestamp)

@@ -20,7 +20,7 @@ SOUNDS_DIR:=$(DESTDIR)$(ASTDATADIR)/sounds
 MOH_DIR:=$(DESTDIR)$(ASTDATADIR)/moh
 CORE_SOUNDS_VERSION:=1.4.7
 EXTRA_SOUNDS_VERSION:=1.4.6
-SOUNDS_URL:=http://ftp.digium.com/pub/telephony/sounds/releases
+SOUNDS_URL:=http://downloads.digium.com/pub/telephony/sounds/releases
 MCS:=$(subst -EN-,-en-,$(MENUSELECT_CORE_SOUNDS))
 MCS:=$(subst -FR-,-fr-,$(MCS))
 MCS:=$(subst -ES-,-es-,$(MCS))
@@ -131,13 +131,13 @@ $(MOH_DIR)/.asterisk-moh-%: have_download
 	touch $@
 
 asterisk-core-%.tar.gz: have_download
-	@$(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@
+	@if test ! -f $@ ;then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@;fi
 
 asterisk-extra-%.tar.gz: have_download
-	@$(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@
+	@if test ! -f $@ ;then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@;fi
 
 asterisk-moh-%.tar.gz: have_download
-	@$(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@
+	@if test ! -f $@ ;then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@;fi
 
 dist-clean:
 	rm -f *.tar.gz

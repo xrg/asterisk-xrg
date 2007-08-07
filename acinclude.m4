@@ -125,6 +125,7 @@ AC_DEFUN(
 [AST_CHECK_PWLIB], [
 PWLIB_INCDIR=
 PWLIB_LIBDIR=
+AC_LANG_PUSH([C++])
 if test "${PWLIBDIR:-unset}" != "unset" ; then
   AC_CHECK_FILE(${PWLIBDIR}/version.h, HAS_PWLIB=1, )
 fi
@@ -323,13 +324,22 @@ if test "${HAS_OPENH323:-unset}" = "unset" ; then
   AC_CHECK_FILE(${PWLIBDIR}/../openh323/version.h, OPENH323DIR="${PWLIBDIR}/../openh323"; HAS_OPENH323=1, )
   if test "${HAS_OPENH323:-unset}" != "unset" ; then
     OPENH323DIR="${PWLIBDIR}/../openh323"
-    AC_CHECK_FILE(${OPENH323DIR}/include/h323.h, , OPENH323_INCDIR="${PWLIB_INCDIR}/openh323"; OPENH323_LIBDIR="${PWLIB_LIBDIR}")
+    saved_cppflags="${CPPFLAGS}"
+    CPPFLAGS="${CPPFLAGS} -I${PWLIB_INCDIR}/openh323 -I${PWLIB_INCDIR}"
+    AC_CHECK_HEADER(${OPENH323DIR}/include/h323.h, , OPENH323_INCDIR="${PWLIB_INCDIR}/openh323"; OPENH323_LIBDIR="${PWLIB_LIBDIR}", [#include <ptlib.h>])
+    CPPFLAGS="${saved_cppflags}"
   else
-    AC_CHECK_FILE(${HOME}/openh323/include/h323.h, HAS_OPENH323=1, )
+    saved_cppflags="${CPPFLAGS}"
+    CPPFLAGS="${CPPFLAGS} -I${HOME}/openh323/include -I${PWLIB_INCDIR}"
+    AC_CHECK_HEADER(${HOME}/openh323/include/h323.h, HAS_OPENH323=1, )
+    CPPFLAGS="${saved_cppflags}"
     if test "${HAS_OPENH323:-unset}" != "unset" ; then
       OPENH323DIR="${HOME}/openh323"
     else
-      AC_CHECK_FILE(/usr/local/include/openh323/h323.h, HAS_OPENH323=1, )
+      saved_cppflags="${CPPFLAGS}"
+      CPPFLAGS="${CPPFLAGS} -I/usr/local/include/openh323 -I${PWLIB_INCDIR}"
+      AC_CHECK_HEADER(/usr/local/include/openh323/h323.h, HAS_OPENH323=1, )
+      CPPFLAGS="${saved_cppflags}"
       if test "${HAS_OPENH323:-unset}" != "unset" ; then
         OPENH323DIR="/usr/local/share/openh323"
         OPENH323_INCDIR="/usr/local/include/openh323"
@@ -339,7 +349,10 @@ if test "${HAS_OPENH323:-unset}" = "unset" ; then
           OPENH323_LIBDIR="/usr/local/lib"
         fi
       else
-        AC_CHECK_FILE(/usr/include/openh323/h323.h, HAS_OPENH323=1, )
+        saved_cppflags="${CPPFLAGS}"
+        CPPFLAGS="${CPPFLAGS} -I/usr/include/openh323 -I${PWLIB_INCDIR}"
+        AC_CHECK_HEADER(/usr/include/openh323/h323.h, HAS_OPENH323=1, , [#include <ptlib.h>])
+        CPPFLAGS="${saved_cppflags}"
         if test "${HAS_OPENH323:-unset}" != "unset" ; then
           OPENH323DIR="/usr/share/openh323"
           OPENH323_INCDIR="/usr/include/openh323"
@@ -370,6 +383,7 @@ if test "${HAS_OPENH323:-unset}" != "unset" ; then
   AC_SUBST([OPENH323_INCDIR])
   AC_SUBST([OPENH323_LIBDIR])
 fi
+  AC_LANG_POP([C++])
 ])
 
 

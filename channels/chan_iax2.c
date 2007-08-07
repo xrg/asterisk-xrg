@@ -498,6 +498,10 @@ struct chan_iax2_pvt {
 	unsigned short callno;
 	/*! Peer callno */
 	unsigned short peercallno;
+	/*! Negotiated format, this is only used to remember what format was
+	    chosen for an unauthenticated call so that the channel can get
+	    created later using the right format */
+	int chosenformat;
 	/*! Peer selected format */
 	int peerformat;
 	/*! Peer capability */
@@ -705,12 +709,13 @@ struct iax2_thread {
 	struct sockaddr_in iosin;
 	unsigned char readbuf[4096]; 
 	unsigned char *buf;
-	size_t buf_len;
+	ssize_t buf_len;
 	size_t buf_size;
 	int iofd;
 	time_t checktime;
 	ast_mutex_t lock;
 	ast_cond_t cond;
+	unsigned int ready_for_signal:1;
 	/*! if this thread is processing a full frame,
 	  some information about that frame will be stored
 	  here, so we can avoid dispatching any more full
@@ -851,6 +856,9 @@ static const struct ast_channel_tech iax2_tech = {
 	.fixup = iax2_fixup,
 };
 
+/* WARNING: insert_idle_thread should only ever be called within the
+ * context of an iax2_process_thread() thread.
+ */
 static void insert_idle_thread(struct iax2_thread *thread)
 {
 	if (thread->type == IAX_TYPE_DYNAMIC) {
@@ -896,6 +904,10 @@ static struct iax2_thread *find_idle_thread(void)
 				} else {
 					/* All went well and the thread is up, so increment our count */
 					iaxdynamicthreadcount++;
+					
+					/* Wait for the thread to be ready before returning it to the caller */
+					while (!thread->ready_for_signal)
+						usleep(1);
 				}
 			}
 		}
@@ -1357,7 +1369,7 @@ static void destroy_firmware(struct iax_firmware *cur)
 {
 	/* Close firmware */
 	if (cur->fwh) {
-		munmap(cur->fwh, ntohl(cur->fwh->datalen) + sizeof(*(cur->fwh)));
+		munmap((void*)cur->fwh, ntohl(cur->fwh->datalen) + sizeof(*(cur->fwh)));
 	}
 	close(cur->fd);
 	free(cur);
@@ -1456,7 +1468,7 @@ static int try_firmware(char *s)
 		close(fd);
 		return -1;
 	}
-	fwh = mmap(NULL, stbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
+	fwh = (struct ast_iax2_firmware_header*)mmap(NULL, stbuf.st_size, PROT_READ, MAP_PRIVATE, fd, 0); 
 	if (fwh == (void *) -1) {
 		ast_log(LOG_WARNING, "mmap failed: %s\n", strerror(errno));
 		close(fd);
@@ -1467,7 +1479,7 @@ static int try_firmware(char *s)
 	MD5Final(sum, &md5);
 	if (memcmp(sum, fwh->chksum, sizeof(sum))) {
 		ast_log(LOG_WARNING, "Firmware file '%s' fails checksum\n", s);
-		munmap(fwh, stbuf.st_size);
+		munmap((void*)fwh, stbuf.st_size);
 		close(fd);
 		return -1;
 	}
@@ -1480,7 +1492,7 @@ static int try_firmware(char *s)
 				break;
 			/* This version is no newer than what we have.  Don't worry about it.
 			   We'll consider it a proper load anyhow though */
-			munmap(fwh, stbuf.st_size);
+			munmap((void*)fwh, stbuf.st_size);
 			close(fd);
 			return 0;
 		}
@@ -1496,7 +1508,7 @@ static int try_firmware(char *s)
 	}
 	if (cur) {
 		if (cur->fwh) {
-			munmap(cur->fwh, cur->mmaplen);
+			munmap((void*)cur->fwh, cur->mmaplen);
 		}
 		if (cur->fd > -1)
 			close(cur->fd);
@@ -1961,7 +1973,7 @@ static int iax2_prune_realtime(int fd, int argc, char *argv[])
 	} else if ((peer = find_peer(argv[3], 0))) {
 		if(ast_test_flag(peer, IAX_RTCACHEFRIENDS)) {
 			ast_set_flag(peer, IAX_RTAUTOCLEAR);
-			expire_registry((void*)peer->name);
+			expire_registry((void *)peer->name);
 			ast_cli(fd, "OK peer %s was removed from the cache.\n", argv[3]);
 		} else {
 			ast_cli(fd, "SORRY peer %s is not eligible for this operation.\n", argv[3]);
@@ -3268,23 +3280,24 @@ static int iax2_indicate(struct ast_channel *c, int condition, const void *data,
 
 	ast_mutex_lock(&iaxsl[callno]);
 	pvt = iaxs[callno];
-	if (!strcasecmp(pvt->mohinterpret, "passthrough")) {
-		res = send_command(pvt, AST_FRAME_CONTROL, condition, 0, data, datalen, -1);
-		ast_mutex_unlock(&iaxsl[callno]);
-		return res;
-	}
 
 	switch (condition) {
 	case AST_CONTROL_HOLD:
-		ast_moh_start(c, data, pvt->mohinterpret);
+		if (strcasecmp(pvt->mohinterpret, "passthrough")) {
+			ast_moh_start(c, data, pvt->mohinterpret);
+			goto done;
+		}
 		break;
 	case AST_CONTROL_UNHOLD:
-		ast_moh_stop(c);
-		break;
-	default:
-		res = send_command(pvt, AST_FRAME_CONTROL, condition, 0, data, datalen, -1);
+		if (strcasecmp(pvt->mohinterpret, "passthrough")) {
+			ast_moh_stop(c);
+			goto done;
+		}
 	}
 
+	res = send_command(pvt, AST_FRAME_CONTROL, condition, 0, data, datalen, -1);
+
+done:
 	ast_mutex_unlock(&iaxsl[callno]);
 
 	return res;
@@ -3329,7 +3342,7 @@ static int iax2_getpeertrunk(struct sockaddr_in sin)
 }
 
 /*! \brief  Create new call, interface with the PBX core */
-static struct ast_channel *ast_iax2_new(int callno, int state, int capability, unsigned int delaypbx)
+static struct ast_channel *ast_iax2_new(int callno, int state, int capability)
 {
 	struct ast_channel *tmp;
 	struct chan_iax2_pvt *i;
@@ -3384,9 +3397,7 @@ static struct ast_channel *ast_iax2_new(int callno, int state, int capability, u
 	for (v = i->vars ; v ; v = v->next)
 		pbx_builtin_setvar_helper(tmp, v->name, v->value);
 
-	if (delaypbx) {
-		ast_set_flag(i, IAX_DELAYPBXSTART);
-	} else if (state != AST_STATE_DOWN) {
+	if (state != AST_STATE_DOWN) {
 		if (ast_pbx_start(tmp)) {
 			ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmp->name);
 			ast_hangup(tmp);
@@ -5936,7 +5947,8 @@ static void vnak_retransmit(int callno, int last)
 	AST_LIST_TRAVERSE(&iaxq.queue, f, list) {
 		/* Send a copy immediately */
 		if ((f->callno == callno) && iaxs[f->callno] &&
-			(f->oseqno >= last)) {
+			((unsigned char ) (f->oseqno - last) < 128) &&
+			(f->retries >= 0)) {
 			send_packet(f);
 		}
 	}
@@ -6375,11 +6387,13 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 		if (errno != ECONNREFUSED && errno != EAGAIN)
 			ast_log(LOG_WARNING, "Error: %s\n", strerror(errno));
 		handle_error();
-		insert_idle_thread(thread);
+		thread->iostate = IAX_IOSTATE_IDLE;
+		signal_condition(&thread->lock, &thread->cond);
 		return 1;
 	}
 	if (test_losspct && ((100.0 * ast_random() / (RAND_MAX + 1.0)) < test_losspct)) { /* simulate random loss condition */
-		insert_idle_thread(thread);
+		thread->iostate = IAX_IOSTATE_IDLE;
+		signal_condition(&thread->lock, &thread->cond);
 		return 1;
 	}
 	
@@ -6402,7 +6416,8 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 			   so queue it up for processing later. */
 			defer_full_frame(thread, cur);
 			AST_LIST_UNLOCK(&active_list);
-			insert_idle_thread(thread);
+			thread->iostate = IAX_IOSTATE_IDLE;
+			signal_condition(&thread->lock, &thread->cond);
 			return 1;
 		} else {
 			/* this thread is going to process this frame, so mark it */
@@ -6714,7 +6729,9 @@ static int socket_process(struct iax2_thread *thread)
 				if (option_debug)
 					ast_log(LOG_DEBUG, "Packet arrived out of order (expecting %d, got %d) (frametype = %d, subclass = %d)\n", 
 					iaxs[fr->callno]->iseqno, fr->oseqno, f.frametype, f.subclass);
-				if (iaxs[fr->callno]->iseqno > fr->oseqno) {
+				/* Check to see if we need to request retransmission,
+				 * and take sequence number wraparound into account */
+				if ((unsigned char) (iaxs[fr->callno]->iseqno - fr->oseqno) < 128) {
 					/* If we've already seen it, ack it XXX There's a border condition here XXX */
 					if ((f.frametype != AST_FRAME_IAX) || 
 							((f.subclass != IAX_COMMAND_ACK) && (f.subclass != IAX_COMMAND_INVAL))) {
@@ -6841,10 +6858,7 @@ static int socket_process(struct iax2_thread *thread)
 		    (f.frametype == AST_FRAME_IAX)) {
 			if (ast_test_flag(iaxs[fr->callno], IAX_DELAYPBXSTART)) {
 				ast_clear_flag(iaxs[fr->callno], IAX_DELAYPBXSTART);
-				if (ast_pbx_start(iaxs[fr->callno]->owner)) {
-					ast_log(LOG_WARNING, "Unable to start PBX on %s\n", iaxs[fr->callno]->owner->name);
-					ast_hangup(iaxs[fr->callno]->owner);
-					iaxs[fr->callno]->owner = NULL;
+				if (!ast_iax2_new(fr->callno, AST_STATE_RING, iaxs[fr->callno]->chosenformat)) {
 					ast_mutex_unlock(&iaxsl[fr->callno]);
 					return 1;
 				}
@@ -7128,10 +7142,8 @@ retryowner:
 												VERBOSE_PREFIX_4,
 												using_prefs);
 								
-								/* create an Asterisk channel for this call, but don't start
-								   a PBX on it until we have received a full frame from the peer */
-								if (!(c = ast_iax2_new(fr->callno, AST_STATE_RING, format, 1)))
-									iax2_destroy(fr->callno);
+								iaxs[fr->callno]->chosenformat = format;
+								ast_set_flag(iaxs[fr->callno], IAX_DELAYPBXSTART);
 							} else {
 								ast_set_flag(&iaxs[fr->callno]->state, IAX_STATE_TBD);
 								/* If this is a TBD call, we're ready but now what...  */
@@ -7512,7 +7524,7 @@ retryowner2:
 											using_prefs);
 
 							ast_set_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED);
-							if(!(c = ast_iax2_new(fr->callno, AST_STATE_RING, format, 0)))
+							if(!(c = ast_iax2_new(fr->callno, AST_STATE_RING, format)))
 								iax2_destroy(fr->callno);
 						} else {
 							ast_set_flag(&iaxs[fr->callno]->state, IAX_STATE_TBD);
@@ -7540,7 +7552,7 @@ retryowner2:
 							ast_verbose(VERBOSE_PREFIX_3 "Accepting DIAL from %s, formats = 0x%x\n", ast_inet_ntoa(sin.sin_addr), iaxs[fr->callno]->peerformat);
 						ast_set_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED);
 						send_command(iaxs[fr->callno], AST_FRAME_CONTROL, AST_CONTROL_PROGRESS, 0, NULL, 0, -1);
-						if(!(c = ast_iax2_new(fr->callno, AST_STATE_RING, iaxs[fr->callno]->peerformat, 0)))
+						if(!(c = ast_iax2_new(fr->callno, AST_STATE_RING, iaxs[fr->callno]->peerformat)))
 							iax2_destroy(fr->callno);
 					}
 				}
@@ -7855,27 +7867,61 @@ static void *iax2_process_thread(void *data)
 		/* Wait for something to signal us to be awake */
 		ast_mutex_lock(&thread->lock);
 
+		/* Flag that we're ready to accept signals */
+		thread->ready_for_signal = 1;
+		
 		/* Put into idle list if applicable */
 		if (put_into_idle)
 			insert_idle_thread(thread);
 
 		if (thread->type == IAX_TYPE_DYNAMIC) {
+			struct iax2_thread *t = NULL;
 			/* Wait to be signalled or time out */
 			tv = ast_tvadd(ast_tvnow(), ast_samp2tv(30000, 1000));
 			ts.tv_sec = tv.tv_sec;
 			ts.tv_nsec = tv.tv_usec * 1000;
 			if (ast_cond_timedwait(&thread->cond, &thread->lock, &ts) == ETIMEDOUT) {
-				ast_mutex_unlock(&thread->lock);
+				/* This thread was never put back into the available dynamic
+				 * thread list, so just go away. */
+				if (!put_into_idle) {
+					ast_mutex_unlock(&thread->lock);
+					break;
+				}
 				AST_LIST_LOCK(&dynamic_list);
-				AST_LIST_REMOVE(&dynamic_list, thread, list);
-				iaxdynamicthreadcount--;
+				/* Account for the case where this thread is acquired *right* after a timeout */
+				if ((t = AST_LIST_REMOVE(&dynamic_list, thread, list)))
+					iaxdynamicthreadcount--;
 				AST_LIST_UNLOCK(&dynamic_list);
-				break;		/* exiting the main loop */
+				if (t) {
+					/* This dynamic thread timed out waiting for a task and was
+					 * not acquired immediately after the timeout, 
+					 * so it's time to go away. */
+					ast_mutex_unlock(&thread->lock);
+					break;
+				}
+				/* Someone grabbed our thread *right* after we timed out.
+				 * Wait for them to set us up with something to do and signal
+				 * us to continue. */
+				tv = ast_tvadd(ast_tvnow(), ast_samp2tv(30000, 1000));
+				ts.tv_sec = tv.tv_sec;
+				ts.tv_nsec = tv.tv_usec * 1000;
+				if (ast_cond_timedwait(&thread->cond, &thread->lock, &ts) == ETIMEDOUT)
+				{
+					ast_mutex_unlock(&thread->lock);
+					break;
+				}
 			}
 		} else {
 			ast_cond_wait(&thread->cond, &thread->lock);
 		}
+
+		/* Go back into our respective list */
+		put_into_idle = 1;
+
 		ast_mutex_unlock(&thread->lock);
+
+		if (thread->iostate == IAX_IOSTATE_IDLE)
+			continue;
 
 		/* Add ourselves to the active list now */
 		AST_LIST_LOCK(&active_list);
@@ -7911,9 +7957,6 @@ static void *iax2_process_thread(void *data)
 
 		/* Make sure another frame didn't sneak in there after we thought we were done. */
 		handle_deferred_full_frames(thread);
-
-		/* Go back into our respective list */
-		put_into_idle = 1;
 	}
 
 	/* I am exiting here on my own volition, I need to clean up my own data structures
@@ -8244,7 +8287,7 @@ static struct ast_channel *iax2_request(const char *type, int format, void *data
 	if (cai.found)
 		ast_string_field_set(iaxs[callno], host, pds.peer);
 
-	c = ast_iax2_new(callno, AST_STATE_DOWN, cai.capability, 0);
+	c = ast_iax2_new(callno, AST_STATE_DOWN, cai.capability);
 
 	ast_mutex_unlock(&iaxsl[callno]);
 
@@ -8338,7 +8381,7 @@ static void *network_thread(void *ignore)
 
 			if (f->retries < 0) {
 				/* This is not supposed to be retransmitted */
-				AST_LIST_REMOVE(&iaxq.queue, f, list);
+				AST_LIST_REMOVE_CURRENT(&iaxq.queue, list);
 				iaxq.count--;
 				/* Free the iax frame */
 				iax_frame_free(f);

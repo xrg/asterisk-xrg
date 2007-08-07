@@ -1032,11 +1032,13 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 	const char *msg = prev ? "deadlock" : "initial deadlock";
 	int retries;
 	struct ast_channel *c;
+	const struct ast_channel *_prev = prev;
 
 	for (retries = 0; retries < 10; retries++) {
 		int done;
 		AST_LIST_LOCK(&channels);
 		AST_LIST_TRAVERSE(&channels, c, chan_list) {
+			prev = _prev;
 			if (prev) {	/* look for next item */
 				if (c != prev)	/* not this one */
 					continue;
@@ -1050,6 +1052,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 				/* We want prev to be NULL in case we end up doing more searching through
 				 * the channel list to find the channel (ie: name searching). If we didn't
 				 * set this to NULL the logic would just blow up
+				 * XXX Need a better explanation for this ...
 				 */
 			}
 			if (name) { /* want match by name */
@@ -1093,6 +1096,11 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 		AST_LIST_UNLOCK(&channels);
 		if (done)
 			return c;
+		/* If we reach this point we basically tried to lock a channel and failed. Instead of
+		 * starting from the beginning of the list we can restore our saved pointer to the previous
+		 * channel and start from there.
+		 */
+		prev = _prev;
 		usleep(1);	/* give other threads a chance before retrying */
 	}
 
@@ -2340,9 +2348,10 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			 * However, only let emulation be forced if the other end cares about BEGIN frames */
 			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF) ||
 				(ast_test_flag(chan, AST_FLAG_EMULATE_DTMF) && !ast_test_flag(chan, AST_FLAG_END_DTMF_ONLY)) ) {
-				if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2)
+				if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2) {
+					ast_log(LOG_DTMF, "DTMF end '%c' put into dtmf queue on %s\n", f->subclass, chan->name);
 					chan->dtmfq[strlen(chan->dtmfq)] = f->subclass;
-				else
+				} else
 					ast_log(LOG_WARNING, "Dropping deferred DTMF digits on %s\n", chan->name);
 				ast_frfree(f);
 				f = &ast_null_frame;
@@ -2350,9 +2359,10 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				if (!ast_tvzero(chan->dtmf_tv) && 
 				    ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) {
 					/* If it hasn't been long enough, defer this digit */
-					if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2)
+					if (strlen(chan->dtmfq) < sizeof(chan->dtmfq) - 2) {
+						ast_log(LOG_DTMF, "DTMF end '%c' put into dtmf queue on %s\n", f->subclass, chan->name);
 						chan->dtmfq[strlen(chan->dtmfq)] = f->subclass;
-					else
+					} else
 						ast_log(LOG_WARNING, "Dropping deferred DTMF digits on %s\n", chan->name);
 					ast_frfree(f);
 					f = &ast_null_frame;
@@ -2369,20 +2379,29 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 							chan->emulate_dtmf_duration = AST_MIN_DTMF_DURATION;
 					} else
 						chan->emulate_dtmf_duration = AST_DEFAULT_EMULATE_DTMF_DURATION;
-					ast_log(LOG_DTMF, "DTMF begin emulation of '%c' with duration %d queued on %s\n", f->subclass, chan->emulate_dtmf_duration, chan->name);
+					ast_log(LOG_DTMF, "DTMF begin emulation of '%c' with duration %u queued on %s\n", f->subclass, chan->emulate_dtmf_duration, chan->name);
 				}
 			} else {
 				struct timeval now = ast_tvnow();
-				ast_clear_flag(chan, AST_FLAG_IN_DTMF);
-				if (!f->len)
-					f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+				if (ast_test_flag(chan, AST_FLAG_IN_DTMF)) {
+					ast_log(LOG_DTMF, "DTMF end accepted with begin '%c' on %s\n", f->subclass, chan->name);
+					ast_clear_flag(chan, AST_FLAG_IN_DTMF);
+					if (!f->len)
+						f->len = ast_tvdiff_ms(now, chan->dtmf_tv);
+				} else if (!f->len) {
+					ast_log(LOG_DTMF, "DTMF end accepted without begin '%c' on %s\n", f->subclass, chan->name);
+					f->len = AST_MIN_DTMF_DURATION;
+				}
 				if (f->len < AST_MIN_DTMF_DURATION) {
+					ast_log(LOG_DTMF, "DTMF end '%c' has duration %ld but want minimum %d, emulating on %s\n", f->subclass, f->len, AST_MIN_DTMF_DURATION, chan->name);
 					ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
 					chan->emulate_dtmf_digit = f->subclass;
 					chan->emulate_dtmf_duration = AST_MIN_DTMF_DURATION - f->len;
 					f = &ast_null_frame;
-				} else
+				} else {
+					ast_log(LOG_DTMF, "DTMF end passthrough '%c' on %s\n", f->subclass, chan->name);
 					chan->dtmf_tv = now;
+				}
 			}
 			break;
 		case AST_FRAME_DTMF_BEGIN:
@@ -2392,9 +2411,11 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			      ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) ) {
 				ast_frfree(f);
 				f = &ast_null_frame;
+				ast_log(LOG_DTMF, "DTMF begin ignored '%c' on %s\n", f->subclass, chan->name);
 			} else {
 				ast_set_flag(chan, AST_FLAG_IN_DTMF);
 				chan->dtmf_tv = ast_tvnow();
+				ast_log(LOG_DTMF, "DTMF begin passthrough '%c' on %s\n", f->subclass, chan->name);
 			}
 			break;
 		case AST_FRAME_NULL:
@@ -2710,10 +2731,10 @@ int ast_senddigit(struct ast_channel *chan, char digit)
 {
 	if (chan->tech->send_digit_begin) {
 		ast_senddigit_begin(chan, digit);
-		ast_safe_sleep(chan, 100); /* XXX 100ms ... probably should be configurable */
+		ast_safe_sleep(chan, AST_DEFAULT_EMULATE_DTMF_DURATION);
 	}
 	
-	return ast_senddigit_end(chan, digit, 100);
+	return ast_senddigit_end(chan, digit, AST_DEFAULT_EMULATE_DTMF_DURATION);
 }
 
 int ast_prod(struct ast_channel *chan)
