@@ -761,6 +761,7 @@ static int speech_background(struct ast_channel *chan, void *data)
 		/* We sort of make a results entry */
 		speech->results = ast_calloc(1, sizeof(*speech->results));
 		if (speech->results != NULL) {
+			ast_speech_dtmf(speech, dtmf);
 			speech->results->score = 1000;
 			speech->results->text = strdup(dtmf);
 			speech->results->grammar = strdup("dtmf");

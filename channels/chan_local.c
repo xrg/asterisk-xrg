@@ -443,6 +443,10 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 	
 	ast_mutex_lock(&p->lock);
 
+	/*
+	 * Note that cid_num and cid_name aren't passed in the ast_channel_alloc
+	 * call, so it's done here instead.
+	 */
 	p->chan->cid.cid_num = ast_strdup(p->owner->cid.cid_num);
 	p->chan->cid.cid_name = ast_strdup(p->owner->cid.cid_name);
 	p->chan->cid.cid_rdnis = ast_strdup(p->owner->cid.cid_rdnis);

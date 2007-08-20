@@ -2013,6 +2013,8 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, int seqno, int res
 		siptimer_a = pkt->timer_t1 * 2;
 
 	/* Schedule retransmission */
+	if (pkt->retransid > -1)
+		ast_sched_del(sched, pkt->retransid);
 	pkt->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, pkt, 1);
 	if (option_debug > 3 && sipdebug)
 		ast_log(LOG_DEBUG, "*** SIP TIMER: Initalizing retransmit timer on packet: Id  #%d\n", pkt->retransid);
@@ -2954,6 +2956,8 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 			p->invitestate = INV_CALLING;
 
 			/* Initialize auto-congest time */
+			if (p->initid > -1)
+				ast_sched_del(sched, p->initid);
 			p->initid = ast_sched_add(sched, p->maxtime ? (p->maxtime * 4) : SIP_TRANS_TIMEOUT, auto_congest, p);
 		}
 	}
@@ -3992,9 +3996,7 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 
 	/* Don't use ast_set_callerid() here because it will
 	 * generate an unnecessary NewCallerID event  */
-	tmp->cid.cid_num = ast_strdup(i->cid_num);
 	tmp->cid.cid_ani = ast_strdup(i->cid_num);
-	tmp->cid.cid_name = ast_strdup(i->cid_name);
 	if (!ast_strlen_zero(i->rdnis))
 		tmp->cid.cid_rdnis = ast_strdup(i->rdnis);
 	
@@ -11118,7 +11120,7 @@ static int sip_notify(int fd, int argc, char *argv[])
 		initreqprep(&req, p, SIP_NOTIFY);
 
 		for (var = varlist; var; var = var->next)
-			add_header(&req, var->name, var->value);
+			add_header(&req, var->name, ast_unescape_semicolon(var->value));
 
 		/* Recalculate our side, and recalculate Call ID */
 		if (ast_sip_ouraddrfor(&p->sa.sin_addr, &p->ourip))
@@ -12270,7 +12272,9 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		r->refresh= (int) expires_ms / 1000;
 
 		/* Schedule re-registration before we expire */
-		r->expire=ast_sched_add(sched, expires_ms, sip_reregister, r); 
+		if (r->expire > -1)
+			ast_sched_del(sched, r->expire);
+		r->expire = ast_sched_add(sched, expires_ms, sip_reregister, r); 
 		ASTOBJ_UNREF(r, sip_registry_destroy);
 	}
 	return 1;
@@ -15424,6 +15428,8 @@ static int sip_poke_noanswer(void *data)
 	peer->lastms = -1;
 	ast_device_state_changed("SIP/%s", peer->name);
 	/* Try again quickly */
+	if (peer->pokeexpire > -1)
+		ast_sched_del(sched, peer->pokeexpire);
 	peer->pokeexpire = ast_sched_add(sched, DEFAULT_FREQ_NOTOK, sip_poke_peer_s, peer);
 	return 0;
 }
@@ -15487,8 +15493,11 @@ static int sip_poke_peer(struct sip_peer *peer)
 	gettimeofday(&peer->ps, NULL);
 	if (xmitres == XMIT_ERROR)
 		sip_poke_noanswer(peer);	/* Immediately unreachable, network problems */
-	else
+	else {
+		if (peer->pokeexpire > -1)
+			ast_sched_del(sched, peer->pokeexpire);
 		peer->pokeexpire = ast_sched_add(sched, DEFAULT_MAXMS * 2, sip_poke_noanswer, peer);
+	}
 
 	return 0;
 }
@@ -15683,10 +15692,28 @@ static struct ast_channel *sip_request_call(const char *type, int format, void *
  */
 static void set_insecure_flags(struct ast_flags *flags, const char *value, int lineno)
 {
-	if (!strcasecmp(value, "very"))
+	static int dep_insecure_very = 0;
+	static int dep_insecure_yes = 0;
+	if (!strcasecmp(value, "very")) {
 		ast_set_flag(flags, SIP_INSECURE_PORT | SIP_INSECURE_INVITE);
-	else if (ast_true(value))
+		if(!dep_insecure_very) {
+			if(lineno != -1)
+				ast_log(LOG_WARNING, "insecure=very at line %d is deprecated; use insecure=port,invite instead\n", lineno);
+			else
+				ast_log(LOG_WARNING, "insecure=very is deprecated; use insecure=port,invite instead\n");
+			dep_insecure_very = 1;
+		}
+	}
+	else if (ast_true(value)) {
 		ast_set_flag(flags, SIP_INSECURE_PORT);
+		if(!dep_insecure_yes) {
+			if(lineno != -1)
+				ast_log(LOG_WARNING, "insecure=%s at line %d is deprecated; use insecure=port instead\n", value, lineno);
+			else
+				ast_log(LOG_WARNING, "insecure=%s is deprecated; use insecure=port instead\n", value);
+			dep_insecure_yes = 1;
+		}
+	}
 	else if (!ast_false(value)) {
 		char buf[64];
 		char *word, *next;
@@ -15713,8 +15740,6 @@ static void set_insecure_flags(struct ast_flags *flags, const char *value, int l
 static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask, struct ast_variable *v)
 {
 	int res = 1;
-	static int dep_insecure_very = 0;
-	static int dep_insecure_yes = 0;
 
 	if (!strcasecmp(v->name, "trustrpid")) {
 		ast_set_flag(&mask[0], SIP_TRUSTRPID);
@@ -15757,39 +15782,28 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "canreinvite")) {
 		ast_set_flag(&mask[0], SIP_REINVITE);
 		ast_clear_flag(&flags[0], SIP_REINVITE);
-		set_insecure_flags(flags, v->value, v->lineno);
+		if(ast_true(v->value)) {
+			ast_set_flag(&flags[0], SIP_CAN_REINVITE | SIP_CAN_REINVITE_NAT);
+		} else if (!ast_false(v->value)) {
+			char buf[64];
+			char *word, *next = buf;
+
+			ast_copy_string(buf, v->value, sizeof(buf));
+			while ((word = strsep(&next, ","))) {
+				if(!strcasecmp(word, "update")) {
+					ast_set_flag(&flags[0], SIP_REINVITE_UPDATE | SIP_CAN_REINVITE);
+				} else if(!strcasecmp(word, "nonat")) {
+					ast_set_flag(&flags[0], SIP_CAN_REINVITE);
+					ast_clear_flag(&flags[0], SIP_CAN_REINVITE_NAT);
+				} else {
+					ast_log(LOG_WARNING, "Unknown canreinvite mode '%s' on line %d\n", v->value, v->lineno);
+				}
+			}
+		}
 	} else if (!strcasecmp(v->name, "insecure")) {
 		ast_set_flag(&mask[0], SIP_INSECURE_PORT | SIP_INSECURE_INVITE);
 		ast_clear_flag(&flags[0], SIP_INSECURE_PORT | SIP_INSECURE_INVITE);
-		if (!strcasecmp(v->value, "very")) {
-			ast_set_flag(&flags[0], SIP_INSECURE_PORT | SIP_INSECURE_INVITE);
-			if (!dep_insecure_very) {
-				ast_log(LOG_WARNING, "insecure=very at line %d is deprecated; use insecure=port,invite instead\n", v->lineno);
-				dep_insecure_very = 1;
-			}
-		}
-		else if (ast_true(v->value)) {
-			ast_set_flag(&flags[0], SIP_INSECURE_PORT);
-			if (!dep_insecure_yes) {
-				ast_log(LOG_WARNING, "insecure=%s at line %d is deprecated; use insecure=port instead\n", v->value, v->lineno);
-				dep_insecure_yes = 1;
-			}
-		}
-		else if (!ast_false(v->value)) {
-			char buf[64];
-			char *word, *next;
-
-			ast_copy_string(buf, v->value, sizeof(buf));
-			next = buf;
-			while ((word = strsep(&next, ","))) {
-				if (!strcasecmp(word, "port"))
-					ast_set_flag(&flags[0], SIP_INSECURE_PORT);
-				else if (!strcasecmp(word, "invite"))
-					ast_set_flag(&flags[0], SIP_INSECURE_INVITE);
-				else
-					ast_log(LOG_WARNING, "Unknown insecure mode '%s' on line %d\n", v->value, v->lineno);
-			}
-		}
+		set_insecure_flags(flags, v->value, v->lineno);
 	} else if (!strcasecmp(v->name, "progressinband")) {
 		ast_set_flag(&mask[0], SIP_PROG_INBAND);
 		ast_clear_flag(&flags[0], SIP_PROG_INBAND);
@@ -17390,7 +17404,7 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest)
 	ast_string_field_build(p, our_contact, "Transfer <sip:%s@%s%s%s>", extension, host, port ? ":" : "", port ? port : "");
 	transmit_response_reliable(p, "302 Moved Temporarily", &p->initreq);
 
-	sip_scheddestroy(p, 32000);	/* Make sure we stop send this reply. */
+	sip_scheddestroy(p, SIP_TRANS_TIMEOUT);	/* Make sure we stop send this reply. */
 	sip_alreadygone(p);
 	return 0;
 }

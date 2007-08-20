@@ -750,6 +750,7 @@ int ast_cdr_disposition(struct ast_cdr *cdr, int cause)
 			ast_cdr_busy(cdr);
 			break;
 		case AST_CAUSE_FAILURE:
+		case AST_CAUSE_NORMAL_CIRCUIT_CONGESTION:
 			ast_cdr_failed(cdr);
 			break;
 		case AST_CAUSE_NORMAL:
@@ -759,7 +760,7 @@ int ast_cdr_disposition(struct ast_cdr *cdr, int cause)
 			break;
 		default:
 			res = -1;
-			ast_log(LOG_WARNING, "Cause not handled\n");
+			ast_log(LOG_WARNING, "Cause (%d) not handled\n", cause);
 		}
 	}
 	return res;

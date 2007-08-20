@@ -2416,6 +2416,15 @@ static int misdn_hangup(struct ast_channel *ast)
 	
 	bc=p->bc;
 
+	if (bc) {
+		const char *tmp=pbx_builtin_getvar_helper(ast,"MISDN_USERUSER");
+		if (tmp) {
+			ast_log(LOG_NOTICE, "MISDN_USERUSER: %s\n", tmp);
+			strcpy(bc->uu, tmp);
+			bc->uulen=strlen(bc->uu);
+		}
+	}
+
 	MISDN_ASTERISK_TECH_PVT(ast)=NULL;
 	p->ast=NULL;
 
@@ -3326,16 +3335,10 @@ static struct ast_channel *misdn_new(struct chan_list *chlist, int state,  char 
 		else
 			chan_misdn_log(1,0,"misdn_new: no exten given.\n");
 		
-		if (callerid) {
-			char *cid_name, *cid_num;
-      
-			ast_callerid_parse(callerid, &cid_name, &cid_num);
+		if (callerid)
 			/* Don't use ast_set_callerid() here because it will
 			 * generate a needless NewCallerID event */
-			tmp->cid.cid_num = ast_strdup(cid_num);
 			tmp->cid.cid_ani = ast_strdup(cid_num);
-			tmp->cid.cid_name = ast_strdup(cid_name);
-		}
 
 		{
 			if (pipe(chlist->pipe)<0)
@@ -4985,6 +4988,7 @@ static int load_module(void)
 				 "    s - send Non Inband DTMF as inband\n"
 				 "   vr - rxgain control\n"
 				 "   vt - txgain control\n"
+                                "    i - Ignore detected dtmf tones, don't signal them to asterisk, they will be transported inband.\n"
 		);
 
 	
@@ -5340,11 +5344,11 @@ static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
 			} else if (strstr(tok,"not_screened")) {
 				ch->bc->pres=1;
 			}
-			
-			
 			break;
-      
-      
+	  	case 'i' :
+			chan_misdn_log(1, ch->bc->port, "Ignoring dtmf tones, just use them inband\n");
+			ch->ignore_dtmf=1;
+			break;
 		default:
 			break;
 		}
