@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/alaw.h"
 
@@ -71,7 +71,7 @@ static inline short int alaw2linear (unsigned char alaw)
     int seg;
 
     alaw ^= AMI_MASK;
-    i = ((alaw & 0x0F) << 4);
+    i = ((alaw & 0x0F) << 4) + 8 /* rounding error */;
     seg = (((int) alaw & 0x70) >> 4);
     if (seg)
         i = (i + 0x100) << (seg - 1);
