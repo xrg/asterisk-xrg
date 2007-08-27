@@ -1,3 +1,420 @@
+2007-08-21  Russell Bryant <russell@digium.com>
+
+	* Asterisk 1.4.11 released.
+
+2007-08-21 18:42 +0000 [r80183]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_sip.c: Don't record SIP dialog history if it's not
+	  turned on. Also, put an upper limit on how many history entires
+	  will be stored for each SIP dialog. It is currently set to 50,
+	  but can be increased if deemed necessary. (closes issue #10421,
+	  closes issue #10418, patches suggested by jmoldenhauer, patches
+	  updated by me) (Security implications documented in AST-2007-020)
+
+2007-08-21 16:39 +0000 [r80166-80167]  Steve Murphy <murf@digium.com>
+
+	* include/asterisk/alaw.h, include/asterisk/ulaw.h: ugh. removing
+	  the diffs from ulaw.h and alaw.h for now; accidentally added them
+	  in 80166
+
+	* main/alaw.c, include/asterisk/alaw.h, include/asterisk/ulaw.h:
+	  This patch solves problem 1 in 8126; it should not slow down the
+	  alaw codec, but should prevent signal degradation via multiple
+	  trips thru the codec. Fossil estimates the twice thru this codec
+	  will prevent fax from working. 4-6 times thru would result
+	  hearable, noticeable, voice degradation.
+
+2007-08-21 15:22 +0000 [r80132]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_mgcp.c: Don't try to dereference the owner channel
+	  when it may not exist (issue #10507, maxper)
+
+2007-08-21 15:03 +0000 [r80130]  Jason Parker <jparker@digium.com>
+
+	* configs/cdr.conf.sample: (issue #10510) Reported by: casper
+	  Patches: cdr.conf.diff uploaded by casper (license 55) Fix a few
+	  errors in sample cdr config file.
+
+2007-08-20 21:57 +0000 [r80088]  Russell Bryant <russell@digium.com>
+
+	* apps/app_queue.c: Fix the build of app_queue
+
+2007-08-20 21:39 +0000 [r80049-80086]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_queue.c: After a discussion on #asterisk-dev, it was
+	  decided that this should be in 1.4 as well. (issue #10424,
+	  reported and patched by irroot)
+
+	* apps/app_queue.c: Found a pointless ternary if. member->dynamic
+	  was set to 1 and has no opportunity to change between then and
+	  this line, so "dynamic" will ALWAYS be output.
+
+2007-08-20 16:08 +0000 [r80047]  Jason Parker <jparker@digium.com>
+
+	* configs/extensions.conf.sample: (issue #10499) Reported by:
+	  casper Patches: extensions.conf.sample.diff uploaded by casper
+	  (license 55) Update CLI examples in extensions.conf.sample to
+	  reflect command changes.
+
+2007-08-20 15:34 +0000 [r80044]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Ukrainian language voicemail support.
+	  (closes issue #10458, reported and patched by Oleh)
+
+2007-08-20 02:42 +0000 [r79998]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* apps/app_voicemail.c: Missing curly braces. Oops. (Reported by
+	  snuffy via IRC)
+
+2007-08-18 14:30 +0000 [r79947]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* apps/app_voicemail.c: Don't allocate vmu for messagecount when we
+	  could just use the stack instead (closes issue #10490) Also,
+	  remove a useless (and leaky) SQLAllocHandle (closes issue #10480)
+
+2007-08-17 21:01 +0000 [r79912]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_zap.c: Avoid a crash in the handling of DTMF based
+	  Caller ID. It is valid for ast_read to return NULL in the case
+	  that the channel has been hung up. (crash reported by
+	  anonymouz666 on IRC in #asterisk-dev)
+
+2007-08-17 19:14 +0000 [r79906]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Patch allows for more seamless transition
+	  from file storage voicemail to ODBC storage voicemail. If a
+	  retrieval of a greeting from the database fails, but the file is
+	  found on the file system, then we go ahead an insert the greeting
+	  into the database. The result of this is that people who switch
+	  from file storage to ODBC storage do not need to rerecord their
+	  voicemail greetings.
+
+2007-08-17 19:12 +0000 [r79902-79904]  Jason Parker <jparker@digium.com>
+
+	* channels/chan_sip.c, main/utils.c, include/asterisk/strings.h:
+	  Don't send a semicolon over the wire in sip notify messages.
+	  Caused by fix for issue 9938. I basically took the code that
+	  existed before 9938 was fixed, and copied it into a new function
+	  - ast_unescape_semicolon There should be very few places this
+	  will be needed (pbx_config does NOT need this (see issue 9938 for
+	  details)) Issue 10430, patch by me, with help/ideas from murf
+	  (thanks murf).
+
+	* channels/chan_local.c: Re-add the setting of callerid name and
+	  number. Issue 10485, reported by and fix explained by paradise.
+
+2007-08-17 13:37 +0000 [r79857]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_sip.c: Fix some crashes in chan_sip. This patch
+	  changes various places that add items to the scheduler to ensure
+	  that they don't overwrite the ID of a previously scheduled item.
+	  If there is one, it should be removed. (closes issue #10391,
+	  closes issue #10256, probably others, patch by me)
+
+2007-08-17 08:22 +0000 [r79833]  Christian Richter <christian.richter@beronet.com>
+
+	* channels/chan_misdn.c: sometimes we don't need to signal dtmf
+	  tones to asterisk, we just want them to go through as inband.
+	  Otherwise they might be generated by the other channel partner
+	  and then there is a double tone.
+
+2007-08-16 22:32 +0000 [r79756-79792]  Russell Bryant <russell@digium.com>
+
+	* res/res_musiconhold.c: Fix a little race condition that could
+	  cause a crash if two channels had MOH stopped at the same time
+	  that were using a class that had been marked for deletion when
+	  its use count hits zero.
+
+	* res/res_musiconhold.c: This patch fixes a bug where reloading the
+	  module with "module reload" did not delete classes from memory
+	  that were no longer in the config. This patch fixes that problem
+	  as well as another one. Previously, if you reloaded MOH using the
+	  "moh reload" CLI command, which behaved differently than "module
+	  reload ...", MOH had to be stopped on every channel and started
+	  again immediately. However, there was no way to tell what class
+	  was being used, so they would all fall back to the default class.
+	  (closes issue #10139) Reported by: blitzrage Patches:
+	  asterisk-10139-advanced.diff.txt uploaded by jamesgolovich
+	  (license 176) Tested by: jamesgolovich
+
+	* channels/chan_iax2.c: Fix more deadlocks in chan_iax2 that were
+	  introduced by making frame handling and scheduling
+	  multi-threaded. Unfortunately, we have to do some expensive
+	  deadlock avoidance when queueing frames on to the ast_channel
+	  owner of the IAX2 pvt struct. This was already handled for
+	  regular frames, but ast_queue_hangup and ast_queue_control were
+	  still used directly. Making these changes introduced even more
+	  places where the IAX2 pvt struct can disappear in the context of
+	  a function holding its lock due to calling a function that has to
+	  unlock/lock it to avoid deadlocks. I went through and fixed all
+	  of these places to account for this possibility. (issue #10362,
+	  patch by me)
+
+2007-08-16 21:16 +0000 [r79690-79748]  Mark Michelson <mmichelson@digium.com>
+
+	* channels/chan_agent.c: Fixes a problem where agents would get
+	  stuck busy due to their wrapuptime being longer than the queue's
+	  wrapuptime and ringinuse=no for the queue. (closes issue #10215,
+	  reported by Doug, repaired by me) Special thanks to fkasumovic
+	  for pointing out the source of the problem and to bweschke for
+	  helping to come up with a solution!
+
+	* apps/app_voicemail.c: base_encode is not trying to open a log
+	  file, so we should not call it a log file in the warning.
+	  (related to issue #10452, reported by bcnit)
+
+2007-08-16 09:37 +0000 [r79665]  Philippe Sultan <philippe.sultan@gmail.com>
+
+	* res/res_jabber.c: A fix for two critical problems detected while
+	  working with Daniel McKeehan in issue #10184. Upon priority
+	  change, the resource list is not NULL terminated when moving an
+	  item to the end of the list. This makes Asterisk endlessy loop
+	  whenever it needs to read the list. Jids with different resource
+	  and priority values, like in Gmail's and GoogleTalk's jabber
+	  clients put that problem in evidence. Upon reception of a 'from'
+	  attribute with an empty resource string, Asterisk crashes when
+	  trying to access the found->cap pointer if the resource list for
+	  the given buddy is not empty. This situation is perfectly valid
+	  and must be handled. The Gizmoproject's jabber client put that
+	  problem in evidence. Also added a few comments in the code as
+	  well as a handle for the capabilities from Gmail's jabber client,
+	  which are stored in a caps:c tag rather than the usual c tag.
+	  Closes issue #10184.
+
+2007-08-16 08:21 +0000 [r79642]  Christian Richter <christian.richter@beronet.com>
+
+	* channels/misdn/ie.c: 0x80 + protocol is wrong for USERUSER when
+	  we want to send IA5 Chars.
+
+2007-08-15 14:40 +0000 [r79553]  Joshua Colp <jcolp@digium.com>
+
+	* main/rtp.c: (closes issue #10440) Reported by: irroot (closes
+	  issue #10454) Reported by: flo_turc Increase maximum timestamp
+	  skew to 120. 20 was apparently far too low.
+
+2007-08-15 14:26 +0000 [r79527]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Fixed an error in the Russian language
+	  voicemail intro. (issue #10458, reported and patched by Oleh)
+
+2007-08-15 14:18 +0000 [r79523]  Joshua Colp <jcolp@digium.com>
+
+	* channels/chan_sip.c: (closes issue #10456) Reported by: irroot
+	  Patches: sip_timeout.patch uploaded by irroot (license 52) Change
+	  hardcoded timer value to defined value. I'm doing this in 1.4 as
+	  well so if it needs to be changed in the future this place would
+	  not have been forgotten.
+
+2007-08-14 18:49 +0000 [r79436-79470]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_iax2.c: Fix another spot where an iax2_peer would
+	  be leaked if realtime was in use.
+
+	* channels/chan_iax2.c: Fix some memory leaks throughout chan_iax2
+	  related to the use of realtime. I found these while working on
+	  iax2_peer object reference tracking.
+
+2007-08-14 15:27 +0000 [r79397]  Joshua Colp <jcolp@digium.com>
+
+	* res/res_features.c: (closes issue #10415) Reported by: atis
+	  Revert fix for #10327 as it causes more issues then it solves.
+
+2007-08-13 22:40 +0000 [r79363]  Steve Murphy <murf@digium.com>
+
+	* pbx/pbx_ael.c: memset really, really needs to be used here.
+
+2007-08-13 21:57 +0000 [r79334]  Joshua Colp <jcolp@digium.com>
+
+	* res/res_speech.c, apps/app_speech_utils.c,
+	  include/asterisk/speech.h: Instead of accepting a single DTMF
+	  character accept a full string.
+
+2007-08-13 20:37 +0000 [r79272-79301]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_iax2.c: Don't call find_peer in
+	  registry_authrequest with the pvt lock held to avoid a deadlock.
+
+	* channels/chan_iax2.c: Release the pvt lock before calling
+	  find_peer in register_verify to avoid a deadlock. Also, remove
+	  some unnecessary locking in auth_fail that was only done
+	  recursively.
+
+	* channels/chan_iax2.c: Don't call find_peer within update_registry
+	  with a pvt lock held. This can cause a deadlock as the code will
+	  eventually call find_callno.
+
+	* channels/chan_iax2.c: I am fighting deadlocks in chan_iax2. I
+	  have tracked them down to a single core issue. You can not call
+	  find_callno() while holding a pvt lock as this function has to
+	  lock another (every) other pvt lock. Doing so can lead to a
+	  classic deadlock. So, I am tracking down all of the code paths
+	  where this can happen and fixing them. The fix I committed
+	  earlier today was along the same theme. This patch fixes some
+	  code down the path of authenticate_reply.
+
+2007-08-13 17:49 +0000 [r79255]  Steve Murphy <murf@digium.com>
+
+	* pbx/ael/ael-test/ref.ael-vtest21 (added),
+	  pbx/ael/ael-test/ref.ael-test19,
+	  pbx/ael/ael-test/ael-vtest21/extensions.ael (added),
+	  pbx/ael/ael-test/ael-vtest21 (added),
+	  pbx/ael/ael-test/ref.ael-vtest17,
+	  pbx/ael/ael-test/ref.ael-ntest10, pbx/ael/ael-test/ref.ael-test1,
+	  pbx/ael/ael-test/ref.ael-test11, pbx/pbx_ael.c,
+	  pbx/ael/ael-test/ref.ael-test14, utils/ael_main.c: This patch
+	  fixes bug 10411. I added a new regression test, some regression
+	  test cleanups
+
+2007-08-13 15:28 +0000 [r79214]  Russell Bryant <russell@digium.com>
+
+	* channels/chan_iax2.c: Fix a potential deadlock in socket_process.
+	  check_provisioning can eventually call find_callno. You can't
+	  hold a pvt lock while calling find_callno because it goes through
+	  and locks every single one looking for a match.
+
+2007-08-13 14:51 +0000 [r79174-79207]  Joshua Colp <jcolp@digium.com>
+
+	* res/res_speech.c, apps/app_speech_utils.c,
+	  include/asterisk/speech.h: Add an API call to allow the engine to
+	  know that DTMF was received.
+
+	* channels/chan_oss.c, channels/chan_mgcp.c, channels/chan_phone.c,
+	  channels/chan_local.c, channels/chan_misdn.c,
+	  channels/chan_zap.c, channels/chan_sip.c, channels/chan_skinny.c,
+	  channels/chan_h323.c, channels/chan_gtalk.c,
+	  channels/chan_iax2.c: (closes issue #10437) Reported by: haklin
+	  Don't set the callerid name and number a second time on a newly
+	  created channel. ast_channel_alloc itself already sets it and
+	  setting it twice would cause a memory leak.
+
+2007-08-11 05:23 +0000 [r79142]  Tilghman Lesher <tilghman@mail.jeffandtilghman.com>
+
+	* res/res_odbc.c: Ensure the connection gets marked as used at
+	  allocation time (closes issue #10429, report and fix by
+	  mnicholson)
+
+2007-08-10 20:53 +0000 [r79044-79099]  Steve Murphy <murf@digium.com>
+
+	* main/channel.c, pbx/pbx_spool.c, include/asterisk/channel.h: From
+	  a user complaint on #asterisk, I have forced pbx_spool to explain
+	  what reason codes mean, when they are logged
+
+	* main/cdr.c: Re bug behavior mentioned in #asterisk, made this
+	  tweak to code, to prevent hundreds of log messages from being
+	  generated
+
+	* main/cdr.c: This will help debug; from a question asked on
+	  #asterisk
+
+2007-08-10  Russell Bryant <russell@digium.com>
+
+	* Asterisk 1.4.10.1 released.
+	
+2007-08-10 15:20 +0000 [r78995]  Russell Bryant <russell@digium.com>
+
+	* include/asterisk/lock.h: The last set of changes that I made to
+	  "core show locks" made it not able to track mutexes unless they
+	  were declared using AST_MUTEX_DEFINE_STATIC. Locks initialized
+	  with ast_mutex_init() were not tracked. It should work now.
+
+2007-08-10 14:15 +0000 [r78951-78955]  Joshua Colp <jcolp@digium.com>
+
+	* main/file.c: Don't bother having the core pass through or emulate
+	  begin DTMF frames when in an ast_waitstream. It only cares about
+	  the end of DTMF.
+
+	* configs/queues.conf.sample: (closes issue #10422) Reported by:
+	  bhowell Add note to sample configuration about module load order
+	  and how it can cause perfectly good queue members to be marked as
+	  invalid.
+
+2007-08-10 13:24 +0000 [r78936]  Christian Richter <christian.richter@beronet.com>
+
+	* channels/chan_misdn.c, channels/misdn/ie.c,
+	  channels/misdn/isdn_msg_parser.c: fixed a bug with the useruser
+	  information element. We send them now also in the disconnect
+	  message.
+
+2007-08-09 23:47 +0000 [r78907]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Improved a bit of logic regarding
+	  comma-separated mailboxes in has_voicemail. Also added some
+	  braces to some compound if statements since unbraced if
+	  statements scare me in general.
+
+2007-08-09 23:10 +0000 [r78891]  Steve Murphy <murf@digium.com>
+
+	* Makefile: This fixes bug 10416; thanks to mvanbaak for the pretty
+	  output
+
+2007-08-09 22:03 +0000 [r78826-78860]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Removing some extra debug code I left in my
+	  last commit
+
+	* apps/app_voicemail.c: Quite a few changes regarding IMAP storage.
+	  1. instead of using inboxcount as the core message counting
+	  function, we use messagecount instead. This makes it possible to
+	  count messages in folders besides just INBOX and Old. 2.
+	  inboxcount and hasvoicemail now use messagecount as their means
+	  of determining return values. 3. Added a copy_message function
+	  for IMAP storage. Unfortunately I don't have the means to test
+	  it, but it seems like a pretty straightforward function. 4.
+	  Removed a #ifndef IMAP_STORAGE and matching #endif from
+	  leave_voicemail for a couple of reasons. One, we want to support
+	  copying mail to multiple IMAP boxes, and two, IMAP was broken
+	  because a STORE macro had been moved into this section of code.
+
+	* channels/chan_sip.c: I broke canreinvite...Now I'm fixing it. I
+	  put some new code in the wrong place and so I've reverted the
+	  canreinvite section to how it was and put my new code where it
+	  should be.
+
+2007-08-09 17:58 +0000 [r78717-78778]  Russell Bryant <russell@digium.com>
+
+	* apps/app_voicemail.c: add a comment to indicate that inboxcount
+	  for ODBC_STORAGE needs to be fixed to support multiple mailboxes
+
+	* apps/app_voicemail.c: Fix subscriptions to multiple mailboxes for
+	  ODBC_STORAGE. Also, leave a comment for this to be fixed for
+	  IMAP_STORAGE, as well. I left IMAP alone since I know MarkM was
+	  working on this code right now for another reason. This is broken
+	  even worse in trunk, but for a different reason. The fact that
+	  the mailbox option supported multiple mailboxes is completely not
+	  obvious from the code in the channel drivers. Anyway, I will fix
+	  that in another commit ...
+
+	* apps/app_meetme.c: Fix a problem with the combination of the 'F'
+	  option to pass DTMF through a conference and options that use
+	  DTMF to activate various features. The problem was that the BEGIN
+	  frame would be passed through, but the END frame would get
+	  intercepted to activate a feature. Then, the other conference
+	  members would hear DTMF for forever, which they didn't seem to
+	  like very much. (closes issue #10400, reported by stevefeinstein,
+	  fixed by me)
+
+2007-08-08 19:29 +0000 [r78646]  Jason Parker <jparker@digium.com>
+
+	* doc/jabber.txt: Fix mogs email address.
+
+2007-08-08 18:16 +0000 [r78575-78620]  Mark Michelson <mmichelson@digium.com>
+
+	* apps/app_voicemail.c: Fixed some compiler warnings so that
+	  compiling with dev-mode and IMAP storage would not have any
+	  errors. This section of code may get changed again shortly since
+	  my change uncovers a rather silly bit of logic.
+
+	* apps/app_queue.c: Changing a bit of logic so that someone will
+	  NEVER exit the queue on timeout unless they have enabled the 'n'
+	  option. This commit relates to issue #10320. Thanks to
+	  jfitzgibbon for detailing the idea behind this code change.
+
+2007-08-08 13:51 +0000 [r78569]  Joshua Colp <jcolp@digium.com>
+
+	* configs/sip.conf.sample: (closes issue #10335) Reported by:
+	  adamgundy Update sip.conf to include another scenario where
+	  directrtpsetup will fail.
+
 2007-08-07  Russell Bryant <russell@digium.com>
 
 	* Asterisk 1.4.10 released.
