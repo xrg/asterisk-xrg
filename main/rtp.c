@@ -57,7 +57,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/unaligned.h"
 #include "asterisk/utils.h"
 
-#define MAX_TIMESTAMP_SKEW	120
+#define MAX_TIMESTAMP_SKEW	640
 
 #define RTP_SEQ_MOD     (1<<16) 	/*!< A sequence number can't be more than 16 bits */
 #define RTCP_DEFAULT_INTERVALMS   5000	/*!< Default milli-seconds between RTCP reports we send */
@@ -2093,7 +2093,7 @@ void ast_rtp_destroy(struct ast_rtp *rtp)
 		ast_verbose("  SSRC:		 %u\n", rtp->ssrc);
 		ast_verbose("  Sent packets:	 %u\n", rtp->txcount);
 		ast_verbose("  Lost packets:	 %u\n", rtp->rtcp->reported_lost);
-		ast_verbose("  Jitter:		 %u\n", rtp->rtcp->reported_jitter);
+		ast_verbose("  Jitter:		 %u\n", rtp->rtcp->reported_jitter / (unsigned int)65536.0);
 		ast_verbose("  SR-count:	 %u\n", rtp->rtcp->sr_count);
 		ast_verbose("  RTT:		 %f\n", rtp->rtcp->rtt);
 	}

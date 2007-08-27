@@ -58,6 +58,8 @@ export PROC
 export SOLINK
 export STRIP
 export DOWNLOAD
+export GREP
+export ID
 export OSARCH
 export CURSES_DIR
 export NCURSES_DIR
@@ -72,6 +74,10 @@ export GTK2_INCLUDE
 ifneq ($(wildcard makeopts),)
   include makeopts
 endif
+
+# Some build systems, such as the one in openwrt, like to pass custom target
+# CFLAGS in the COPTS variable.
+ASTCFLAGS+=$(COPTS)
 
 #Uncomment this to see all build commands instead of 'quiet' output
 #NOISY_BUILD=yes
@@ -642,9 +648,7 @@ sounds:
 # last clean count we had
 
 cleantest:
-	@if ! cmp -s .cleancount .lastclean ; then \
-		$(MAKE) clean;\
-	fi
+	@cmp -s .cleancount .lastclean || $(MAKE) clean
 
 $(SUBDIRS_UNINSTALL):
 	@$(MAKE) --no-print-directory -C $(@:-uninstall=) uninstall

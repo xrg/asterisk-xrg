@@ -27,7 +27,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -85,7 +85,7 @@ static int zapateller_exec(struct ast_channel *chan, void *data)
 			res = ast_safe_sleep(chan, 500);
 		}
 	}
-	if (chan->cid.cid_num && nocallerid) {
+	if (!ast_strlen_zero(chan->cid.cid_num) && nocallerid) {
 		ast_module_user_remove(u);
 		return res;
 	} 

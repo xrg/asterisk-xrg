@@ -1002,11 +1002,15 @@ static struct sip_pvt {
 	struct ast_rtp *vrtp;			/*!< Video RTP session */
 	struct sip_pkt *packets;		/*!< Packets scheduled for re-transmission */
 	struct sip_history_head *history;	/*!< History of this SIP dialog */
+	size_t history_entries;			/*!< Number of entires in the history */
 	struct ast_variable *chanvars;		/*!< Channel variables to set for inbound call */
 	struct sip_pvt *next;			/*!< Next dialog in chain */
 	struct sip_invite_param *options;	/*!< Options for INVITE */
 	int autoframing;
 } *iflist = NULL;
+
+/*! Max entires in the history list for a sip_pvt */
+#define MAX_HISTORY_ENTRIES 50
 
 #define FLAG_RESPONSE (1 << 0)
 #define FLAG_FATAL (1 << 1)
@@ -1846,7 +1850,14 @@ static void append_history_va(struct sip_pvt *p, const char *fmt, va_list ap)
 		return;
 	}
 	memcpy(hist->event, buf, l);
+	if (p->history_entries == MAX_HISTORY_ENTRIES) {
+		struct sip_history *oldest;
+		oldest = AST_LIST_REMOVE_HEAD(p->history, list);
+		p->history_entries--;
+		free(oldest);
+	}
 	AST_LIST_INSERT_TAIL(p->history, hist, list);
+	p->history_entries++;
 }
 
 /*! \brief Append to SIP dialog history with arg list  */
@@ -1856,6 +1867,12 @@ static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
 
 	if (!p)
 		return;
+
+	if (ast_test_flag(&p->flags[0], SIP_NO_HISTORY) 
+		&& !recordhistory && !dumphistory) {
+		return;
+	}
+
 	va_start(ap, fmt);
 	append_history_va(p, fmt, ap);
 	va_end(ap);
@@ -3053,8 +3070,10 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 	/* Clear history */
 	if (p->history) {
 		struct sip_history *hist;
-		while( (hist = AST_LIST_REMOVE_HEAD(p->history, list)) )
+		while ( (hist = AST_LIST_REMOVE_HEAD(p->history, list)) ) {
 			free(hist);
+			p->history_entries--;
+		}
 		free(p->history);
 		p->history = NULL;
 	}
@@ -15694,6 +15713,10 @@ static void set_insecure_flags(struct ast_flags *flags, const char *value, int l
 {
 	static int dep_insecure_very = 0;
 	static int dep_insecure_yes = 0;
+
+	if (ast_strlen_zero(value))
+		return;
+
 	if (!strcasecmp(value, "very")) {
 		ast_set_flag(flags, SIP_INSECURE_PORT | SIP_INSECURE_INVITE);
 		if(!dep_insecure_very) {
@@ -16978,7 +17001,7 @@ static int reload_config(enum channelreloadreason reason)
 	notify_types = ast_config_load(notify_config);
 
 	/* Done, tell the manager */
-	manager_event(EVENT_FLAG_SYSTEM, "ChannelReload", "Channel: SIP\r\nReloadReason: %s\r\nRegistry_Count: %d\r\nPeer_Count: %d\r\nUser_Count: %d\r\n\r\n", channelreloadreason2txt(reason), registry_count, peer_count, user_count);
+	manager_event(EVENT_FLAG_SYSTEM, "ChannelReload", "Channel: SIP\r\nReloadReason: %s\r\nRegistry_Count: %d\r\nPeer_Count: %d\r\nUser_Count: %d\r\n", channelreloadreason2txt(reason), registry_count, peer_count, user_count);
 
 	return 0;
 }

@@ -1120,53 +1120,6 @@ static struct call_queue *find_queue_by_name_rt(const char *queuename, struct as
 	return q;
 }
 
-static struct call_queue *load_realtime_queue(const char *queuename)
-{
-	struct ast_variable *queue_vars;
-	struct ast_config *member_config = NULL;
-	struct call_queue *q;
-
-	/* Find the queue in the in-core list first. */
-	AST_LIST_LOCK(&queues);
-	AST_LIST_TRAVERSE(&queues, q, list) {
-		if (!strcasecmp(q->name, queuename)) {
-			break;
-		}
-	}
-	AST_LIST_UNLOCK(&queues);
-
-	if (!q || q->realtime) {
-		/*! \note Load from realtime before taking the global qlock, to avoid blocking all
-		   queue operations while waiting for the DB.
-
-		   This will be two separate database transactions, so we might
-		   see queue parameters as they were before another process
-		   changed the queue and member list as it was after the change.
-		   Thus we might see an empty member list when a queue is
-		   deleted. In practise, this is unlikely to cause a problem. */
-
-		queue_vars = ast_load_realtime("queues", "name", queuename, NULL);
-		if (queue_vars) {
-			member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", queuename, NULL);
-			if (!member_config) {
-				ast_log(LOG_ERROR, "no queue_members defined in your config (extconfig.conf).\n");
-				return NULL;
-			}
-		}
-
-		AST_LIST_LOCK(&queues);
-
-		q = find_queue_by_name_rt(queuename, queue_vars, member_config);
-		if (member_config)
-			ast_config_destroy(member_config);
-		if (queue_vars)
-			ast_variables_destroy(queue_vars);
-
-		AST_LIST_UNLOCK(&queues);
-	}
-	return q;
-}
-
 static void update_realtime_members(struct call_queue *q)
 {
 	struct ast_config *member_config = NULL;
@@ -1216,6 +1169,55 @@ static void update_realtime_members(struct call_queue *q)
 		m = next_m;
 	}
 	ast_mutex_unlock(&q->lock);
+}
+
+static struct call_queue *load_realtime_queue(const char *queuename)
+{
+	struct ast_variable *queue_vars;
+	struct ast_config *member_config = NULL;
+	struct call_queue *q;
+
+	/* Find the queue in the in-core list first. */
+	AST_LIST_LOCK(&queues);
+	AST_LIST_TRAVERSE(&queues, q, list) {
+		if (!strcasecmp(q->name, queuename)) {
+			break;
+		}
+	}
+	AST_LIST_UNLOCK(&queues);
+
+	if (!q || q->realtime) {
+		/*! \note Load from realtime before taking the global qlock, to avoid blocking all
+		   queue operations while waiting for the DB.
+
+		   This will be two separate database transactions, so we might
+		   see queue parameters as they were before another process
+		   changed the queue and member list as it was after the change.
+		   Thus we might see an empty member list when a queue is
+		   deleted. In practise, this is unlikely to cause a problem. */
+
+		queue_vars = ast_load_realtime("queues", "name", queuename, NULL);
+		if (queue_vars) {
+			member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", queuename, NULL);
+			if (!member_config) {
+				ast_log(LOG_ERROR, "no queue_members defined in your config (extconfig.conf).\n");
+				return NULL;
+			}
+		}
+
+		AST_LIST_LOCK(&queues);
+
+		q = find_queue_by_name_rt(queuename, queue_vars, member_config);
+		if (member_config)
+			ast_config_destroy(member_config);
+		if (queue_vars)
+			ast_variables_destroy(queue_vars);
+
+		AST_LIST_UNLOCK(&queues);
+	} else { 
+		update_realtime_members(q);
+	}
+	return q;
 }
 
 static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *reason)
@@ -2176,7 +2178,8 @@ static int is_our_turn(struct queue_ent *qe)
 				switch (cur->status) {
 				case AST_DEVICE_NOT_INUSE:
 				case AST_DEVICE_UNKNOWN:
-					avl++;
+					if (!cur->paused)
+						avl++;
 					break;
 				}
 			}
@@ -2910,7 +2913,7 @@ static int add_to_queue(const char *queuename, const char *interface, const char
 				"Status: %d\r\n"
 				"Paused: %d\r\n",
 				q->name, new_member->interface, new_member->membername,
-				new_member->dynamic ? "dynamic" : "static",
+				"dynamic",
 				new_member->penalty, new_member->calls, (int) new_member->lastcall,
 				new_member->status, new_member->paused);
 			
@@ -3923,8 +3926,11 @@ static int reload_queues(void)
 				ast_log(LOG_DEBUG, "XXX Leaking a little memory :( XXX\n");
 		} else {
 			ast_mutex_lock(&q->lock);
-			for (cur = q->members; cur; cur = cur->next)
+			for (cur = q->members; cur; cur = cur->next) {
+				if(cur->dynamic)
+					q->membercount++;
 				cur->status = ast_device_state(cur->interface);
+			}
 			ast_mutex_unlock(&q->lock);
 		}
 	}

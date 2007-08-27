@@ -105,6 +105,8 @@ static int timeout_write(struct ast_channel *chan, char *cmd, char *data,
 		return -1;
 
 	x = atoi(value);
+	if (x < 0)
+		x = 0;
 
 	switch (*data) {
 	case 'a':

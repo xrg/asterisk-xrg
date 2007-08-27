@@ -1873,6 +1873,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 			}
 		} else if (outfd > -1) {
 			retry = RETRY;
+			buf[0] = '\0';
 			if (!fgets(buf, sizeof(buf), readf)) {
 				/* Program terminated */
 				if (returnstatus && returnstatus != AST_PBX_KEEPALIVE)
