@@ -109,9 +109,9 @@ void destroy_pval_item(pval *item);
 int is_float(char *arg );
 int is_int(char *arg );
 int is_empty(char *arg);
-static pval *current_db;
-static pval *current_context;
-static pval *current_extension;
+static pval *current_db=0;
+static pval *current_context=0;
+static pval *current_extension=0;
 
 static const char *match_context;
 static const char *match_exten;
@@ -2733,6 +2733,8 @@ static void ael2_semantic_check(pval *item, int *arg_errs, int *arg_warns, int *
 #endif
 	struct argapp *apps=0;
 
+	if (!item)
+		return; /* don't check an empty tree */
 #ifdef AAL_ARGCHECK
 	rfilename = alloca(10 + strlen(ast_config_AST_VAR_DIR));
 	sprintf(rfilename, "%s/applist", ast_config_AST_VAR_DIR);
@@ -2894,7 +2896,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 	struct ael_priority *pr;
 	struct ael_priority *for_init, *for_test, *for_inc, *for_loop, *for_end;
 	struct ael_priority *while_test, *while_loop, *while_end;
-	struct ael_priority *switch_test, *switch_end, *fall_thru;
+	struct ael_priority *switch_test, *switch_end, *fall_thru, *switch_empty;
 	struct ael_priority *if_test, *if_end, *if_skip, *if_false;
 #ifdef OLD_RAND_ACTION
 	struct ael_priority *rand_test, *rand_end, *rand_skip;
@@ -2907,7 +2909,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 	int local_control_statement_count;
 	struct ael_priority *loop_break_save;
 	struct ael_priority *loop_continue_save;
-	struct ael_extension *switch_case;
+	struct ael_extension *switch_case,*switch_null;
 	
 	for (p=statement; p; p=p->next) {
 		switch (p->type) {
@@ -2983,30 +2985,100 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			strcpy(buf2,p->u1.for_init);
 			remove_spaces_before_equals(buf2);
 			strp = strchr(buf2, '=');
-			strp2 = strchr(p->u1.for_init, '=');
 			if (strp) {
+				strp2 = strchr(p->u1.for_init, '=');
 				*(strp+1) = 0;
 				strcat(buf2,"$[");
 				strncat(buf2,strp2+1, sizeof(buf2)-strlen(strp2+1)-2);
 				strcat(buf2,"]");
 				for_init->appargs = strdup(buf2);
-			} else
-				for_init->appargs = strdup(p->u1.for_init);
+				for_init->app = strdup("Set");
+			} else {
+				strp2 = p->u1.for_init;
+				while (*strp2 && isspace(*strp2))
+					strp2++;
+				if (*strp2 == '&') { /* itsa macro call */
+					char *strp3 = strp2+1;
+					while (*strp3 && isspace(*strp3))
+						strp3++;
+					strcpy(buf2, strp3);
+					strp3 = strchr(buf2,'(');
+					if (strp3) {
+						*strp3 = '|';
+					}
+					while ((strp3=strchr(buf2,','))) {
+						*strp3 = '|';
+					}
+					strp3 = strrchr(buf2, ')');
+					if (strp3)
+						*strp3 = 0; /* remove the closing paren */
 
-			for_inc->app = strdup("Set");
+					for_init->appargs = strdup(buf2);
+
+					for_init->app = strdup("Macro");
+				} else {  /* must be a regular app call */
+					char *strp3;
+					strcpy(buf2, strp2);
+					strp3 = strchr(buf2,'(');
+					if (strp3) {
+						*strp3 = 0;
+						for_init->app = strdup(buf2);
+						for_init->appargs = strdup(strp3+1);
+						strp3 = strrchr(for_init->appargs, ')');
+						if (strp3)
+							*strp3 = 0; /* remove the closing paren */
+					}
+				}
+			}
 
 			strcpy(buf2,p->u3.for_inc);
 			remove_spaces_before_equals(buf2);
 			strp = strchr(buf2, '=');
-			strp2 = strchr(p->u3.for_inc, '=');
-			if (strp) {
+			if (strp) {  /* there's an = in this part; that means an assignment. set it up */
+				strp2 = strchr(p->u3.for_inc, '=');
 				*(strp+1) = 0;
 				strcat(buf2,"$[");
 				strncat(buf2,strp2+1, sizeof(buf2)-strlen(strp2+1)-2);
 				strcat(buf2,"]");
 				for_inc->appargs = strdup(buf2);
-			} else
-				for_inc->appargs = strdup(p->u3.for_inc);
+				for_inc->app = strdup("Set");
+			} else {
+				strp2 = p->u3.for_inc;
+				while (*strp2 && isspace(*strp2))
+					strp2++;
+				if (*strp2 == '&') { /* itsa macro call */
+					char *strp3 = strp2+1;
+					while (*strp3 && isspace(*strp3))
+						strp3++;
+					strcpy(buf2, strp3);
+					strp3 = strchr(buf2,'(');
+					if (strp3) {
+						*strp3 = '|';
+					}
+					while ((strp3=strchr(buf2,','))) {
+						*strp3 = '|';
+					}
+					strp3 = strrchr(buf2, ')');
+					if (strp3)
+						*strp3 = 0; /* remove the closing paren */
+
+					for_inc->appargs = strdup(buf2);
+
+					for_inc->app = strdup("Macro");
+				} else {  /* must be a regular app call */
+					char *strp3;
+					strcpy(buf2, strp2);
+					strp3 = strchr(buf2,'(');
+					if (strp3) {
+						*strp3 = 0;
+						for_inc->app = strdup(buf2);
+						for_inc->appargs = strdup(strp3+1);
+						strp3 = strrchr(for_inc->appargs, ')');
+						if (strp3)
+							*strp3 = 0; /* remove the closing paren */
+					}
+				}
+			}
 			snprintf(buf1,sizeof(buf1),"$[%s]",p->u2.for_test);
 			for_test->app = 0;
 			for_test->appargs = strdup(buf1);
@@ -3082,7 +3154,10 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			switch_end = new_prio();
 			switch_test->type = AEL_APPCALL;
 			switch_end->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",control_statement_count, p->u1.str);
+			strncpy(buf2,p->u1.str,sizeof(buf2));
+			buf2[sizeof(buf2)-1] = 0; /* just in case */
+			substitute_commas(buf2);
+			snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",control_statement_count, buf2);
 			switch_test->app = strdup("Goto");
 			switch_test->appargs = strdup(buf1);
 			snprintf(buf1,sizeof(buf1),"Finish switch-%s-%d", label, control_statement_count);
@@ -3110,9 +3185,12 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					switch_case->loop_continue = exten->loop_continue;
 					
 					linkexten(exten,switch_case);
-					snprintf(buf1,sizeof(buf1),"sw-%d-%s", local_control_statement_count, p2->u1.str);
+					strncpy(buf2,p2->u1.str,sizeof(buf2));
+					buf2[sizeof(buf2)-1] = 0; /* just in case */
+					substitute_commas(buf2);
+					snprintf(buf1,sizeof(buf1),"sw-%d-%s", local_control_statement_count, buf2);
 					switch_case->name = strdup(buf1);
-					snprintf(new_label,sizeof(new_label),"sw-%s-%s-%d", label, p2->u1.str, local_control_statement_count);
+					snprintf(new_label,sizeof(new_label),"sw-%s-%s-%d", label, buf2, local_control_statement_count);
 					
 					gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context); /* this will link in all the case body statements here */
 
@@ -3128,7 +3206,10 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, p2->next->u1.str);
+							strncpy(buf2,p2->next->u1.str,sizeof(buf2));
+							buf2[sizeof(buf2)-1] = 0; /* just in case */
+							substitute_commas(buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3136,6 +3217,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
+							substitute_commas(buf2);
 							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10", local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
@@ -3174,9 +3256,12 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					switch_case->loop_continue = exten->loop_continue;
 					
 					linkexten(exten,switch_case);
-					snprintf(buf1,sizeof(buf1),"_sw-%d-%s", local_control_statement_count, p2->u1.str);
+					strncpy(buf2,p2->u1.str,sizeof(buf2));
+					buf2[sizeof(buf2)-1] = 0; /* just in case */
+					substitute_commas(buf2);
+					snprintf(buf1,sizeof(buf1),"_sw-%d-%s", local_control_statement_count, buf2);
 					switch_case->name = strdup(buf1);
-					snprintf(new_label,sizeof(new_label),"sw-%s-%s-%d", label, p2->u1.str, local_control_statement_count);
+					snprintf(new_label,sizeof(new_label),"sw-%s-%s-%d", label, buf2, local_control_statement_count);
 					
 					gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context); /* this will link in all the while body statements here */
 					/* here is where we write code to "fall thru" to the next case... if there is one... */
@@ -3191,7 +3276,10 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, p2->next->u1.str);
+							strncpy(buf2,p2->next->u1.str,sizeof(buf2));
+							buf2[sizeof(buf2)-1] = 0; /* just in case */
+							substitute_commas(buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3199,6 +3287,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
+							substitute_commas(buf2);
 							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
@@ -3228,11 +3317,30 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 						switch_case-> return_target = np2;
 					}
 				} else if (p2->type == PV_DEFAULT) {
-					default_exists++;
 					/* ok, generate a extension and link it in */
 					switch_case = new_exten();
 					switch_case->context = this_context;
 					switch_case->is_switch = 1;
+					
+					/* new: the default case intros a pattern with ., which covers ALMOST everything.
+					   but it doesn't cover a NULL pattern. So, we'll define a null extension to match
+					   that goto's the default extension. */
+
+					default_exists++;
+					switch_null = new_exten();
+					switch_null->context = this_context;
+					switch_null->is_switch = 1;
+					switch_empty = new_prio();
+					snprintf(buf1,sizeof(buf1),"sw-%d-.|10",local_control_statement_count);
+					switch_empty->app = strdup("Goto");
+					switch_empty->appargs = strdup(buf1);
+					linkprio(switch_null, switch_empty);
+					snprintf(buf1,sizeof(buf1),"sw-%d-", local_control_statement_count);
+					switch_null->name = strdup(buf1);
+					switch_null->loop_break = exten->loop_break;
+					switch_null->loop_continue = exten->loop_continue;
+					linkexten(exten,switch_null);
+
 					/* the break/continue locations are inherited from parent */
 					switch_case->loop_break = exten->loop_break;
 					switch_case->loop_continue = exten->loop_continue;
@@ -3242,7 +3350,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					
 					snprintf(new_label,sizeof(new_label),"sw-%s-default-%d", label, local_control_statement_count);
 					
-					gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context); /* this will link in all the while body statements here */
+					gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context); /* this will link in all the default:  body statements here */
 					
 					/* here is where we write code to "fall thru" to the next case... if there is one... */
 					for (p3=p2->u2.statements; p3; p3=p3->next) {
@@ -3256,7 +3364,10 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, p2->next->u1.str);
+							strncpy(buf2,p2->next->u1.str,sizeof(buf2));
+							buf2[sizeof(buf2)-1] = 0; /* just in case */
+							substitute_commas(buf2);
+							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3264,6 +3375,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
+							substitute_commas(buf2);
 							snprintf(buf1,sizeof(buf1),"sw-%d-%s|10",local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru);
@@ -3970,7 +4082,7 @@ static int aeldebug = 0;
 
 static int pbx_load_module(void)
 {
-	int errs, sem_err, sem_warn, sem_note;
+	int errs=0, sem_err=0, sem_warn=0, sem_note=0;
 	char *rfilename;
 	struct ast_context *local_contexts=NULL, *con;
 	struct pval *parse_tree;

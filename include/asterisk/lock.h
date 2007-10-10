@@ -126,6 +126,12 @@ typedef pthread_cond_t ast_cond_t;
 
 static pthread_mutex_t empty_mutex;
 
+enum ast_lock_type {
+	AST_MUTEX,
+	AST_RDLOCK,
+	AST_WRLOCK,
+};
+
 /*!
  * \brief Store lock info for the current thread
  *
@@ -134,13 +140,18 @@ static pthread_mutex_t empty_mutex;
  * lock info struct.  The lock is marked as pending as the thread is waiting
  * on the lock.  ast_mark_lock_acquired() will mark it as held by this thread.
  */
-void ast_store_lock_info(const char *filename, int line_num, 
-	const char *func, const char *lock_name, void *lock_addr);
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr);
 
 /*!
  * \brief Mark the last lock as acquired
  */
 void ast_mark_lock_acquired(void);
+
+/*!
+ * \brief Mark the last lock as failed (trylock)
+ */
+void ast_mark_lock_failed(void);
 
 /*!
  * \brief remove lock info for the current thread
@@ -159,6 +170,7 @@ static inline int __ast_pthread_mutex_init_attr(int track, const char *filename,
 						const char *mutex_name, ast_mutex_t *t,
 						pthread_mutexattr_t *attr) 
 {
+	int i;
 #ifdef AST_MUTEX_INIT_W_CONSTRUCTORS
 	int canlog = strcmp(filename, "logger.c");
 
@@ -174,10 +186,12 @@ static inline int __ast_pthread_mutex_init_attr(int track, const char *filename,
 	}
 #endif
 
-	t->file[0] = filename;
-	t->lineno[0] = lineno;
-	t->func[0] = func;
-	t->thread[0]  = 0;
+	for (i = 0; i < AST_MAX_REENTRANCY; i++) {
+		t->file[i] = NULL;
+		t->lineno[i] = 0;
+		t->func[i] = NULL;
+		t->thread[i]  = 0;
+	}
 	t->reentrancy = 0;
 	t->track = track;
 
@@ -249,7 +263,7 @@ static inline int __ast_pthread_mutex_lock(const char *filename, int lineno, con
 	int canlog = strcmp(filename, "logger.c");
 
 	if (t->track)
-		ast_store_lock_info(filename, lineno, func, mutex_name, &t->mutex);
+		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex);
 
 #if defined(AST_MUTEX_INIT_W_CONSTRUCTORS)
 	if ((t->mutex) == ((pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER)) {
@@ -333,7 +347,7 @@ static inline int __ast_pthread_mutex_trylock(const char *filename, int lineno, 
 #endif /* AST_MUTEX_INIT_W_CONSTRUCTORS */
 
 	if (t->track)
-		ast_store_lock_info(filename, lineno, func, mutex_name, &t->mutex);
+		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex);
 
 	if (!(res = pthread_mutex_trylock(&t->mutex))) {
 		if (t->track)
@@ -469,7 +483,7 @@ static inline int __ast_cond_wait(const char *filename, int lineno, const char *
 		DO_THREAD_CRASH;
 	} else {
 		if (t->track)
-			ast_store_lock_info(filename, lineno, func, mutex_name, &t->mutex);
+			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex);
 
 		if (t->reentrancy < AST_MAX_REENTRANCY) {
 			t->file[t->reentrancy] = filename;
@@ -530,7 +544,7 @@ static inline int __ast_cond_timedwait(const char *filename, int lineno, const c
 		DO_THREAD_CRASH;
 	} else {
 		if (t->track)
-			ast_store_lock_info(filename, lineno, func, mutex_name, &t->mutex);
+			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex);
 
 		if (t->reentrancy < AST_MAX_REENTRANCY) {
 			t->file[t->reentrancy] = filename;
@@ -702,6 +716,85 @@ static inline int ast_rwlock_destroy(ast_rwlock_t *prwlock)
 	return pthread_rwlock_destroy(prwlock);
 }
 
+#ifdef DEBUG_THREADS
+#define ast_rwlock_unlock(a) \
+	_ast_rwlock_unlock(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+static inline int _ast_rwlock_unlock(ast_rwlock_t *lock, const char *name,
+	const char *file, int line, const char *func)
+{
+	int res;
+	res = pthread_rwlock_unlock(lock);
+	ast_remove_lock_info(lock);
+	return res;
+}
+
+#define ast_rwlock_rdlock(a) \
+	_ast_rwlock_rdlock(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+static inline int _ast_rwlock_rdlock(ast_rwlock_t *lock, const char *name,
+	const char *file, int line, const char *func)
+{
+	int res;
+	ast_store_lock_info(AST_RDLOCK, file, line, func, name, lock);
+	res = pthread_rwlock_rdlock(lock);
+	if (!res)
+		ast_mark_lock_acquired();
+	else
+		ast_remove_lock_info(lock);
+	return res;
+}
+
+#define ast_rwlock_wrlock(a) \
+	_ast_rwlock_wrlock(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+static inline int _ast_rwlock_wrlock(ast_rwlock_t *lock, const char *name,
+	const char *file, int line, const char *func)
+{
+	int res;
+	ast_store_lock_info(AST_WRLOCK, file, line, func, name, lock);
+	res = pthread_rwlock_wrlock(lock);
+	if (!res)
+		ast_mark_lock_acquired();
+	else
+		ast_remove_lock_info(lock);
+	return res;
+}
+
+#define ast_rwlock_tryrdlock(a) \
+	_ast_rwlock_tryrdlock(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+static inline int _ast_rwlock_tryrdlock(ast_rwlock_t *lock, const char *name,
+	const char *file, int line, const char *func)
+{
+	int res;
+	ast_store_lock_info(AST_RDLOCK, file, line, func, name, lock);
+	res = pthread_rwlock_tryrdlock(lock);
+	if (!res)
+		ast_mark_lock_acquired();
+	else
+		ast_remove_lock_info(lock);
+	return res;
+}
+
+#define ast_rwlock_trywrlock(a) \
+	_ast_rwlock_trywrlock(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+static inline int _ast_rwlock_trywrlock(ast_rwlock_t *lock, const char *name,
+	const char *file, int line, const char *func)
+{
+	int res;
+	ast_store_lock_info(AST_WRLOCK, file, line, func, name, lock);
+	res = pthread_rwlock_trywrlock(lock);
+	if (!res)
+		ast_mark_lock_acquired();
+	else
+		ast_remove_lock_info(lock);
+	return res;
+}
+
+#else
+
 static inline int ast_rwlock_unlock(ast_rwlock_t *prwlock)
 {
 	return pthread_rwlock_unlock(prwlock);
@@ -726,6 +819,7 @@ static inline int ast_rwlock_trywrlock(ast_rwlock_t *prwlock)
 {
 	return pthread_rwlock_trywrlock(prwlock);
 }
+#endif /* DEBUG_THREADS */
 
 /* Statically declared read/write locks */
 
@@ -786,6 +880,17 @@ AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
 {
 	return OSAtomicAdd64(v, (int64_t *) p);
 #elif defined (__i386__)
+#ifdef sun
+AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
+{
+	__asm __volatile (
+	"       lock;  xaddl   %0, %1 ;        "
+	: "+r" (v),                     /* 0 (result) */   
+	  "=m" (*p)                     /* 1 */
+	: "m" (*p));                    /* 2 */
+	return (v);
+})
+#else /* ifndef sun */
 AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
 {
 	__asm __volatile (
@@ -795,6 +900,7 @@ AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
 	: "m" (*p));                    /* 2 */
 	return (v);
 })
+#endif
 #else   /* low performance version in utils.c */
 AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
 {

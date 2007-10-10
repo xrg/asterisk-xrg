@@ -133,6 +133,7 @@ struct ast_filestream {
 	struct ast_frame fr;	/* frame produced by read, typically */
 	char *buf;		/* buffer pointed to by ast_frame; */
 	void *private;	/* pointer to private buffer */
+	const char *orig_chan_name;
 };
 
 #define SEEK_FORCECUR	10

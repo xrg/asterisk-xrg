@@ -57,6 +57,11 @@ struct astobj2 {
 	void *user_data[0];
 };
 
+#ifdef AST_DEVMODE
+#define AO2_DEBUG 1
+#endif
+
+#ifdef AO2_DEBUG
 struct ao2_stats {
 	volatile int total_objects;
 	volatile int total_mem;
@@ -66,6 +71,7 @@ struct ao2_stats {
 };
 
 static struct ao2_stats ao2;
+#endif
 
 #ifndef HAVE_BKTR	/* backtrace support */
 void ao2_bt(void) {}
@@ -126,7 +132,9 @@ int ao2_lock(void *user_data)
 	if (p == NULL)
 		return -1;
 
+#ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_locked, 1);
+#endif
 
 	return ast_mutex_lock(&p->priv_data.lock);
 }
@@ -138,7 +146,9 @@ int ao2_unlock(void *user_data)
 	if (p == NULL)
 		return -1;
 
+#ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_locked, -1);
+#endif
 
 	return ast_mutex_unlock(&p->priv_data.lock);
 }
@@ -161,9 +171,12 @@ int ao2_ref(void *user_data, const int delta)
 
 	/* we modify with an atomic operation the reference counter */
 	ret = ast_atomic_fetchadd_int(&obj->priv_data.ref_counter, delta);
-	ast_atomic_fetchadd_int(&ao2.total_refs, delta);
 	current_value = ret + delta;
-	
+
+#ifdef AO2_DEBUG	
+	ast_atomic_fetchadd_int(&ao2.total_refs, delta);
+#endif
+
 	/* this case must never happen */
 	if (current_value < 0)
 		ast_log(LOG_ERROR, "refcount %d on object %p\n", current_value, user_data);
@@ -173,13 +186,15 @@ int ao2_ref(void *user_data, const int delta)
 			obj->priv_data.destructor_fn(user_data);
 
 		ast_mutex_destroy(&obj->priv_data.lock);
+#ifdef AO2_DEBUG
 		ast_atomic_fetchadd_int(&ao2.total_mem, - obj->priv_data.data_size);
+		ast_atomic_fetchadd_int(&ao2.total_objects, -1);
+#endif
 		/* for safety, zero-out the astobj2 header and also the
 		 * first word of the user-data, which we make sure is always
 		 * allocated. */
 		bzero(obj, sizeof(struct astobj2 *) + sizeof(void *) );
 		free(obj);
-		ast_atomic_fetchadd_int(&ao2.total_objects, -1);
 	}
 
 	return ret;
@@ -207,9 +222,12 @@ void *ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
 	obj->priv_data.data_size = data_size;
 	obj->priv_data.ref_counter = 1;
 	obj->priv_data.destructor_fn = destructor_fn;	/* can be NULL */
+
+#ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_objects, 1);
 	ast_atomic_fetchadd_int(&ao2.total_mem, data_size);
 	ast_atomic_fetchadd_int(&ao2.total_refs, 1);
+#endif
 
 	/* return a pointer to the user data */
 	return EXTERNAL_OBJ(obj);
@@ -243,7 +261,7 @@ AST_LIST_HEAD_NOLOCK(bucket, bucket_list);
  * This will be more efficient as we can do the freelist management while
  * we hold the lock (that we need anyways).
  */
-struct __ao2_container {
+struct ao2_container {
 	ao2_hash_fn hash_fn;
 	ao2_callback_fn cmp_fn;
 	int n_buckets;
@@ -272,15 +290,15 @@ static int hash_zero(const void *user_obj, const int flags)
 /*
  * A container is just an object, after all!
  */
-ao2_container *
+struct ao2_container *
 ao2_container_alloc(const uint n_buckets, ao2_hash_fn hash_fn,
 		ao2_callback_fn cmp_fn)
 {
 	/* XXX maybe consistency check on arguments ? */
 	/* compute the container size */
-	size_t container_size = sizeof(ao2_container) + n_buckets * sizeof(struct bucket);
+	size_t container_size = sizeof(struct ao2_container) + n_buckets * sizeof(struct bucket);
 
-	ao2_container *c = ao2_alloc(container_size, container_destruct);
+	struct ao2_container *c = ao2_alloc(container_size, container_destruct);
 
 	if (!c)
 		return NULL;
@@ -289,15 +307,18 @@ ao2_container_alloc(const uint n_buckets, ao2_hash_fn hash_fn,
 	c->n_buckets = n_buckets;
 	c->hash_fn = hash_fn ? hash_fn : hash_zero;
 	c->cmp_fn = cmp_fn;
+
+#ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_containers, 1);
-	
+#endif
+
 	return c;
 }
 
 /*!
  * return the number of elements in the container
  */
-int ao2_container_count(ao2_container *c)
+int ao2_container_count(struct ao2_container *c)
 {
 	return c->elements;
 }
@@ -316,7 +337,7 @@ struct bucket_list {
 /*
  * link an object to a container
  */
-void *__ao2_link(ao2_container *c, void *user_data, int iax2_hack)
+void *__ao2_link(struct ao2_container *c, void *user_data, int iax2_hack)
 {
 	int i;
 	/* create a new list entry */
@@ -352,7 +373,7 @@ void *__ao2_link(ao2_container *c, void *user_data, int iax2_hack)
 /*!
  * \brief another convenience function is a callback that matches on address
  */
-static int match_by_addr(void *user_data, void *arg, int flags)
+int ao2_match_by_addr(void *user_data, void *arg, int flags)
 {
 	return (user_data == arg) ? (CMP_MATCH | CMP_STOP) : 0;
 }
@@ -361,12 +382,12 @@ static int match_by_addr(void *user_data, void *arg, int flags)
  * Unlink an object from the container
  * and destroy the associated * ao2_bucket_list structure.
  */
-void *ao2_unlink(ao2_container *c, void *user_data)
+void *ao2_unlink(struct ao2_container *c, void *user_data)
 {
 	if (INTERNAL_OBJ(user_data) == NULL)	/* safety check on the argument */
 		return NULL;
 
-	ao2_callback(c, OBJ_UNLINK | OBJ_POINTER | OBJ_NODATA, match_by_addr, user_data);
+	ao2_callback(c, OBJ_UNLINK | OBJ_POINTER | OBJ_NODATA, ao2_match_by_addr, user_data);
 
 	return NULL;
 }
@@ -384,7 +405,7 @@ static int cb_true(void *user_data, void *arg, int flags)
  * \return Is a pointer to an object or to a list of object if OBJ_MULTIPLE is 
  * specified.
  */
-void *ao2_callback(ao2_container *c,
+void *ao2_callback(struct ao2_container *c,
 	const enum search_flags flags,
 	ao2_callback_fn cb_fn, void *arg)
 {
@@ -488,7 +509,7 @@ void *ao2_callback(ao2_container *c,
 /*!
  * the find function just invokes the default callback with some reasonable flags.
  */
-void *ao2_find(ao2_container *c, void *arg, enum search_flags flags)
+void *ao2_find(struct ao2_container *c, void *arg, enum search_flags flags)
 {
 	return ao2_callback(c, flags, c->cmp_fn, arg);
 }
@@ -496,9 +517,9 @@ void *ao2_find(ao2_container *c, void *arg, enum search_flags flags)
 /*!
  * initialize an iterator so we start from the first object
  */
-ao2_iterator ao2_iterator_init(ao2_container *c, int flags)
+struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
 {
-	ao2_iterator a = {
+	struct ao2_iterator a = {
 		.c = c,
 		.flags = flags
 	};
@@ -509,10 +530,11 @@ ao2_iterator ao2_iterator_init(ao2_container *c, int flags)
 /*
  * move to the next element in the container.
  */
-void * ao2_iterator_next(ao2_iterator *a)
+void * ao2_iterator_next(struct ao2_iterator *a)
 {
 	int lim;
 	struct bucket_list *p = NULL;
+	void *ret = NULL;
 
 	if (INTERNAL_OBJ(a->c) == NULL)
 		return NULL;
@@ -553,14 +575,15 @@ found:
 		a->version = p->version;
 		a->obj = p;
 		a->c_version = a->c->version;
+		ret = EXTERNAL_OBJ(p->astobj);
 		/* inc refcount of returned object */
-		ao2_ref(EXTERNAL_OBJ(p->astobj), 1);
+		ao2_ref(ret, 1);
 	}
 
 	if (!(a->flags & F_AO2I_DONTLOCK))
 		ao2_unlock(a->c);
 
-	return p ? EXTERNAL_OBJ(p->astobj) : NULL;
+	return ret;
 }
 
 /* callback for destroying container.
@@ -574,12 +597,16 @@ static int cd_cb(void *obj, void *arg, int flag)
 	
 static void container_destruct(void *_c)
 {
-	ao2_container *c = _c;
+	struct ao2_container *c = _c;
 
 	ao2_callback(c, OBJ_UNLINK, cd_cb, NULL);
+
+#ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_containers, -1);
+#endif
 }
 
+#ifdef AO2_DEBUG
 static int print_cb(void *obj, void *arg, int flag)
 {
 	int *fd = arg;
@@ -607,7 +634,7 @@ static int handle_astobj2_stats(int fd, int argc, char *argv[])
  */
 static int handle_astobj2_test(int fd, int argc, char *argv[])
 {
-	ao2_container *c1;
+	struct ao2_container *c1;
 	int i, lim;
 	char *obj;
 	static int prof_id = -1;
@@ -645,7 +672,7 @@ static int handle_astobj2_test(int fd, int argc, char *argv[])
 
 	ast_cli(fd, "testing iterators, remove every second object\n");
 	{
-		ao2_iterator ai;
+		struct ao2_iterator ai;
 		int x = 0;
 
 		ai = ao2_iterator_init(c1, 0);
@@ -679,10 +706,13 @@ static struct ast_cli_entry cli_astobj2[] = {
 	handle_astobj2_stats, "Print astobj2 statistics", },
 	{ { "astobj2", "test", NULL } , handle_astobj2_test, "Test astobj2", },
 };
+#endif /* AO2_DEBUG */
 
-int astobj2_init(void);
 int astobj2_init(void)
 {
+#ifdef AO2_DEBUG
 	ast_cli_register_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
+#endif
+
 	return 0;
 }

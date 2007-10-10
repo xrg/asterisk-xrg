@@ -1193,23 +1193,23 @@ static char *zap_sig2str(int sig)
 	case SIG_FXOKS:
 		return "FXO Kewlstart";
 	case SIG_PRI:
-		return "PRI Signalling";
+		return "ISDN PRI";
 	case SIG_SF:
-		return "SF (Tone) Signalling Immediate";
+		return "SF (Tone) Immediate";
 	case SIG_SFWINK:
-		return "SF (Tone) Signalling Wink";
+		return "SF (Tone) Wink";
 	case SIG_SF_FEATD:
-		return "SF (Tone) Signalling with Feature Group D (DTMF)";
+		return "SF (Tone) with Feature Group D (DTMF)";
 	case SIG_SF_FEATDMF:
-		return "SF (Tone) Signalling with Feature Group D (MF)";
+		return "SF (Tone) with Feature Group D (MF)";
 	case SIG_SF_FEATB:
-		return "SF (Tone) Signalling with Feature Group B (MF)";
+		return "SF (Tone) with Feature Group B (MF)";
 	case SIG_GR303FXOKS:
-		return "GR-303 Signalling with FXOKS";
+		return "GR-303 with FXOKS";
 	case SIG_GR303FXSKS:
-		return "GR-303 Signalling with FXSKS";
+		return "GR-303 with FXSKS";
 	case 0:
-		return "Pseudo Signalling";
+		return "Pseudo";
 	default:
 		snprintf(buf, sizeof(buf), "Unknown signalling %d", sig);
 		return buf;
@@ -3167,7 +3167,11 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		return AST_BRIDGE_FAILED_NOWARN;
 
 	ast_mutex_lock(&c0->lock);
-	ast_mutex_lock(&c1->lock);
+	while (ast_mutex_trylock(&c1->lock)) {
+		ast_mutex_unlock(&c0->lock);
+		usleep(1);
+		ast_mutex_lock(&c0->lock);
+	}
 
 	p0 = c0->tech_pvt;
 	p1 = c1->tech_pvt;
@@ -3335,7 +3339,12 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		/* Here's our main loop...  Start by locking things, looking for private parts, 
 		   and then balking if anything is wrong */
 		ast_mutex_lock(&c0->lock);
-		ast_mutex_lock(&c1->lock);
+		while (ast_mutex_trylock(&c1->lock)) {
+			ast_mutex_unlock(&c0->lock);
+			usleep(1);
+			ast_mutex_lock(&c0->lock);
+		}
+
 		p0 = c0->tech_pvt;
 		p1 = c1->tech_pvt;
 
@@ -4914,7 +4923,6 @@ static int zt_write(struct ast_channel *ast, struct ast_frame *frame)
 {
 	struct zt_pvt *p = ast->tech_pvt;
 	int res;
-	unsigned char outbuf[4096];
 	int index;
 	index = zt_get_index(ast, p, 0);
 	if (index < 0) {
@@ -4968,10 +4976,6 @@ static int zt_write(struct ast_channel *ast, struct ast_frame *frame)
 	/* Return if it's not valid data */
 	if (!frame->data || !frame->datalen)
 		return 0;
-	if (frame->datalen > sizeof(outbuf) * 2) {
-		ast_log(LOG_WARNING, "Frame too large\n");
-		return 0;
-	}
 
 	if (frame->subclass == AST_FORMAT_SLINEAR) {
 		if (!p->subs[index].linear) {
@@ -9127,7 +9131,7 @@ static void *pri_dchannel(void *vpri)
 									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset, pri->span, (int)e->hangup.aoc_units, (e->hangup.aoc_units == 1) ? "" : "s");
 
 #ifdef SUPPORT_USERUSER
-						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
+						if (pri->pvts[chanpos]->owner && !ast_strlen_zero(e->hangup.useruserinfo)) {
 							pbx_builtin_setvar_helper(pri->pvts[chanpos]->owner, "USERUSERINFO", e->hangup.useruserinfo);
 						}
 #endif

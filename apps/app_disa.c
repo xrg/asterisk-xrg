@@ -28,7 +28,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <string.h>
 #include <stdlib.h>
@@ -296,6 +296,10 @@ static int disa_exec(struct ast_channel *chan, void *data)
 					exten[0] = 0;
 					ast_log(LOG_DEBUG,"Successful DISA log-in on chan %s\n", chan->name);
 					continue;
+				}
+			} else {
+				if (j == '#') { /* end of extension */
+					break;
 				}
 			}
 

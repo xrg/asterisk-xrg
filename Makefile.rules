@@ -17,6 +17,8 @@
 
 -include $(ASTTOPDIR)/makeopts
 
+.PHONY: dist-clean
+
 ifeq ($(NOISY_BUILD),)
    ECHO_PREFIX=@
    CMD_PREFIX=@
@@ -38,27 +40,15 @@ endif
 
 %.o: %.c
 	$(ECHO_PREFIX) echo "   [CC] $< -> $@"
-ifeq ($(AST_DEVMODE),yes)
 	$(CMD_PREFIX) $(CC) -o $@ -c $< $(PTHREAD_CFLAGS) $(ASTCFLAGS) -MMD -MT $@ -MF .$(subst /,_,$@).d -MP
-else
-	$(CMD_PREFIX) $(CC) -o $@ -c $< $(PTHREAD_CFLAGS) $(ASTCFLAGS)
-endif
 
 %.o: %.s
 	$(ECHO_PREFIX) echo "   [AS] $< -> $@"
-ifeq ($(AST_DEVMODE),yes)
 	$(CMD_PREFIX) $(CC) -o $@ -c $< $(PTHREAD_CFLAGS) $(ASTCFLAGS) -MMD -MT $@ -MF .$(subst /,_,$@).d -MP
-else
-	$(CMD_PREFIX) $(CC) -o $@ -c $< $(PTHREAD_CFLAGS) $(ASTCFLAGS)
-endif
 
 %.oo: %.cc
 	$(ECHO_PREFIX) echo "   [CXX] $< -> $@"
-ifeq ($(AST_DEVMODE),yes)
 	$(CMD_PREFIX) $(CXX) -o $@ -c $< $(PTHREAD_CFLAGS) $(filter-out -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations,$(ASTCFLAGS)) -MMD -MT $@ -MF .$(subst /,_,$@).d -MP
-else
-	$(CMD_PREFIX) $(CXX) -o $@ -c $< $(PTHREAD_CFLAGS) $(filter-out -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations,$(ASTCFLAGS))
-endif
 
 %.c: %.y
 	$(ECHO_PREFIX) echo "   [BISON] $< -> $@"
@@ -79,3 +69,5 @@ endif
 %: %.o
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
 	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(PTHREAD_CFLAGS) $(ASTLDFLAGS) $^ $(PTHREAD_LIBS) $(LIBS)
+
+dist-clean::

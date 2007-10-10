@@ -3480,7 +3480,7 @@ static void print_ext(struct ast_exten *e, char * buf, int buflen)
 	} else {
 		snprintf(buf, buflen, "%d. %s(%s)",
 			prio, ast_get_extension_app(e),
-			(char *)ast_get_extension_app_data(e));
+			(!ast_strlen_zero(ast_get_extension_app_data(e)) ? (char *)ast_get_extension_app_data(e) : ""));
 	}
 }
 
@@ -5034,10 +5034,13 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 			if (ast_exists_extension(chan, context, "failed", 1, NULL)) {
 				chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "OutgoingSpoolFailed");
 				if (chan) {
+					char failed_reason[4] = "";
 					if (!ast_strlen_zero(context))
 						ast_copy_string(chan->context, context, sizeof(chan->context));
 					set_ext_pri(chan, "failed", 1);
 					ast_set_variables(chan, vars);
+					snprintf(failed_reason, sizeof(failed_reason), "%d", *reason);
+					pbx_builtin_setvar_helper(chan, "REASON", failed_reason);
 					if (account)
 						ast_cdr_setaccount(chan, account);
 					ast_pbx_run(chan);

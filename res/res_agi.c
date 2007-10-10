@@ -67,6 +67,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define MAX_ARGS 128
 #define MAX_COMMANDS 128
+#define AGI_NANDFS_RETRY 3
+#define AGI_BUF_LEN 2048
 
 /* Recycle some stuff from the CLI interface */
 #define fdprintf agi_debug_cli
@@ -111,6 +113,7 @@ static int agidebug = 0;
 
 enum agi_result {
 	AGI_RESULT_SUCCESS,
+	AGI_RESULT_SUCCESS_FAST,
 	AGI_RESULT_FAILURE,
 	AGI_RESULT_HANGUP
 };
@@ -230,7 +233,7 @@ static enum agi_result launch_netscript(char *agiurl, char *argv[], int *fds, in
 	fds[0] = s;
 	fds[1] = s;
 	*opid = -1;
-	return AGI_RESULT_SUCCESS;
+	return AGI_RESULT_SUCCESS_FAST;
 }
 
 static enum agi_result launch_script(char *script, char *argv[], int *fds, int *efd, int *opid)
@@ -1204,7 +1207,7 @@ static int handle_getvariablefull(struct ast_channel *chan, AGI *agi, int argc, 
 	} else {
 		chan2 = chan;
 	}
-	if (chan) { /* XXX isn't this chan2 ? */
+	if (chan2) {
 		pbx_substitute_variables_helper(chan2, argv[3], tmp, sizeof(tmp) - 1);
 		fdprintf(agi->fd, "200 result=1 (%s)\n", tmp);
 	} else {
@@ -1823,7 +1826,6 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf)
 	}
 	return 0;
 }
-#define RETRY	3
 static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi, int pid, int *status, int dead)
 {
 	struct ast_channel *c;
@@ -1831,11 +1833,12 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	int ms, needhup = 0;
 	enum agi_result returnstatus = AGI_RESULT_SUCCESS;
 	struct ast_frame *f;
-	char buf[2048];
+	char buf[AGI_BUF_LEN];
+	char *res = NULL;
 	FILE *readf;
 	/* how many times we'll retry if ast_waitfor_nandfs will return without either 
 	  channel or file descriptor in case select is interrupted by a system call (EINTR) */
-	int retry = RETRY;
+	int retry = AGI_NANDFS_RETRY;
 
 	if (!(readf = fdopen(agi->ctrl, "r"))) {
 		ast_log(LOG_WARNING, "Unable to fdopen file descriptor\n");
@@ -1855,7 +1858,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 		ms = -1;
 		c = ast_waitfor_nandfds(&chan, dead ? 0 : 1, &agi->ctrl, 1, NULL, &outfd, &ms);
 		if (c) {
-			retry = RETRY;
+			retry = AGI_NANDFS_RETRY;
 			/* Idle the channel until we get a command */
 			f = ast_read(c);
 			if (!f) {
@@ -1872,9 +1875,29 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				ast_frfree(f);
 			}
 		} else if (outfd > -1) {
-			retry = RETRY;
+			size_t len = sizeof(buf);
+			size_t buflen = 0;
+
+			retry = AGI_NANDFS_RETRY;
 			buf[0] = '\0';
-			if (!fgets(buf, sizeof(buf), readf)) {
+
+			while (buflen < (len - 1)) {
+				res = fgets(buf + buflen, len, readf);
+				if (feof(readf)) 
+					break;
+				if (ferror(readf) && ((errno != EINTR) && (errno != EAGAIN))) 
+					break;
+				if (res != NULL && !agi->fast)
+					break;
+				buflen = strlen(buf);
+				if (buflen && buf[buflen - 1] == '\n')
+					break;
+				len -= buflen;
+				if (agidebug)
+					ast_verbose( "AGI Rx << temp buffer %s - errno %s\n", buf, strerror(errno));
+			}
+
+			if (!buf[0]) {
 				/* Program terminated */
 				if (returnstatus && returnstatus != AST_PBX_KEEPALIVE)
 					returnstatus = -1;
@@ -1886,6 +1909,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				pid = -1;
 				break;
 			}
+
 			/* get rid of trailing newline, if any */
 			if (*buf && buf[strlen(buf) - 1] == '\n')
 				buf[strlen(buf) - 1] = 0;
@@ -2000,7 +2024,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 	enum agi_result res;
 	struct ast_module_user *u;
 	char *argv[MAX_ARGS];
-	char buf[2048]="";
+	char buf[AGI_BUF_LEN] = "";
 	char *tmp = (char *)buf;
 	int argc = 0;
 	int fds[2];
@@ -2031,14 +2055,15 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 	}
 #endif
 	res = launch_script(argv[0], argv, fds, enhanced ? &efd : NULL, &pid);
-	if (res == AGI_RESULT_SUCCESS) {
+	if (res == AGI_RESULT_SUCCESS || res == AGI_RESULT_SUCCESS_FAST) {
 		int status = 0;
 		agi.fd = fds[1];
 		agi.ctrl = fds[0];
 		agi.audio = efd;
+		agi.fast = (res == AGI_RESULT_SUCCESS_FAST) ? 1 : 0;
 		res = run_agi(chan, argv[0], &agi, pid, &status, dead);
 		/* If the fork'd process returns non-zero, set AGISTATUS to FAILURE */
-		if (res == AGI_RESULT_SUCCESS && status)
+		if ((res == AGI_RESULT_SUCCESS || res == AGI_RESULT_SUCCESS_FAST) && status)
 			res = AGI_RESULT_FAILURE;
 		if (fds[1] != fds[0])
 			close(fds[1]);
@@ -2050,6 +2075,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 
 	switch (res) {
 	case AGI_RESULT_SUCCESS:
+	case AGI_RESULT_SUCCESS_FAST:
 		pbx_builtin_setvar_helper(chan, "AGISTATUS", "SUCCESS");
 		break;
 	case AGI_RESULT_FAILURE:

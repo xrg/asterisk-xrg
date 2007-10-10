@@ -1170,8 +1170,12 @@ static void aji_handle_presence(struct aji_client *client, ikspak *pak)
 		aji_create_buddy(pak->from->partial, client);
 
 	buddy = ASTOBJ_CONTAINER_FIND(&client->buddies, pak->from->partial);
-	if (!buddy) {
-		ast_log(LOG_NOTICE, "Got presence packet from %s, someone not in our roster!!!!\n", pak->from->partial);
+	if (!buddy && pak->from->partial) {
+		/* allow our jid to be used to log in with another resource */
+		if (!strcmp((const char *)pak->from->partial, (const char *)client->jid->partial))
+			aji_create_buddy(pak->from->partial, client);
+		else
+			ast_log(LOG_NOTICE, "Got presence packet from %s, someone not in our roster!!!!\n", pak->from->partial);
 		return;
 	}
 	type = iks_find_attrib(pak->x, "type");
@@ -1185,7 +1189,7 @@ static void aji_handle_presence(struct aji_client *client, ikspak *pak)
 	tmp = buddy->resources;
 	descrip = ast_strdup(iks_find_cdata(pak->x,"status"));
 
-	while (tmp) {
+	while (tmp && pak->from->resource) {
 		if (!strcasecmp(tmp->resource, pak->from->resource)) {
 			tmp->status = status;
 			if (tmp->description) free(tmp->description);
@@ -1258,7 +1262,7 @@ static void aji_handle_presence(struct aji_client *client, ikspak *pak)
 	}
 
 	/* resource not found in our list, create it */
-	if (!found && status != 6) {
+	if (!found && status != 6 && pak->from->resource) {
 		found = (struct aji_resource *) malloc(sizeof(struct aji_resource));
 		memset(found, 0, sizeof(struct aji_resource));
 
@@ -1293,12 +1297,6 @@ static void aji_handle_presence(struct aji_client *client, ikspak *pak)
 			buddy->resources = found;
 	}
 	
-	/* if 'from' attribute does not contain 'resource' string
-	   point to the top of our resource list */
-	if (!found && !pak->from->resource && buddy->resources) {
-		found = buddy->resources;
-	}
-
 	ASTOBJ_UNLOCK(buddy);
 	ASTOBJ_UNREF(buddy, aji_buddy_destroy);
 
@@ -1311,7 +1309,8 @@ static void aji_handle_presence(struct aji_client *client, ikspak *pak)
 		ver = iks_find_attrib(iks_find(pak->x, "caps:c"), "ver");
 	}
 
-	if(status !=6 && !found->cap) {
+	/* retrieve capabilites of the new resource */
+	if(status !=6 && found && !found->cap) {
 		found->cap = aji_find_version(node, ver, pak);
 		if(gtalk_yuck(pak->x)) /* gtalk should do discover */
 			found->cap->jingle = 1;
@@ -1324,7 +1323,7 @@ static void aji_handle_presence(struct aji_client *client, ikspak *pak)
 			if(query && iq)  {
 				iks_insert_attrib(iq, "type", "get");
 				iks_insert_attrib(iq, "to", pak->from->full);
-				iks_insert_attrib(iq,"from",iks_find_attrib(pak->x,"to"));
+				iks_insert_attrib(iq,"from", client->jid->full);
 				iks_insert_attrib(iq, "id", client->mid);
 				ast_aji_increment_mid(client->mid);
 				iks_insert_attrib(query, "xmlns", "http://jabber.org/protocol/disco#info");

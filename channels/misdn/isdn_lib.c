@@ -1566,9 +1566,6 @@ static int handle_event ( struct misdn_bchannel *bc, enum event_e event, iframe_
 		case EVENT_PROGRESS:
 		case EVENT_PROCEEDING:
 		case EVENT_SETUP_ACKNOWLEDGE:
-
-		setup_bc(bc);
-
 		case EVENT_SETUP:
 		{
 			if (bc->channel == 0xff || bc->channel<=0)
@@ -1580,6 +1577,8 @@ static int handle_event ( struct misdn_bchannel *bc, enum event_e event, iframe_
 				return -1;
 			}
 		}
+
+		setup_bc(bc);
 		break;
 
 		case EVENT_RELEASE_COMPLETE:
@@ -1825,6 +1824,7 @@ handle_event_nt(void *dat, void *arg)
 				free(hold_bc);
 
 				bc->holded=0;
+				bc->b_stid=0;
 			}
 			
 		}
@@ -2861,7 +2861,6 @@ static int handle_mgmt(msg_t *msg)
 		case SSTATUS_L1_DEACTIVATED:
 			cb_log(3, 0, "MGMT: SSTATUS: L1_DEACTIVATED \n");
 			stack->l1link=0;
-
 			clear_l3(stack);
 			break;
 

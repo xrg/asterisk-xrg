@@ -269,7 +269,8 @@ static struct robin_list* get_robin_position (char *group)
 	}
 	new = (struct robin_list *)calloc(1, sizeof(struct robin_list));
 	new->group = strndup(group, strlen(group));
-	new->channel = 1;
+	new->port = 0;
+	new->channel = 0;
 	if (robin) {
 		new->next = robin;
 		robin->prev = new;
@@ -613,7 +614,7 @@ static inline void misdn_tasks_wakeup (void)
 	pthread_kill(misdn_tasks_thread, SIGUSR1);
 }
 
-static inline int _misdn_tasks_add_variable (int timeout, ast_sched_cb callback, void *data, int variable)
+static inline int _misdn_tasks_add_variable (int timeout, ast_sched_cb callback, const void *data, int variable)
 {
 	int task_id;
 
@@ -626,12 +627,12 @@ static inline int _misdn_tasks_add_variable (int timeout, ast_sched_cb callback,
 	return task_id;
 }
 
-static int misdn_tasks_add (int timeout, ast_sched_cb callback, void *data)
+static int misdn_tasks_add (int timeout, ast_sched_cb callback, const void *data)
 {
 	return _misdn_tasks_add_variable(timeout, callback, data, 0);
 }
 
-static int misdn_tasks_add_variable (int timeout, ast_sched_cb callback, void *data)
+static int misdn_tasks_add_variable (int timeout, ast_sched_cb callback, const void *data)
 {
 	return _misdn_tasks_add_variable(timeout, callback, data, 1);
 }
@@ -641,14 +642,14 @@ static void misdn_tasks_remove (int task_id)
 	ast_sched_del(misdn_tasks, task_id);
 }
 
-static int misdn_l1_task (void *data)
+static int misdn_l1_task (const void *data)
 {
 	misdn_lib_isdn_l1watcher(*(int *)data);
 	chan_misdn_log(5, *(int *)data, "L1watcher timeout\n");
 	return 1;
 }
 
-static int misdn_overlap_dial_task (void *data)
+static int misdn_overlap_dial_task (const void *data)
 {
 	struct timeval tv_end, tv_now;
 	int diff;
@@ -1764,6 +1765,7 @@ static int read_config(struct chan_list *ch, int orig)
 	
 	port=bc->port;
 	
+
 	chan_misdn_log(1,port,"read_config: Getting Config\n");
 
 	misdn_cfg_get( port, MISDN_CFG_LANGUAGE, lang, BUFFERSIZE);
@@ -1779,6 +1781,12 @@ static int read_config(struct chan_list *ch, int orig)
 	misdn_cfg_get( port, MISDN_CFG_INCOMING_EARLY_AUDIO, &ch->incoming_early_audio, sizeof(int));
 	
 	misdn_cfg_get( port, MISDN_CFG_SENDDTMF, &bc->send_dtmf, sizeof(int));
+
+	misdn_cfg_get( port, MISDN_CFG_ASTDTMF, &ch->ast_dsp, sizeof(int));
+
+	if (ch->ast_dsp) {
+		ch->ignore_dtmf=1;
+	}
 
 	misdn_cfg_get( port, MISDN_CFG_NEED_MORE_INFOS, &bc->need_more_infos, sizeof(int));
 	misdn_cfg_get( port, MISDN_CFG_NTTIMEOUT, &ch->nttimeout, sizeof(int));
@@ -1954,12 +1962,16 @@ static int read_config(struct chan_list *ch, int orig)
 
 	ch->overlap_dial_task = -1;
 	
-	if (ch->faxdetect) {
+	if (ch->faxdetect  || ch->ast_dsp) {
 		misdn_cfg_get( port, MISDN_CFG_FAXDETECT_TIMEOUT, &ch->faxdetect_timeout, sizeof(ch->faxdetect_timeout));
 		if (!ch->dsp)
 			ch->dsp = ast_dsp_new();
-		if (ch->dsp)
-			ast_dsp_set_features(ch->dsp, DSP_FEATURE_DTMF_DETECT | DSP_FEATURE_FAX_DETECT);
+		if (ch->dsp) {
+			if (ch->faxdetect) 
+				ast_dsp_set_features(ch->dsp, DSP_FEATURE_DTMF_DETECT | DSP_FEATURE_FAX_DETECT);
+			else 
+				ast_dsp_set_features(ch->dsp, DSP_FEATURE_DTMF_DETECT );
+		}
 		if (!ch->trans)
 			ch->trans=ast_translator_build_path(AST_FORMAT_SLINEAR, AST_FORMAT_ALAW);
 	}
@@ -2651,15 +2663,17 @@ static struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame
  		chan_misdn_log(2, tmp->bc->port, " --> * SEND: DTMF (AST_DSP) :%c\n", f->subclass);
  	}
 
-	return frame;
+	return f;
 }
 
 
 static struct ast_frame  *misdn_read(struct ast_channel *ast)
 {
 	struct chan_list *tmp;
-	int len;
-	
+	fd_set rrfs;
+	struct timeval tv;
+	int len, t;
+
 	if (!ast) {
 		chan_misdn_log(1,0,"misdn_read called without ast\n");
 		return NULL;
@@ -2674,11 +2688,34 @@ static struct ast_frame  *misdn_read(struct ast_channel *ast)
 		return NULL;
 	}
 
-	len=read(tmp->pipe[0],tmp->ast_rd_buf,sizeof(tmp->ast_rd_buf));
+	tv.tv_sec=0;
+	tv.tv_usec=20000;
 
-	if (len<=0) {
-		/* we hangup here, since our pipe is closed */
-		chan_misdn_log(2,tmp->bc->port,"misdn_read: Pipe closed, hanging up\n");
+	FD_ZERO(&rrfs);
+	FD_SET(tmp->pipe[0],&rrfs);
+
+	t=select(FD_SETSIZE,&rrfs,NULL, NULL,&tv);
+
+	if (!t) {
+		chan_misdn_log(3, tmp->bc->port, "read Select Timed out\n");
+		len=160;
+	}
+
+	if (t<0) {
+		chan_misdn_log(-1, tmp->bc->port, "Select Error (err=%s)\n",strerror(errno));
+		return NULL;
+	}
+
+	if (FD_ISSET(tmp->pipe[0],&rrfs)) {
+		len=read(tmp->pipe[0],tmp->ast_rd_buf,sizeof(tmp->ast_rd_buf));
+
+		if (len<=0) {
+			/* we hangup here, since our pipe is closed */
+			chan_misdn_log(2,tmp->bc->port,"misdn_read: Pipe closed, hanging up\n");
+			return NULL;
+		}
+
+	} else {
 		return NULL;
 	}
 
@@ -3095,63 +3132,67 @@ static struct ast_channel *misdn_request(const char *type, int format, void *dat
 			chan_misdn_log(4, port, " --> STARTING ROUND ROBIN...\n");
 			rr = get_robin_position(group);
 		}
-		
-			
+
 		if (rr) {
-			int robin_channel = rr->channel;
-			int port_start;
-			int next_chan = 1;
+			int port_start = 0;
+			int port_bak = rr->port;
+			int chan_bak = rr->channel;
 
-			do {
-				port_start = 0;
-				for (port = misdn_cfg_get_next_port_spin(rr->port); port > 0 && port != port_start;
-					 port = misdn_cfg_get_next_port_spin(port)) {
+			if (!rr->port)
+				rr->port = misdn_cfg_get_next_port_spin(rr->port);
+			
+			for (; rr->port > 0 && rr->port != port_start;
+				 rr->port = misdn_cfg_get_next_port_spin(rr->port)) {
+				int port_up;
+				int check;
+				int max_chan;
+				int last_chance = 0;
 
-					if (!port_start)
-						port_start = port;
+				if (!port_start)
+					port_start = rr->port;
 
-					if (port >= port_start)
-						next_chan = 1;
-					
-					if (port <= port_start && next_chan) {
-						int maxbchans=misdn_lib_get_maxchans(port);
-						if (++robin_channel >= maxbchans) {
-							robin_channel = 1;
-						}
-						next_chan = 0;
-					}
+				misdn_cfg_get(rr->port, MISDN_CFG_GROUPNAME, cfg_group, BUFFERSIZE);
+				if (strcasecmp(cfg_group, group))
+					continue;
 
-					misdn_cfg_get(port, MISDN_CFG_GROUPNAME, cfg_group, BUFFERSIZE);
-					
-					if (!strcasecmp(cfg_group, group)) {
-						int port_up;
-						int check;
-						misdn_cfg_get(port, MISDN_CFG_PMP_L1_CHECK, &check, sizeof(int));
-						port_up = misdn_lib_port_up(port, check);
+				misdn_cfg_get(rr->port, MISDN_CFG_PMP_L1_CHECK, &check, sizeof(int));
+				port_up = misdn_lib_port_up(rr->port, check);
 
-						if (check && !port_up) 
-							chan_misdn_log(1,port,"L1 is not Up on this Port\n");
-						
-						if (check && port_up<0) {
-							ast_log(LOG_WARNING,"This port (%d) is blocked\n", port);
-						}
-						
-						
-						if ( port_up>0 )	{
-							newbc = misdn_lib_get_free_bc(port, robin_channel,0, 0);
-							if (newbc) {
-								chan_misdn_log(4, port, " Success! Found port:%d channel:%d\n", newbc->port, newbc->channel);
-								if (port_up)
-									chan_misdn_log(4, port, "portup:%d\n",  port_up);
-								rr->port = newbc->port;
-								rr->channel = newbc->channel;
-								break;
-							}
-						}
+				if (check && !port_up) 
+					chan_misdn_log(1, rr->port, "L1 is not Up on this Port\n");
+
+				if (check && port_up < 0)
+					ast_log(LOG_WARNING,"This port (%d) is blocked\n", rr->port);
+
+				if (port_up <= 0)
+					continue;
+
+				max_chan = misdn_lib_get_maxchans(rr->port);
+
+				for (++rr->channel; !last_chance && rr->channel <= max_chan; ++rr->channel) {
+					if (rr->port == port_bak && rr->channel == chan_bak)
+						last_chance = 1;
+
+					chan_misdn_log(1, 0, "trying port:%d channel:%d\n", rr->port, rr->channel);
+					newbc = misdn_lib_get_free_bc(rr->port, rr->channel, 0, 0);
+					if (newbc) {
+						chan_misdn_log(4, rr->port, " Success! Found port:%d channel:%d\n", newbc->port, newbc->channel);
+						if (port_up)
+							chan_misdn_log(4, rr->port, "portup:%d\n",  port_up);
+						port = rr->port;
+						break;
 					}
 				}
-			} while (!newbc && robin_channel != rr->channel);
-			
+
+				if (newbc || last_chance)
+					break;
+
+				rr->channel = 0;
+			}
+			if (!newbc) {
+				rr->port = port_bak;
+				rr->channel = chan_bak;
+			}
 		} else {		
 			for (port=misdn_cfg_get_next_port(0); port > 0;
 				 port=misdn_cfg_get_next_port(port)) {
@@ -3787,7 +3828,8 @@ void export_ch(struct ast_channel *chan, struct misdn_bchannel *bc, struct chan_
 		pbx_builtin_setvar_helper(chan,"MISDN_URATE",tmp);
 	}
 
-	if (bc->uulen) {
+	if (bc->uulen && (bc->uulen < sizeof(bc->uu))) {
+		bc->uu[bc->uulen]=0;
 		pbx_builtin_setvar_helper(chan,"MISDN_USERUSER",bc->uu);
 	}
 
@@ -4468,8 +4510,15 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			}
 		}
 	}
+	ch->l3id=bc->l3_id;
+	ch->addr=bc->addr;
+
+	start_bc_tones(ch);
 	
-	/* notice that we don't break here!*/
+	ch->state = MISDN_CONNECTED;
+	
+	ast_queue_control(ch->ast, AST_CONTROL_ANSWER);
+	break;
 	case EVENT_CONNECT_ACKNOWLEDGE:
 	{
 		ch->l3id=bc->l3_id;
@@ -4478,10 +4527,6 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		start_bc_tones(ch);
 		
 		ch->state = MISDN_CONNECTED;
-		
-		if (!ch->ast) break;
-
-		ast_queue_control(ch->ast, AST_CONTROL_ANSWER);
 	}
 	break;
 	case EVENT_DISCONNECT:
@@ -4541,9 +4586,6 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 
 			hangup_chan(ch);
 			release_chan(bc);
-		
-			if (bc->need_release_complete) 
-				misdn_lib_send_event(bc,EVENT_RELEASE_COMPLETE);
 		}
 		break;
 	case EVENT_RELEASE_COMPLETE:
@@ -4662,7 +4704,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				ret=write(ch->pipe[1], bc->bframe, bc->bframe_len);
 				
 				if (ret<=0) {
-					chan_misdn_log(-1, bc->port, "Write returned <=0 (err=%s) --> hanging up channel\n",strerror(errno));
+					chan_misdn_log(0, bc->port, "Write returned <=0 (err=%s) --> hanging up channel\n",strerror(errno));
 
 					stop_bc_tones(ch);
 					hangup_chan(ch);
@@ -4729,7 +4771,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 	{
 		struct ast_channel *hold_ast;
 		if (!ch) {
-			chan_misdn_log(4, bc->port, " --> no CH, searching in holded");
+			chan_misdn_log(4, bc->port, " --> no CH, searching in holded\n");
 			ch=find_holded_l3(cl_te, bc->l3_id,1);
 		}
 
@@ -4752,8 +4794,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			ast_moh_stop(hold_ast);
 		}
 	
-		if ( misdn_lib_send_event(bc, EVENT_RETRIEVE_ACKNOWLEDGE) < 0)
+		if ( misdn_lib_send_event(bc, EVENT_RETRIEVE_ACKNOWLEDGE) < 0) {
+			chan_misdn_log(4, bc->port, " --> RETRIEVE_ACK failed\n");
 			misdn_lib_send_event(bc, EVENT_RETRIEVE_REJECT);
+		}
 	}
 	break;
     

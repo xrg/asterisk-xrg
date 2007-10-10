@@ -220,6 +220,10 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"\tinstead." },
 	{ "senddtmf", MISDN_CFG_SENDDTMF, MISDN_CTYPE_BOOL, "no", NONE,
 		"Enable this if we should produce DTMF Tones ourselves." },
+	{ "astdtmf", MISDN_CFG_ASTDTMF, MISDN_CTYPE_BOOL, "no", NONE,
+		"Enable this if you want to use the Asterisk dtmf detector\n"
+		"instead of the mISDN_dsp/hfcmulti one."
+		},
 	{ "hold_allowed", MISDN_CFG_HOLD_ALLOWED, MISDN_CTYPE_BOOL, "no", NONE,
 		"Enable this to have support for hold and retrieve." },
 	{ "early_bconnect", MISDN_CFG_EARLY_BCONNECT, MISDN_CTYPE_BOOL, "yes", NONE,
@@ -996,7 +1000,7 @@ void misdn_cfg_update_ptp (void)
 
 	misdn_cfg_get(0, MISDN_GEN_MISDN_INIT, &misdn_init, sizeof(misdn_init));
 
-	if (misdn_init) {
+	if (!ast_strlen_zero(misdn_init)) {
 		fp = fopen(misdn_init, "r");
 		if (fp) {
 			while(fgets(line, sizeof(line), fp)) {

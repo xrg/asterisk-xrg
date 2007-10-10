@@ -264,6 +264,12 @@ struct ast_channel_tech {
 
 	/*! \brief Provide additional write items for CHANNEL() dialplan function */
 	int (* func_channel_write)(struct ast_channel *chan, char *function, char *data, const char *value);
+
+	/*! \brief Retrieve base channel (agent and local) */
+	struct ast_channel* (* get_base_channel)(struct ast_channel *chan);
+	
+	/*! \brief Set base channel (agent and local) */
+	int (* set_base_channel)(struct ast_channel *chan, struct ast_channel *base);
 };
 
 struct ast_channel_spy_list;
@@ -367,7 +373,7 @@ struct ast_channel {
 	int oldwriteformat;				/*!< Original writer format */
 	
 	int timingfd;					/*!< Timing fd */
-	int (*timingfunc)(void *data);
+	int (*timingfunc)(const void *data);
 	void *timingdata;
 
 	enum ast_channel_state _state;			/*!< State of line -- Don't write directly, use ast_setstate */
@@ -478,6 +484,9 @@ enum {
 	/*! This is set to tell the channel not to generate DTMF begin frames, and
 	 *  to instead only generate END frames. */
 	AST_FLAG_END_DTMF_ONLY = (1 << 14),
+	/*! This flag indicates that on a masquerade, an active stream should not
+	 *  be carried over */
+	AST_FLAG_MASQ_NOSTREAM = (1 << 15),
 };
 
 /*! \brief ast_bridge_config flags */
@@ -1132,7 +1141,7 @@ int ast_autoservice_stop(struct ast_channel *chan);
 
 /* If built with zaptel optimizations, force a scheduled expiration on the
    timer fd, at which point we call the callback function / data */
-int ast_settimeout(struct ast_channel *c, int samples, int (*func)(void *data), void *data);
+int ast_settimeout(struct ast_channel *c, int samples, int (*func)(const void *data), void *data);
 
 /*!	\brief Transfer a channel (if supported).  Returns -1 on error, 0 if not supported
    and 1 if supported and requested 

@@ -80,6 +80,9 @@ h323/libchanh323.a h323/Makefile.ast:
 	$(CMD_PREFIX) exit 1
 endif
 
+dist-clean::
+	rm -f h323/Makefile
+
 gentone: gentone.c
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
 	$(CMD_PREFIX) $(HOST_CC) $(STATIC_BUILD) -o $@ $(HOST_CFLAGS) $(HOST_LDFLAGS) $^ $(LIBS)

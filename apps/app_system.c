@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -95,6 +95,8 @@ static int system_exec_helper(struct ast_channel *chan, void *data, int failmode
 
 	u = ast_module_user_add(chan);
 
+	ast_autoservice_start(chan);
+
 	/* Do our thing here */
 	res = ast_safe_system((char *)data);
 	if ((res < 0) && (errno != ECHILD)) {
@@ -117,6 +119,8 @@ static int system_exec_helper(struct ast_channel *chan, void *data, int failmode
 			pbx_builtin_setvar_helper(chan, chanvar, "SUCCESS");
 		res = 0;
 	} 
+
+	ast_autoservice_stop(chan);
 
 	ast_module_user_remove(u);
 

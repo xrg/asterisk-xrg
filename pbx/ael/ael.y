@@ -46,7 +46,7 @@ extern char *my_file;
 #ifdef AAL_ARGCHECK
 int ael_is_funcname(char *name);
 #endif
-static char *ael_token_subst(char *mess);
+static char *ael_token_subst(const char *mess);
 
 %}
 
@@ -204,8 +204,8 @@ context : opt_abstract KW_CONTEXT context_name LC elements RC {
 		if (!$5) {
                         ast_log(LOG_WARNING, "==== File: %s, Line %d, Cols: %d-%d: Warning! The empty context %s will be IGNORED!\n", 
 				my_file, @4.first_line, @4.first_column, @4.last_column, $3 );
+			$$ = 0;
 			free($3);
-
 		} else {
 			$$ = npval2(PV_CONTEXT, &@1, &@6);
 			$$->u1.str = $3;
@@ -705,11 +705,11 @@ static char *token_equivs2[] =
 };
 
 
-static char *ael_token_subst(char *mess)
+static char *ael_token_subst(const char *mess)
 {
 	/* calc a length, malloc, fill, and return; yyerror had better free it! */
 	int len=0,i;
-	char *p;
+	const char *p;
 	char *res, *s,*t;
 	int token_equivs_entries = sizeof(token_equivs1)/sizeof(char*);
 
@@ -750,7 +750,7 @@ static char *ael_token_subst(char *mess)
 
 void yyerror(YYLTYPE *locp, struct parse_io *parseio,  char const *s)
 {
-	char *s2 = ael_token_subst((char *)s);
+	char *s2 = ael_token_subst(s);
 	if (locp->first_line == locp->last_line) {
 		ast_log(LOG_ERROR, "==== File: %s, Line %d, Cols: %d-%d: Error: %s\n", my_file, locp->first_line, locp->first_column, locp->last_column, s2);
 	} else {

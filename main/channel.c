@@ -1449,12 +1449,10 @@ static void spy_detach(struct ast_channel_spy *spy, struct ast_channel *chan)
 		/* Poke the spy if needed */
 		if (ast_test_flag(spy, CHANSPY_TRIGGER_MODE) != CHANSPY_TRIGGER_NONE)
 			ast_cond_signal(&spy->trigger);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Spy %s removed from channel %s\n", spy->type, chan->name);
 		ast_mutex_unlock(&spy->lock);
 	}
-
-	/* Print it out while we still have a lock so the structure can't go away (if signalled above) */
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Spy %s removed from channel %s\n", spy->type, chan->name);
 
 	return;
 }
@@ -1835,13 +1833,13 @@ void ast_deactivate_generator(struct ast_channel *chan)
 	ast_channel_unlock(chan);
 }
 
-static int generator_force(void *data)
+static int generator_force(const void *data)
 {
 	/* Called if generator doesn't have data */
 	void *tmp;
 	int res;
 	int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples);
-	struct ast_channel *chan = data;
+	struct ast_channel *chan = (struct ast_channel *)data;
 	tmp = chan->generatordata;
 	chan->generatordata = NULL;
 	generate = chan->generator->generate;
@@ -2059,7 +2057,7 @@ int ast_waitfordigit(struct ast_channel *c, int ms)
 	return ast_waitfordigit_full(c, ms, -1, -1);
 }
 
-int ast_settimeout(struct ast_channel *c, int samples, int (*func)(void *data), void *data)
+int ast_settimeout(struct ast_channel *c, int samples, int (*func)(const void *data), void *data)
 {
 	int res = -1;
 #ifdef HAVE_ZAPTEL
@@ -2080,11 +2078,13 @@ int ast_settimeout(struct ast_channel *c, int samples, int (*func)(void *data), 
 
 int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 {
-	int begin_digit = 0;
-
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(c, AST_FLAG_ZOMBIE) || ast_check_hangup(c))
 		return -1;
+
+	/* Only look for the end of DTMF, don't bother with the beginning and don't emulate things */
+	ast_set_flag(c, AST_FLAG_END_DTMF_ONLY);
+
 	/* Wait for a digit, no more than ms milliseconds total. */
 	while (ms) {
 		struct ast_channel *rchan;
@@ -2096,9 +2096,11 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 			if (errno == 0 || errno == EINTR)
 				continue;
 			ast_log(LOG_WARNING, "Wait failed (%s)\n", strerror(errno));
+			ast_clear_flag(c, AST_FLAG_END_DTMF_ONLY);
 			return -1;
 		} else if (outfd > -1) {
 			/* The FD we were watching has something waiting */
+			ast_clear_flag(c, AST_FLAG_END_DTMF_ONLY);
 			return 1;
 		} else if (rchan) {
 			int res;
@@ -2108,18 +2110,17 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 
 			switch(f->frametype) {
 			case AST_FRAME_DTMF_BEGIN:
-				begin_digit = f->subclass;
 				break;
 			case AST_FRAME_DTMF_END:
-				if (begin_digit != f->subclass)
-					break;
 				res = f->subclass;
 				ast_frfree(f);
+				ast_clear_flag(c, AST_FLAG_END_DTMF_ONLY);
 				return res;
 			case AST_FRAME_CONTROL:
 				switch(f->subclass) {
 				case AST_CONTROL_HANGUP:
 					ast_frfree(f);
+					ast_clear_flag(c, AST_FLAG_END_DTMF_ONLY);
 					return -1;
 				case AST_CONTROL_RINGING:
 				case AST_CONTROL_ANSWER:
@@ -2141,6 +2142,9 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 			ast_frfree(f);
 		}
 	}
+
+	ast_clear_flag(c, AST_FLAG_END_DTMF_ONLY);
+
 	return 0; /* Time is up */
 }
 
@@ -2177,6 +2181,7 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 {
 	struct ast_frame *f = NULL;	/* the return value */
+	struct ast_channel *base = NULL;
 	int blah;
 	int prestate;
 
@@ -2199,6 +2204,23 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		goto done;
 	}
 	prestate = chan->_state;
+
+	/* Check if there's an underlying channel */
+	if (chan->tech->get_base_channel && (base = chan->tech->get_base_channel(chan)) != chan) {
+		int count = 0;
+		while (!base || ast_mutex_trylock(&base->lock)) {
+			if (count++ > 10) {
+				f = &ast_null_frame;
+				goto done;
+			}
+			ast_mutex_unlock(&chan->lock);
+			usleep(1);
+			ast_mutex_lock(&chan->lock);
+			base = chan->tech->get_base_channel(chan);
+		}
+		ast_mutex_unlock(&chan->lock);
+		chan = base;
+	}
 
 	if (!ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_EMULATE_DTMF | AST_FLAG_IN_DTMF) && 
 	    !ast_strlen_zero(chan->dtmfq) && 
@@ -2249,7 +2271,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			ioctl(chan->timingfd, ZT_TIMERACK, &blah);
 			if (chan->timingfunc) {
 				/* save a copy of func/data before unlocking the channel */
-				int (*func)(void *) = chan->timingfunc;
+				int (*func)(const void *) = chan->timingfunc;
 				void *data = chan->timingdata;
 				ast_channel_unlock(chan);
 				func(data);
@@ -2937,9 +2959,20 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 			/* and now put it through the regular translator */
 			f = (chan->writetrans) ? ast_translate(chan->writetrans, f, 0) : f;
 		}
-		if (f)
-			res = chan->tech->write(chan, f);
-		else
+		if (f) {
+			struct ast_channel *base = NULL;
+			if (!chan->tech->get_base_channel || chan == chan->tech->get_base_channel(chan))
+				res = chan->tech->write(chan, f);
+			else {
+				while (chan->tech->get_base_channel && (((base = chan->tech->get_base_channel(chan)) && ast_mutex_trylock(&base->lock)) || base == NULL)) {
+					ast_mutex_unlock(&chan->lock);
+					usleep(1);
+					ast_mutex_lock(&chan->lock);
+				}
+				res = base->tech->write(base, f);
+				ast_mutex_unlock(&base->lock);
+			}
+		} else
 			res = 0;
 		break;
 	case AST_FRAME_NULL:
@@ -3406,7 +3439,11 @@ int ast_channel_make_compatible(struct ast_channel *chan, struct ast_channel *pe
 int ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clone)
 {
 	int res = -1;
-	struct ast_channel *final_orig = original, *final_clone = clone;
+	struct ast_channel *final_orig, *final_clone, *base;
+
+retrymasq:
+	final_orig = original;
+	final_clone = clone;
 
 	ast_channel_lock(original);
 	while (ast_channel_trylock(clone)) {
@@ -3422,13 +3459,25 @@ int ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clo
 
 	if (clone->_bridge && (clone->_bridge != ast_bridged_channel(clone)) && (clone->_bridge->_bridge != clone))
 		final_clone = clone->_bridge;
+	
+	if (final_clone->tech->get_base_channel && (base = final_clone->tech->get_base_channel(final_clone))) {
+		final_clone = base;
+	}
 
 	if ((final_orig != original) || (final_clone != clone)) {
-		ast_channel_lock(final_orig);
-		while (ast_channel_trylock(final_clone)) {
+		/* Lots and lots of deadlock avoidance.  The main one we're competing with
+		 * is ast_write(), which locks channels recursively, when working with a
+		 * proxy channel. */
+		if (ast_channel_trylock(final_orig)) {
+			ast_channel_unlock(clone);
+			ast_channel_unlock(original);
+			goto retrymasq;
+		}
+		if (ast_channel_trylock(final_clone)) {
 			ast_channel_unlock(final_orig);
-			usleep(1);
-			ast_channel_lock(final_orig);
+			ast_channel_unlock(clone);
+			ast_channel_unlock(original);
+			goto retrymasq;
 		}
 		ast_channel_unlock(clone);
 		ast_channel_unlock(original);
@@ -4250,7 +4299,8 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		    (c0->tech->bridge == c1->tech->bridge) &&
 		    !nativefailed && !c0->monitor && !c1->monitor &&
 		    !c0->spies && !c1->spies && !ast_test_flag(&(config->features_callee),AST_FEATURE_REDIRECT) &&
-		    !ast_test_flag(&(config->features_caller),AST_FEATURE_REDIRECT) ) {
+		    !ast_test_flag(&(config->features_caller),AST_FEATURE_REDIRECT) &&
+		    !c0->masq && !c0->masqr && !c1->masq && !c1->masqr) {
 			/* Looks like they share a bridge method and nothing else is in the way */
 			ast_set_flag(c0, AST_FLAG_NBRIDGE);
 			ast_set_flag(c1, AST_FLAG_NBRIDGE);
