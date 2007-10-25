@@ -26,7 +26,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,7 +145,21 @@ static int cut_internal(struct ast_channel *chan, char *data, char *buffer, size
 			return ERROR_NOMEM;
 		}
 
-		d = args.delimiter[0] ? args.delimiter[0] : '-';
+		if (args.delimiter[0] == '\\') {
+			if (args.delimiter[1] == 'n')
+				d = '\n';
+			else if (args.delimiter[1] == 't')
+				d = '\t';
+			else if (args.delimiter[1] == 'r')
+				d = '\r';
+			else if (args.delimiter[1])
+				d = args.delimiter[1];
+			else
+				d = '-';
+		} else if (args.delimiter[0])
+			d = args.delimiter[0];
+		else
+			d = '-';
 
 		/* String form of the delimiter, for use with strsep(3) */
 		snprintf(ds, sizeof(ds), "%c", d);
