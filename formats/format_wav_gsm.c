@@ -29,7 +29,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unistd.h>
 #include <netinet/in.h>
@@ -559,7 +559,9 @@ static const struct ast_format wav49_f = {
 
 static int load_module(void)
 {
-	return ast_format_register(&wav49_f);
+	if (ast_format_register(&wav49_f))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
