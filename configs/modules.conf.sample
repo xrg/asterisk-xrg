@@ -41,3 +41,29 @@ noload => chan_alsa.so
 ; 
 ;noload => res_timing_dahdi.so
 ;noload => res_timing_pthread.so
+
+;
+; Voicemail storage selection
+;
+; Comment out the "noload" lines for the voicemail
+; storage system that you want.  Leave the ones that
+; you don't want uncommented.
+;
+
+;
+; Voicemail with IMAP storage
+;
+noload => app_directory_imap.so
+noload => app_voicemail_imap.so
+
+;
+; Voicemail with ODBC storage
+;
+noload => app_directory_odbc.so
+noload => app_voicemail_odbc.so
+
+;
+; Voicemail with filesystem storage
+;
+;noload => app_directory_plain.so
+;noload => app_voicemail_plain.so
