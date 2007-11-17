@@ -835,8 +835,9 @@ static void check_includes(pval *includes)
 		/* find a matching context name */
 		struct pval *that_other_context = find_context(incl_context);
 		if (!that_other_context && strcmp(incl_context, "parkedcalls") != 0) {
-			ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: The included context '%s' cannot be found.\n",
-					includes->filename, includes->startline, includes->endline, incl_context);
+			ast_log(LOG_WARNING, "Warning: file %s, line %d-%d: The included context '%s' cannot be found.\n\
+ (You may ignore this warning if '%s' exists in extensions.conf, or is created by another module. I cannot check for those.)\n",
+					includes->filename, includes->startline, includes->endline, incl_context, incl_context);
 			warns++;
 		}
 	}
@@ -2245,9 +2246,9 @@ static void check_context_names(void)
 		if (i->type == PV_CONTEXT || i->type == PV_MACRO) {
 			for (j=i->next; j; j=j->next) {
 				if ( j->type == PV_CONTEXT || j->type == PV_MACRO ) {
-					if ( !strcmp(i->u1.str, j->u1.str) )
+					if ( !strcmp(i->u1.str, j->u1.str) && !(i->u3.abstract&2) && !(j->u3.abstract&2) )
 					{
-						ast_log(LOG_ERROR,"Error: file %s, line %d-%d: The context name (%s) is also declared in file %s, line %d-%d!\n",
+						ast_log(LOG_ERROR,"Error: file %s, line %d-%d: The context name (%s) is also declared in file %s, line %d-%d! (and neither is marked 'extend')\n",
 								i->filename, i->startline, i->endline, i->u1.str,  j->filename, j->startline, j->endline);
 						errs++;
 					}
@@ -2992,7 +2993,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 				strncat(buf2,strp2+1, sizeof(buf2)-strlen(strp2+1)-2);
 				strcat(buf2,"]");
 				for_init->appargs = strdup(buf2);
-				for_init->app = strdup("Set");
+				/* for_init->app = strdup("Set"); just set! */
 			} else {
 				strp2 = p->u1.for_init;
 				while (*strp2 && isspace(*strp2))
@@ -3014,7 +3015,8 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 						*strp3 = 0; /* remove the closing paren */
 
 					for_init->appargs = strdup(buf2);
-
+					if (for_init->app)
+						free(for_init->app);
 					for_init->app = strdup("Macro");
 				} else {  /* must be a regular app call */
 					char *strp3;
@@ -3022,6 +3024,8 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					strp3 = strchr(buf2,'(');
 					if (strp3) {
 						*strp3 = 0;
+						if (for_init->app)
+							free(for_init->app);
 						for_init->app = strdup(buf2);
 						for_init->appargs = strdup(strp3+1);
 						strp3 = strrchr(for_init->appargs, ')');
@@ -3955,7 +3959,7 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct pval *root)
 			break;
 			
 		case PV_CONTEXT:
-			context = ast_context_create(local_contexts, p->u1.str, registrar);
+			context = ast_context_find_or_create(local_contexts, p->u1.str, registrar);
 			
 			/* contexts contain: ignorepat, includes, switches, eswitches, extensions,  */
 			for (p2=p->u2.statements; p2; p2=p2->next) {

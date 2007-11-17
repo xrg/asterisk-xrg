@@ -26,9 +26,9 @@
 /*!
   \file srv.h
   \brief Support for DNS SRV records, used in to locate SIP services.
-  \note Note: The Asterisk DNS SRV record support is broken, it only
-	supports the first DNS SRV record and will give no load 
-	balancing or failover support.
+  \note Note: This SRV record support will respect the priority and
+        weight elements of the records that are returned, but there are
+	no provisions for retrying or failover between records.
 */
 
 /*! Lookup entry in SRV records Returns 1 if found, 0 if not found, -1 on hangup 

@@ -218,8 +218,12 @@ static struct ast_frame *zap_frameout(struct ast_trans_pvt *pvt)
 static void zap_destroy(struct ast_trans_pvt *pvt)
 {
 	struct pvt *ztp = pvt->pvt;
+	unsigned int x;
 
-	ast_atomic_fetchadd_int(&channels.total, -1);
+	x = ZT_TCOP_RELEASE;
+	if (ioctl(ztp->fd, ZT_TRANSCODE_OP, &x))
+		ast_log(LOG_WARNING, "Failed to release transcoder channel: %s\n", strerror(errno));
+
 	switch (ztp->hdr->dstfmt) {
 	case AST_FORMAT_G729A:
 	case AST_FORMAT_G723_1:
@@ -281,7 +285,6 @@ static int zap_translate(struct ast_trans_pvt *pvt, int dest, int source)
 	ztp->fd = fd;
 	ztp->hdr = hdr;
 
-	ast_atomic_fetchadd_int(&channels.total, +1);
 	switch (hdr->dstfmt) {
 	case AST_FORMAT_G729A:
 	case AST_FORMAT_G723_1:
@@ -437,6 +440,7 @@ static int find_transcoders(void)
 		if (option_verbose > 1)
 			ast_verbose(VERBOSE_PREFIX_2 "Found transcoder '%s'.\n", info.name);
 		build_translators(&map, info.dstfmts, info.srcfmts);
+		ast_atomic_fetchadd_int(&channels.total, info.numchannels / 2);
 	}
 	close(fd);
 

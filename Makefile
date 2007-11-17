@@ -194,7 +194,11 @@ ifeq ($(OSARCH),linux-gnu)
   endif
 endif
 
-ASTCFLAGS+=-pipe -Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
+ifeq ($(findstring -save-temps,$(ASTCFLAGS)),)
+ASTCFLAGS+=-pipe
+endif
+
+ASTCFLAGS+=-Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
 ASTCFLAGS+=-include $(ASTTOPDIR)/include/asterisk/autoconfig.h
 
@@ -560,8 +564,31 @@ samples:
 		echo "astlogdir => $(ASTLOGDIR)" ; \
 		echo "" ; \
 		echo ";[options]" ; \
+		echo ";verbose = 3" ; \
+		echo ";debug = 3" ; \
+		echo ";alwaysfork = yes ; same as -F at startup" ; \
+		echo ";nofork = yes ; same as -f at startup" ; \
+		echo ";quiet = yes ; same as -q at startup" ; \
+		echo ";timestamp = yes ; same as -T at startup" ; \
+		echo ";execincludes = yes ; support #exec in config files" ; \
+		echo ";console = yes ; Run as console (same as -c at startup)" ; \
+		echo ";highpriority = yes ; Run realtime priority (same as -p at startup)" ; \
+		echo ";initcrypto = yes ; Initialize crypto keys (same as -i at startup)" ; \
+		echo ";nocolor = yes ; Disable console colors" ; \
+		echo ";dontwarn = yes ; Disable some warnings" ; \
+		echo ";dumpcore = yes ; Dump core on crash (same as -g at startup)" ; \
+		echo ";languageprefix = yes ; Use the new sound prefix path syntax" ; \
 		echo ";internal_timing = yes" ; \
 		echo ";systemname = my_system_name ; prefix uniqueid with a system name for global uniqueness issues" ; \
+		echo ";maxcalls = 10 ; Maximum amount of calls allowed" ; \
+		echo ";maxload = 0.9 ; Asterisk stops accepting new calls if the load average exceed this limit" ; \
+		echo ";cache_record_files = yes ; Cache recorded sound files to another directory during recording" ; \
+		echo ";record_cache_dir = /tmp ; Specify cache directory (used in cnjunction with cache_record_files)" ; \
+		echo ";transmit_silence_during_record = yes ; Transmit SLINEAR silence while a channel is being recorded" ; \
+		echo ";transcode_via_sln = yes ; Build transcode paths via SLINEAR, instead of directly" ; \
+		echo ";runuser = asterisk ; The user to run as" ; \
+		echo ";rungroup = asterisk ; The group to run as" ; \
+		echo "" ; \
 		echo "; Changing the following lines may compromise your security." ; \
 		echo ";[files]" ; \
 		echo ";astctlpermissions = 0660" ; \
@@ -622,20 +649,20 @@ progdocs:
 config:
 	@if [ "${OSARCH}" = "linux-gnu" ]; then \
 		if [ -f /etc/redhat-release -o -f /etc/fedora-release ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.redhat.asterisk /etc/rc.d/init.d/asterisk; \
-			/sbin/chkconfig --add asterisk; \
+			$(INSTALL) -m 755 contrib/init.d/rc.redhat.asterisk $(DESTDIR)/etc/rc.d/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /sbin/chkconfig --add asterisk; fi; \
 		elif [ -f /etc/debian_version ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.debian.asterisk /etc/init.d/asterisk; \
-			/usr/sbin/update-rc.d asterisk start 10 2 3 4 5 . stop 91 2 3 4 5 .; \
+			$(INSTALL) -m 755 contrib/init.d/rc.debian.asterisk $(DESTDIR)/etc/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /usr/sbin/update-rc.d asterisk start 50 2 3 4 5 . stop 91 2 3 4 5 .; fi; \
 		elif [ -f /etc/gentoo-release ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.gentoo.asterisk /etc/init.d/asterisk; \
-			/sbin/rc-update add asterisk default; \
-		elif [ -f /etc/mandrake-release ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.mandrake.asterisk /etc/rc.d/init.d/asterisk; \
-			/sbin/chkconfig --add asterisk; \
+			$(INSTALL) -m 755 contrib/init.d/rc.gentoo.asterisk $(DESTDIR)/etc/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /sbin/rc-update add asterisk default; fi; \
+		elif [ -f /etc/mandrake-release -o -f /etc/mandriva-release ]; then \
+			$(INSTALL) -m 755 contrib/init.d/rc.mandrake.asterisk $(DESTDIR)/etc/rc.d/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /sbin/chkconfig --add asterisk; fi; \
 		elif [ -f /etc/SuSE-release -o -f /etc/novell-release ]; then \
-			$(INSTALL) -m 755 contrib/init.d/rc.suse.asterisk /etc/init.d/asterisk; \
-			/sbin/chkconfig --add asterisk; \
+			$(INSTALL) -m 755 contrib/init.d/rc.suse.asterisk $(DESTDIR)/etc/init.d/asterisk; \
+			if [ -z "$(DESTDIR)" ]; then /sbin/chkconfig --add asterisk; fi; \
 		elif [ -f /etc/slackware-version ]; then \
 			echo "Slackware is not currently supported, although an init script does exist for it." \
 		else \

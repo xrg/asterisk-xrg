@@ -124,6 +124,7 @@ static struct strategy {
 #define	RES_EXISTS	(-1)		/* Entry already exists */
 #define	RES_OUTOFMEMORY	(-2)		/* Out of memory */
 #define	RES_NOSUCHQUEUE	(-3)		/* No such queue */
+#define RES_NOT_DYNAMIC (-4)		/* Member is not dynamic */
 
 static char *app = "Queue";
 
@@ -358,7 +359,7 @@ struct call_queue {
 	unsigned int wrapped:1;
 	unsigned int timeoutrestart:1;
 	unsigned int announceholdtime:2;
-	unsigned int strategy:3;
+	int strategy:4;
 	unsigned int maskmemberstatus:1;
 	unsigned int realtime:1;
 	unsigned int found:1;
@@ -418,6 +419,15 @@ static void rr_dep_warning(void)
 
 	if (!warned) {
 		ast_log(LOG_NOTICE, "The 'roundrobin' queue strategy is deprecated. Please use the 'rrmemory' strategy instead.\n");
+		warned = 1;
+	}
+}
+
+static void monjoin_dep_warning(void)
+{
+	static unsigned int warned = 0;
+	if (!warned) {
+		ast_log(LOG_NOTICE, "The 'monitor-join' queue option is deprecated. Please use monitor-type=mixmonitor instead.\n");
 		warned = 1;
 	}
 }
@@ -524,14 +534,14 @@ static enum queue_member_status get_member_status(struct call_queue *q, int max_
 }
 
 struct statechange {
+	AST_LIST_ENTRY(statechange) entry;
 	int state;
 	char dev[0];
 };
 
-static void *changethread(void *data)
+static void *handle_statechange(struct statechange *sc)
 {
 	struct call_queue *q;
-	struct statechange *sc = data;
 	struct member *cur;
 	struct ao2_iterator mem_iter;
 	struct member_interface *curint;
@@ -543,7 +553,6 @@ static void *changethread(void *data)
 	if (loc) {
 		*loc++ = '\0';
 	} else {
-		free(sc);
 		return NULL;
 	}
 
@@ -564,7 +573,6 @@ static void *changethread(void *data)
 	if (!curint) {
 		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s) but we don't care because they're not a member of any queue.\n", technology, loc, sc->state, devstate2str(sc->state));
-		free(sc);
 		return NULL;
 	}
 
@@ -613,31 +621,75 @@ static void *changethread(void *data)
 	}
 	AST_LIST_UNLOCK(&queues);
 
-	free(sc);
+	return NULL;
+}
+
+/*!
+ * \brief Data used by the device state thread
+ */
+static struct {
+	/*! Set to 1 to stop the thread */
+	unsigned int stop:1;
+	/*! The device state monitoring thread */
+	pthread_t thread;
+	/*! Lock for the state change queue */
+	ast_mutex_t lock;
+	/*! Condition for the state change queue */
+	ast_cond_t cond;
+	/*! Queue of state changes */
+	AST_LIST_HEAD_NOLOCK(, statechange) state_change_q;
+} device_state = {
+	.thread = AST_PTHREADT_NULL,
+};
+
+static void *device_state_thread(void *data)
+{
+	struct statechange *sc = NULL;
+
+	while (!device_state.stop) {
+		ast_mutex_lock(&device_state.lock);
+		if (!(sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry))) {
+			ast_cond_wait(&device_state.cond, &device_state.lock);
+			sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry);
+		}
+		ast_mutex_unlock(&device_state.lock);
+
+		/* Check to see if we were woken up to see the request to stop */
+		if (device_state.stop)
+			break;
+
+		if (!sc)
+			continue;
+
+		handle_statechange(sc);
+
+		free(sc);
+		sc = NULL;
+	}
+
+	if (sc)
+		free(sc);
+
+	while ((sc = AST_LIST_REMOVE_HEAD(&device_state.state_change_q, entry)))
+		free(sc);
 
 	return NULL;
 }
 
 static int statechange_queue(const char *dev, int state, void *ign)
 {
-	/* Avoid potential for deadlocks by spawning a new thread to handle
-	   the event */
 	struct statechange *sc;
-	pthread_t t;
-	pthread_attr_t attr;
 
 	if (!(sc = ast_calloc(1, sizeof(*sc) + strlen(dev) + 1)))
 		return 0;
 
 	sc->state = state;
 	strcpy(sc->dev, dev);
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	if (ast_pthread_create_background(&t, &attr, changethread, sc)) {
-		ast_log(LOG_WARNING, "Failed to create update thread!\n");
-		free(sc);
-	}
-	pthread_attr_destroy(&attr);
+
+	ast_mutex_lock(&device_state.lock);
+	AST_LIST_INSERT_TAIL(&device_state.state_change_q, sc, entry);
+	ast_cond_signal(&device_state.cond);
+	ast_mutex_unlock(&device_state.lock);
 
 	return 0;
 }
@@ -858,6 +910,7 @@ static void queue_set_param(struct call_queue *q, const char *param, const char 
 	} else if (!strcasecmp(param, "setinterfacevar")) {
 		q->setinterfacevar = ast_true(val);
 	} else if (!strcasecmp(param, "monitor-join")) {
+		monjoin_dep_warning();
 		q->monjoin = ast_true(val);
 	} else if (!strcasecmp(param, "monitor-format")) {
 		ast_copy_string(q->monfmt, val, sizeof(q->monfmt));
@@ -1493,7 +1546,7 @@ posout:
 	res = play_file(qe->chan, qe->parent->sound_thanks);
 
 playout:
-	if (res > 0 && !valid_exit(qe, res))
+	if ((res > 0 && !valid_exit(qe, res)) || res < 0)
 		res = 0;
 
 	/* Set our last_pos indicators */
@@ -1926,7 +1979,7 @@ static int say_periodic_announcement(struct queue_ent *qe)
 	/* play the announcement */
 	res = play_file(qe->chan, qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]);
 
-	if (res > 0 && !valid_exit(qe, res))
+	if ((res > 0 && !valid_exit(qe, res)) || res < 0)
 		res = 0;
 
 	/* Resume Music on Hold if the caller is going to stay in the queue */
@@ -2569,6 +2622,8 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		callcompletedinsl = ((now - qe->start) <= qe->parent->servicelevel);
 		ast_mutex_unlock(&qe->parent->lock);
 		member = lpeer->member;
+		/* Increment the refcount for this member, since we're going to be using it for awhile in here. */
+		ao2_ref(member, 1);
 		hangupcalls(outgoing, peer);
 		outgoing = NULL;
 		if (announce || qe->parent->reportholdtime || qe->parent->memberdelay) {
@@ -2615,6 +2670,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 							queuename, qe->chan->uniqueid, peer->name, member->interface, member->membername,
 							qe->parent->eventwhencalled == QUEUE_EVENT_VARIABLES ? vars2manager(qe->chan, vars, sizeof(vars)) : "");
 				ast_hangup(peer);
+				ao2_ref(member, -1);
 				goto out;
 			} else if (res2) {
 				/* Caller must have hung up just before being connected*/
@@ -2622,6 +2678,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "ABANDON", "%d|%d|%ld", qe->pos, qe->opos, (long)time(NULL) - qe->start);
 				record_abandoned(qe);
 				ast_hangup(peer);
+				ao2_ref(member, -1);
 				return -1;
 			}
 		}
@@ -2637,6 +2694,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			ast_log(LOG_WARNING, "Had to drop call because I couldn't make %s compatible with %s\n", qe->chan->name, peer->name);
 			record_abandoned(qe);
 			ast_hangup(peer);
+			ao2_ref(member, -1);
 			return -1;
 		}
 
@@ -2821,6 +2879,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			ast_hangup(peer);
 		update_queue(qe->parent, member, callcompletedinsl);
 		res = bridge ? bridge : 1;
+		ao2_ref(member, -1);
 	}
 out:
 	hangupcalls(outgoing, NULL);
@@ -2920,13 +2979,21 @@ static int remove_from_queue(const char *queuename, const char *interface)
 			continue;
 		}
 
-		if ((mem = ao2_find(q->members, &tmpmem, OBJ_POINTER | OBJ_UNLINK))) {
+		if ((mem = ao2_find(q->members, &tmpmem, OBJ_POINTER))) {
+			/* XXX future changes should beware of this assumption!! */
+			if(!mem->dynamic) {
+				res = RES_NOT_DYNAMIC;
+				ao2_ref(mem, -1);
+				ast_mutex_unlock(&q->lock);
+				break;
+			}
 			q->membercount--;
 			manager_event(EVENT_FLAG_AGENT, "QueueMemberRemoved",
 				"Queue: %s\r\n"
 				"Location: %s\r\n"
 				"MemberName: %s\r\n",
 				q->name, mem->interface, mem->membername);
+			ao2_unlink(q->members, mem);
 			ao2_ref(mem, -1);
 
 			if (queue_persistent_members)
@@ -3301,6 +3368,11 @@ static int rqm_exec(struct ast_channel *chan, void *data)
 	case RES_NOSUCHQUEUE:
 		ast_log(LOG_WARNING, "Unable to remove interface from queue '%s': No such queue\n", args.queuename);
 		pbx_builtin_setvar_helper(chan, "RQMSTATUS", "NOSUCHQUEUE");
+		res = 0;
+		break;
+	case RES_NOT_DYNAMIC:
+		ast_log(LOG_WARNING, "Unable to remove interface from queue '%s': '%s' is not a dynamic member\n", args.queuename, args.interface);
+		pbx_builtin_setvar_helper(chan, "RQMSTATUS", "NOTDYNAMIC");
 		res = 0;
 		break;
 	}
@@ -3685,17 +3757,9 @@ static int queue_function_qac(struct ast_channel *chan, char *cmd, char *data, c
 	}
 
 	lu = ast_module_user_add(chan);
-	
-	AST_LIST_LOCK(&queues);
-	AST_LIST_TRAVERSE(&queues, q, list) {
-		if (!strcasecmp(q->name, data)) {
-			ast_mutex_lock(&q->lock);
-			break;
-		}
-	}
-	AST_LIST_UNLOCK(&queues);
 
-	if (q) {
+	if((q = load_realtime_queue(data))) {
+		ast_mutex_lock(&q->lock);
 		mem_iter = ao2_iterator_init(q->members, 0);
 		while ((m = ao2_iterator_next(&mem_iter))) {
 			/* Count the agents who are logged in and presently answering calls */
@@ -4369,6 +4433,9 @@ static int manager_remove_queue_member(struct mansession *s, const struct messag
 	case RES_OUTOFMEMORY:
 		astman_send_error(s, m, "Out of memory");
 		break;
+	case RES_NOT_DYNAMIC:
+		astman_send_error(s, m, "Member not dynamic");
+		break;
 	}
 
 	return 0;
@@ -4509,6 +4576,9 @@ static int handle_queue_remove_member(int fd, int argc, char *argv[])
 	case RES_OUTOFMEMORY:
 		ast_cli(fd, "Out of memory\n");
 		return RESULT_FAILURE;
+	case RES_NOT_DYNAMIC:
+		ast_cli(fd, "Member not dynamic\n");
+		return RESULT_FAILURE;
 	default:
 		return RESULT_FAILURE;
 	}
@@ -4600,6 +4670,14 @@ static int unload_module(void)
 {
 	int res;
 
+	if (device_state.thread != AST_PTHREADT_NULL) {
+		device_state.stop = 1;
+		ast_mutex_lock(&device_state.lock);
+		ast_cond_signal(&device_state.cond);
+		ast_mutex_unlock(&device_state.lock);
+		pthread_join(device_state.thread, NULL);
+	}
+
 	ast_cli_unregister_multiple(cli_queue, sizeof(cli_queue) / sizeof(struct ast_cli_entry));
 	res = ast_manager_unregister("QueueStatus");
 	res |= ast_manager_unregister("Queues");
@@ -4629,10 +4707,17 @@ static int unload_module(void)
 static int load_module(void)
 {
 	int res;
-	if(!reload_queues())
+
+	if (!reload_queues())
 		return AST_MODULE_LOAD_DECLINE;
+
 	if (queue_persistent_members)
 		reload_queue_members();
+
+	ast_mutex_init(&device_state.lock);
+	ast_cond_init(&device_state.cond, NULL);
+	ast_pthread_create(&device_state.thread, NULL, device_state_thread, NULL);
+
 	ast_cli_register_multiple(cli_queue, sizeof(cli_queue) / sizeof(struct ast_cli_entry));
 	res = ast_register_application(app, queue_exec, synopsis, descrip);
 	res |= ast_register_application(app_aqm, aqm_exec, app_aqm_synopsis, app_aqm_descrip);

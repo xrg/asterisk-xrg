@@ -1572,7 +1572,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		goto outrun;
 	}
 
-	retryzap = strcasecmp(chan->tech->type, "Zap");
+	retryzap = (strcasecmp(chan->tech->type, "Zap") || chan->spies ? 1 : 0);
 	user->zapchannel = !retryzap;
 
  zapretry:
@@ -1890,14 +1890,14 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				break;
 
 			if (c) {
-				if (c->fds[0] != origfd) {
+				if (c->fds[0] != origfd || (user->zapchannel && c->spies)) {
 					if (using_pseudo) {
 						/* Kill old pseudo */
 						close(fd);
 						using_pseudo = 0;
 					}
 					ast_log(LOG_DEBUG, "Ooh, something swapped out under us, starting over\n");
-					retryzap = strcasecmp(c->tech->type, "Zap");
+					retryzap = (strcasecmp(c->tech->type, "Zap") || c->spies ? 1 : 0);
 					user->zapchannel = !retryzap;
 					goto zapretry;
 				}
@@ -4171,6 +4171,29 @@ static int sla_station_exec(struct ast_channel *chan, void *data)
 			trunk_ref->state = SLA_TRUNK_STATE_UP;
 			ast_device_state_changed("SLA:%s_%s", station->name, trunk_ref->trunk->name);
 		}
+	} else if (trunk_ref->state == SLA_TRUNK_STATE_RINGING) {
+		struct sla_ringing_trunk *ringing_trunk;
+
+		ast_mutex_lock(&sla.lock);
+		AST_LIST_TRAVERSE_SAFE_BEGIN(&sla.ringing_trunks, ringing_trunk, entry) {
+			if (ringing_trunk->trunk == trunk_ref->trunk) {
+				AST_LIST_REMOVE_CURRENT(&sla.ringing_trunks, entry);
+				break;
+			}
+		}
+		AST_LIST_TRAVERSE_SAFE_END
+		ast_mutex_unlock(&sla.lock);
+
+		if (ringing_trunk) {
+			ast_answer(ringing_trunk->trunk->chan);
+			sla_change_trunk_state(ringing_trunk->trunk, SLA_TRUNK_STATE_UP, ALL_TRUNK_REFS, NULL);
+
+			free(ringing_trunk);
+
+			/* Queue up reprocessing ringing trunks, and then ringing stations again */
+			sla_queue_event(SLA_EVENT_RINGING_TRUNK);
+			sla_queue_event(SLA_EVENT_DIAL_STATE);
+		}
 	}
 
 	trunk_ref->chan = chan;
@@ -4406,7 +4429,7 @@ static void destroy_trunk(struct sla_trunk *trunk)
 	while ((station_ref = AST_LIST_REMOVE_HEAD(&trunk->stations, entry)))
 		free(station_ref);
 
-	ast_string_field_free_all(trunk);
+	ast_string_field_free_memory(trunk);
 	free(trunk);
 }
 
@@ -4432,7 +4455,7 @@ static void destroy_station(struct sla_station *station)
 	while ((trunk_ref = AST_LIST_REMOVE_HEAD(&station->trunks, entry)))
 		free(trunk_ref);
 
-	ast_string_field_free_all(station);
+	ast_string_field_free_memory(station);
 	free(station);
 }
 

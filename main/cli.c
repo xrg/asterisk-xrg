@@ -402,9 +402,12 @@ static int handle_debuglevel_deprecated(int fd, int argc, char *argv[])
 
 static int handle_logger_mute(int fd, int argc, char *argv[])
 {
-	if (argc != 2)
+	if (argc < 2 || argc > 3)
 		return RESULT_SHOWUSAGE;
-	ast_console_toggle_mute(fd);
+	if (argc == 3 && !strcasecmp(argv[2], "silent"))
+		ast_console_toggle_mute(fd, 1);
+	else
+		ast_console_toggle_mute(fd, 0);
 	return RESULT_SUCCESS;
 }
 
@@ -2004,4 +2007,21 @@ int ast_cli_command(int fd, const char *s)
 	free(dup);
 	
 	return 0;
+}
+
+int ast_cli_command_multiple(int fd, size_t size, const char *s)
+{
+	char cmd[512];
+	int x, y = 0, count = 0;
+
+	for (x = 0; x < size; x++) {
+		cmd[y] = s[x];
+		y++;
+		if (s[x] == '\0') {
+			ast_cli_command(fd, cmd);
+			y = 0;
+			count++;
+		}
+	}
+	return count;
 }

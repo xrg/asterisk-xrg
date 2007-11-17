@@ -235,7 +235,7 @@ static struct ast_rtp_protocol gtalk_rtp = {
 	get_codec: gtalk_get_codec,
 };
 
-static char debug_usage[] = 
+static char show_channels_usage[] = 
 "Usage: gtalk show channels\n" 
 "       Shows current state of the Gtalk channels.\n";
 
@@ -245,8 +245,8 @@ static char reload_usage[] =
 
 
 static struct ast_cli_entry gtalk_cli[] = {
-	{{ "gtalk", "reload", NULL}, gtalk_do_reload, "Enable Jabber debugging", reload_usage },
-	{{ "gtalk", "show", "channels", NULL}, gtalk_show_channels, "Show GoogleTalk Channels", debug_usage },
+	{{ "gtalk", "reload", NULL}, gtalk_do_reload, "Reload GoogleTalk configuration", reload_usage },
+	{{ "gtalk", "show", "channels", NULL}, gtalk_show_channels, "Show GoogleTalk channels", show_channels_usage },
  };
 
 
@@ -1221,9 +1221,6 @@ static int gtalk_add_candidate(struct gtalk *client, ikspak *pak)
 	if(!from)
 		from = c->jid->full;
 
-	newcandidate = ast_calloc(1, sizeof(*newcandidate));
-	if (!newcandidate)
-		return 0;
 	for (tmp = client->p; tmp; tmp = tmp->next) {
 		if (iks_find_with_attrib(pak->x, "session", "id", tmp->sid)) {
 			p = tmp;

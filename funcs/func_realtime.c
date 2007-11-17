@@ -74,10 +74,15 @@ static int function_realtime_read(struct ast_channel *chan, char *cmd, char *dat
 	if (!args.delim2)
 		args.delim2 = "=";
 
+	if (chan)
+		ast_autoservice_start(chan);
+
 	head = ast_load_realtime(args.family, args.fieldmatch, args.value, NULL);
 
 	if (!head) {
 		ast_module_user_remove(u);
+		if (chan)
+			ast_autoservice_stop(chan);
 		return -1;
 	}
 	for (var = head; var; var = var->next)
@@ -90,12 +95,15 @@ static int function_realtime_read(struct ast_channel *chan, char *cmd, char *dat
 
 	ast_module_user_remove(u);
 
+	if (chan)
+		ast_autoservice_stop(chan);
+
 	return 0;
 }
 
 static int function_realtime_write(struct ast_channel *chan, char *cmd, char *data, const char *value)
 {
-        struct ast_module_user *u;
+        struct ast_module_user *u = NULL;
 	int res = 0;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(family);
@@ -109,7 +117,10 @@ static int function_realtime_write(struct ast_channel *chan, char *cmd, char *da
 		return -1;
 	}
 
-	u = ast_module_user_add(chan);
+	if (chan) {
+		ast_autoservice_start(chan);
+		u = ast_module_user_add(chan);
+	}
 
 	AST_STANDARD_APP_ARGS(args, data);
 
@@ -119,7 +130,10 @@ static int function_realtime_write(struct ast_channel *chan, char *cmd, char *da
 		ast_log(LOG_WARNING, "Failed to update. Check the debug log for possible data repository related entries.\n");
 	}
 
-	ast_module_user_remove(u);
+	if (chan) {
+		ast_module_user_remove(u);
+		ast_autoservice_stop(chan);
+	}
 
 	return 0;
 }

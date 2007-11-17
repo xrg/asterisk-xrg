@@ -905,7 +905,13 @@ static int zt_open(char *fn)
 		}
 	}
 	bs = READ_SIZE;
-	if (ioctl(fd, ZT_SET_BLOCKSIZE, &bs) == -1) return -1;
+	if (ioctl(fd, ZT_SET_BLOCKSIZE, &bs) == -1) {
+		ast_log(LOG_WARNING, "Unable to set blocksize '%d': %s\n", bs,  strerror(errno));
+		x = errno;
+		close(fd);
+		errno = x;
+		return -1;
+	}
 	return fd;
 }
 
@@ -2058,17 +2064,18 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 			c++;
 		else
 			c = dest;
-		if (!p->hidecalleridname)
-			n = ast->cid.cid_name;
-		else
-			n = NULL;
+
+		l = NULL;
+		n = NULL;
+
 		if (!p->hidecallerid) {
 			l = ast->cid.cid_num;
-			n = ast->cid.cid_name;
-		} else {
-			l = NULL;
-			n = NULL;
+			if (!p->hidecalleridname) {
+				n = ast->cid.cid_name;
+			}
 		}
+
+
 		if (strlen(c) < p->stripmsd) {
 			ast_log(LOG_WARNING, "Number '%s' is shorter than stripmsd (%d)\n", c, p->stripmsd);
 			ast_mutex_unlock(&p->lock);
@@ -6783,8 +6790,10 @@ static void *do_monitor(void *data)
 		/* Lock the interface list */
 		ast_mutex_lock(&iflock);
 		if (!pfds || (lastalloc != ifcount)) {
-			if (pfds)
+			if (pfds) {
 				free(pfds);
+				pfds = NULL;
+			}
 			if (ifcount) {
 				if (!(pfds = ast_calloc(1, ifcount * sizeof(*pfds)))) {
 					ast_mutex_unlock(&iflock);
@@ -9471,7 +9480,7 @@ static int handle_pri_set_debug_file(int fd, int argc, char **argv)
 		if (ast_strlen_zero(argv[4]))
 			return RESULT_SHOWUSAGE;
 
-		myfd = open(argv[4], O_CREAT|O_WRONLY);
+		myfd = open(argv[4], O_CREAT|O_WRONLY, 0600);
 		if (myfd < 0) {
 			ast_cli(fd, "Unable to open '%s' for writing\n", argv[4]);
 			return RESULT_SUCCESS;
@@ -11404,8 +11413,10 @@ static int zt_sendtext(struct ast_channel *c, const char *text)
 			continue;
 		}
 		  /* if got exception */
-		if (fds[0].revents & POLLPRI)
+		if (fds[0].revents & POLLPRI) {
+			ast_free(mybuf);
 			return -1;
+		}
 		if (!(fds[0].revents & POLLOUT)) {
 			ast_log(LOG_DEBUG, "write fd not ready on channel %d\n", p->channel);
 			continue;

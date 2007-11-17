@@ -108,7 +108,6 @@ static char authuser[32];
 static char authpassword[42];
 
 static int expungeonhangup = 1;
-AST_MUTEX_DEFINE_STATIC(delimiter_lock);
 static char delimiter = '\0';
 
 struct vm_state;
@@ -4678,7 +4677,7 @@ static int init_mailstream(struct vm_state *vms, int box)
 		char *cp;
 #include "linkage.c"
 		/* Connect to INBOX first to get folders delimiter */
-		imap_mailbox_name(tmp, sizeof(tmp), vms, 0, 0);
+		imap_mailbox_name(tmp, sizeof(tmp), vms, 0, 1);
 		stream = mail_open (stream, tmp, debug ? OP_DEBUG : NIL);
 		if (stream == NIL) {
 			ast_log (LOG_ERROR, "Can't connect to imap server %s\n", tmp);
@@ -4717,11 +4716,6 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 		ast_log (LOG_ERROR,"Could not initialize mailstream\n");
 		return -1;
 	}
-
-	/* Check Quota (here for now to test) */
-	mail_parameters(NULL, SET_QUOTA, (void *) mm_parsequota);
-	imap_mailbox_name(dbox, sizeof(dbox), vms, box, 1);
-	imap_getquotaroot(vms->mailstream, dbox);
 
 	pgm = mail_newsearchpgm();
 
@@ -8549,9 +8543,7 @@ void mm_notify(MAILSTREAM * stream, char *string, long errflg)
 void mm_list(MAILSTREAM * stream, int delim, char *mailbox, long attributes)
 {
 	if (delimiter == '\0') {
-		ast_mutex_lock(&delimiter_lock);
 		delimiter = delim;
-		ast_mutex_unlock(&delimiter_lock);
 	}
 	if (option_debug > 4) {
 		ast_log(LOG_DEBUG, "Delimiter set to %c and mailbox %s\n",delim, mailbox);
@@ -8723,8 +8715,8 @@ static char *get_header_by_tag(char *header, char *tag)
 	ast_mutex_lock(&imaptemp_lock);
 	ast_copy_string(imaptemp, start+taglen, sizeof(imaptemp));
 	ast_mutex_unlock(&imaptemp_lock);
-	eol_pnt = strchr(imaptemp,'\n');
-	*eol_pnt = '\0';
+	if ((eol_pnt = strchr(imaptemp,'\r')) || (eol_pnt = strchr(imaptemp,'\n')))
+		*eol_pnt = '\0';
 	return imaptemp;
 }
 

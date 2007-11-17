@@ -26,7 +26,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,7 +125,7 @@ static int cut_internal(struct ast_channel *chan, char *data, char *buffer, size
 	);
 
 	memset(buffer, 0, buflen); 
-	
+
 	parse = ast_strdupa(data);
 
 	AST_STANDARD_APP_ARGS(args, parse);
@@ -145,7 +145,21 @@ static int cut_internal(struct ast_channel *chan, char *data, char *buffer, size
 			return ERROR_NOMEM;
 		}
 
-		d = args.delimiter[0] ? args.delimiter[0] : '-';
+		if (args.delimiter[0] == '\\') {
+			if (args.delimiter[1] == 'n')
+				d = '\n';
+			else if (args.delimiter[1] == 't')
+				d = '\t';
+			else if (args.delimiter[1] == 'r')
+				d = '\r';
+			else if (args.delimiter[1])
+				d = args.delimiter[1];
+			else
+				d = '-';
+		} else if (args.delimiter[0])
+			d = args.delimiter[0];
+		else
+			d = '-';
 
 		/* String form of the delimiter, for use with strsep(3) */
 		snprintf(ds, sizeof(ds), "%c", d);
@@ -237,9 +251,12 @@ static int acf_sort_exec(struct ast_channel *chan, char *cmd, char *data, char *
 static int acf_cut_exec(struct ast_channel *chan, char *cmd, char *data, char *buf, size_t len)
 {
 	int ret = -1;
-	struct ast_module_user *u;
+	struct ast_module_user *u = NULL;
 
-	u = ast_module_user_add(chan);
+	if (chan) {
+		ast_autoservice_start(chan);
+		u = ast_module_user_add(chan);
+	}
 
 	switch (cut_internal(chan, data, buf, len)) {
 	case ERROR_NOARG:
@@ -258,7 +275,10 @@ static int acf_cut_exec(struct ast_channel *chan, char *cmd, char *data, char *b
 		ast_log(LOG_ERROR, "Unknown internal error\n");
 	}
 
-	ast_module_user_remove(u);
+	if (chan) {
+		ast_module_user_remove(u);
+		ast_autoservice_stop(chan);
+	}
 
 	return ret;
 }

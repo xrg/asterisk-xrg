@@ -2841,7 +2841,8 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 		/* Check if anything changed */
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
-		    (c0->masq || c0->masqr || c1->masq || c1->masqr)) {
+		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
+		    (c0->monitor || c0->spies || c1->monitor || c1->spies)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 			if (c0->tech_pvt == pvt0)
 				if (pr0->set_rtp_peer(c0, NULL, NULL, 0, 0))
@@ -2914,7 +2915,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 		}
 		fr = ast_read(who);
 		other = (who == c0) ? c1 : c0;
-		if (!fr || ((fr->frametype == AST_FRAME_DTMF) &&
+		if (!fr || ((fr->frametype == AST_FRAME_DTMF_BEGIN || fr->frametype == AST_FRAME_DTMF_END) &&
 			    (((who == c0) && (flags & AST_BRIDGE_DTMF_CHANNEL_0)) ||
 			     ((who == c1) && (flags & AST_BRIDGE_DTMF_CHANNEL_1))))) {
 			/* Break out of bridge */
@@ -2966,7 +2967,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 			}
 		} else {
 			if ((fr->frametype == AST_FRAME_DTMF_BEGIN) ||
-			    (fr->frametype == AST_FRAME_DTMF) ||
+			    (fr->frametype == AST_FRAME_DTMF_END) ||
 			    (fr->frametype == AST_FRAME_VOICE) ||
 			    (fr->frametype == AST_FRAME_VIDEO) ||
 			    (fr->frametype == AST_FRAME_IMAGE) ||
@@ -3118,7 +3119,8 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		/* Check if anything changed */
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
-		    (c0->masq || c0->masqr || c1->masq || c1->masqr)) {
+		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
+		    (c0->monitor || c0->spies || c1->monitor || c1->spies)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 			if ((c0->masq || c0->masqr) && (fr = ast_read(c0)))
 				ast_frfree(fr);
@@ -3143,7 +3145,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		fr = ast_read(who);
 		other = (who == c0) ? c1 : c0;
 		/* Dependong on the frame we may need to break out of our bridge */
-		if (!fr || ((fr->frametype == AST_FRAME_DTMF) &&
+		if (!fr || ((fr->frametype == AST_FRAME_DTMF_BEGIN || fr->frametype == AST_FRAME_DTMF_END) &&
 			    ((who == c0) && (flags & AST_BRIDGE_DTMF_CHANNEL_0)) |
 			    ((who == c1) && (flags & AST_BRIDGE_DTMF_CHANNEL_1)))) {
 			/* Record received frame and who */
@@ -3185,7 +3187,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 			}
 		} else {
 			if ((fr->frametype == AST_FRAME_DTMF_BEGIN) ||
-			    (fr->frametype == AST_FRAME_DTMF) ||
+			    (fr->frametype == AST_FRAME_DTMF_END) ||
 			    (fr->frametype == AST_FRAME_VOICE) ||
 			    (fr->frametype == AST_FRAME_VIDEO) ||
 			    (fr->frametype == AST_FRAME_IMAGE) ||

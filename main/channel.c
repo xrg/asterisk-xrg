@@ -776,7 +776,7 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 	if (needqueue) {
 		if (pipe(tmp->alertpipe)) {
 			ast_log(LOG_WARNING, "Channel allocation failed: Can't create alert pipe!\n");
-			ast_string_field_free_pools(tmp);
+			ast_string_field_free_memory(tmp);
 			free(tmp);
 			return NULL;
 		} else {
@@ -1265,7 +1265,7 @@ void ast_channel_free(struct ast_channel *chan)
 	/* Destroy the jitterbuffer */
 	ast_jb_destroy(chan);
 
-	ast_string_field_free_pools(chan);
+	ast_string_field_free_memory(chan);
 	free(chan);
 	AST_LIST_UNLOCK(&channels);
 
@@ -1708,6 +1708,8 @@ int ast_hangup(struct ast_channel *chan)
 	ast_channel_lock(chan);
 
 	detach_spies(chan);		/* get rid of spies */
+
+	ast_autoservice_stop(chan);
 
 	if (chan->masq) {
 		if (ast_do_masquerade(chan))
@@ -2181,14 +2183,20 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 {
 	struct ast_frame *f = NULL;	/* the return value */
-	struct ast_channel *base = NULL;
 	int blah;
 	int prestate;
+	int count = 0;
 
 	/* this function is very long so make sure there is only one return
-	 * point at the end (there is only one exception to this).
+	 * point at the end (there are only two exceptions to this).
 	 */
-	ast_channel_lock(chan);
+	while(ast_channel_trylock(chan)) {
+		if(count++ > 10) 
+			/*cannot goto done since the channel is not locked*/
+			return &ast_null_frame;
+		usleep(1);
+	}
+
 	if (chan->masq) {
 		if (ast_do_masquerade(chan))
 			ast_log(LOG_WARNING, "Failed to perform masquerade\n");
@@ -2204,23 +2212,6 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		goto done;
 	}
 	prestate = chan->_state;
-
-	/* Check if there's an underlying channel */
-	if (chan->tech->get_base_channel && (base = chan->tech->get_base_channel(chan)) != chan) {
-		int count = 0;
-		while (!base || ast_mutex_trylock(&base->lock)) {
-			if (count++ > 10) {
-				f = &ast_null_frame;
-				goto done;
-			}
-			ast_mutex_unlock(&chan->lock);
-			usleep(1);
-			ast_mutex_lock(&chan->lock);
-			base = chan->tech->get_base_channel(chan);
-		}
-		ast_mutex_unlock(&chan->lock);
-		chan = base;
-	}
 
 	if (!ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_EMULATE_DTMF | AST_FLAG_IN_DTMF) && 
 	    !ast_strlen_zero(chan->dtmfq) && 
@@ -2270,17 +2261,13 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		} else if (blah == ZT_EVENT_TIMER_EXPIRED) {
 			ioctl(chan->timingfd, ZT_TIMERACK, &blah);
 			if (chan->timingfunc) {
-				/* save a copy of func/data before unlocking the channel */
-				int (*func)(const void *) = chan->timingfunc;
-				void *data = chan->timingdata;
-				ast_channel_unlock(chan);
-				func(data);
+				chan->timingfunc(chan->timingdata);
 			} else {
 				blah = 0;
 				ioctl(chan->timingfd, ZT_TIMERCONFIG, &blah);
 				chan->timingdata = NULL;
-				ast_channel_unlock(chan);
 			}
+			ast_channel_unlock(chan);
 			/* cannot 'goto done' because the channel is already unlocked */
 			return &ast_null_frame;
 		} else
@@ -2419,6 +2406,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
 					chan->emulate_dtmf_digit = f->subclass;
 					chan->emulate_dtmf_duration = AST_MIN_DTMF_DURATION - f->len;
+					ast_frfree(f);
 					f = &ast_null_frame;
 				} else {
 					ast_log(LOG_DTMF, "DTMF end passthrough '%c' on %s\n", f->subclass, chan->name);
@@ -2431,9 +2419,9 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_END_DTMF_ONLY) || 
 			    (!ast_tvzero(chan->dtmf_tv) && 
 			      ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) ) {
+				ast_log(LOG_DTMF, "DTMF begin ignored '%c' on %s\n", f->subclass, chan->name);
 				ast_frfree(f);
 				f = &ast_null_frame;
-				ast_log(LOG_DTMF, "DTMF begin ignored '%c' on %s\n", f->subclass, chan->name);
 			} else {
 				ast_set_flag(chan, AST_FLAG_IN_DTMF);
 				chan->dtmf_tv = ast_tvnow();
@@ -3582,7 +3570,6 @@ static void clone_variables(struct ast_channel *original, struct ast_channel *cl
 	/* XXX Is this always correct?  We have to in order to keep MACROS working XXX */
 	if (AST_LIST_FIRST(&clone->varshead))
 		AST_LIST_APPEND_LIST(&original->varshead, &clone->varshead, entries);
-	AST_LIST_HEAD_INIT_NOLOCK(&clone->varshead);
 
 	/* then, dup the varshead list into the clone */
 	
@@ -3674,16 +3661,38 @@ int ast_do_masquerade(struct ast_channel *original)
 	original->tech_pvt = clone->tech_pvt;
 	clone->tech_pvt = t_pvt;
 
-	/* Swap the readq's */
-	cur = AST_LIST_FIRST(&original->readq);
-	AST_LIST_HEAD_SET_NOLOCK(&original->readq, AST_LIST_FIRST(&clone->readq));
-	AST_LIST_HEAD_SET_NOLOCK(&clone->readq, cur);
-
 	/* Swap the alertpipes */
 	for (i = 0; i < 2; i++) {
 		x = original->alertpipe[i];
 		original->alertpipe[i] = clone->alertpipe[i];
 		clone->alertpipe[i] = x;
+	}
+
+	/* 
+	 * Swap the readq's.  The end result should be this:
+	 *
+	 *  1) All frames should be on the new (original) channel.
+	 *  2) Any frames that were already on the new channel before this
+	 *     masquerade need to be at the end of the readq, after all of the
+	 *     frames on the old (clone) channel.
+	 *  3) The alertpipe needs to get poked for every frame that was already
+	 *     on the new channel, since we are now using the alert pipe from the
+	 *     old (clone) channel.
+	 */
+	{
+		AST_LIST_HEAD_NOLOCK(, ast_frame) tmp_readq;
+		AST_LIST_HEAD_SET_NOLOCK(&tmp_readq, NULL);
+
+		AST_LIST_APPEND_LIST(&tmp_readq, &original->readq, frame_list);
+		AST_LIST_APPEND_LIST(&original->readq, &clone->readq, frame_list);
+
+		while ((cur = AST_LIST_REMOVE_HEAD(&tmp_readq, frame_list))) {
+			AST_LIST_INSERT_TAIL(&original->readq, cur, frame_list);
+			if (original->alertpipe[1] > -1) {
+				int poke = 0;
+				write(original->alertpipe[1], &poke, sizeof(poke));
+			}
+		}
 	}
 
 	/* Swap the raw formats */
@@ -3715,26 +3724,7 @@ int ast_do_masquerade(struct ast_channel *original)
 		}
 	}
 
-	/* Save any pending frames on both sides.  Start by counting
-	 * how many we're going to need... */
-	x = 0;
-	if (original->alertpipe[1] > -1) {
-		AST_LIST_TRAVERSE(&clone->readq, cur, frame_list)
-			x++;
-	}
-
-	/* If we had any, prepend them to the ones already in the queue, and 
-	 * load up the alertpipe */
-	if (AST_LIST_FIRST(&clone->readq)) {
-		AST_LIST_INSERT_TAIL(&clone->readq, AST_LIST_FIRST(&original->readq), frame_list);
-		AST_LIST_HEAD_SET_NOLOCK(&original->readq, AST_LIST_FIRST(&clone->readq));
-		AST_LIST_HEAD_SET_NOLOCK(&clone->readq, NULL);
-		for (i = 0; i < x; i++)
-			write(original->alertpipe[1], &x, sizeof(x));
-	}
-	
 	clone->_softhangup = AST_SOFTHANGUP_DEV;
-
 
 	/* And of course, so does our current state.  Note we need not
 	   call ast_setstate since the event manager doesn't really consider
@@ -3790,8 +3780,7 @@ int ast_do_masquerade(struct ast_channel *original)
 
 	/* Move data stores over */
 	if (AST_LIST_FIRST(&clone->datastores))
-                AST_LIST_INSERT_TAIL(&original->datastores, AST_LIST_FIRST(&clone->datastores), entry);
-	AST_LIST_HEAD_INIT_NOLOCK(&clone->datastores);
+		AST_LIST_APPEND_LIST(&original->datastores, &clone->datastores, entry);
 
 	clone_variables(original, clone);
 	/* Presense of ADSI capable CPE follows clone */
