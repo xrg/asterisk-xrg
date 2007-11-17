@@ -2699,6 +2699,7 @@ int main(int argc, char *argv[])
 		if (!isroot && pw->pw_uid != geteuid()) {
 			ast_log(LOG_ERROR, "Asterisk started as nonroot, but runuser '%s' requested.\n", runuser);
 			exit(1);
+		}
 #ifdef HAVE_CAP
 		if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0)) {
 			ast_log(LOG_WARNING, "Unable to keep capabilities.\n");
