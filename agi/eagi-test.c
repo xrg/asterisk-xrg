@@ -5,18 +5,18 @@
  * with no warranty of any kind
  */
 
-#include <stdio.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <sys/select.h>
-
 #include "asterisk.h"
 
-#include "asterisk/compat.h"
-
 #define AUDIO_FILENO (STDERR_FILENO + 1)
+
+/*! \file
+ * Extended AGI test application
+ *
+ * This code is released into the public domain
+ * with no warranty of any kind
+ *
+ * \ingroup agi
+ */
 
 static int read_environment(void)
 {
