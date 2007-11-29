@@ -16,6 +16,7 @@
  *
  * \brief Postgresql plugin for Asterisk RealTime Architecture
  *
+ * \note  We \b require protocol 3.0 and therefore Postgres >= 7.4
  * \author Mark Spencer <markster@digium.com>
  * \author Manuel Guesdon <mguesdon@oxymium.net> - Postgresql RealTime Driver Author/Adaptor
  *
@@ -81,6 +82,8 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 	PGresult *result = NULL;
 	int num_rows = 0;
 	char sql[256];
+	const char *sparams[20];
+	int  nparams = 0;
 	char *stringp;
 	char *chunk;
 	char *op;
@@ -109,16 +112,23 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 	   If there is only 1 set, then we have our query. Otherwise, loop thru the list and concat */
 	op = strchr(newparam, ' ') ? "" : " =";
 
-	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s '%s'", table, newparam, op,
-			 newval);
+	sparams[nparams++]=newval;
+	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s $%d", table, newparam, op,
+			 nparams);
 	while ((newparam = va_arg(ap, const char *))) {
+		if (nparams >= sizeof(sparams) ) {
+			ast_log(LOG_WARNING, "Postgresql RealTime: Too many params in query! Skipping..\n");
+			break;
+		}
 		newval = va_arg(ap, const char *);
 		if (!strchr(newparam, ' '))
 			op = " =";
 		else
 			op = "";
-		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " AND %s%s '%s'", newparam,
-				 op, newval);
+		
+		sparams[nparams++]=newval;
+		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " AND %s%s $%d", newparam,
+				 op, nparams);
 	}
 	va_end(ap);
 
@@ -129,7 +139,7 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 		return NULL;
 	}
 
-	if (!(result = PQexec(pgsqlConn, sql))) {
+	if (!(result = PQexecParams(pgsqlConn, sql, nparams,NULL, sparams, NULL, NULL,0))) {
 		ast_log(LOG_WARNING,
 				"Postgresql RealTime: Failed to query database. Check debug for more info.\n");
 		ast_log(LOG_DEBUG, "Postgresql RealTime: Query: %s\n", sql);
@@ -204,6 +214,8 @@ static struct ast_config *realtime_multi_pgsql(const char *database, const char 
 	PGresult *result = NULL;
 	int num_rows = 0;
 	char sql[256];
+	const char *sparams[20];
+	int  nparams = 0;
 	const char *initfield = NULL;
 	char *stringp;
 	char *chunk;
@@ -250,16 +262,22 @@ static struct ast_config *realtime_multi_pgsql(const char *database, const char 
 	else
 		op = "";
 
-	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s '%s'", table, newparam, op,
-			 newval);
+	sparams[nparams++]=newval;
+	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s $%d", table, newparam, op,
+			 nparams);
 	while ((newparam = va_arg(ap, const char *))) {
+		if (nparams >= sizeof(sparams) ) {
+			ast_log(LOG_WARNING, "Postgresql RealTime: Too many params in query! Skipping..\n");
+			break;
+		}
 		newval = va_arg(ap, const char *);
 		if (!strchr(newparam, ' '))
 			op = " =";
 		else
 			op = "";
-		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " AND %s%s '%s'", newparam,
-				 op, newval);
+		sparams[nparams++]=newval;
+		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " AND %s%s $%d", newparam,
+				 op, nparams);
 	}
 
 	if (initfield) {
@@ -275,7 +293,7 @@ static struct ast_config *realtime_multi_pgsql(const char *database, const char 
 		return NULL;
 	}
 
-	if (!(result = PQexec(pgsqlConn, sql))) {
+	if (!(result = PQexecParams(pgsqlConn, sql, nparams,NULL, sparams, NULL, NULL,0))) {
 		ast_log(LOG_WARNING,
 				"Postgresql RealTime: Failed to query database. Check debug for more info.\n");
 		ast_log(LOG_DEBUG, "Postgresql RealTime: Query: %s\n", sql);
@@ -354,7 +372,9 @@ static int update_pgsql(const char *database, const char *table, const char *key
 	int numrows = 0;
 	char sql[256];
 	const char *newparam, *newval;
-
+	const char *sparams[40];
+	int  nparams = 0;
+	
 	if (!table) {
 		ast_log(LOG_WARNING, "Postgresql RealTime: No table specified.\n");
 		return -1;
@@ -375,16 +395,26 @@ static int update_pgsql(const char *database, const char *table, const char *key
 
 	/* Create the first part of the query using the first parameter/value pairs we just extracted
 	   If there is only 1 set, then we have our query. Otherwise, loop thru the list and concat */
-
-	snprintf(sql, sizeof(sql), "UPDATE %s SET %s = '%s'", table, newparam, newval);
+	
+	sparams[nparams++]=newval;
+	snprintf(sql, sizeof(sql), "UPDATE %s SET %s = $%d", table, newparam, nparams);
+	
 	while ((newparam = va_arg(ap, const char *))) {
+		if (nparams >= (sizeof(sparams) -1) ) {
+			/* Half-updated values are obviously a mess */
+			ast_log(LOG_ERROR, "Postgresql RealTime: Too many params in query! Cannot update.\n");
+			va_end(ap);
+			return -1;
+		}
 		newval = va_arg(ap, const char *);
-		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), ", %s = '%s'", newparam,
-				 newval);
+		sparams[nparams++]=newval;
+		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), ", %s = $%d", newparam,
+				 nparams);
 	}
 	va_end(ap);
-	snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " WHERE %s = '%s'", keyfield,
-			 lookup);
+	sparams[nparams++]=lookup;
+	snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " WHERE %s = $%d", keyfield,
+			 nparams);
 
 	ast_log(LOG_DEBUG, "Postgresql RealTime: Update SQL: %s\n", sql);
 
@@ -395,7 +425,7 @@ static int update_pgsql(const char *database, const char *table, const char *key
 		return -1;
 	}
 
-	if (!(result = PQexec(pgsqlConn, sql))) {
+	if (!(result = PQexecParams(pgsqlConn, sql, nparams,NULL, sparams, NULL, NULL,0))) {
 		ast_log(LOG_WARNING,
 				"Postgresql RealTime: Failed to query database. Check debug for more info.\n");
 		ast_log(LOG_DEBUG, "Postgresql RealTime: Query: %s\n", sql);
@@ -436,6 +466,7 @@ static int update_pgsql(const char *database, const char *table, const char *key
 	return -1;
 }
 
+/* Note: we trust "database", "table" and "file" to be valid strings.  */
 static struct ast_config *config_pgsql(const char *database, const char *table,
 					   const char *file, struct ast_config *cfg,
 					   int withcomments)
