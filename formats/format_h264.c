@@ -26,7 +26,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unistd.h>
 #include <netinet/in.h>
@@ -72,7 +72,7 @@ static struct ast_frame *h264_read(struct ast_filestream *s, int *whennext)
 	int mark=0;
 	unsigned short len;
 	unsigned int ts;
-	struct h264_desc *fs = (struct h264_desc *)s->private;
+	struct h264_desc *fs = (struct h264_desc *)s->_private;
 
 	/* Send a frame from the file to the appropriate channel */
 	if ((res = fread(&len, 1, sizeof(len), s->f)) < 1)
