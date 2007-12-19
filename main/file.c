@@ -136,6 +136,8 @@ int ast_format_unregister(const char *name)
 
 int ast_stopstream(struct ast_channel *tmp)
 {
+	ast_channel_lock(tmp);
+
 	/* Stop a running stream if there is one */
 	if (tmp->stream) {
 		ast_closestream(tmp->stream);
@@ -148,6 +150,9 @@ int ast_stopstream(struct ast_channel *tmp)
 		ast_closestream(tmp->vstream);
 		tmp->vstream = NULL;
 	}
+
+	ast_channel_unlock(tmp);
+
 	return 0;
 }
 
@@ -294,7 +299,7 @@ static struct ast_filestream *get_filestream(struct ast_format *fmt, FILE *bfile
 	s->f = bfile;
 
 	if (fmt->desc_size)
-		s->private = ((char *)(s+1)) + fmt->buf_size;
+		s->_private = ((char *)(s+1)) + fmt->buf_size;
 	if (fmt->buf_size)
 		s->buf = (char *)(s+1);
 	s->fr.src = fmt->name;

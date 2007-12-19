@@ -118,6 +118,7 @@ extern "C" {
 #include "asterisk/stringfields.h"
 #include "asterisk/compiler.h"
 
+#define DATASTORE_INHERIT_FOREVER	INT_MAX
 
 #define AST_MAX_FDS		8
 /*
@@ -148,6 +149,7 @@ struct ast_generator {
 /*! \brief Structure for a data store type */
 struct ast_datastore_info {
 	const char *type;		/*!< Type of data store */
+	void *(*duplicate)(void *data); /*!< Duplicate item data (used for inheritance) */
 	void (*destroy)(void *data);	/*!< Destroy function */
 };
 
@@ -156,6 +158,7 @@ struct ast_datastore {
 	char *uid;		/*!< Unique data store identifier */
 	void *data;		/*!< Contained data */
 	const struct ast_datastore_info *info;	/*!< Data store type information */
+	unsigned int inheritance;	/*!Number of levels this item will continue to be inherited */
 	AST_LIST_ENTRY(ast_datastore) entry; /*!< Used for easy linking */
 };
 
@@ -437,6 +440,8 @@ struct ast_channel {
 	unsigned int emulate_dtmf_duration;	/*!< Number of ms left to emulate DTMF for */
 	struct timeval dtmf_tv;       /*!< The time that an in process digit began, or the last digit ended */
 
+	int visible_indication;                         /*!< Indication currently playing on the channel */
+
 	/*! \brief Data stores on the channel */
 	AST_LIST_HEAD_NOLOCK(datastores, ast_datastore) datastores;
 };
@@ -572,6 +577,9 @@ struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_inf
 
 /*! \brief Free a channel datastore structure */
 int ast_channel_datastore_free(struct ast_datastore *datastore);
+
+/*! \brief Inherit datastores from a parent to a child. */
+int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *to);
 
 /*! \brief Add a datastore to a channel */
 int ast_channel_datastore_add(struct ast_channel *chan, struct ast_datastore *datastore);
@@ -1109,6 +1117,9 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 /*! Deactive an active generator */
 void ast_deactivate_generator(struct ast_channel *chan);
 
+/*!
+ * \note The channel does not need to be locked before calling this function.
+ */
 void ast_set_callerid(struct ast_channel *chan, const char *cidnum, const char *cidname, const char *ani);
 
 

@@ -180,7 +180,7 @@ static inline void ast_reentrancy_unlock(ast_mutex_t *p_ast_mutex)
 static inline void ast_reentrancy_init(ast_mutex_t *p_ast_mutex)
 {
 	int i;
-	static pthread_mutexattr_t reentr_attr;
+	pthread_mutexattr_t reentr_attr;
 
 	for (i = 0; i < AST_MAX_REENTRANCY; i++) {
 		p_ast_mutex->file[i] = NULL;
@@ -206,7 +206,7 @@ static inline int __ast_pthread_mutex_init(int track, const char *filename, int 
 						const char *mutex_name, ast_mutex_t *t) 
 {
 	int res;
-	static pthread_mutexattr_t  attr;
+	pthread_mutexattr_t  attr;
 
 #ifdef AST_MUTEX_INIT_W_CONSTRUCTORS
 
@@ -322,7 +322,7 @@ static inline int __ast_pthread_mutex_lock(const char *filename, int lineno, con
 #ifdef DETECT_DEADLOCKS
 	{
 		time_t seconds = time(NULL);
-		time_t current;
+		time_t wait_time, reported_wait = 0;
 		do {
 #ifdef	HAVE_MTX_PROFILE
 			ast_mark(mtx_prof, 1);
@@ -332,15 +332,16 @@ static inline int __ast_pthread_mutex_lock(const char *filename, int lineno, con
 			ast_mark(mtx_prof, 0);
 #endif
 			if (res == EBUSY) {
-				current = time(NULL);
-				if ((current - seconds) && (!((current - seconds) % 5))) {
+				wait_time = time(NULL) - seconds;
+				if (wait_time > reported_wait && (wait_time % 5) == 0) {
 					__ast_mutex_logger("%s line %d (%s): Deadlock? waited %d sec for mutex '%s'?\n",
-							   filename, lineno, func, (int)(current - seconds), mutex_name);
+							   filename, lineno, func, (int) wait_time, mutex_name);
 					ast_reentrancy_lock(t);
 					__ast_mutex_logger("%s line %d (%s): '%s' was locked here.\n",
 							   t->file[t->reentrancy-1], t->lineno[t->reentrancy-1],
 							   t->func[t->reentrancy-1], mutex_name);
 					ast_reentrancy_unlock(t);
+					reported_wait = wait_time;
 				}
 				usleep(200);
 			}
@@ -1104,12 +1105,12 @@ AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
 #elif defined(HAVE_OSX_ATOMICS) && (SIZEOF_INT == 4)
 AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
 {
-	return OSAtomicAdd32(v, (int32_t *) p);
+	return OSAtomicAdd32(v, (int32_t *) p) - v;
 })
 #elif defined(HAVE_OSX_ATOMICS) && (SIZEOF_INT == 8)
 AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),
 {
-	return OSAtomicAdd64(v, (int64_t *) p);
+	return OSAtomicAdd64(v, (int64_t *) p) - v;
 #elif defined (__i386__)
 #ifdef sun
 AST_INLINE_API(int ast_atomic_fetchadd_int(volatile int *p, int v),

@@ -87,6 +87,10 @@
  * - the ALERT_INFO dialplan variable
  */
 
+/*** MODULEINFO
+        <depend>res_features</depend>
+ ***/
+
 
 #include "asterisk.h"
 
@@ -145,6 +149,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/compiler.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/translate.h"
+#include "asterisk/dnsmgr.h"
 
 #ifndef FALSE
 #define FALSE    0
@@ -986,6 +991,7 @@ static struct sip_pvt {
 	
 	int maxtime;				/*!< Max time for first response */
 	int initid;				/*!< Auto-congest ID if appropriate (scheduler) */
+	int waitid;				/*!< Wait ID for scheduler after 491 or other delays */
 	int autokillid;				/*!< Auto-kill ID (scheduler) */
 	enum transfermodes allowtransfer;	/*!< REFER: restriction scheme */
 	struct sip_refer *refer;		/*!< REFER: SIP transfer data structure */
@@ -1326,7 +1332,6 @@ static int expire_register(const void *data);
 static void *do_monitor(void *data);
 static int restart_monitor(void);
 static int sip_send_mwi_to_peer(struct sip_peer *peer);
-static void sip_destroy(struct sip_pvt *p);
 static int sip_addrcmp(char *name, struct sockaddr_in *sin);	/* Support for peer matching */
 static int sip_refer_allocate(struct sip_pvt *p);
 static void ast_quiet_chan(struct ast_channel *chan);
@@ -2493,9 +2498,35 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 	unsigned short portnum;
 
 	/* First check on peer name */
-	if (newpeername) 
-		var = ast_load_realtime("sippeers", "name", newpeername, NULL);
-	else if (sin) {	/* Then check on IP address */
+	if (newpeername) {
+		var = ast_load_realtime("sippeers", "name", newpeername, "host", "dynamic", NULL);
+		if (!var && sin) {
+			var = ast_load_realtime("sippeers", "name", newpeername, "host", ast_inet_ntoa(sin->sin_addr), NULL);
+			if (!var) {
+				var = ast_load_realtime("sippeers", "name", newpeername, NULL);
+				/*!\note
+				 * If this one loaded something, then we need to ensure that the host
+				 * field matched.  The only reason why we can't have this as a criteria
+				 * is because we only have the IP address and the host field might be
+				 * set as a name (and the reverse PTR might not match).
+				 */
+				if (var) {
+					for (tmp = var; tmp; tmp = tmp->next) {
+						if (!strcasecmp(var->name, "host")) {
+							struct in_addr sin2 = { 0, };
+							struct ast_dnsmgr_entry *dnsmgr = NULL;
+							if ((ast_dnsmgr_lookup(tmp->value, &sin2, &dnsmgr) < 0) || (memcmp(&sin2, &sin->sin_addr, sizeof(sin2)) != 0)) {
+								/* No match */
+								ast_variables_destroy(var);
+								var = NULL;
+							}
+							break;
+						}
+					}
+				}
+			}
+		}
+	} else if (sin) {	/* Then check on IP address */
 		iabuf = ast_inet_ntoa(sin->sin_addr);
 		portnum = ntohs(sin->sin_port);
 		sprintf(portstring, "%d", portnum);
@@ -3043,6 +3074,8 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 		ast_extension_state_del(p->stateid, NULL);
 	if (p->initid > -1)
 		ast_sched_del(sched, p->initid);
+	if (p->waitid > -1)
+		ast_sched_del(sched, p->waitid);
 	if (p->autokillid > -1)
 		ast_sched_del(sched, p->autokillid);
 
@@ -3562,6 +3595,9 @@ static int sip_hangup(struct ast_channel *ast)
 				   but we can't send one while we have "INVITE" outstanding. */
 				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
 				ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);	
+				if (p->waitid)
+					ast_sched_del(sched, p->waitid);
+				p->waitid = -1;
 				sip_cancel_destroy(p);
 			}
 		}
@@ -4052,6 +4088,10 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	if (i->rtp)
 		ast_jb_configure(tmp, &global_jbconf);
 
+	/* If the INVITE contains T.38 SDP information set the proper channel variable so a created outgoing call will also have T.38 */
+	if (i->udptl && i->t38.state == T38_PEER_DIRECT)
+		pbx_builtin_setvar_helper(tmp, "_T38CALL", "1");
+
 	/* Set channel variables for this call from configuration */
 	for (v = i->chanvars ; v ; v = v->next)
 		pbx_builtin_setvar_helper(tmp, v->name, v->value);
@@ -4362,6 +4402,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 
 	p->method = intended_method;
 	p->initid = -1;
+	p->waitid = -1;
 	p->autokillid = -1;
 	p->subscribed = NONE;
 	p->stateid = -1;
@@ -5203,16 +5244,37 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req)
 			continue;
 		} else if (sscanf(a, "rtpmap: %u %[^/]/", &codec, mimeSubtype) == 2) {
 			/* We have a rtpmap to handle */
-			if (debug)
-				ast_verbose("Found description format %s for ID %d\n", mimeSubtype, codec);
-			found_rtpmap_codecs[last_rtpmap_codec] = codec;
-			last_rtpmap_codec++;
+			int found = FALSE;
+			/* We should propably check if this is an audio or video codec
+				so we know where to look */
 
 			/* Note: should really look at the 'freq' and '#chans' params too */
-			ast_rtp_set_rtpmap_type(newaudiortp, codec, "audio", mimeSubtype,
-					ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0);
-			if (p->vrtp)
-				ast_rtp_set_rtpmap_type(newvideortp, codec, "video", mimeSubtype, 0);
+			if(ast_rtp_set_rtpmap_type(newaudiortp, codec, "audio", mimeSubtype,
+					ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0) != -1) {
+				if (debug)
+					ast_verbose("Found audio description format %s for ID %d\n", mimeSubtype, codec);
+				found_rtpmap_codecs[last_rtpmap_codec] = codec;
+				last_rtpmap_codec++;
+				found = TRUE;
+
+			} else if (p->vrtp) {
+				if(ast_rtp_set_rtpmap_type(newvideortp, codec, "video", mimeSubtype, 0) != -1) {
+					if (debug)
+						ast_verbose("Found video description format %s for ID %d\n", mimeSubtype, codec);
+					found_rtpmap_codecs[last_rtpmap_codec] = codec;
+					last_rtpmap_codec++;
+					found = TRUE;
+				}
+			}
+			if (!found) {
+				/* Remove this codec since it's an unknown media type for us */
+				/* XXX This is buggy since the media line for audio and video can have the
+					same numbers. We need to check as described above, but for testing this works... */
+				ast_rtp_unset_m_type(newaudiortp, codec);
+				ast_rtp_unset_m_type(newvideortp, codec);
+				if (debug) 
+					ast_verbose("Found unknown media description format %s for ID %d\n", mimeSubtype, codec);
+			}
 		}
 	}
 	
@@ -10643,8 +10705,8 @@ static int sip_show_subscriptions(int fd, int argc, char *argv[])
 static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions)
 {
 #define FORMAT3 "%-15.15s  %-10.10s  %-11.11s  %-15.15s  %-13.13s  %-15.15s %-10.10s\n"
-#define FORMAT2 "%-15.15s  %-10.10s  %-11.11s  %-11.11s  %-4.4s  %-7.7s  %-15.15s\n"
-#define FORMAT  "%-15.15s  %-10.10s  %-11.11s  %5.5d/%5.5d  %-4.4s  %-3.3s %-3.3s  %-15.15s %-10.10s\n"
+#define FORMAT2 "%-15.15s  %-10.10s  %-11.11s  %-11.11s  %-15.15s  %-7.7s  %-15.15s\n"
+#define FORMAT  "%-15.15s  %-10.10s  %-11.11s  %5.5d/%5.5d  %-15.15s  %-3.3s %-3.3s  %-15.15s %-10.10s\n"
 	struct sip_pvt *cur;
 	int numchans = 0;
 	char *referstatus = NULL;
@@ -10663,11 +10725,12 @@ static int __sip_show_channels(int fd, int argc, char *argv[], int subscriptions
 			referstatus = referstatus2str(cur->refer->status);
 		}
 		if (cur->subscribed == NONE && !subscriptions) {
+			char formatbuf[BUFSIZ/2];
 			ast_cli(fd, FORMAT, ast_inet_ntoa(cur->sa.sin_addr), 
 				S_OR(cur->username, S_OR(cur->cid_num, "(None)")),
 				cur->callid, 
-				cur->ocseq, cur->icseq, 
-				ast_getformatname(cur->owner ? cur->owner->nativeformats : 0), 
+				cur->ocseq, cur->icseq,
+				ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0),
 				ast_test_flag(&cur->flags[1], SIP_PAGE2_CALL_ONHOLD) ? "Yes" : "No",
 				ast_test_flag(&cur->flags[0], SIP_NEEDDESTROY) ? "(d)" : "",
 				cur->lastmsg ,
@@ -11867,7 +11930,7 @@ static void check_pendings(struct sip_pvt *p)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	} else if (ast_test_flag(&p->flags[0], SIP_NEEDREINVITE)) {
 		/* if we can't REINVITE, hold it for later */
-		if (p->pendinginvite || p->invitestate == INV_CALLING || p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA) {
+		if (p->pendinginvite || p->invitestate == INV_CALLING || p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA || p->waitid > 0) {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "NOT Sending pending reinvite (yet) on '%s'\n", p->callid);
 		} else {
@@ -11879,6 +11942,20 @@ static void check_pendings(struct sip_pvt *p)
 		}
 	}
 }
+
+/*! \brief Reset the NEEDREINVITE flag after waiting when we get 491 on a Re-invite
+	to avoid race conditions between asterisk servers.
+	Called from the scheduler.
+*/
+static int sip_reinvite_retry(const void *data) 
+{
+	struct sip_pvt *p = (struct sip_pvt *) data;
+
+	ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);	
+	p->waitid = -1;
+	return 0;
+}
+
 
 /*! \brief Handle SIP response to INVITE dialogue */
 static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, struct sip_request *req, int seqno)
@@ -12154,6 +12231,20 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 			if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
 				ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+		} else if (p->udptl && p->t38.state == T38_LOCAL_DIRECT) {
+			/* We tried to send T.38 out in an initial INVITE and the remote side rejected it,
+			   right now we can't fall back to audio so totally abort.
+			*/
+			p->t38.state = T38_DISABLED;
+			/* Try to reset RTP timers */
+			ast_rtp_set_rtptimers_onhold(p->rtp);
+			ast_log(LOG_ERROR, "Got error on T.38 initial invite. Bailing out.\n");
+
+			/* The dialog is now terminated */
+			if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
+				ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);
+			sip_alreadygone(p);
 		} else {
 			/* We can't set up this call, so give up */
 			if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
@@ -12166,9 +12257,20 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 			/* We should support the retry-after at some point */
 		/* At this point, we treat this as a congestion */
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
-		if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE))
-			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
-		ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+		if (p->owner && !ast_test_flag(req, SIP_PKT_IGNORE)) {
+			if (p->owner->_state != AST_STATE_UP) {
+				ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+				ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
+			} else {
+				/* This is a re-invite that failed. */
+				/* Reset the flag after a while 
+				 */
+				int wait = 3 + ast_random() % 5;
+				p->waitid = ast_sched_add(sched, wait, sip_reinvite_retry, p); 
+				if (option_debug > 2)
+					ast_log(LOG_DEBUG, "Reinvite race. Waiting %d secs before retry\n", wait);
+			}
+		}
 		break;
 
 	case 501: /* Not implemented */
@@ -13384,7 +13486,8 @@ static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, in
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "Invite/Replaces: preparing to masquerade %s into %s\n", c->name, replacecall->name);
 	/* Unlock clone, but not original (replacecall) */
-	ast_channel_unlock(c);
+	if (!oneleggedreplace)
+		ast_channel_unlock(c);
 
 	/* Unlock PVT */
 	ast_mutex_unlock(&p->refer->refer_call->lock);
@@ -13416,7 +13519,8 @@ static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, in
 			ast_log(LOG_WARNING, "Invite/Replace:  Could not read frame from RING channel \n");
 		}
 		c->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
-		ast_channel_unlock(replacecall);
+		if (!oneleggedreplace)
+			ast_channel_unlock(replacecall);
 	} else {	/* Bridged call, UP channel */
 		if ((f = ast_read(replacecall))) {	/* Force the masq to happen */
 			/* Masq ok */
@@ -13451,7 +13555,8 @@ static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, in
 	}
 
 	ast_channel_unlock(p->owner);	/* Unlock new owner */
-	ast_mutex_unlock(&p->lock);	/* Unlock SIP structure */
+	if (!oneleggedreplace)
+		ast_mutex_unlock(&p->lock);	/* Unlock SIP structure */
 
 	/* The call should be down with no ast_channel, so hang it up */
 	c->tech_pvt = NULL;
@@ -16586,6 +16691,36 @@ static int reload_config(enum channelreloadreason reason)
 		return -1;
 	}
 	
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "--------------- SIP reload started\n");
+
+	clear_realm_authentication(authl);
+	clear_sip_domains();
+	authl = NULL;
+
+	/* First, destroy all outstanding registry calls */
+	/* This is needed, since otherwise active registry entries will not be destroyed */
+	ASTOBJ_CONTAINER_TRAVERSE(&regl, 1, do {
+		ASTOBJ_RDLOCK(iterator);
+		if (iterator->call) {
+			if (option_debug > 2)
+				ast_log(LOG_DEBUG, "Destroying active SIP dialog for registry %s@%s\n", iterator->username, iterator->hostname);
+			/* This will also remove references to the registry */
+			sip_destroy(iterator->call);
+		}
+		ASTOBJ_UNLOCK(iterator);
+	
+	} while(0));
+
+	/* Then, actually destroy users and registry */
+	ASTOBJ_CONTAINER_DESTROYALL(&userl, sip_destroy_user);
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "--------------- Done destroying user list\n");
+	ASTOBJ_CONTAINER_DESTROYALL(&regl, sip_registry_destroy);
+	if (option_debug > 3)
+		ast_log(LOG_DEBUG, "--------------- Done destroying registry list\n");
+	ASTOBJ_CONTAINER_MARKALL(&peerl);
+
 	/* Initialize copy of current global_regcontext for later use in removing stale contexts */
 	ast_copy_string(oldcontexts, global_regcontext, sizeof(oldcontexts));
 	oldregcontext = oldcontexts;
@@ -17594,35 +17729,6 @@ static void sip_send_all_registers(void)
 /*! \brief Reload module */
 static int sip_do_reload(enum channelreloadreason reason)
 {
-	if (option_debug > 3)
-		ast_log(LOG_DEBUG, "--------------- SIP reload started\n");
-
-	clear_realm_authentication(authl);
-	clear_sip_domains();
-	authl = NULL;
-
-	/* First, destroy all outstanding registry calls */
-	/* This is needed, since otherwise active registry entries will not be destroyed */
-	ASTOBJ_CONTAINER_TRAVERSE(&regl, 1, do {
-		ASTOBJ_RDLOCK(iterator);
-		if (iterator->call) {
-			if (option_debug > 2)
-				ast_log(LOG_DEBUG, "Destroying active SIP dialog for registry %s@%s\n", iterator->username, iterator->hostname);
-			/* This will also remove references to the registry */
-			sip_destroy(iterator->call);
-		}
-		ASTOBJ_UNLOCK(iterator);
-	
-	} while(0));
-
-	/* Then, actually destroy users and registry */
-	ASTOBJ_CONTAINER_DESTROYALL(&userl, sip_destroy_user);
-	if (option_debug > 3)
-		ast_log(LOG_DEBUG, "--------------- Done destroying user list\n");
-	ASTOBJ_CONTAINER_DESTROYALL(&regl, sip_registry_destroy);
-	if (option_debug > 3)
-		ast_log(LOG_DEBUG, "--------------- Done destroying registry list\n");
-	ASTOBJ_CONTAINER_MARKALL(&peerl);
 	reload_config(reason);
 
 	/* Prune peers who still are supposed to be deleted */

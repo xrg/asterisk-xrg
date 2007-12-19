@@ -160,7 +160,11 @@ static struct vmstate *vmstates = NULL;
 #define INTRO "vm-intro"
 
 #define MAXMSG 100
+#ifndef IMAP_STORAGE
 #define MAXMSGLIMIT 9999
+#else
+#define MAXMSGLIMIT 255
+#endif
 
 #define BASEMAXINLINE 256
 #define BASELINELEN 72
@@ -1682,10 +1686,10 @@ static int base_encode(char *filename, FILE *so)
 		}
 	}
 
+	fclose(fi);
+	
 	if (fputs(eol,so)==EOF)
 		return 0;
-
-	fclose(fi);
 
 	return 1;
 }
@@ -2308,7 +2312,12 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 	char tmp[80] = "/tmp/astmail-XXXXXX";
 	long len;
 	void *buf;
+	int tempcopy = 0;
 	STRING str;
+
+	/*Greetings are not retrieved from IMAP, so there is no reason to attempt storing them there either*/
+	if(msgnum < 0)
+		return 0;
 	
 	/* Attach only the first format */
 	fmt = ast_strdupa(fmt);
@@ -2320,8 +2329,14 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 
 	make_file(fn, sizeof(fn), dir, msgnum);
 
-	if (ast_strlen_zero(vmu->email))
+	if (ast_strlen_zero(vmu->email)) {
+		/*we need the vmu->email to be set when we call make_email_file, but if we keep it set,
+		 * a duplicate e-mail will be created. So at the end of this function, we will revert back to an empty
+		 * string if tempcopy is 1
+		 */
 		ast_copy_string(vmu->email, vmu->imapuser, sizeof(vmu->email));
+		tempcopy = 1;
+	}
 
 	if (!strcmp(fmt, "wav49"))
 		fmt = "WAV";
@@ -2331,6 +2346,8 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 	   command hangs */
 	if ((p = vm_mkftemp(tmp)) == NULL) {
 		ast_log(LOG_WARNING, "Unable to store '%s' (can't create temporary file)\n", fn);
+		if(tempcopy)
+			*(vmu->email) = '\0';
 		return -1;
 	} else {
 		make_email_file(p, myserveremail, vmu, msgnum, vmu->context, vmu->mailbox, S_OR(chan->cid.cid_num, NULL), S_OR(chan->cid.cid_name, NULL), fn, fmt, duration, 1, chan, NULL, 1);
@@ -2339,6 +2356,7 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 		rewind(p);
 		if((buf = ast_malloc(len+1)) == NIL) {
 			ast_log(LOG_ERROR, "Can't allocate %ld bytes to read message\n", len+1);
+			fclose(p);
 			return -1;
 		}
 		fread(buf, len, 1, p);
@@ -2354,6 +2372,8 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 		if(option_debug > 2)
 			ast_log(LOG_DEBUG, "%s stored\n", fn);
 	}
+	if(tempcopy)
+		*(vmu->email) = '\0';
 	return 0;
 
 }
@@ -2545,6 +2565,10 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 	char dest[256];
 	struct vm_state *sendvms = NULL, *destvms = NULL;
 	char messagestring[10]; /*I guess this could be a problem if someone has more than 999999999 messages...*/
+	if(msgnum >= recip->maxmsg) {
+		ast_log(LOG_WARNING, "Unable to copy mail, mailbox %s is full\n", recip->mailbox);
+		return -1;
+	}
 	if(!(sendvms = get_vm_state_by_imapuser(vmu->imapuser, 2)))
 	{
 		ast_log(LOG_ERROR, "Couldn't get vm_state for originator's mailbox!!\n");
@@ -2988,6 +3012,12 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 		if (vms->quota_limit && vms->quota_usage >= vms->quota_limit) {
 			if(option_debug)
 				ast_log(LOG_DEBUG, "*** QUOTA EXCEEDED!! %u >= %u\n", vms->quota_usage, vms->quota_limit);
+			ast_play_and_wait(chan, "vm-mailboxfull");
+			return -1;
+		}
+		/* Check if we have exceeded maxmsg */
+		if (msgnum >= vmu->maxmsg) {
+			ast_log(LOG_WARNING, "Unable to leave message since we will exceed the maximum number of messages allowed (%u > %u)\n", msgnum, vmu->maxmsg);
 			ast_play_and_wait(chan, "vm-mailboxfull");
 			return -1;
 		}
@@ -4611,7 +4641,10 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 	if (!res) {
 		make_file(vms->fn, sizeof(vms->fn), vms->curdir, vms->curmsg);
 		vms->heard[vms->curmsg] = 1;
-		res = wait_file(chan, vms, vms->fn);
+		if ((res = wait_file(chan, vms, vms->fn)) < 0) {
+			ast_log(LOG_WARNING, "Playback of message %s failed\n", vms->fn);
+			res = 0;
+		}
 	}
 	DISPOSE(vms->curdir, vms->curmsg);
 	return res;
@@ -6475,9 +6508,7 @@ static int vm_execmain(struct ast_channel *chan, void *data)
 	/* Set language from config to override channel language */
 	if (!ast_strlen_zero(vmu->language))
 		ast_string_field_set(chan, language, vmu->language);
-#ifndef IMAP_STORAGE
 	create_dirpath(vms.curdir, sizeof(vms.curdir), vmu->context, vms.username, "");
-#endif
 	/* Retrieve old and new message counts */
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Before open_mailbox\n");

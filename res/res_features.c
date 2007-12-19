@@ -305,10 +305,7 @@ static int metermaidstate(const char *data)
 		return AST_DEVICE_INUSE;
 }
 
-/*! \brief Park a call 
- 	\note We put the user in the parking list, then wake up the parking thread to be sure it looks
-	after these channels too */
-int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeout, int *extout)
+static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, int timeout, int *extout, char *orig_chan_name)
 {
 	struct parkeduser *pu, *cur;
 	int i, x = -1, parking_range;
@@ -375,8 +372,9 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 	pu->parkingtime = (timeout > 0) ? timeout : parkingtime;
 	if (extout)
 		*extout = x;
-
-	if (peer) 
+	if (!ast_strlen_zero(orig_chan_name))
+		ast_copy_string(pu->peername, orig_chan_name, sizeof(pu->peername));
+	else if (peer) 
 		ast_copy_string(pu->peername, peer->name, sizeof(pu->peername));
 
 	/* Remember what had been dialed, so that if the parking
@@ -422,7 +420,7 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 	if (!con)	/* Still no context? Bad */
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", parking_con);
 	/* Tell the peer channel the number of the parking space */
-	if (peer && pu->parkingnum != -1) { /* Only say number if it's a number */
+	if (peer && ((pu->parkingnum != -1 && ast_strlen_zero(orig_chan_name)) || (strlen(orig_chan_name) == strlen(peer->name) && !strncasecmp(peer->name, orig_chan_name, strlen(peer->name))))) { /* Only say number if it's a number and the channel hasn't been masqueraded away */
 		/* Make sure we don't start saying digits to the channel being parked */
 		ast_set_flag(peer, AST_FLAG_MASQ_NOSTREAM);
 		ast_say_digits(peer, pu->parkingnum, "", peer->language);
@@ -441,6 +439,14 @@ int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeou
 		pthread_kill(parking_thread, SIGURG);
 	}
 	return 0;
+}
+
+/*! \brief Park a call 
+ 	\note We put the user in the parking list, then wake up the parking thread to be sure it looks
+	after these channels too */
+int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeout, int *extout)
+{
+	return park_call_full(chan, peer, timeout, extout, NULL);
 }
 
 int ast_masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int timeout, int *extout)
@@ -1053,15 +1059,18 @@ static int ast_feature_interpret(struct ast_channel *chan, struct ast_channel *p
 	struct ast_flags features;
 	int res = FEATURE_RETURN_PASSDIGITS;
 	struct ast_call_feature *feature;
-	const char *dynamic_features=pbx_builtin_getvar_helper(chan,"DYNAMIC_FEATURES");
+	const char *dynamic_features;
 	char *tmp, *tok;
 
-	if (sense == FEATURE_SENSE_CHAN)
+	if (sense == FEATURE_SENSE_CHAN) {
 		ast_copy_flags(&features, &(config->features_caller), AST_FLAGS_ALL);	
-	else
+		dynamic_features = pbx_builtin_getvar_helper(chan, "DYNAMIC_FEATURES");
+	} else {
 		ast_copy_flags(&features, &(config->features_callee), AST_FLAGS_ALL);	
+		dynamic_features = pbx_builtin_getvar_helper(peer, "DYNAMIC_FEATURES");
+	}
 	if (option_debug > 2)
-		ast_log(LOG_DEBUG, "Feature interpret: chan=%s, peer=%s, sense=%d, features=%d\n", chan->name, peer->name, sense, features.flags);
+		ast_log(LOG_DEBUG, "Feature interpret: chan=%s, peer=%s, sense=%d, features=%d dynamic=%s\n", chan->name, peer->name, sense, features.flags, dynamic_features);
 
 	ast_rwlock_rdlock(&features_lock);
 	for (x = 0; x < FEATURES_COUNT; x++) {
@@ -1799,6 +1808,10 @@ std:					for (x=0; x<AST_MAX_FDS; x++) {	/* mark fds for next round */
 /*! \brief Park a call */
 static int park_call_exec(struct ast_channel *chan, void *data)
 {
+	/* Cache the original channel name in case we get masqueraded in the middle
+	 * of a park--it is still theoretically possible for a transfer to happen before
+	 * we get here, but it is _really_ unlikely */
+	char *orig_chan_name = ast_strdupa(chan->name);
 	/* Data is unused at the moment but could contain a parking
 	   lot context eventually */
 	int res = 0;
@@ -1818,7 +1831,7 @@ static int park_call_exec(struct ast_channel *chan, void *data)
 		res = ast_safe_sleep(chan, 1000);
 	/* Park the call */
 	if (!res)
-		res = ast_park_call(chan, chan, 0, NULL);
+		res = park_call_full(chan, chan, 0, NULL, orig_chan_name);
 
 	ast_module_user_remove(u);
 
@@ -1911,6 +1924,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 			if (error) {
 				ast_log(LOG_WARNING, "Failed to play courtesy tone!\n");
 				ast_hangup(peer);
+				ast_module_user_remove(u);
 				return -1;
 			}
 		} else
@@ -1920,6 +1934,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Could not make channels %s and %s compatible for bridge\n", chan->name, peer->name);
 			ast_hangup(peer);
+			ast_module_user_remove(u);
 			return -1;
 		}
 		/* This runs sorta backwards, since we give the incoming channel control, as if it
@@ -1940,6 +1955,7 @@ static int park_exec(struct ast_channel *chan, void *data)
 		/* Simulate the PBX hanging up */
 		if (res != AST_PBX_NO_HANGUP_PEER)
 			ast_hangup(peer);
+		ast_module_user_remove(u);
 		return res;
 	} else {
 		/*! \todo XXX Play a message XXX */
@@ -2244,7 +2260,7 @@ static int load_config(void)
 				parkingtime = parkingtime * 1000;
 		} else if (!strcasecmp(var->name, "parkpos")) {
 			if (sscanf(var->value, "%d-%d", &start, &end) != 2) {
-				ast_log(LOG_WARNING, "Format for parking positions is a-b, where a and b are numbers at line %d of parking.conf\n", var->lineno);
+				ast_log(LOG_WARNING, "Format for parking positions is a-b, where a and b are numbers at line %d of features.conf\n", var->lineno);
 			} else {
 				parking_start = start;
 				parking_stop = end;

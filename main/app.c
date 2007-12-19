@@ -689,8 +689,6 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 		} else {
 			ast_frfree(f);
 		}
-		if (end == start)
-			end = time(NULL);
 	} else {
 		ast_log(LOG_WARNING, "Error creating writestream '%s', format '%s'\n", recordfile, sfmt[x]);
 	}
@@ -699,7 +697,17 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 		if (silgen)
 			ast_channel_stop_silence_generator(chan, silgen);
 	}
-	*duration = end - start;
+
+	/*!\note
+	 * Instead of asking how much time passed (end - start), calculate the number
+	 * of seconds of audio which actually went into the file.  This fixes a
+	 * problem where audio is stopped up on the network and never gets to us.
+	 *
+	 * Note that we still want to use the number of seconds passed for the max
+	 * message, otherwise we could get a situation where this stream is never
+	 * closed (which would create a resource leak).
+	 */
+	*duration = ast_tellstream(others[0]) / 8000;
 
 	if (!prepend) {
 		for (x = 0; x < fmtcnt; x++) {
@@ -1386,7 +1394,6 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
 	s = optstr;
 	while (*s) {
 		curarg = *s++ & 0x7f;	/* the array (in app.h) has 128 entries */
-		ast_set_flag(flags, options[curarg].flag);
 		argloc = options[curarg].arg_index;
 		if (*s == '(') {
 			/* Has argument */
@@ -1401,8 +1408,9 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
 				break;
 			}
 		} else if (argloc) {
-			args[argloc - 1] = NULL;
+			args[argloc - 1] = "";
 		}
+		ast_set_flag(flags, options[curarg].flag);
 	}
 
 	return res;

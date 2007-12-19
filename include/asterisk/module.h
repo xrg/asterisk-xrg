@@ -179,14 +179,16 @@ struct ast_module_user_list;
 enum ast_module_flags {
 	AST_MODFLAG_DEFAULT = 0,
 	AST_MODFLAG_GLOBAL_SYMBOLS = (1 << 0),
+	AST_MODFLAG_BUILDSUM = (1 << 1),
 };
 
 struct ast_module_info {
 
-	/* The 'self' pointer for a module; it will be set by the loader before
-	   it calls the module's load_module() entrypoint, and used by various
-	   other macros that need to identify the module.
-	*/
+	/*!
+	 * The 'self' pointer for a module; it will be set by the loader before
+	 * it calls the module's load_module() entrypoint, and used by various
+	 * other macros that need to identify the module.
+	 */
 
 	struct ast_module *self;
 	enum ast_module_load_result (*load)(void);	/* register stuff etc. Optional. */
@@ -203,6 +205,9 @@ struct ast_module_info {
 
 	const char *key;
 	unsigned int flags;
+
+	/*! The value of AST_BUILDOPT_SUM when this module was compiled */
+	const char buildopt_sum[33];
 };
 
 void ast_module_register(const struct ast_module_info *);
@@ -229,7 +234,8 @@ void ast_module_unref(struct ast_module *);
 		AST_MODULE,				\
 		desc,					\
 		keystr,					\
-		flags_to_set				\
+		flags_to_set | AST_MODFLAG_BUILDSUM,	\
+		AST_BUILDOPT_SUM,			\
 	};						\
 	static void  __attribute__ ((constructor)) __reg_module(void) \
 	{ \
@@ -256,9 +262,10 @@ const static __attribute__((unused)) struct ast_module_info *ast_module_info;
 #define AST_MODULE_INFO(keystr, flags_to_set, desc, fields...)	\
 	static struct ast_module_info __mod_info = {		\
 		.name = AST_MODULE,				\
-		.flags = flags_to_set,				\
+		.flags = flags_to_set | AST_MODFLAG_BUILDSUM,	\
 		.description = desc,				\
 		.key = keystr,					\
+		.buildopt_sum = AST_BUILDOPT_SUM,		\
 		fields						\
 	};							\
 	static void  __attribute__ ((constructor)) __reg_module(void) \

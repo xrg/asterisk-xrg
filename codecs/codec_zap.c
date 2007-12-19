@@ -108,6 +108,7 @@ static AST_LIST_HEAD_STATIC(translators, translator);
 struct pvt {
 	int fd;
 	int fake;
+	unsigned int g729b_warning:1;
 #ifdef DEBUG_TRANSCODE
 	int totalms;
 	int lasttotalms;
@@ -145,6 +146,19 @@ static int zap_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	if (!hdr->srclen)
 		/* Copy at front of buffer */
 		hdr->srcoffset = 0;
+
+	/* if we get handed a G.729 frame that is not a multiple of
+	   10 bytes (10 milliseconds), then it has a CNG frame and
+	   we need to avoid sending that to the transcoder
+	*/
+	if ((f->subclass == AST_FORMAT_G729A) && ((f->datalen % 10) != 0)) {
+		if (!ztp->g729b_warning) {
+			ast_log(LOG_WARNING, "G.729B CNG frame received but is not supported; dropping.\n");
+			ztp->g729b_warning = 1;
+		}
+		f->datalen -= f->datalen % 10;
+		f->samples = f->datalen * 8;
+	}
 
 	if (hdr->srclen + f->datalen > sizeof(hdr->srcdata)) {
 		ast_log(LOG_WARNING, "Out of space for codec translation!\n");

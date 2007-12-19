@@ -776,6 +776,11 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 	if (needqueue) {
 		if (pipe(tmp->alertpipe)) {
 			ast_log(LOG_WARNING, "Channel allocation failed: Can't create alert pipe!\n");
+#ifdef HAVE_ZAPTEL
+			if (tmp->timingfd > -1)
+				close(tmp->timingfd);
+#endif
+			sched_context_destroy(tmp->sched);
 			ast_string_field_free_memory(tmp);
 			free(tmp);
 			return NULL;
@@ -1316,6 +1321,23 @@ int ast_channel_datastore_free(struct ast_datastore *datastore)
 	return res;
 }
 
+int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *to)
+{
+	struct ast_datastore *datastore = NULL, *datastore2;
+
+	AST_LIST_TRAVERSE(&from->datastores, datastore, entry) {
+		if (datastore->inheritance > 0) {
+			datastore2 = ast_channel_datastore_alloc(datastore->info, datastore->uid);
+			if (datastore2) {
+				datastore2->data = datastore->info->duplicate(datastore->data);
+				datastore2->inheritance = datastore->inheritance == DATASTORE_INHERIT_FOREVER ? DATASTORE_INHERIT_FOREVER : datastore->inheritance - 1;
+				AST_LIST_INSERT_TAIL(&to->datastores, datastore2, entry);
+			}
+		}
+	}
+	return 0;
+}
+
 int ast_channel_datastore_add(struct ast_channel *chan, struct ast_datastore *datastore)
 {
 	int res = 0;
@@ -1816,6 +1838,7 @@ int ast_answer(struct ast_channel *chan)
 	default:
 		break;
 	}
+	chan->visible_indication = 0;
 	ast_channel_unlock(chan);
 	return res;
 }
@@ -2607,6 +2630,7 @@ int ast_indicate_data(struct ast_channel *chan, int condition, const void *data,
 					ast_log(LOG_DEBUG, "Driver for channel '%s' does not support indication %d, emulating it\n", chan->name, condition);
 				ast_playtones_start(chan,0,ts->data, 1);
 				res = 0;
+				chan->visible_indication = condition;
 			} else if (condition == AST_CONTROL_PROGRESS) {
 				/* ast_playtones_stop(chan); */
 			} else if (condition == AST_CONTROL_PROCEEDING) {
@@ -2623,7 +2647,9 @@ int ast_indicate_data(struct ast_channel *chan, int condition, const void *data,
 				res = -1;
 			}
 		}
-	}
+	} else
+		chan->visible_indication = condition;
+
 	return res;
 }
 
@@ -2779,10 +2805,20 @@ int ast_write_video(struct ast_channel *chan, struct ast_frame *fr)
 int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 {
 	int res = -1;
+	int count = 0;
 	struct ast_frame *f = NULL;
 
+	/*Deadlock avoidance*/
+	while(ast_channel_trylock(chan)) {
+		/*cannot goto done since the channel is not locked*/
+		if(count++ > 10) {
+			if(option_debug)
+				ast_log(LOG_DEBUG, "Deadlock avoided for write to channel '%s'\n", chan->name);
+			return 0;
+		}
+		usleep(1);
+	}
 	/* Stop if we're a zombie or need a soft hangup */
-	ast_channel_lock(chan);
 	if (ast_test_flag(chan, AST_FLAG_ZOMBIE) || ast_check_hangup(chan))
 		goto done;
 
@@ -2947,20 +2983,9 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 			/* and now put it through the regular translator */
 			f = (chan->writetrans) ? ast_translate(chan->writetrans, f, 0) : f;
 		}
-		if (f) {
-			struct ast_channel *base = NULL;
-			if (!chan->tech->get_base_channel || chan == chan->tech->get_base_channel(chan))
-				res = chan->tech->write(chan, f);
-			else {
-				while (chan->tech->get_base_channel && (((base = chan->tech->get_base_channel(chan)) && ast_mutex_trylock(&base->lock)) || base == NULL)) {
-					ast_mutex_unlock(&chan->lock);
-					usleep(1);
-					ast_mutex_lock(&chan->lock);
-				}
-				res = base->tech->write(base, f);
-				ast_mutex_unlock(&base->lock);
-			}
-		} else
+		if (f) 
+			res = chan->tech->write(chan,f);
+		else
 			res = 0;
 		break;
 	case AST_FRAME_NULL:
@@ -3836,6 +3861,10 @@ int ast_do_masquerade(struct ast_channel *original)
 	} else
 		ast_log(LOG_WARNING, "Channel type '%s' does not have a fixup routine (for %s)!  Bad things may happen.\n",
 			original->tech->type, original->name);
+
+	/* If an indication is currently playing maintain it on the channel that is taking the place of original */
+	if (original->visible_indication)
+		ast_indicate(original, original->visible_indication);
 	
 	/* Now, at this point, the "clone" channel is totally F'd up.  We mark it as
 	   a zombie so nothing tries to touch it.  If it's already been marked as a
@@ -3873,6 +3902,8 @@ int ast_do_masquerade(struct ast_channel *original)
 
 void ast_set_callerid(struct ast_channel *chan, const char *callerid, const char *calleridname, const char *ani)
 {
+	ast_channel_lock(chan);
+
 	if (callerid) {
 		if (chan->cid.cid_num)
 			free(chan->cid.cid_num);
@@ -3903,6 +3934,8 @@ void ast_set_callerid(struct ast_channel *chan, const char *callerid, const char
 				chan->cid.cid_pres,
 				ast_describe_caller_presentation(chan->cid.cid_pres)
 				);
+	
+	ast_channel_unlock(chan);
 }
 
 int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
