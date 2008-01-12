@@ -50,7 +50,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
 
-#define MAX_AUTOMONS 256
+#define MAX_AUTOMONS 1500
 
 struct asent {
 	struct ast_channel *chan;
@@ -58,6 +58,7 @@ struct asent {
 	 *  channel.  It will ensure that it doesn't actually get stopped until 
 	 *  it gets stopped for the last time. */
 	unsigned int use_count;
+	unsigned int orig_end_dtmf_flag:1;
 	AST_LIST_HEAD_NOLOCK(, ast_frame) dtmf_frames;
 	AST_LIST_ENTRY(asent) list;
 };
@@ -125,7 +126,6 @@ static void *autoservice_run(void *ign)
 			 * be queued up or not. */
 			switch (f->frametype) {
 			/* Save these frames */
-			case AST_FRAME_DTMF_BEGIN:
 			case AST_FRAME_DTMF_END:
 			case AST_FRAME_CONTROL:
 			case AST_FRAME_TEXT:
@@ -135,6 +135,7 @@ static void *autoservice_run(void *ign)
 				break;
 
 			/* Throw these frames away */
+			case AST_FRAME_DTMF_BEGIN:
 			case AST_FRAME_VOICE:
 			case AST_FRAME_VIDEO:
 			case AST_FRAME_NULL:
@@ -157,41 +158,51 @@ int ast_autoservice_start(struct ast_channel *chan)
 	int res = 0;
 	struct asent *as;
 
-	AST_LIST_LOCK(&aslist);
-
 	/* Check if the channel already has autoservice */
+	AST_LIST_LOCK(&aslist);
 	AST_LIST_TRAVERSE(&aslist, as, list) {
 		if (as->chan == chan) {
 			as->use_count++;
 			break;
 		}
 	}
+	AST_LIST_UNLOCK(&aslist);
 
-	/* If not, start autoservice on channel */
 	if (as) {
-		/* Entry extist, autoservice is already handling this channel */
-	} else if ((as = ast_calloc(1, sizeof(*as))) == NULL) {
-		/* Memory allocation failed */
-		res = -1;
-	} else {
-		/* New entry created */
-		as->chan = chan;
-		as->use_count = 1;
-		AST_LIST_INSERT_HEAD(&aslist, as, list);
-		if (asthread == AST_PTHREADT_NULL) { /* need start the thread */
-			if (ast_pthread_create_background(&asthread, NULL, autoservice_run, NULL)) {
-				ast_log(LOG_WARNING, "Unable to create autoservice thread :(\n");
-				/* There will only be a single member in the list at this point,
-				   the one we just added. */
-				AST_LIST_REMOVE(&aslist, as, list);
-				free(as);
-				res = -1;
-			} else
-				pthread_kill(asthread, SIGURG);
-		}
+		/* Entry exists, autoservice is already handling this channel */
+		return 0;
 	}
 
+	if (!(as = ast_calloc(1, sizeof(*as))))
+		return -1;
+	
+	/* New entry created */
+	as->chan = chan;
+	as->use_count = 1;
+
+	ast_channel_lock(chan);
+	as->orig_end_dtmf_flag = ast_test_flag(chan, AST_FLAG_END_DTMF_ONLY) ? 1 : 0;
+	if (!as->orig_end_dtmf_flag)
+		ast_set_flag(chan, AST_FLAG_END_DTMF_ONLY);
+	ast_channel_unlock(chan);
+
+	AST_LIST_LOCK(&aslist);
+	AST_LIST_INSERT_HEAD(&aslist, as, list);
 	AST_LIST_UNLOCK(&aslist);
+
+	if (asthread == AST_PTHREADT_NULL) { /* need start the thread */
+		if (ast_pthread_create_background(&asthread, NULL, autoservice_run, NULL)) {
+			ast_log(LOG_WARNING, "Unable to create autoservice thread :(\n");
+			/* There will only be a single member in the list at this point,
+			   the one we just added. */
+			AST_LIST_LOCK(&aslist);
+			AST_LIST_REMOVE(&aslist, as, list);
+			AST_LIST_UNLOCK(&aslist);
+			free(as);
+			res = -1;
+		} else
+			pthread_kill(asthread, SIGURG);
+	}
 
 	return res;
 }
@@ -203,6 +214,7 @@ int ast_autoservice_stop(struct ast_channel *chan)
 	AST_LIST_HEAD_NOLOCK(, ast_frame) dtmf_frames;
 	struct ast_frame *f;
 	int removed = 0;
+	int orig_end_dtmf_flag = 0;
 
 	AST_LIST_HEAD_INIT_NOLOCK(&dtmf_frames);
 
@@ -214,6 +226,7 @@ int ast_autoservice_stop(struct ast_channel *chan)
 				break;
 			AST_LIST_REMOVE_CURRENT(&aslist, list);
 			AST_LIST_APPEND_LIST(&dtmf_frames, &as->dtmf_frames, frame_list);
+			orig_end_dtmf_flag = as->orig_end_dtmf_flag;
 			free(as);
 			removed = 1;
 			if (!chan->_softhangup)
@@ -230,6 +243,9 @@ int ast_autoservice_stop(struct ast_channel *chan)
 
 	if (!removed)
 		return 0;
+
+	if (!orig_end_dtmf_flag)
+		ast_clear_flag(chan, AST_FLAG_END_DTMF_ONLY);
 
 	/* Wait for it to un-block */
 	while (ast_test_flag(chan, AST_FLAG_BLOCKING))

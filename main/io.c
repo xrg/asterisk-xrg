@@ -25,7 +25,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 44169 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <unistd.h>
@@ -57,7 +57,7 @@ struct io_rec {
    the same index.  it's too bad that
    pollfd doesn't have a callback field
    or something like that.  They grow as
-   needed, by GROW_SHRINK_AMOUNT structures
+   needed, by GROW_SHRINK_SIZE structures
    at once */
 
 #define GROW_SHRINK_SIZE 512

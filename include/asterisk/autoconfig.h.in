@@ -292,9 +292,6 @@
 /* Define if your system has the PWLib libraries. */
 #undef HAVE_PWLIB
 
-/* Define if your system has the Qt library */
-#undef HAVE_QT
-
 /* Define to indicate the ${RADIUS_DESCRIP} library */
 #undef HAVE_RADIUS
 
@@ -325,6 +322,9 @@
 
 /* Define to 1 if you have the `socket' function. */
 #undef HAVE_SOCKET
+
+/* Define to 1 if your system has soxmix application. */
+#undef HAVE_SOXMIX
 
 /* Define to indicate the ${SPANDSP_DESCRIP} library */
 #undef HAVE_SPANDSP
@@ -631,6 +631,9 @@
 #endif
 #ifndef _POSIX_PTHREAD_SEMANTICS
 # undef _POSIX_PTHREAD_SEMANTICS
+#endif
+#ifndef _TANDEM_SOURCE
+# undef _TANDEM_SOURCE
 #endif
 
 /* Define like PROTOTYPES; this can be used by system headers. */

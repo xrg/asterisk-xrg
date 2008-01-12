@@ -1248,7 +1248,7 @@ static char *complete_mod_4(const char *line, const char *word, int pos, int sta
 
 static char *complete_fn_2(const char *line, const char *word, int pos, int state)
 {
-	char *c;
+	char *c, *d;
 	char filename[256];
 
 	if (pos != 1)
@@ -1259,17 +1259,20 @@ static char *complete_fn_2(const char *line, const char *word, int pos, int stat
 	else
 		snprintf(filename, sizeof(filename), "%s/%s", ast_config_AST_MODULE_DIR, word);
 	
-	c = filename_completion_function(filename, state);
+	c = d = filename_completion_function(filename, state);
 	
 	if (c && word[0] != '/')
 		c += (strlen(ast_config_AST_MODULE_DIR) + 1);
+	if (c)
+		c = strdup(c);
+	free(d);
 	
-	return c ? strdup(c) : c;
+	return c;
 }
 
 static char *complete_fn_3(const char *line, const char *word, int pos, int state)
 {
-	char *c;
+	char *c, *d;
 	char filename[256];
 
 	if (pos != 2)
@@ -1280,12 +1283,15 @@ static char *complete_fn_3(const char *line, const char *word, int pos, int stat
 	else
 		snprintf(filename, sizeof(filename), "%s/%s", ast_config_AST_MODULE_DIR, word);
 	
-	c = filename_completion_function(filename, state);
+	c = d = filename_completion_function(filename, state);
 	
 	if (c && word[0] != '/')
 		c += (strlen(ast_config_AST_MODULE_DIR) + 1);
+	if (c)
+		c = strdup(c);
+	free(d);
 	
-	return c ? strdup(c) : c;
+	return c;
 }
 
 static int group_show_channels(int fd, int argc, char *argv[])
@@ -1718,10 +1724,9 @@ void ast_cli_unregister_multiple(struct ast_cli_entry *e, int len)
 }
 
 
-/*! \brief helper for help_workhorse and final part of
- * handle_help. if locked = 0 it's just help_workhorse,
- * otherwise assume the list is already locked and print
- * an error message if not found.
+/*! \brief helper for help_workhorse and final part of handle_help
+ * if locked = 0 it's just help_workhorse, otherwise assume the
+ * list is already locked.
  */
 static int help1(int fd, char *match[], int locked)
 {
@@ -1749,10 +1754,11 @@ static int help1(int fd, char *match[], int locked)
 		ast_cli(fd, "%25.25s  %s\n", e->_full_cmd, S_OR(e->summary, ""));
 		found++;
 	}
-	AST_LIST_UNLOCK(&helpers);
-	if (!locked && !found && matchstr[0])
+	if (!locked)
+		AST_LIST_UNLOCK(&helpers);
+	if (!found && matchstr[0])
 		ast_cli(fd, "No such command '%s'.\n", matchstr);
-	return 0;
+	return RESULT_SUCCESS;
 }
 
 static int help_workhorse(int fd, char *match[])
@@ -1764,6 +1770,7 @@ static int handle_help(int fd, int argc, char *argv[])
 {
 	char fullcmd[80];
 	struct ast_cli_entry *e;
+	int res = RESULT_SUCCESS;
 
 	if (argc < 1)
 		return RESULT_SHOWUSAGE;
@@ -1772,8 +1779,11 @@ static int handle_help(int fd, int argc, char *argv[])
 
 	AST_LIST_LOCK(&helpers);
 	e = find_cli(argv + 1, 1);	/* try exact match first */
-	if (!e)
-		return help1(fd, argv + 1, 1 /* locked */);
+	if (!e) {
+		res = help1(fd, argv + 1, 1 /* locked */);
+		AST_LIST_UNLOCK(&helpers);
+		return res;
+	}
 	if (e->usage)
 		ast_cli(fd, "%s", e->usage);
 	else {
@@ -1781,7 +1791,7 @@ static int handle_help(int fd, int argc, char *argv[])
 		ast_cli(fd, "No help text available for '%s'.\n", fullcmd);
 	}
 	AST_LIST_UNLOCK(&helpers);
-	return RESULT_SUCCESS;
+	return res;
 }
 
 static char *parse_args(const char *s, int *argc, char *argv[], int max, int *trailingwhitespace)

@@ -283,10 +283,18 @@ const struct {
 
 /*! \brief We define a custom "local user" structure because we
    use it not only for keeping track of what is in use but
-   also for keeping track of who we're dialing. */
+   also for keeping track of who we're dialing.
+
+   There are two "links" defined in this structure, q_next and call_next.
+   q_next links ALL defined callattempt structures into a linked list. call_next is
+   a link which allows for a subset of the callattempts to be traversed. This subset
+   is used in wait_for_answer so that irrelevant callattempts are not traversed. This
+   also is helpful so that queue logs are always accurate in the case where a call to 
+   a member times out, especially if using the ringall strategy. */
 
 struct callattempt {
 	struct callattempt *q_next;
+	struct callattempt *call_next;
 	struct ast_channel *chan;
 	char interface[256];
 	int stillgoing;
@@ -437,7 +445,7 @@ static void monjoin_dep_warning(void)
 		warned = 1;
 	}
 }
-
+/*! \brief sets the QUEUESTATUS channel variable */
 static void set_queue_result(struct ast_channel *chan, enum queue_result res)
 {
 	int i;
@@ -500,6 +508,12 @@ enum queue_member_status {
 	QUEUE_NORMAL
 };
 
+/*! \brief Check if members are available
+ *
+ * This function checks to see if members are available to be called. If any member
+ * is available, the function immediately returns QUEUE_NORMAL. If no members are available,
+ * the appropriate reason why is returned
+ */
 static enum queue_member_status get_member_status(struct call_queue *q, int max_penalty)
 {
 	struct member *member;
@@ -544,7 +558,7 @@ struct statechange {
 	int state;
 	char dev[0];
 };
-
+/*! \brief set a member's status based on device state of that member's interface*/
 static void *handle_statechange(struct statechange *sc)
 {
 	struct call_queue *q;
@@ -648,6 +662,7 @@ static struct {
 	.thread = AST_PTHREADT_NULL,
 };
 
+/*! \brief Consumer of the statechange queue */
 static void *device_state_thread(void *data)
 {
 	struct statechange *sc = NULL;
@@ -681,7 +696,7 @@ static void *device_state_thread(void *data)
 
 	return NULL;
 }
-
+/*! \brief Producer of the statechange queue */
 static int statechange_queue(const char *dev, int state, void *ign)
 {
 	struct statechange *sc;
@@ -699,7 +714,7 @@ static int statechange_queue(const char *dev, int state, void *ign)
 
 	return 0;
 }
-
+/*! \brief allocate space for new queue member and set fields based on parameters passed */
 static struct member *create_queue_member(const char *interface, const char *membername, int penalty, int paused)
 {
 	struct member *cur;
@@ -708,7 +723,7 @@ static struct member *create_queue_member(const char *interface, const char *mem
 		cur->penalty = penalty;
 		cur->paused = paused;
 		ast_copy_string(cur->interface, interface, sizeof(cur->interface));
-		if(!ast_strlen_zero(membername))
+		if (!ast_strlen_zero(membername))
 			ast_copy_string(cur->membername, membername, sizeof(cur->membername));
 		else
 			ast_copy_string(cur->membername, interface, sizeof(cur->membername));
@@ -780,7 +795,7 @@ static void init_queue(struct call_queue *q)
 	q->context[0] = '\0';
 	q->monfmt[0] = '\0';
 	q->periodicannouncefrequency = 0;
-	if(!q->members)
+	if (!q->members)
 		q->members = ao2_container_alloc(37, member_hash_fn, member_cmp_fn);
 	q->membercount = 0;
 	q->found = 1;
@@ -1238,14 +1253,14 @@ static int update_realtime_member_field(struct member *mem, const char *queue_na
 	struct ast_variable *var;
 	int ret = -1;
 
-	if(!(var = ast_load_realtime("queue_members", "interface", mem->interface, "queue_name", queue_name, NULL))) 
+	if (!(var = ast_load_realtime("queue_members", "interface", mem->interface, "queue_name", queue_name, NULL))) 
 		return ret;
 	while (var) {
-		if(!strcmp(var->name, "uniqueid"))
+		if (!strcmp(var->name, "uniqueid"))
 			break;
 		var = var->next;
 	}
-	if(var && !ast_strlen_zero(var->value)) {
+	if (var && !ast_strlen_zero(var->value)) {
 		if ((ast_update_realtime("queue_members", "uniqueid", var->value, field, value, NULL)) > -1)
 			ret = 0;
 	}
@@ -1767,6 +1782,11 @@ static char *vars2manager(struct ast_channel *chan, char *vars, size_t len)
 	return vars;
 }
 
+/*! \brief Part 2 of ring_one
+ *
+ * Does error checking before attempting to request a channel and call a member. This
+ * function is only called from ring_one
+ */
 static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies)
 {
 	int res;
@@ -1853,6 +1873,16 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 	/* Presense of ADSI CPE on outgoing channel follows ours */
 	tmp->chan->adsicpe = qe->chan->adsicpe;
 
+	/* Inherit context and extension */
+	if (!ast_strlen_zero(qe->chan->macrocontext))
+		ast_copy_string(tmp->chan->dialcontext, qe->chan->macrocontext, sizeof(tmp->chan->dialcontext));
+	else
+		ast_copy_string(tmp->chan->dialcontext, qe->chan->context, sizeof(tmp->chan->dialcontext));
+	if (!ast_strlen_zero(qe->chan->macroexten))
+		ast_copy_string(tmp->chan->exten, qe->chan->macroexten, sizeof(tmp->chan->exten));
+	else
+		ast_copy_string(tmp->chan->exten, qe->chan->exten, sizeof(tmp->chan->exten));
+
 	/* Place the call, but don't wait on the answer */
 	if ((res = ast_call(tmp->chan, location, 0))) {
 		/* Again, keep going even if there's an error */
@@ -1904,6 +1934,14 @@ static struct callattempt *find_best(struct callattempt *outgoing)
 	return best;
 }
 
+/*! \brief Place a call to a queue member
+ *
+ * Once metrics have been calculated for each member, this function is used
+ * to place a call to the appropriate member (or members). The low-level
+ * channel-handling and error detection is handled in ring_entry
+ *
+ * Returns 1 if a member was called successfully, 0 otherwise
+ */
 static int ring_one(struct queue_ent *qe, struct callattempt *outgoing, int *busies)
 {
 	int ret = 0;
@@ -1922,17 +1960,15 @@ static int ring_one(struct queue_ent *qe, struct callattempt *outgoing, int *bus
 				if (cur->stillgoing && !cur->chan && cur->metric <= best->metric) {
 					if (option_debug)
 						ast_log(LOG_DEBUG, "(Parallel) Trying '%s' with metric %d\n", cur->interface, cur->metric);
-					ring_entry(qe, cur, busies);
+					ret |= ring_entry(qe, cur, busies);
 				}
 			}
 		} else {
 			/* Ring just the best channel */
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Trying '%s' with metric %d\n", best->interface, best->metric);
-			ring_entry(qe, best, busies);
+			ret = ring_entry(qe, best, busies);
 		}
-		if (best->chan) /* break out with result = 1 */
-			ret = 1;
 	}
 
 	return ret;
@@ -2038,11 +2074,20 @@ static void rna(int rnatime, struct queue_ent *qe, char *interface, char *member
 }
 
 #define AST_MAX_WATCHERS 256
-
+/*! \brief Wait for a member to answer the call
+ *
+ * \param[in] qe the queue_ent corresponding to the caller in the queue
+ * \param[in] outgoing the list of callattempts. Relevant ones will have their chan and stillgoing parameters non-zero
+ * \param[in] to the amount of time (in milliseconds) to wait for a response
+ * \param[out] digit if a user presses a digit to exit the queue, this is the digit the caller pressed
+ * \param[in] prebusies number of busy members calculated prior to calling wait_for_answer
+ * \param[in] caller_disconnect if the 'H' option is used when calling Queue(), this is used to detect if the caller pressed * to disconnect the call
+ * \param[in] forwardsallowed used to detect if we should allow call forwarding, based on the 'i' option to Queue()
+ */
 static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callattempt *outgoing, int *to, char *digit, int prebusies, int caller_disconnect, int forwardsallowed)
 {
 	char *queue = qe->parent->name;
-	struct callattempt *o;
+	struct callattempt *o, *start = NULL, *prev = NULL;
 	int status;
 	int numbusies = prebusies;
 	int numnochan = 0;
@@ -2063,14 +2108,21 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 		int numlines, retry, pos = 1;
 		struct ast_channel *watchers[AST_MAX_WATCHERS];
 		watchers[0] = in;
+		start = NULL;
 
 		for (retry = 0; retry < 2; retry++) {
 			numlines = 0;
 			for (o = outgoing; o; o = o->q_next) { /* Keep track of important channels */
 				if (o->stillgoing) {	/* Keep track of important channels */
 					stillgoing = 1;
-					if (o->chan)
+					if (o->chan) {
 						watchers[pos++] = o->chan;
+						if (!start)
+							start = o;
+						else
+							prev->call_next = o;
+						prev = o;
+					}
 				}
 				numlines++;
 			}
@@ -2092,7 +2144,7 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 			return NULL;
 		}
 		winner = ast_waitfor_n(watchers, pos, to);
-		for (o = outgoing; o; o = o->q_next) {
+		for (o = start; o; o = o->call_next) {
 			if (o->stillgoing && (o->chan) &&  (o->chan->_state == AST_STATE_UP)) {
 				if (!peer) {
 					if (option_verbose > 2)
@@ -2262,13 +2314,23 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 			}
 			ast_frfree(f);
 		}
-		if (!*to)
-			rna(orig, qe, on, membername);
+		if (!*to) {
+			for (o = start; o; o = o->call_next)
+				rna(orig, qe, o->interface, o->member->membername);
+		}
 	}
 
 	return peer;
 }
-
+/*! \brief Check if we should start attempting to call queue members
+ *
+ * The behavior of this function is dependent first on whether autofill is enabled
+ * and second on whether the ring strategy is ringall. If autofill is not enabled,
+ * then return true if we're the head of the queue. If autofill is enabled, then
+ * we count the available members and see if the number of available members is enough
+ * that given our position in the queue, we would theoretically be able to connect to
+ * one of those available members
+ */
 static int is_our_turn(struct queue_ent *qe)
 {
 	struct queue_ent *ch;
@@ -2339,7 +2401,16 @@ static int is_our_turn(struct queue_ent *qe)
 
 	return res;
 }
-
+/*! \brief The waiting areas for callers who are not actively calling members
+ *
+ * This function is one large loop. This function will return if a caller
+ * either exits the queue or it becomes that caller's turn to attempt calling
+ * queue members. Inside the loop, we service the caller with periodic announcements,
+ * holdtime announcements, etc. as configured in queues.conf
+ *
+ * \retval  0 if the caller's turn has arrived
+ * \retval -1 if the caller should exit the queue.
+ */
 static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *reason)
 {
 	int res = 0;
@@ -2409,6 +2480,12 @@ static int update_queue(struct call_queue *q, struct member *member, int callcom
 	return 0;
 }
 
+/*! \brief Calculate the metric of each member in the outgoing callattempts
+ *
+ * A numeric metric is given to each member depending on the ring strategy used
+ * by the queue. Members with lower metrics will be called before members with
+ * higher metrics
+ */
 static int calc_metric(struct call_queue *q, struct member *mem, int pos, struct queue_ent *qe, struct callattempt *tmp)
 {
 	if (qe->max_penalty && (mem->penalty > qe->max_penalty))
@@ -2463,6 +2540,29 @@ static int calc_metric(struct call_queue *q, struct member *mem, int pos, struct
 	}
 	return 0;
 }
+/*! \brief A large function which calls members, updates statistics, and bridges the caller and a member
+ * 
+ * Here is the process of this function
+ * 1. Process any options passed to the Queue() application. Options here mean the third argument to Queue()
+ * 2. Iterate trough the members of the queue, creating a callattempt corresponding to each member. During this
+ *    iteration, we also check the dialed_interfaces datastore to see if we have already attempted calling this
+ *    member. If we have, we do not create a callattempt. This is in place to prevent call forwarding loops. Also
+ *    during each iteration, we call calc_metric to determine which members should be rung when.
+ * 3. Call ring_one to place a call to the appropriate member(s)
+ * 4. Call wait_for_answer to wait for an answer. If no one answers, return.
+ * 5. Take care of any holdtime announcements, member delays, or other options which occur after a call has been answered.
+ * 6. Start the monitor or mixmonitor if the option is set
+ * 7. Remove the caller from the queue to allow other callers to advance
+ * 8. Bridge the call.
+ * 9. Do any post processing after the call has disconnected.
+ *
+ * \param[in] qe the queue_ent structure which corresponds to the caller attempting to reach members
+ * \param[in] options the options passed as the third parameter to the Queue() application
+ * \param[in] url the url passed as the fourth parameter to the Queue() application
+ * \param[in,out] tries the number of times we have tried calling queue members
+ * \param[out] noption set if the call to Queue() has the 'n' option set.
+ * \param[in] agi the agi passed as the fifth parameter to the Queue() application
+ */
 
 static int try_calling(struct queue_ent *qe, const char *options, char *announceoverride, const char *url, int *tries, int *noption, const char *agi)
 {
@@ -3058,7 +3158,7 @@ static int remove_from_queue(const char *queuename, const char *interface)
 
 		if ((mem = ao2_find(q->members, &tmpmem, OBJ_POINTER))) {
 			/* XXX future changes should beware of this assumption!! */
-			if(!mem->dynamic) {
+			if (!mem->dynamic) {
 				res = RES_NOT_DYNAMIC;
 				ao2_ref(mem, -1);
 				ast_mutex_unlock(&q->lock);
@@ -3172,7 +3272,7 @@ static int set_member_paused(const char *queuename, const char *interface, int p
 				if (queue_persistent_members)
 					dump_queue_members(q);
 
-				if(mem->realtime)
+				if (mem->realtime)
 					update_realtime_member_field(mem, q->name, "paused", paused ? "1" : "0");
 
 				ast_queue_log(q->name, "NONE", mem->membername, (paused ? "PAUSE" : "UNPAUSE"), "%s", "");
@@ -3575,6 +3675,18 @@ static int ql_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
+/*!\brief The starting point for all queue calls
+ *
+ * The process involved here is to 
+ * 1. Parse the options specified in the call to Queue()
+ * 2. Join the queue
+ * 3. Wait in a loop until it is our turn to try calling a queue member
+ * 4. Attempt to call a queue member
+ * 5. If 4. did not result in a bridged call, then check for between
+ *    call options such as periodic announcements etc.
+ * 6. Try 4 again uless some condition (such as an expiration time) causes us to 
+ *    exit the queue.
+ */
 static int queue_exec(struct ast_channel *chan, void *data)
 {
 	int res=-1;
@@ -3838,7 +3950,7 @@ static int queue_function_qac(struct ast_channel *chan, char *cmd, char *data, c
 
 	lu = ast_module_user_add(chan);
 
-	if((q = load_realtime_queue(data))) {
+	if ((q = load_realtime_queue(data))) {
 		ast_mutex_lock(&q->lock);
 		mem_iter = ao2_iterator_init(q->members, 0);
 		while ((m = ao2_iterator_next(&mem_iter))) {
@@ -4014,7 +4126,7 @@ static int reload_queues(void)
 	use_weight=0;
 	/* Mark all non-realtime queues as dead for the moment */
 	AST_LIST_TRAVERSE(&queues, q, list) {
-		if(!q->realtime) {
+		if (!q->realtime) {
 			q->dead = 1;
 			q->found = 0;
 		}
@@ -4055,7 +4167,7 @@ static int reload_queues(void)
 				/* Check if a queue with this name already exists */
 				if (q->found) {
 					ast_log(LOG_WARNING, "Queue '%s' already defined! Skipping!\n", cat);
-					if(!new)
+					if (!new)
 						ast_mutex_unlock(&q->lock);
 					continue;
 				}
@@ -4072,6 +4184,7 @@ static int reload_queues(void)
 				for (var = ast_variable_browse(cfg, cat); var; var = var->next) {
 					if (!strcasecmp(var->name, "member")) {
 						struct member tmpmem;
+						membername = NULL;
 
 						/* Add a new member */
 						ast_copy_string(parse, var->value, sizeof(parse));
@@ -4079,7 +4192,7 @@ static int reload_queues(void)
 						AST_NONSTANDARD_APP_ARGS(args, parse, ',');
 
 						interface = args.interface;
-						if(!ast_strlen_zero(args.penalty)) {
+						if (!ast_strlen_zero(args.penalty)) {
 							tmp = args.penalty;
 							while (*tmp && *tmp < 33) tmp++;
 							penalty = atoi(tmp);

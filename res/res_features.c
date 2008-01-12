@@ -325,7 +325,7 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, in
 			ast_mutex_unlock(&parking_lock);
 			free(pu);
 			ast_log(LOG_WARNING, "Requested parking extension already exists: %s@%s\n", parkingexten, parking_con);
-			return 0;	/* Continue execution if possible */
+			return 1;	/* Continue execution if possible */
 		}
 		ast_copy_string(pu->parkingexten, parkingexten, sizeof(pu->parkingexten));
 		x = atoi(parkingexten);
@@ -372,9 +372,8 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, in
 	pu->parkingtime = (timeout > 0) ? timeout : parkingtime;
 	if (extout)
 		*extout = x;
-	if (!ast_strlen_zero(orig_chan_name))
-		ast_copy_string(pu->peername, orig_chan_name, sizeof(pu->peername));
-	else if (peer) 
+
+	if (peer) 
 		ast_copy_string(pu->peername, peer->name, sizeof(pu->peername));
 
 	/* Remember what had been dialed, so that if the parking
@@ -420,7 +419,7 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, in
 	if (!con)	/* Still no context? Bad */
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", parking_con);
 	/* Tell the peer channel the number of the parking space */
-	if (peer && ((pu->parkingnum != -1 && ast_strlen_zero(orig_chan_name)) || (strlen(orig_chan_name) == strlen(peer->name) && !strncasecmp(peer->name, orig_chan_name, strlen(peer->name))))) { /* Only say number if it's a number and the channel hasn't been masqueraded away */
+	if (peer && ((pu->parkingnum != -1 && ast_strlen_zero(orig_chan_name)) || !strcasecmp(peer->name, orig_chan_name))) { /* Only say number if it's a number and the channel hasn't been masqueraded away */
 		/* Make sure we don't start saying digits to the channel being parked */
 		ast_set_flag(peer, AST_FLAG_MASQ_NOSTREAM);
 		ast_say_digits(peer, pu->parkingnum, "", peer->language);
@@ -1812,12 +1811,17 @@ static int park_call_exec(struct ast_channel *chan, void *data)
 	 * of a park--it is still theoretically possible for a transfer to happen before
 	 * we get here, but it is _really_ unlikely */
 	char *orig_chan_name = ast_strdupa(chan->name);
+	char orig_exten[AST_MAX_EXTENSION];
+	int orig_priority = chan->priority;
+
 	/* Data is unused at the moment but could contain a parking
 	   lot context eventually */
 	int res = 0;
 	struct ast_module_user *u;
 
 	u = ast_module_user_add(chan);
+
+	ast_copy_string(orig_exten, chan->exten, sizeof(orig_exten));
 
 	/* Setup the exten/priority to be s/1 since we don't know
 	   where this call should return */
@@ -1830,12 +1834,20 @@ static int park_call_exec(struct ast_channel *chan, void *data)
 	if (!res)
 		res = ast_safe_sleep(chan, 1000);
 	/* Park the call */
-	if (!res)
+	if (!res) {
 		res = park_call_full(chan, chan, 0, NULL, orig_chan_name);
+		/* Continue on in the dialplan */
+		if (res == 1) {
+			ast_copy_string(chan->exten, orig_exten, sizeof(chan->exten));
+			chan->priority = orig_priority;
+			res = 0;
+		} else if (!res)
+			res = AST_PBX_KEEPALIVE;
+	}
 
 	ast_module_user_remove(u);
 
-	return !res ? AST_PBX_KEEPALIVE : res;
+	return res;
 }
 
 /*! \brief Pickup parked call */

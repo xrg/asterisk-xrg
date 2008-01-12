@@ -2588,7 +2588,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'x':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_EXEC);
-			xarg = optarg;
+			xarg = ast_strdupa(optarg);
 			break;
 		case 'C':
 			ast_copy_string(ast_config_AST_CONFIG_FILE, optarg, sizeof(ast_config_AST_CONFIG_FILE));
@@ -2610,10 +2610,10 @@ int main(int argc, char *argv[])
 			show_version();
 			exit(0);
 		case 'U':
-			runuser = optarg;
+			runuser = ast_strdupa(optarg);
 			break;
 		case 'G':
-			rungroup = optarg;
+			rungroup = ast_strdupa(optarg);
 			break;
 		case '?':
 			exit(1);
@@ -2696,6 +2696,12 @@ int main(int argc, char *argv[])
 			ast_log(LOG_WARNING, "No such user '%s'!\n", runuser);
 			exit(1);
 		}
+#ifdef HAVE_CAP
+		if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0)) {
+			ast_log(LOG_WARNING, "Unable to keep capabilities.\n");
+			has_cap = 0;
+		}
+#endif /* HAVE_CAP */
 		if (!isroot && pw->pw_uid != geteuid()) {
 			ast_log(LOG_ERROR, "Asterisk started as nonroot, but runuser '%s' requested.\n", runuser);
 			exit(1);
@@ -2711,7 +2717,7 @@ int main(int argc, char *argv[])
 				ast_log(LOG_WARNING, "Unable to setgid to %d!\n", (int)pw->pw_gid);
 				exit(1);
 			}
-			if (initgroups(pw->pw_name, pw->pw_gid)) {
+			if (isroot && initgroups(pw->pw_name, pw->pw_gid)) {
 				ast_log(LOG_WARNING, "Unable to init groups for '%s'\n", runuser);
 				exit(1);
 			}

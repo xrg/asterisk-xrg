@@ -2674,7 +2674,7 @@ static int iax2_fixup(struct ast_channel *oldchannel, struct ast_channel *newcha
  */
 static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in *sin)
 {
-	struct ast_variable *var;
+	struct ast_variable *var = NULL;
 	struct ast_variable *tmp;
 	struct iax2_peer *peer=NULL;
 	time_t regseconds = 0, nowtime;
@@ -2696,7 +2696,7 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 			}
 		}
 	}
-	if (!var) { /* Last ditch effort */
+	if (!var && peername) { /* Last ditch effort */
 		var = ast_load_realtime("iaxpeers", "name", peername, NULL);
 		/*!\note
 		 * If this one loaded something, then we need to ensure that the host
@@ -2704,7 +2704,7 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 		 * is because we only have the IP address and the host field might be
 		 * set as a name (and the reverse PTR might not match).
 		 */
-		if (var) {
+		if (var && sin) {
 			for (tmp = var; tmp; tmp = tmp->next) {
 				if (!strcasecmp(tmp->name, "host")) {
 					struct in_addr sin2 = { 0, };
@@ -8250,11 +8250,11 @@ retryowner2:
 	iax_frame_wrap(fr, &f);
 
 	/* If this is our most recent packet, use it as our basis for timestamping */
-	if (iaxs[fr->callno]->last < fr->ts) {
+	if (iaxs[fr->callno] && iaxs[fr->callno]->last < fr->ts) {
 		/*iaxs[fr->callno]->last = fr->ts; (do it afterwards cos schedule/forward_delivery needs the last ts too)*/
 		fr->outoforder = 0;
 	} else {
-		if (option_debug && iaxdebug)
+		if (option_debug && iaxdebug && iaxs[fr->callno])
 			ast_log(LOG_DEBUG, "Received out of order packet... (type=%d, subclass %d, ts = %d, last = %d)\n", f.frametype, f.subclass, fr->ts, iaxs[fr->callno]->last);
 		fr->outoforder = -1;
 	}

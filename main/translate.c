@@ -232,7 +232,10 @@ struct ast_frame *ast_trans_frameout(struct ast_trans_pvt *pvt,
 	f->offset = AST_FRIENDLY_OFFSET;
 	f->src = pvt->t->name;
 	f->data = pvt->outbuf;
-	return f;
+	/* We must clone the frame, because the pvt could disappear
+	 * the moment after we return (and unlock the source channel).
+	 */
+	return ast_frisolate(f);
 }
 
 static struct ast_frame *default_frameout(struct ast_trans_pvt *pvt)
@@ -291,6 +294,14 @@ struct ast_trans_pvt *ast_translator_build_path(int dest, int source)
 	return head;
 }
 
+static inline int format_rate(int format)
+{
+	if (format == AST_FORMAT_G722)
+		return 16000;
+
+	return 8000;
+}
+
 /*! \brief do the actual translation */
 struct ast_frame *ast_translate(struct ast_trans_pvt *path, struct ast_frame *f, int consume)
 {
@@ -327,7 +338,7 @@ struct ast_frame *ast_translate(struct ast_trans_pvt *path, struct ast_frame *f,
 			path->nextout = f->delivery;
 		}
 		/* Predict next incoming sample */
-		path->nextin = ast_tvadd(path->nextin, ast_samp2tv(f->samples, 8000));
+		path->nextin = ast_tvadd(path->nextin, ast_samp2tv(f->samples, format_rate(f->subclass)));
 	}
 	delivery = f->delivery;
 	for ( ; out && p ; p = p->next) {
@@ -349,7 +360,7 @@ struct ast_frame *ast_translate(struct ast_trans_pvt *path, struct ast_frame *f,
 		
 		/* Predict next outgoing timestamp from samples in this
 		   frame. */
-		path->nextout = ast_tvadd(path->nextout, ast_samp2tv( out->samples, 8000));
+		path->nextout = ast_tvadd(path->nextout, ast_samp2tv(out->samples, format_rate(out->subclass)));
 	} else {
 		out->delivery = ast_tv(0, 0);
 		out->has_timing_info = has_timing_info;
@@ -368,10 +379,11 @@ struct ast_frame *ast_translate(struct ast_trans_pvt *path, struct ast_frame *f,
 /*! \brief compute the cost of a single translation step */
 static void calc_cost(struct ast_translator *t, int seconds)
 {
-	int sofar=0;
+	int num_samples = 0;
 	struct ast_trans_pvt *pvt;
 	struct timeval start;
 	int cost;
+	int out_rate = format_rate(t->dstfmt);
 
 	if (!seconds)
 		seconds = 1;
@@ -382,15 +394,18 @@ static void calc_cost(struct ast_translator *t, int seconds)
 		t->cost = 99999;
 		return;
 	}
+
 	pvt = newpvt(t);
 	if (!pvt) {
 		ast_log(LOG_WARNING, "Translator '%s' appears to be broken and will probably fail.\n", t->name);
 		t->cost = 99999;
 		return;
 	}
+
 	start = ast_tvnow();
+
 	/* Call the encoder until we've processed the required number of samples */
-	while (sofar < seconds * 8000) {
+	while (num_samples < seconds * out_rate) {
 		struct ast_frame *f = t->sample();
 		if (!f) {
 			ast_log(LOG_WARNING, "Translator '%s' failed to produce a sample frame.\n", t->name);
@@ -401,13 +416,17 @@ static void calc_cost(struct ast_translator *t, int seconds)
 		framein(pvt, f);
 		ast_frfree(f);
 		while ((f = t->frameout(pvt))) {
-			sofar += f->samples;
+			num_samples += f->samples;
 			ast_frfree(f);
 		}
 	}
+
 	cost = ast_tvdiff_ms(ast_tvnow(), start);
+
 	destroy(pvt);
+
 	t->cost = cost / seconds;
+
 	if (!t->cost)
 		t->cost = 1;
 }
@@ -796,10 +815,10 @@ int ast_translator_best_choice(int *dst, int *srcs)
 	int cur, cursrc;
 	int besttime = INT_MAX;
 	int beststeps = INT_MAX;
-	int common = (*dst) & (*srcs);	/* are there common formats ? */
+	int common = ((*dst) & (*srcs)) & AST_FORMAT_AUDIO_MASK;	/* are there common formats ? */
 
 	if (common) { /* yes, pick one and return */
-		for (cur = 1, y = 0; y < MAX_FORMAT; cur <<= 1, y++) {
+		for (cur = 1, y = 0; y <= MAX_AUDIO_FORMAT; cur <<= 1, y++) {
 			if (cur & common)	/* guaranteed to find one */
 				break;
 		}
@@ -808,10 +827,10 @@ int ast_translator_best_choice(int *dst, int *srcs)
 		return 0;
 	} else {	/* No, we will need to translate */
 		AST_LIST_LOCK(&translators);
-		for (cur = 1, y = 0; y < MAX_FORMAT; cur <<= 1, y++) {
+		for (cur = 1, y = 0; y <= MAX_AUDIO_FORMAT; cur <<= 1, y++) {
 			if (! (cur & *dst))
 				continue;
-			for (cursrc = 1, x = 0; x < MAX_FORMAT; cursrc <<= 1, x++) {
+			for (cursrc = 1, x = 0; x <= MAX_AUDIO_FORMAT; cursrc <<= 1, x++) {
 				if (!(*srcs & cursrc) || !tr_matrix[x][y].step ||
 				    tr_matrix[x][y].cost >  besttime)
 					continue;	/* not existing or no better */
