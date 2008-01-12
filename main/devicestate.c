@@ -327,9 +327,9 @@ static int __ast_device_state_changed_literal(char *buf, int norecurse)
 	 * to ensure that the right one gets notified.  Not a huge performance hit,
 	 * but it might could be fixed by an enterprising programmer in trunk.
 	 */
-	if (!norecurse && (tmp = strrchr(device, '-'))) {
+	if (!norecurse && (tmp = strrchr(device, '-')) && (tmp != device)) {
 		*tmp = '\0';
-		__ast_device_state_changed_literal(device, 1);
+		return __ast_device_state_changed_literal(device, 1);
 	}
 	
 	return 1;
@@ -338,8 +338,11 @@ static int __ast_device_state_changed_literal(char *buf, int norecurse)
 int ast_device_state_changed_literal(const char *dev)
 {
 	char *buf;
-	buf = ast_strdupa(dev);
-	return __ast_device_state_changed_literal(buf, 0);
+	if (dev) {
+		buf = ast_strdupa(dev);
+		return __ast_device_state_changed_literal(buf, 0);
+	} else
+		return -1;
 }
 
 /*! \brief Accept change notification, add it to change queue */
