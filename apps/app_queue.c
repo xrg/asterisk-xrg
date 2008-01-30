@@ -795,6 +795,17 @@ static void init_queue(struct call_queue *q)
 	q->context[0] = '\0';
 	q->monfmt[0] = '\0';
 	q->periodicannouncefrequency = 0;
+	q->reportholdtime = 0;
+	q->monjoin = 0;
+	q->wrapuptime = 0;
+	q->autofill = 0;
+	q->joinempty = 0;
+	q->leavewhenempty = 0;
+	q->memberdelay = 0;
+	q->maskmemberstatus = 0;
+	q->eventwhencalled = 0;
+	q->weight = 0;
+	q->timeoutrestart = 0;
 	if (!q->members)
 		q->members = ao2_container_alloc(37, member_hash_fn, member_cmp_fn);
 	q->membercount = 0;
@@ -1274,8 +1285,7 @@ static void update_realtime_members(struct call_queue *q)
 	char *interface = NULL;
 	struct ao2_iterator mem_iter;
 
-	member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", q->name , NULL);
-	if (!member_config) {
+	if (!(member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", q->name , NULL))) {
 		/*This queue doesn't have realtime members*/
 		if (option_debug > 2)
 			ast_log(LOG_DEBUG, "Queue %s has no realtime members defined. No need for update\n", q->name);
@@ -1312,6 +1322,7 @@ static void update_realtime_members(struct call_queue *q)
 		ao2_ref(m, -1);
 	}
 	ast_mutex_unlock(&q->lock);
+	ast_config_destroy(member_config);
 }
 
 static struct call_queue *load_realtime_queue(const char *queuename)
@@ -2380,8 +2391,9 @@ static int is_our_turn(struct queue_ent *qe)
 		if (option_debug)
 			ast_log(LOG_DEBUG, "There are %d available members.\n", avl);
 	
-		while ((idx < avl) && (ch) &&  !ch->pending && (ch != qe)) {
-			idx++;
+		while ((idx < avl) && (ch) && (ch != qe)) {
+			if (!ch->pending)
+				idx++;
 			ch = ch->next;			
 		}
 	
@@ -3433,7 +3445,7 @@ static int pqm_exec(struct ast_channel *chan, void *data)
 		}
 		ast_module_user_remove(lu);
 		pbx_builtin_setvar_helper(chan, "PQMSTATUS", "NOTFOUND");
-		return -1;
+		return 0;
 	}
 
 	ast_module_user_remove(lu);
@@ -3486,7 +3498,7 @@ static int upqm_exec(struct ast_channel *chan, void *data)
 		}
 		ast_module_user_remove(lu);
 		pbx_builtin_setvar_helper(chan, "UPQMSTATUS", "NOTFOUND");
-		return -1;
+		return 0;
 	}
 
 	ast_module_user_remove(lu);

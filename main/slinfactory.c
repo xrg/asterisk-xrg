@@ -64,6 +64,7 @@ int ast_slinfactory_feed(struct ast_slinfactory *sf, struct ast_frame *f)
 			ast_translator_free_path(sf->trans);
 			sf->trans = NULL;
 		}
+
 		if (!sf->trans) {
 			if ((sf->trans = ast_translator_build_path(AST_FORMAT_SLINEAR, f->subclass)) == NULL) {
 				ast_log(LOG_WARNING, "Cannot build a path from %s to slin\n", ast_getformatname(f->subclass));
@@ -72,7 +73,15 @@ int ast_slinfactory_feed(struct ast_slinfactory *sf, struct ast_frame *f)
 				sf->format = f->subclass;
 			}
 		}
-		if (!(begin_frame = ast_translate(sf->trans, f, 0)) || !(duped_frame = ast_frdup(begin_frame)))
+
+		if (!(begin_frame = ast_translate(sf->trans, f, 0))) 
+			return 0;
+		
+		duped_frame = ast_frdup(begin_frame);
+
+		ast_frfree(begin_frame);
+
+		if (!duped_frame)
 			return 0;
 	} else {
 		if (!(duped_frame = ast_frdup(f)))
@@ -100,7 +109,7 @@ int ast_slinfactory_read(struct ast_slinfactory *sf, short *buf, size_t samples)
 		ineed = samples - sofar;
 
 		if (sf->holdlen) {
-			if ((sofar + sf->holdlen) <= ineed) {
+			if (sf->holdlen <= ineed) {
 				memcpy(offset, sf->hold, sf->holdlen * sizeof(*offset));
 				sofar += sf->holdlen;
 				offset += sf->holdlen;
@@ -119,7 +128,7 @@ int ast_slinfactory_read(struct ast_slinfactory *sf, short *buf, size_t samples)
 		if ((frame_ptr = AST_LIST_REMOVE_HEAD(&sf->queue, frame_list))) {
 			frame_data = frame_ptr->data;
 			
-			if ((sofar + frame_ptr->samples) <= ineed) {
+			if (frame_ptr->samples <= ineed) {
 				memcpy(offset, frame_data, frame_ptr->samples * sizeof(*offset));
 				sofar += frame_ptr->samples;
 				offset += frame_ptr->samples;

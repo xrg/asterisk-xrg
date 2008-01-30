@@ -142,7 +142,10 @@ typedef unsigned long long ast_group_t;
 struct ast_generator {
 	void *(*alloc)(struct ast_channel *chan, void *params);
 	void (*release)(struct ast_channel *chan, void *data);
-	/*! This function gets called with the channel locked */
+	/*! This function gets called with the channel unlocked, but is called in
+	 *  the context of the channel thread so we know the channel is not going
+	 *  to disappear.  This callback is responsible for locking the channel as
+	 *  necessary. */
 	int (*generate)(struct ast_channel *chan, void *data, int len, int samples);
 };
 
@@ -275,9 +278,6 @@ struct ast_channel_tech {
 	/*! \brief Set base channel (agent and local) */
 	int (* set_base_channel)(struct ast_channel *chan, struct ast_channel *base);
 };
-
-struct ast_channel_spy_list;
-struct ast_channel_whisper_buffer;
 
 #define	DEBUGCHAN_FLAG  0x80000000
 #define	FRAMECOUNT_INC(x)	( ((x) & DEBUGCHAN_FLAG) | (((x)+1) & ~DEBUGCHAN_FLAG) )
@@ -430,8 +430,10 @@ struct ast_channel {
 	int rawreadformat;				/*!< Raw read format */
 	int rawwriteformat;				/*!< Raw write format */
 
-	struct ast_channel_spy_list *spies;		/*!< Chan Spy stuff */
-	struct ast_channel_whisper_buffer *whisper;	/*!< Whisper Paging buffer */
+	struct ast_audiohook_list *audiohooks;
+	void *unused; /*! This pointer should stay for Asterisk 1.4.  It just keeps the struct size the same
+			 *  for the sake of ABI compatability. */
+
 	AST_LIST_ENTRY(ast_channel) chan_list;		/*!< For easy linking */
 	
 	struct ast_jb jb;				/*!< The jitterbuffer state  */

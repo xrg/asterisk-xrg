@@ -332,6 +332,9 @@
 /* Define to indicate the ${SPEEX_DESCRIP} library */
 #undef HAVE_SPEEX
 
+/* Define to indicate the ${SPEEXDSP_DESCRIP} library */
+#undef HAVE_SPEEXDSP
+
 /* Define to indicate the ${SQLITE_DESCRIP} library */
 #undef HAVE_SQLITE
 
@@ -631,9 +634,6 @@
 #endif
 #ifndef _POSIX_PTHREAD_SEMANTICS
 # undef _POSIX_PTHREAD_SEMANTICS
-#endif
-#ifndef _TANDEM_SOURCE
-# undef _TANDEM_SOURCE
 #endif
 
 /* Define like PROTOTYPES; this can be used by system headers. */

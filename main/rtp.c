@@ -1312,7 +1312,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			ast_frame_byteswap_be(&rtp->f);
 		calc_rxstamp(&rtp->f.delivery, rtp, timestamp, mark);
 		/* Add timing data to let ast_generic_bridge() put the frame into a jitterbuf */
-		rtp->f.has_timing_info = 1;
+		ast_set_flag(&rtp->f, AST_FRFLAG_HAS_TIMING_INFO);
 		rtp->f.ts = timestamp / 8;
 		rtp->f.len = rtp->f.samples / 8;
 	} else {
@@ -1341,7 +1341,9 @@ static struct {
 	{{1, AST_FORMAT_G723_1}, "audio", "G723"},
 	{{1, AST_FORMAT_GSM}, "audio", "GSM"},
 	{{1, AST_FORMAT_ULAW}, "audio", "PCMU"},
+	{{1, AST_FORMAT_ULAW}, "audio", "G711U"},
 	{{1, AST_FORMAT_ALAW}, "audio", "PCMA"},
+	{{1, AST_FORMAT_ALAW}, "audio", "G711A"},
 	{{1, AST_FORMAT_G726}, "audio", "G726-32"},
 	{{1, AST_FORMAT_ADPCM}, "audio", "DVI4"},
 	{{1, AST_FORMAT_SLINEAR}, "audio", "L16"},
@@ -2036,10 +2038,7 @@ struct ast_rtp *ast_rtp_get_bridged(struct ast_rtp *rtp)
 
 void ast_rtp_stop(struct ast_rtp *rtp)
 {
-	if (rtp->rtcp && rtp->rtcp->schedid > 0) {
-		ast_sched_del(rtp->sched, rtp->rtcp->schedid);
-		rtp->rtcp->schedid = -1;
-	}
+	AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 
 	memset(&rtp->them.sin_addr, 0, sizeof(rtp->them.sin_addr));
 	memset(&rtp->them.sin_port, 0, sizeof(rtp->them.sin_port));
@@ -2143,8 +2142,7 @@ void ast_rtp_destroy(struct ast_rtp *rtp)
 	if (rtp->s > -1)
 		close(rtp->s);
 	if (rtp->rtcp) {
-		if (rtp->rtcp->schedid > 0)
-			ast_sched_del(rtp->sched, rtp->rtcp->schedid);
+		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 		close(rtp->rtcp->s);
 		free(rtp->rtcp);
 		rtp->rtcp=NULL;
@@ -2370,9 +2368,7 @@ static int ast_rtcp_write_sr(const void *data)
 	
 	if (!rtp->rtcp->them.sin_addr.s_addr) {  /* This'll stop rtcp for this rtp session */
 		ast_verbose("RTCP SR transmission error, rtcp halted\n");
-		if (rtp->rtcp->schedid > 0)
-			ast_sched_del(rtp->sched, rtp->rtcp->schedid);
-		rtp->rtcp->schedid = -1;
+		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 		return 0;
 	}
 
@@ -2429,9 +2425,7 @@ static int ast_rtcp_write_sr(const void *data)
 	res = sendto(rtp->rtcp->s, (unsigned int *)rtcpheader, len, 0, (struct sockaddr *)&rtp->rtcp->them, sizeof(rtp->rtcp->them));
 	if (res < 0) {
 		ast_log(LOG_ERROR, "RTCP SR transmission error to %s:%d, rtcp halted %s\n",ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), strerror(errno));
-		if (rtp->rtcp->schedid > 0)
-			ast_sched_del(rtp->sched, rtp->rtcp->schedid);
-		rtp->rtcp->schedid = -1;
+		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 		return 0;
 	}
 	
@@ -2481,9 +2475,7 @@ static int ast_rtcp_write_rr(const void *data)
 	  
 	if (!rtp->rtcp->them.sin_addr.s_addr) {
 		ast_log(LOG_ERROR, "RTCP RR transmission error, rtcp halted\n");
-		if (rtp->rtcp->schedid > 0)
-			ast_sched_del(rtp->sched, rtp->rtcp->schedid);
-		rtp->rtcp->schedid = -1;
+		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 		return 0;
 	}
 
@@ -2530,9 +2522,7 @@ static int ast_rtcp_write_rr(const void *data)
 	if (res < 0) {
 		ast_log(LOG_ERROR, "RTCP RR transmission error, rtcp halted: %s\n",strerror(errno));
 		/* Remove the scheduler */
-		if (rtp->rtcp->schedid > 0)
-			ast_sched_del(rtp->sched, rtp->rtcp->schedid);
-		rtp->rtcp->schedid = -1;
+		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
 		return 0;
 	}
 
@@ -2659,7 +2649,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	if (rtp->lastts > rtp->lastdigitts)
 		rtp->lastdigitts = rtp->lastts;
 
-	if (f->has_timing_info)
+	if (ast_test_flag(f, AST_FRFLAG_HAS_TIMING_INFO))
 		rtp->lastts = f->ts * 8;
 
 	/* Get a pointer to the header */
@@ -2874,7 +2864,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
-		    (c0->monitor || c0->spies || c1->monitor || c1->spies)) {
+		    (c0->monitor || c0->audiohooks || c1->monitor || c1->audiohooks)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 			if (c0->tech_pvt == pvt0)
 				if (pr0->set_rtp_peer(c0, NULL, NULL, 0, 0))
@@ -3158,7 +3148,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		if ((c0->tech_pvt != pvt0) ||
 		    (c1->tech_pvt != pvt1) ||
 		    (c0->masq || c0->masqr || c1->masq || c1->masqr) ||
-		    (c0->monitor || c0->spies || c1->monitor || c1->spies)) {
+		    (c0->monitor || c0->audiohooks || c1->monitor || c1->audiohooks)) {
 			ast_log(LOG_DEBUG, "Oooh, something is weird, backing out\n");
 			if ((c0->masq || c0->masqr) && (fr = ast_read(c0)))
 				ast_frfree(fr);
