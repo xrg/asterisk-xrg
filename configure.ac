@@ -1493,9 +1493,14 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 		[${PWLIB_INCLUDE}], [${PWLIB_LIB}])
 fi
 
-AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h], [-lm]) 
-# Some distributions (like SuSE) remove the 5.1 suffix.
-AST_EXT_LIB_CHECK([LUA], [lua], [luaL_register], [lua.h], [-lm]) 
+PBX_LUA=0
+AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)
+if test ! "x${PKGCONFIG}" = xNo; then
+   LUA_INCLUDE=$(${PKGCONFIG} lua --cflags 2>/dev/null)
+   LUA_LIB=$(${PKGCONFIG} lua --libs 2>/dev/null)
+   PBX_LUA=1
+   AC_DEFINE([HAVE_LUA], 1, [Define if your system has the LUA libraries.])
+fi
 
 AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
 
