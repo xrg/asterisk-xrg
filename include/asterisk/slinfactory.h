@@ -1,0 +1,106 @@
+/*
+ * Asterisk -- An open source telephony toolkit.
+ *
+ * Copyright (C) 2005, Anthony Minessale II
+ *
+ * Anthony Minessale <anthmct@yahoo.com>
+ *
+ * See http://www.asterisk.org for more information about
+ * the Asterisk project. Please do not directly contact
+ * any of the maintainers of this project for assistance;
+ * the project provides a web site, mailing lists and IRC
+ * channels for your use.
+ *
+ * This program is free software, distributed under the terms of
+ * the GNU General Public License Version 2. See the LICENSE file
+ * at the top of the source tree.
+ */
+
+/*! \file
+ * \brief A machine to gather up arbitrary frames and convert them
+ * to raw slinear on demand.
+ */
+
+#ifndef _ASTERISK_SLINFACTORY_H
+#define _ASTERISK_SLINFACTORY_H
+
+#if defined(__cplusplus) || defined(c_plusplus)
+extern "C" {
+#endif
+
+struct ast_slinfactory {
+	AST_LIST_HEAD_NOLOCK(, ast_frame) queue; /*!< A list of unaltered frames */
+	struct ast_trans_pvt *trans;             /*!< Translation path that converts fed frames into signed linear */
+	short hold[1280];                        /*!< Hold for audio that no longer belongs to a frame (ie: if only some samples were taken from a frame) */
+	short *offset;                           /*!< Offset into the hold where audio begins */
+	size_t holdlen;                          /*!< Number of samples currently in the hold */
+	unsigned int size;                       /*!< Number of samples currently in the factory */
+	unsigned int format;                     /*!< Current format the translation path is converting from */
+};
+
+/*!
+ * \brief Initialize an slinfactory
+ *
+ * \arg sf The slinfactory to initialize
+ *
+ * \return Nothing
+ */
+void ast_slinfactory_init(struct ast_slinfactory *sf);
+
+/*!
+ * \brief Destroy the contents of a slinfactory
+ *
+ * \arg sf The slinfactory that is no longer needed
+ *
+ * This function will free any memory allocated for the contents of the
+ * slinfactory.  It does not free the slinfactory itself.  If the sf is
+ * malloc'd, then it must be explicitly free'd after calling this function.
+ *
+ * \return Nothing
+ */
+void ast_slinfactory_destroy(struct ast_slinfactory *sf);
+
+/*!
+ * \brief Feed audio into an slinfactory
+ *
+ * \arg sf The slinfactory to feed into
+ * \arg f Frame containing audio to feed in
+ *
+ * \return Number of frames currently in factory
+ */
+int ast_slinfactory_feed(struct ast_slinfactory *sf, struct ast_frame *f);
+
+/*!
+ * \brief Read samples from an slinfactory
+ *
+ * \arg sf The slinfactory to read from
+ * \arg buf Buffer to put samples into
+ * \arg samples Number of samples wanted
+ *
+ * \return Number of samples read
+ */
+int ast_slinfactory_read(struct ast_slinfactory *sf, short *buf, size_t samples);
+
+/*!
+ * \brief Retrieve number of samples currently in an slinfactory
+ *
+ * \arg sf The slinfactory to peek into
+ *
+ * \return Number of samples in slinfactory
+ */
+unsigned int ast_slinfactory_available(const struct ast_slinfactory *sf);
+
+/*!
+ * \brief Flush the contents of an slinfactory
+ *
+ * \arg sf The slinfactory to flush
+ *
+ * \return Nothing
+ */
+void ast_slinfactory_flush(struct ast_slinfactory *sf);
+
+#if defined(__cplusplus) || defined(c_plusplus)
+}
+#endif
+
+#endif /* _ASTERISK_SLINFACTORY_H */
