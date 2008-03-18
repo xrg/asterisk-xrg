@@ -2008,13 +2008,9 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 	struct chan_list *ch=MISDN_ASTERISK_TECH_PVT(ast);
 	struct misdn_bchannel *newbc;
 	char *opts=NULL, *ext;
-	char dest_cp[256];
 
 	{
-		strncpy(dest_cp,dest,sizeof(dest_cp)-1);
-		dest_cp[sizeof(dest_cp)]=0;
-
-		ext=dest_cp;
+		ext = ast_strdupa(dest);
 		strsep(&ext,"/");
 		if (ext) {
 			opts=ext;
@@ -2246,8 +2242,7 @@ static int misdn_digit_end(struct ast_channel *ast, char digit, unsigned int dur
 			buf[1]=0;
 			
 			l = sizeof(bc->infos_pending);
-			strncat(bc->infos_pending,buf,l);
-			bc->infos_pending[l-1] = 0;
+			strncat(bc->infos_pending, buf, l - strlen(bc->infos_pending) - 1);
 		}
 		break;
 		case MISDN_CALLING_ACKNOWLEDGE:
@@ -2257,8 +2252,7 @@ static int misdn_digit_end(struct ast_channel *ast, char digit, unsigned int dur
 			
 			{
 				int l = sizeof(bc->dad);
-				strncat(bc->dad,bc->info_dad, l - strlen(bc->dad));
-				bc->dad[l-1] = 0;
+				strncat(bc->dad, bc->info_dad, l - strlen(bc->dad) - 1);
 			}
 			{
 				int l = sizeof(p->ast->exten);
@@ -4054,8 +4048,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			}
 
 			l = sizeof(bc->dad);
-			strncat(bc->dad,bc->info_dad, l);
-			bc->dad[l-1] = 0;
+			strncat(bc->dad,bc->info_dad, l - strlen(bc->dad) - 1);
 
 			l = sizeof(ch->ast->exten);
 			strncpy(ch->ast->exten, bc->dad, l);
@@ -4133,8 +4126,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			if (ch->state != MISDN_CONNECTED ) {
 				if (digits) {
 					int l = sizeof(bc->dad);
-					strncat(bc->dad,bc->info_dad, l);
-					bc->dad[l-1] = 0;
+					strncat(bc->dad, bc->info_dad, l - strlen(bc->dad) - 1);
 					l = sizeof(ch->ast->exten);
 					strncpy(ch->ast->exten, bc->dad, l);
 					ch->ast->exten[l-1] = 0;
@@ -4436,8 +4428,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			
 			{
 				int l = sizeof(bc->dad);
-				strncat(bc->dad,bc->infos_pending, l - strlen(bc->dad));
-				bc->dad[l-1] = 0;
+				strncat(bc->dad, bc->infos_pending, l - strlen(bc->dad) - 1);
 			}	
 		
 			if (!ch->ast) break;

@@ -871,6 +871,7 @@ POW_LIB
 GC_CFLAGS
 GC_LDFLAGS
 AST_DECLARATION_AFTER_STATEMENT
+AST_NO_STRICT_OVERFLOW
 GSM_INTERNAL
 KDEINIT
 KDEDIR
@@ -13486,507 +13487,6 @@ esac
 
 
 
-
-for ac_header in stdlib.h sys/time.h unistd.h
-do
-as_ac_Header=`echo "ac_cv_header_$ac_header" | $as_tr_sh`
-if { as_var=$as_ac_Header; eval "test \"\${$as_var+set}\" = set"; }; then
-  { echo "$as_me:$LINENO: checking for $ac_header" >&5
-echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6; }
-if { as_var=$as_ac_Header; eval "test \"\${$as_var+set}\" = set"; }; then
-  echo $ECHO_N "(cached) $ECHO_C" >&6
-fi
-ac_res=`eval echo '${'$as_ac_Header'}'`
-	       { echo "$as_me:$LINENO: result: $ac_res" >&5
-echo "${ECHO_T}$ac_res" >&6; }
-else
-  # Is the header compilable?
-{ echo "$as_me:$LINENO: checking $ac_header usability" >&5
-echo $ECHO_N "checking $ac_header usability... $ECHO_C" >&6; }
-cat >conftest.$ac_ext <<_ACEOF
-/* confdefs.h.  */
-_ACEOF
-cat confdefs.h >>conftest.$ac_ext
-cat >>conftest.$ac_ext <<_ACEOF
-/* end confdefs.h.  */
-$ac_includes_default
-#include <$ac_header>
-_ACEOF
-rm -f conftest.$ac_objext
-if { (ac_try="$ac_compile"
-case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_compile") 2>conftest.er1
-  ac_status=$?
-  grep -v '^ *+' conftest.er1 >conftest.err
-  rm -f conftest.er1
-  cat conftest.err >&5
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); } &&
-	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
-  { (case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_try") 2>&5
-  ac_status=$?
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); }; } &&
-	 { ac_try='test -s conftest.$ac_objext'
-  { (case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_try") 2>&5
-  ac_status=$?
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); }; }; then
-  ac_header_compiler=yes
-else
-  echo "$as_me: failed program was:" >&5
-sed 's/^/| /' conftest.$ac_ext >&5
-
-	ac_header_compiler=no
-fi
-
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-{ echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
-echo "${ECHO_T}$ac_header_compiler" >&6; }
-
-# Is the header present?
-{ echo "$as_me:$LINENO: checking $ac_header presence" >&5
-echo $ECHO_N "checking $ac_header presence... $ECHO_C" >&6; }
-cat >conftest.$ac_ext <<_ACEOF
-/* confdefs.h.  */
-_ACEOF
-cat confdefs.h >>conftest.$ac_ext
-cat >>conftest.$ac_ext <<_ACEOF
-/* end confdefs.h.  */
-#include <$ac_header>
-_ACEOF
-if { (ac_try="$ac_cpp conftest.$ac_ext"
-case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_cpp conftest.$ac_ext") 2>conftest.er1
-  ac_status=$?
-  grep -v '^ *+' conftest.er1 >conftest.err
-  rm -f conftest.er1
-  cat conftest.err >&5
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); } >/dev/null; then
-  if test -s conftest.err; then
-    ac_cpp_err=$ac_c_preproc_warn_flag
-    ac_cpp_err=$ac_cpp_err$ac_c_werror_flag
-  else
-    ac_cpp_err=
-  fi
-else
-  ac_cpp_err=yes
-fi
-if test -z "$ac_cpp_err"; then
-  ac_header_preproc=yes
-else
-  echo "$as_me: failed program was:" >&5
-sed 's/^/| /' conftest.$ac_ext >&5
-
-  ac_header_preproc=no
-fi
-
-rm -f conftest.err conftest.$ac_ext
-{ echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
-echo "${ECHO_T}$ac_header_preproc" >&6; }
-
-# So?  What about this header?
-case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
-  yes:no: )
-    { echo "$as_me:$LINENO: WARNING: $ac_header: accepted by the compiler, rejected by the preprocessor!" >&5
-echo "$as_me: WARNING: $ac_header: accepted by the compiler, rejected by the preprocessor!" >&2;}
-    { echo "$as_me:$LINENO: WARNING: $ac_header: proceeding with the compiler's result" >&5
-echo "$as_me: WARNING: $ac_header: proceeding with the compiler's result" >&2;}
-    ac_header_preproc=yes
-    ;;
-  no:yes:* )
-    { echo "$as_me:$LINENO: WARNING: $ac_header: present but cannot be compiled" >&5
-echo "$as_me: WARNING: $ac_header: present but cannot be compiled" >&2;}
-    { echo "$as_me:$LINENO: WARNING: $ac_header:     check for missing prerequisite headers?" >&5
-echo "$as_me: WARNING: $ac_header:     check for missing prerequisite headers?" >&2;}
-    { echo "$as_me:$LINENO: WARNING: $ac_header: see the Autoconf documentation" >&5
-echo "$as_me: WARNING: $ac_header: see the Autoconf documentation" >&2;}
-    { echo "$as_me:$LINENO: WARNING: $ac_header:     section \"Present But Cannot Be Compiled\"" >&5
-echo "$as_me: WARNING: $ac_header:     section \"Present But Cannot Be Compiled\"" >&2;}
-    { echo "$as_me:$LINENO: WARNING: $ac_header: proceeding with the preprocessor's result" >&5
-echo "$as_me: WARNING: $ac_header: proceeding with the preprocessor's result" >&2;}
-    { echo "$as_me:$LINENO: WARNING: $ac_header: in the future, the compiler will take precedence" >&5
-echo "$as_me: WARNING: $ac_header: in the future, the compiler will take precedence" >&2;}
-    ( cat <<\_ASBOX
-## ------------------------------- ##
-## Report this to www.asterisk.org ##
-## ------------------------------- ##
-_ASBOX
-     ) | sed "s/^/$as_me: WARNING:     /" >&2
-    ;;
-esac
-{ echo "$as_me:$LINENO: checking for $ac_header" >&5
-echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6; }
-if { as_var=$as_ac_Header; eval "test \"\${$as_var+set}\" = set"; }; then
-  echo $ECHO_N "(cached) $ECHO_C" >&6
-else
-  eval "$as_ac_Header=\$ac_header_preproc"
-fi
-ac_res=`eval echo '${'$as_ac_Header'}'`
-	       { echo "$as_me:$LINENO: result: $ac_res" >&5
-echo "${ECHO_T}$ac_res" >&6; }
-
-fi
-if test `eval echo '${'$as_ac_Header'}'` = yes; then
-  cat >>confdefs.h <<_ACEOF
-#define `echo "HAVE_$ac_header" | $as_tr_cpp` 1
-_ACEOF
-
-fi
-
-done
-
-
-for ac_func in alarm
-do
-as_ac_var=`echo "ac_cv_func_$ac_func" | $as_tr_sh`
-{ echo "$as_me:$LINENO: checking for $ac_func" >&5
-echo $ECHO_N "checking for $ac_func... $ECHO_C" >&6; }
-if { as_var=$as_ac_var; eval "test \"\${$as_var+set}\" = set"; }; then
-  echo $ECHO_N "(cached) $ECHO_C" >&6
-else
-  cat >conftest.$ac_ext <<_ACEOF
-/* confdefs.h.  */
-_ACEOF
-cat confdefs.h >>conftest.$ac_ext
-cat >>conftest.$ac_ext <<_ACEOF
-/* end confdefs.h.  */
-/* Define $ac_func to an innocuous variant, in case <limits.h> declares $ac_func.
-   For example, HP-UX 11i <limits.h> declares gettimeofday.  */
-#define $ac_func innocuous_$ac_func
-
-/* System header to define __stub macros and hopefully few prototypes,
-    which can conflict with char $ac_func (); below.
-    Prefer <limits.h> to <assert.h> if __STDC__ is defined, since
-    <limits.h> exists even on freestanding compilers.  */
-
-#ifdef __STDC__
-# include <limits.h>
-#else
-# include <assert.h>
-#endif
-
-#undef $ac_func
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char $ac_func ();
-/* The GNU C library defines this for functions which it implements
-    to always fail with ENOSYS.  Some functions are actually named
-    something starting with __ and the normal name is an alias.  */
-#if defined __stub_$ac_func || defined __stub___$ac_func
-choke me
-#endif
-
-int
-main ()
-{
-return $ac_func ();
-  ;
-  return 0;
-}
-_ACEOF
-rm -f conftest.$ac_objext conftest$ac_exeext
-if { (ac_try="$ac_link"
-case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_link") 2>conftest.er1
-  ac_status=$?
-  grep -v '^ *+' conftest.er1 >conftest.err
-  rm -f conftest.er1
-  cat conftest.err >&5
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); } &&
-	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
-  { (case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_try") 2>&5
-  ac_status=$?
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); }; } &&
-	 { ac_try='test -s conftest$ac_exeext'
-  { (case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_try") 2>&5
-  ac_status=$?
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); }; }; then
-  eval "$as_ac_var=yes"
-else
-  echo "$as_me: failed program was:" >&5
-sed 's/^/| /' conftest.$ac_ext >&5
-
-	eval "$as_ac_var=no"
-fi
-
-rm -f core conftest.err conftest.$ac_objext \
-      conftest$ac_exeext conftest.$ac_ext
-fi
-ac_res=`eval echo '${'$as_ac_var'}'`
-	       { echo "$as_me:$LINENO: result: $ac_res" >&5
-echo "${ECHO_T}$ac_res" >&6; }
-if test `eval echo '${'$as_ac_var'}'` = yes; then
-  cat >>confdefs.h <<_ACEOF
-#define `echo "HAVE_$ac_func" | $as_tr_cpp` 1
-_ACEOF
-
-fi
-done
-
-{ echo "$as_me:$LINENO: checking for working mktime" >&5
-echo $ECHO_N "checking for working mktime... $ECHO_C" >&6; }
-if test "${ac_cv_func_working_mktime+set}" = set; then
-  echo $ECHO_N "(cached) $ECHO_C" >&6
-else
-  if test "$cross_compiling" = yes; then
-  ac_cv_func_working_mktime=no
-else
-  cat >conftest.$ac_ext <<_ACEOF
-/* confdefs.h.  */
-_ACEOF
-cat confdefs.h >>conftest.$ac_ext
-cat >>conftest.$ac_ext <<_ACEOF
-/* end confdefs.h.  */
-/* Test program from Paul Eggert and Tony Leneis.  */
-#if TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
-#else
-# if HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
-#endif
-
-#if HAVE_STDLIB_H
-# include <stdlib.h>
-#endif
-
-#if HAVE_UNISTD_H
-# include <unistd.h>
-#endif
-
-#if !HAVE_ALARM
-# define alarm(X) /* empty */
-#endif
-
-/* Work around redefinition to rpl_putenv by other config tests.  */
-#undef putenv
-
-static time_t time_t_max;
-static time_t time_t_min;
-
-/* Values we'll use to set the TZ environment variable.  */
-static char *tz_strings[] = {
-  (char *) 0, "TZ=GMT0", "TZ=JST-9",
-  "TZ=EST+3EDT+2,M10.1.0/00:00:00,M2.3.0/00:00:00"
-};
-#define N_STRINGS (sizeof (tz_strings) / sizeof (tz_strings[0]))
-
-/* Return 0 if mktime fails to convert a date in the spring-forward gap.
-   Based on a problem report from Andreas Jaeger.  */
-static int
-spring_forward_gap ()
-{
-  /* glibc (up to about 1998-10-07) failed this test. */
-  struct tm tm;
-
-  /* Use the portable POSIX.1 specification "TZ=PST8PDT,M4.1.0,M10.5.0"
-     instead of "TZ=America/Vancouver" in order to detect the bug even
-     on systems that don't support the Olson extension, or don't have the
-     full zoneinfo tables installed.  */
-  putenv ("TZ=PST8PDT,M4.1.0,M10.5.0");
-
-  tm.tm_year = 98;
-  tm.tm_mon = 3;
-  tm.tm_mday = 5;
-  tm.tm_hour = 2;
-  tm.tm_min = 0;
-  tm.tm_sec = 0;
-  tm.tm_isdst = -1;
-  return mktime (&tm) != (time_t) -1;
-}
-
-static int
-mktime_test1 (now)
-     time_t now;
-{
-  struct tm *lt;
-  return ! (lt = localtime (&now)) || mktime (lt) == now;
-}
-
-static int
-mktime_test (now)
-     time_t now;
-{
-  return (mktime_test1 (now)
-	  && mktime_test1 ((time_t) (time_t_max - now))
-	  && mktime_test1 ((time_t) (time_t_min + now)));
-}
-
-static int
-irix_6_4_bug ()
-{
-  /* Based on code from Ariel Faigon.  */
-  struct tm tm;
-  tm.tm_year = 96;
-  tm.tm_mon = 3;
-  tm.tm_mday = 0;
-  tm.tm_hour = 0;
-  tm.tm_min = 0;
-  tm.tm_sec = 0;
-  tm.tm_isdst = -1;
-  mktime (&tm);
-  return tm.tm_mon == 2 && tm.tm_mday == 31;
-}
-
-static int
-bigtime_test (j)
-     int j;
-{
-  struct tm tm;
-  time_t now;
-  tm.tm_year = tm.tm_mon = tm.tm_mday = tm.tm_hour = tm.tm_min = tm.tm_sec = j;
-  now = mktime (&tm);
-  if (now != (time_t) -1)
-    {
-      struct tm *lt = localtime (&now);
-      if (! (lt
-	     && lt->tm_year == tm.tm_year
-	     && lt->tm_mon == tm.tm_mon
-	     && lt->tm_mday == tm.tm_mday
-	     && lt->tm_hour == tm.tm_hour
-	     && lt->tm_min == tm.tm_min
-	     && lt->tm_sec == tm.tm_sec
-	     && lt->tm_yday == tm.tm_yday
-	     && lt->tm_wday == tm.tm_wday
-	     && ((lt->tm_isdst < 0 ? -1 : 0 < lt->tm_isdst)
-		  == (tm.tm_isdst < 0 ? -1 : 0 < tm.tm_isdst))))
-	return 0;
-    }
-  return 1;
-}
-
-int
-main ()
-{
-  time_t t, delta;
-  int i, j;
-
-  /* This test makes some buggy mktime implementations loop.
-     Give up after 60 seconds; a mktime slower than that
-     isn't worth using anyway.  */
-  alarm (60);
-
-  for (time_t_max = 1; 0 < time_t_max; time_t_max *= 2)
-    continue;
-  time_t_max--;
-  if ((time_t) -1 < 0)
-    for (time_t_min = -1; (time_t) (time_t_min * 2) < 0; time_t_min *= 2)
-      continue;
-  delta = time_t_max / 997; /* a suitable prime number */
-  for (i = 0; i < N_STRINGS; i++)
-    {
-      if (tz_strings[i])
-	putenv (tz_strings[i]);
-
-      for (t = 0; t <= time_t_max - delta; t += delta)
-	if (! mktime_test (t))
-	  return 1;
-      if (! (mktime_test ((time_t) 1)
-	     && mktime_test ((time_t) (60 * 60))
-	     && mktime_test ((time_t) (60 * 60 * 24))))
-	return 1;
-
-      for (j = 1; 0 < j; j *= 2)
-	if (! bigtime_test (j))
-	  return 1;
-      if (! bigtime_test (j - 1))
-	return 1;
-    }
-  return ! (irix_6_4_bug () && spring_forward_gap ());
-}
-_ACEOF
-rm -f conftest$ac_exeext
-if { (ac_try="$ac_link"
-case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_link") 2>&5
-  ac_status=$?
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); } && { ac_try='./conftest$ac_exeext'
-  { (case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_try") 2>&5
-  ac_status=$?
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); }; }; then
-  ac_cv_func_working_mktime=yes
-else
-  echo "$as_me: program exited with status $ac_status" >&5
-echo "$as_me: failed program was:" >&5
-sed 's/^/| /' conftest.$ac_ext >&5
-
-( exit $ac_status )
-ac_cv_func_working_mktime=no
-fi
-rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext conftest.$ac_objext conftest.$ac_ext
-fi
-
-
-fi
-{ echo "$as_me:$LINENO: result: $ac_cv_func_working_mktime" >&5
-echo "${ECHO_T}$ac_cv_func_working_mktime" >&6; }
-if test $ac_cv_func_working_mktime = no; then
-  case " $LIBOBJS " in
-  *" mktime.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS mktime.$ac_objext"
- ;;
-esac
-
-fi
-
-
-
 for ac_header in stdlib.h unistd.h
 do
 as_ac_Header=`echo "ac_cv_header_$ac_header" | $as_tr_sh`
@@ -17274,6 +16774,19 @@ echo "${ECHO_T}no" >&6; }
 fi
 
 
+{ echo "$as_me:$LINENO: checking for -fno-strict-overflow" >&5
+echo $ECHO_N "checking for -fno-strict-overflow... $ECHO_C" >&6; }
+if $(${CC} -O2 -fno-strict-overflow -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
+   { echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6; }
+   AST_NO_STRICT_OVERFLOW=-fno-strict-overflow
+else
+	{ echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6; }
+	AST_NO_STRICT_OVERFLOW=
+fi
+
+
 { echo "$as_me:$LINENO: checking for res_ninit" >&5
 echo $ECHO_N "checking for res_ninit... $ECHO_C" >&6; }
 cat >conftest.$ac_ext <<_ACEOF
@@ -19641,6 +19154,94 @@ fi
 
 fi
 
+
+    if test "x${PBX_GETIFADDRS}" != "x1" -a "${USE_GETIFADDRS}" != "no"; then
+	{ echo "$as_me:$LINENO: checking if \"struct ifaddrs *p; getifaddrs(&p)\" compiles using ifaddrs.h" >&5
+echo $ECHO_N "checking if \"struct ifaddrs *p; getifaddrs(&p)\" compiles using ifaddrs.h... $ECHO_C" >&6; }
+	saved_cppflags="${CPPFLAGS}"
+	if test "x${GETIFADDRS_DIR}" != "x"; then
+	    GETIFADDRS_INCLUDE="-I${GETIFADDRS_DIR}/include"
+	fi
+	CPPFLAGS="${CPPFLAGS} ${GETIFADDRS_INCLUDE}"
+
+	cat >conftest.$ac_ext <<_ACEOF
+ /* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <ifaddrs.h>
+int
+main ()
+{
+ struct ifaddrs *p; getifaddrs(&p);
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+     { echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6; }
+		PBX_GETIFADDRS=1
+
+cat >>confdefs.h <<\_ACEOF
+#define HAVE_GETIFADDRS 1
+_ACEOF
+
+
+cat >>confdefs.h <<\_ACEOF
+#define HAVE_GETIFADDRS_VERSION
+_ACEOF
+
+
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	       { echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6; }
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+	CPPFLAGS="${saved_cppflags}"
+    fi
+
+
 GSM_INTERNAL="yes"
 
 GSM_SYSTEM="yes"
@@ -21401,83 +21002,80 @@ fi
 fi
 
 if test "${USE_IMAP_TK}" != "no"; then
-   if test "${IMAP_TK_DIR}" = ""; then
-      IMAP_TK_DIR=`pwd`"/../imap-2004g"
-      if test  -n "${IMAP_TK_MANDATORY}"; then
-	 { echo "$as_me:$LINENO: The --with-imap option does not search your system for installed" >&5
-echo "$as_me: The --with-imap option does not search your system for installed" >&6;}
-	 { echo "$as_me:$LINENO: c-client library/header files. Since you did not provide a path" >&5
-echo "$as_me: c-client library/header files. Since you did not provide a path" >&6;}
-	 { echo "$as_me:$LINENO: the configure script will assume you have placed built the c-client" >&5
-echo "$as_me: the configure script will assume you have placed built the c-client" >&6;}
-	 { echo "$as_me:$LINENO: files at ${IMAP_TK_DIR}, as outlined in the doc/imapstorage.txt file." >&5
-echo "$as_me: files at ${IMAP_TK_DIR}, as outlined in the doc/imapstorage.txt file." >&6;}
-      fi
-   fi
-   { echo "$as_me:$LINENO: checking for UW IMAP Toolkit c-client library" >&5
+	saved_cppflags="${CPPFLAGS}"
+	saved_libs="${LIBS}"
+	switch_to_system_on_failure="no"
+	if test "${IMAP_TK_DIR}" = ""; then
+		IMAP_TK_DIR=`pwd`"/../imap-2004g"
+		switch_to_system_on_failure="yes"
+	fi
+	if test "${IMAP_TK_DIR}" != "system"; then
+		{ echo "$as_me:$LINENO: checking for UW IMAP Toolkit c-client library" >&5
 echo $ECHO_N "checking for UW IMAP Toolkit c-client library... $ECHO_C" >&6; }
-   saved_cppflags="${CPPFLAGS}"
-   saved_libs="${LIBS}"
-   imap_ldflags="-lpam -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err -lssl -lcrypto"
-   CPPFLAGS="${CPPFLAGS} -I${IMAP_TK_DIR}/include/imap"
-   LIBS="${LIBS} ${IMAP_TK_DIR}/lib/libc-client.a "`echo ${imap_ldflags}`
-   cat >conftest.$ac_ext <<_ACEOF
+		if test -f "${IMAP_TK_DIR}/c-client/LDFLAGS"; then
+      		imap_ldflags=`cat ${IMAP_TK_DIR}/c-client/LDFLAGS`
+		fi
+		imap_libs="${IMAP_TK_DIR}/c-client/c-client.a"
+	  	imap_include="-I${IMAP_TK_DIR}/c-client"
+      	CPPFLAGS="${CPPFLAGS} ${imap_include}"
+	  	LIBS="${LIBS} ${imap_libs} "`echo ${imap_ldflags}`
+	  	cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
 #include "c-client.h"
-		void mm_searched (MAILSTREAM *stream,unsigned long number)
-		{
-		}
-		void mm_exists (MAILSTREAM *stream,unsigned long number)
-		{
-		}
-		void mm_expunged (MAILSTREAM *stream,unsigned long number)
-		{
-		}
-		void mm_flags (MAILSTREAM *stream,unsigned long number)
-		{
-		}
-		void mm_notify (MAILSTREAM *stream,char *string,long errflg)
-		{
-		}
-		void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
-		{
-		}
-		void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
-		{
-		}
-		void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
-		{
-		}
-		void mm_log (char *string,long errflg)
-		{
-		}
-		void mm_dlog (char *string)
-		{
-		}
-		void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
-		{
-		}
-		void mm_critical (MAILSTREAM *stream)
-		{
-		}
-		void mm_nocritical (MAILSTREAM *stream)
-		{
-		}
-		long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
-		{
-		}
-		void mm_fatal (char *string)
-		{
-		}
+				void mm_searched (MAILSTREAM *stream,unsigned long number)
+				{
+				}
+				void mm_exists (MAILSTREAM *stream,unsigned long number)
+				{
+				}
+				void mm_expunged (MAILSTREAM *stream,unsigned long number)
+				{
+				}
+				void mm_flags (MAILSTREAM *stream,unsigned long number)
+				{
+				}
+				void mm_notify (MAILSTREAM *stream,char *string,long errflg)
+				{
+				}
+				void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+				{
+				}
+				void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+				{
+				}
+				void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
+				{
+				}
+				void mm_log (char *string,long errflg)
+				{
+				}
+				void mm_dlog (char *string)
+				{
+				}
+				void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
+				{
+				}
+				void mm_critical (MAILSTREAM *stream)
+				{
+				}
+				void mm_nocritical (MAILSTREAM *stream)
+				{
+				}
+				long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
+				{
+				}
+				void mm_fatal (char *string)
+				{
+				}
 int
 main ()
 {
 
-		MAILSTREAM *foo = mail_open(NULL, "", 0);
+				MAILSTREAM *foo = mail_open(NULL, "", 0);
 
 
   ;
@@ -21529,64 +21127,64 @@ fi
 
 rm -f core conftest.err conftest.$ac_objext \
       conftest$ac_exeext conftest.$ac_ext
-   if test "${ac_cv_imap_tk}" = "yes"; then
-   cat >conftest.$ac_ext <<_ACEOF
+		if test "${ac_cv_imap_tk}" = "yes"; then
+			cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
 #include "c-client.h"
-         void mm_searched (MAILSTREAM *stream,unsigned long number)
-         {
-         }
-         void mm_exists (MAILSTREAM *stream,unsigned long number)
-         {
-         }
-         void mm_expunged (MAILSTREAM *stream,unsigned long number)
-         {
-         }
-         void mm_flags (MAILSTREAM *stream,unsigned long number)
-         {
-         }
-         void mm_notify (MAILSTREAM *stream,char *string,long errflg)
-         {
-         }
-         void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
-         {
-         }
-         void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
-         {
-         }
-         void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
-         {
-         }
-         void mm_log (char *string,long errflg)
-         {
-         }
-         void mm_dlog (char *string)
-         {
-         }
-         void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
-         {
-         }
-         void mm_critical (MAILSTREAM *stream)
-         {
-         }
-         void mm_nocritical (MAILSTREAM *stream)
-         {
-         }
-         long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
-         {
-         }
-         void mm_fatal (char *string)
-         {
-         }
+					void mm_searched (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_exists (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_expunged (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_flags (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_notify (MAILSTREAM *stream,char *string,long errflg)
+					{
+					}
+					void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+					{
+					}
+					void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+					{
+					}
+					void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
+					{
+					}
+					void mm_log (char *string,long errflg)
+					{
+					}
+					void mm_dlog (char *string)
+					{
+					}
+					void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
+					{
+					}
+					void mm_critical (MAILSTREAM *stream)
+					{
+					}
+					void mm_nocritical (MAILSTREAM *stream)
+					{
+					}
+					long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
+					{
+					}
+					void mm_fatal (char *string)
+					{
+					}
 int
 main ()
 {
 
-         long check = mail_expunge_full(NULL, "", 0);
+					long check = mail_expunge_full(NULL, "", 0);
 
 
   ;
@@ -21638,43 +21236,741 @@ fi
 
 rm -f core conftest.err conftest.$ac_objext \
       conftest$ac_exeext conftest.$ac_ext
-  fi
-   CPPFLAGS="${saved_cppflags}"
-   LIBS="${saved_libs}"
-   if test "${ac_cv_imap_tk}" = "yes"; then
-      { echo "$as_me:$LINENO: result: yes" >&5
+		fi
+		CPPFLAGS="${saved_cppflags}"
+		LIBS="${saved_libs}"
+		if test "${ac_cv_imap_tk}" = "no"; then
+			{ echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6; }
+			if test "${switch_to_system_on_failure}" = "yes"; then
+				IMAP_TK_DIR="system"
+			else #This means they specified a directory. Search for a package installation there too
+				{ echo "$as_me:$LINENO: checking for system c-client library..." >&5
+echo $ECHO_N "checking for system c-client library...... $ECHO_C" >&6; }
+				CPPFLAGS="${saved_cppflags}"
+				LIBS="${saved_libs}"
+				imap_include="-I${IMAP_TK_DIR}/include"
+				imap_ldflags="-L${IMAP_TK_DIR}/lib"
+				imap_libs="-lc-client"
+				CPPFLAGS="${CPPFLAGS} ${imap_include}"
+				LIBS="${LIBS} ${imap_libs} ${imap_ldflags}"
+				cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include "c-client.h"
+						void mm_searched (MAILSTREAM *stream,unsigned long number)
+						{
+						}
+						void mm_exists (MAILSTREAM *stream,unsigned long number)
+						{
+						}
+						void mm_expunged (MAILSTREAM *stream,unsigned long number)
+						{
+						}
+						void mm_flags (MAILSTREAM *stream,unsigned long number)
+						{
+						}
+						void mm_notify (MAILSTREAM *stream,char *string,long errflg)
+						{
+						}
+						void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+						{
+						}
+						void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+						{
+						}
+						void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
+						{
+						}
+						void mm_log (char *string,long errflg)
+						{
+						}
+						void mm_dlog (char *string)
+						{
+						}
+						void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
+						{
+						}
+						void mm_critical (MAILSTREAM *stream)
+						{
+						}
+						void mm_nocritical (MAILSTREAM *stream)
+						{
+						}
+						long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
+						{
+						}
+						void mm_fatal (char *string)
+						{
+						}
+int
+main ()
+{
+
+						MAILSTREAM *foo = mail_open(NULL, "", 0);
+
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_cv_imap_tk="yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_imap_tk="no"
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext conftest.$ac_ext
+				if test "${ac_cv_imap_tk}" = "yes"; then
+					cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include "c-client.h"
+							void mm_searched (MAILSTREAM *stream,unsigned long number)
+							{
+							}
+							void mm_exists (MAILSTREAM *stream,unsigned long number)
+							{
+							}
+							void mm_expunged (MAILSTREAM *stream,unsigned long number)
+							{
+							}
+							void mm_flags (MAILSTREAM *stream,unsigned long number)
+							{
+							}
+							void mm_notify (MAILSTREAM *stream,char *string,long errflg)
+							{
+							}
+							void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+							{
+							}
+							void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+							{
+							}
+							void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
+							{
+							}
+							void mm_log (char *string,long errflg)
+							{
+							}
+							void mm_dlog (char *string)
+							{
+							}
+							void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
+							{
+							}
+							void mm_critical (MAILSTREAM *stream)
+							{
+							}
+							void mm_nocritical (MAILSTREAM *stream)
+							{
+							}
+							long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
+							{
+							}
+							void mm_fatal (char *string)
+							{
+							}
+int
+main ()
+{
+
+							long check = mail_expunge_full(NULL, "", 0);
+
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_cv_imap_tk2006="yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_imap_tk2006="no"
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext conftest.$ac_ext
+				fi
+			fi
+		fi
+	fi
+	if test "${IMAP_TK_DIR}" = "system"; then
+		#We will enter here if user specified "system" or if any of above checks failed
+		{ echo "$as_me:$LINENO: checking for system c-client library..." >&5
+echo $ECHO_N "checking for system c-client library...... $ECHO_C" >&6; }
+		CPPFLAGS="${saved_cppflags}"
+		LIBS="${saved_libs}"
+		imap_ldflags=""
+		imap_libs="-lc-client"
+		imap_include="-DUSE_SYSTEM_IMAP" #Try the imap directory first
+		CPPFLAGS="${CPPFLAGS} ${imap_include}"
+		LIBS="${LIBS} ${imap_libs} "`echo ${imap_ldflags}`
+		cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <stdio.h>
+				#include <imap/c-client.h>
+				void mm_searched (MAILSTREAM *stream,unsigned long number)
+				{
+				}
+				void mm_exists (MAILSTREAM *stream,unsigned long number)
+				{
+				}
+				void mm_expunged (MAILSTREAM *stream,unsigned long number)
+				{
+				}
+				void mm_flags (MAILSTREAM *stream,unsigned long number)
+				{
+				}
+				void mm_notify (MAILSTREAM *stream,char *string,long errflg)
+				{
+				}
+				void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+				{
+				}
+				void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+				{
+				}
+				void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
+				{
+				}
+				void mm_log (char *string,long errflg)
+				{
+				}
+				void mm_dlog (char *string)
+				{
+				}
+				void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
+				{
+				}
+				void mm_critical (MAILSTREAM *stream)
+				{
+				}
+				void mm_nocritical (MAILSTREAM *stream)
+				{
+				}
+				long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
+				{
+				}
+				void mm_fatal (char *string)
+				{
+				}
+int
+main ()
+{
+
+				MAILSTREAM *foo = mail_open(NULL, "", 0);
+
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_cv_imap_tk="yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_imap_tk="no"
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext conftest.$ac_ext
+		if test "${ac_cv_imap_tk}" = "yes"; then
+			cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <stdio.h>
+					#include <imap/c-client.h>
+					void mm_searched (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_exists (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_expunged (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_flags (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_notify (MAILSTREAM *stream,char *string,long errflg)
+					{
+					}
+					void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+					{
+					}
+					void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+					{
+					}
+					void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
+					{
+					}
+					void mm_log (char *string,long errflg)
+					{
+					}
+					void mm_dlog (char *string)
+					{
+					}
+					void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
+					{
+					}
+					void mm_critical (MAILSTREAM *stream)
+					{
+					}
+					void mm_nocritical (MAILSTREAM *stream)
+					{
+					}
+					long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
+					{
+					}
+					void mm_fatal (char *string)
+					{
+					}
+int
+main ()
+{
+
+					long check = mail_expunge_full(NULL, "", 0);
+
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_cv_imap_tk2006="yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_imap_tk2006="no"
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext conftest.$ac_ext
+		else #looking in imap directory didn't work, try c-client
+			imap_ldflags=""
+			imap_libs="-lc-client"
+			imap_include="-DUSE_SYSTEM_CCLIENT"
+			CPPFLAGS="${saved_cppflags}"
+			LIBS="${saved_libs}"
+			CPPFLAGS="${CPPFLAGS} ${imap_include}"
+			LIBS="${LIBS} ${imap_libs} "`echo ${imap_ldflags}`
+			cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <stdio.h>
+					#include <c-client/c-client.h>
+					void mm_searched (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_exists (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_expunged (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_flags (MAILSTREAM *stream,unsigned long number)
+					{
+					}
+					void mm_notify (MAILSTREAM *stream,char *string,long errflg)
+					{
+					}
+					void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+					{
+					}
+					void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+					{
+					}
+					void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
+					{
+					}
+					void mm_log (char *string,long errflg)
+					{
+					}
+					void mm_dlog (char *string)
+					{
+					}
+					void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
+					{
+					}
+					void mm_critical (MAILSTREAM *stream)
+					{
+					}
+					void mm_nocritical (MAILSTREAM *stream)
+					{
+					}
+					long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
+					{
+					}
+					void mm_fatal (char *string)
+					{
+					}
+int
+main ()
+{
+
+					MAILSTREAM *foo = mail_open(NULL, "", 0);
+
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_cv_imap_tk="yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_imap_tk="no"
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext conftest.$ac_ext
+			if test "${ac_cv_imap_tk}" = "yes"; then
+				cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <stdio.h>
+						#include <c-client/c-client.h>
+						void mm_searched (MAILSTREAM *stream,unsigned long number)
+						{
+						}
+						void mm_exists (MAILSTREAM *stream,unsigned long number)
+						{
+						}
+						void mm_expunged (MAILSTREAM *stream,unsigned long number)
+						{
+						}
+						void mm_flags (MAILSTREAM *stream,unsigned long number)
+						{
+						}
+						void mm_notify (MAILSTREAM *stream,char *string,long errflg)
+						{
+						}
+						void mm_list (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+						{
+						}
+						void mm_lsub (MAILSTREAM *stream,int delimiter,char *mailbox,long attributes)
+						{
+						}
+						void mm_status (MAILSTREAM *stream,char *mailbox,MAILSTATUS *status)
+						{
+						}
+						void mm_log (char *string,long errflg)
+						{
+						}
+						void mm_dlog (char *string)
+						{
+						}
+						void mm_login (NETMBX *mb,char *user,char *pwd,long trial)
+						{
+						}
+						void mm_critical (MAILSTREAM *stream)
+						{
+						}
+						void mm_nocritical (MAILSTREAM *stream)
+						{
+						}
+						long mm_diskerror (MAILSTREAM *stream,long errcode,long serious)
+						{
+						}
+						void mm_fatal (char *string)
+						{
+						}
+int
+main ()
+{
+
+						long check = mail_expunge_full(NULL, "", 0);
+
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag" || test ! -s conftest.err'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest$ac_exeext'
+  { (case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_try") 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_cv_imap_tk2006="yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_imap_tk2006="no"
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext \
+      conftest$ac_exeext conftest.$ac_ext
+			fi
+		fi
+	fi
+	if test "${ac_cv_imap_tk}" = "yes"; then
+		{ echo "$as_me:$LINENO: result: yes" >&5
 echo "${ECHO_T}yes" >&6; }
-      IMAP_TK_LIB="${IMAP_TK_DIR}/lib/libc-client.a "`echo ${imap_ldflags}`
-      IMAP_TK_INCLUDE="-I${IMAP_TK_DIR}/include/imap"
-      PBX_IMAP_TK=1
+		IMAP_TK_LIB="${imap_libs} "`echo ${imap_ldflags}`
+		IMAP_TK_INCLUDE="${imap_include}"
+		PBX_IMAP_TK=1
 
 cat >>confdefs.h <<\_ACEOF
 #define HAVE_IMAP_TK 1
 _ACEOF
 
-      if test "${ac_cv_imap_tk2006}" = "yes"; then
+		if test "${ac_cv_imap_tk2006}" = "yes"; then
 
 cat >>confdefs.h <<\_ACEOF
 #define HAVE_IMAP_TK2006 1
 _ACEOF
 
-      fi
-   elif test -n "${IMAP_TK_MANDATORY}"; then
-      { echo "$as_me:$LINENO: result: no" >&5
+		fi
+	elif test -n "${IMAP_TK_MANDATORY}"; then
+		{ echo "$as_me:$LINENO: result: no" >&5
 echo "${ECHO_T}no" >&6; }
-      { echo "$as_me:$LINENO: ***" >&5
+		{ echo "$as_me:$LINENO: ***" >&5
 echo "$as_me: ***" >&6;}
-      { echo "$as_me:$LINENO: *** The UW IMAP Toolkit installation on this system appears to be broken." >&5
+		{ echo "$as_me:$LINENO: *** The UW IMAP Toolkit installation on this system appears to be broken." >&5
 echo "$as_me: *** The UW IMAP Toolkit installation on this system appears to be broken." >&6;}
-      { echo "$as_me:$LINENO: *** Either correct the installation, or run configure" >&5
+		{ echo "$as_me:$LINENO: *** Either correct the installation, or run configure" >&5
 echo "$as_me: *** Either correct the installation, or run configure" >&6;}
-      { echo "$as_me:$LINENO: *** including --without-imap." >&5
+		{ echo "$as_me:$LINENO: *** including --without-imap." >&5
 echo "$as_me: *** including --without-imap." >&6;}
-      exit 1
-   else
-      { echo "$as_me:$LINENO: result: no" >&5
+		exit 1
+	else
+		{ echo "$as_me:$LINENO: result: no" >&5
 echo "${ECHO_T}no" >&6; }
-   fi
+	fi
+	CPPFLAGS="${saved_cppflags}"
+	LIBS="${saved_libs}"
 fi
 
 # Needed by unixodbc
@@ -37599,6 +37895,35 @@ fi
 
 
 
+if test "${cross_compiling}" = "no";
+then
+  { echo "$as_me:$LINENO: checking for /sbin/launchd" >&5
+echo $ECHO_N "checking for /sbin/launchd... $ECHO_C" >&6; }
+if test "${ac_cv_file__sbin_launchd+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  test "$cross_compiling" = yes &&
+  { { echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "/sbin/launchd"; then
+  ac_cv_file__sbin_launchd=yes
+else
+  ac_cv_file__sbin_launchd=no
+fi
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_file__sbin_launchd" >&5
+echo "${ECHO_T}$ac_cv_file__sbin_launchd" >&6; }
+if test $ac_cv_file__sbin_launchd = yes; then
+
+cat >>confdefs.h <<\_ACEOF
+#define HAVE_SBIN_LAUNCHD 1
+_ACEOF
+
+fi
+
+fi
+
 PBX_GTK=0
 if test -n "$ac_tool_prefix"; then
   # Extract the first word of "${ac_tool_prefix}gtk-config", so it can be a program name with args.
@@ -38972,6 +39297,7 @@ POW_LIB!$POW_LIB$ac_delim
 GC_CFLAGS!$GC_CFLAGS$ac_delim
 GC_LDFLAGS!$GC_LDFLAGS$ac_delim
 AST_DECLARATION_AFTER_STATEMENT!$AST_DECLARATION_AFTER_STATEMENT$ac_delim
+AST_NO_STRICT_OVERFLOW!$AST_NO_STRICT_OVERFLOW$ac_delim
 GSM_INTERNAL!$GSM_INTERNAL$ac_delim
 KDEINIT!$KDEINIT$ac_delim
 KDEDIR!$KDEDIR$ac_delim
@@ -38994,7 +39320,6 @@ PBX_H323!$PBX_H323$ac_delim
 PBX_IXJUSER!$PBX_IXJUSER$ac_delim
 GTKCONFIG!$GTKCONFIG$ac_delim
 PBX_GTK!$PBX_GTK$ac_delim
-GTK_INCLUDE!$GTK_INCLUDE$ac_delim
 _ACEOF
 
   if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 97; then
@@ -39036,6 +39361,7 @@ _ACEOF
 ac_delim='%!_!# '
 for ac_last_try in false false false false false :; do
   cat >conf$$subs.sed <<_ACEOF
+GTK_INCLUDE!$GTK_INCLUDE$ac_delim
 GTK_LIB!$GTK_LIB$ac_delim
 PKGCONFIG!$PKGCONFIG$ac_delim
 PBX_GTK2!$PBX_GTK2$ac_delim
@@ -39045,7 +39371,7 @@ CURL_CONFIG!$CURL_CONFIG$ac_delim
 LTLIBOBJS!$LTLIBOBJS$ac_delim
 _ACEOF
 
-  if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 7; then
+  if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 8; then
     break
   elif $ac_last_try; then
     { { echo "$as_me:$LINENO: error: could not make $CONFIG_STATUS" >&5

@@ -610,7 +610,16 @@ void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 		pthread_mutex_unlock(&lock_info->lock);
 		return;
 	}
-	
+
+	if (i && lock_info->locks[i-1].pending == -1) {
+		/* The last lock on the list was one that this thread tried to lock but
+		 * failed at doing so.  It has now moved on to something else, so remove
+		 * the old lock from the list. */
+		i--;
+		lock_info->num_locks--;
+		memset(&lock_info->locks[i], 0, sizeof(lock_info->locks[0]));
+	}
+
 	lock_info->locks[i].file = filename;
 	lock_info->locks[i].line_num = line_num;
 	lock_info->locks[i].func = func;
@@ -624,7 +633,7 @@ void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 	pthread_mutex_unlock(&lock_info->lock);
 }
 
-void ast_mark_lock_acquired(void)
+void ast_mark_lock_acquired(void *lock_addr)
 {
 	struct thr_lock_info *lock_info;
 
@@ -632,11 +641,13 @@ void ast_mark_lock_acquired(void)
 		return;
 
 	pthread_mutex_lock(&lock_info->lock);
-	lock_info->locks[lock_info->num_locks - 1].pending = 0;
+	if (lock_info->locks[lock_info->num_locks - 1].lock_addr == lock_addr) {
+		lock_info->locks[lock_info->num_locks - 1].pending = 0;
+	}
 	pthread_mutex_unlock(&lock_info->lock);
 }
 
-void ast_mark_lock_failed(void)
+void ast_mark_lock_failed(void *lock_addr)
 {
 	struct thr_lock_info *lock_info;
 
@@ -644,8 +655,10 @@ void ast_mark_lock_failed(void)
 		return;
 
 	pthread_mutex_lock(&lock_info->lock);
-	lock_info->locks[lock_info->num_locks - 1].pending = -1;
-	lock_info->locks[lock_info->num_locks - 1].times_locked--;
+	if (lock_info->locks[lock_info->num_locks - 1].lock_addr == lock_addr) {
+		lock_info->locks[lock_info->num_locks - 1].pending = -1;
+		lock_info->locks[lock_info->num_locks - 1].times_locked--;
+	}
 	pthread_mutex_unlock(&lock_info->lock);
 }
 

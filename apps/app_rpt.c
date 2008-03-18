@@ -1646,12 +1646,8 @@ static char *cs_keywords[] = {"rptena","rptdis","apena","apdis","lnkena","lnkdis
  	memset(&rpt_vars[n].p,0,sizeof(rpt_vars[n].p));
 	if (init)
 	{
-		char *cp;
-		int savearea = (char *)&rpt_vars[n].p - (char *)&rpt_vars[n];
-
-		cp = (char *) &rpt_vars[n].p;
-		memset(cp + sizeof(rpt_vars[n].p),0,
-			sizeof(rpt_vars[n]) - (sizeof(rpt_vars[n].p) + savearea));
+		/* clear all the fields in the structure after 'p' */
+		memset(&rpt_vars[n].p + sizeof(rpt_vars[0].p), 0, sizeof(rpt_vars[0]) - sizeof(rpt_vars[0].p) - offsetof(typeof(rpt_vars[0]), p));
 		rpt_vars[n].tele.next = &rpt_vars[n].tele;
 		rpt_vars[n].tele.prev = &rpt_vars[n].tele;
 		rpt_vars[n].rpt_thread = AST_PTHREADT_NULL;
@@ -2427,7 +2423,7 @@ static int rpt_do_fun(int fd, int argc, char *argv[])
 			}
 			if(!busy){
 				myrpt->macrotimer = MACROTIME;
-				strncat(myrpt->macrobuf,argv[3],MAXMACRO - 1);
+				strncat(myrpt->macrobuf, argv[3], MAXMACRO - strlen(myrpt->macrobuf) - 1);
 			}
 			rpt_mutex_unlock(&myrpt->lock);
 		}
@@ -5090,7 +5086,7 @@ int	i;
 		return DC_ERROR;
 	}
 	myrpt->macrotimer = MACROTIME;
-	strncat(myrpt->macrobuf,val,MAXMACRO - 1);
+	strncat(myrpt->macrobuf, val, MAXMACRO - strlen(myrpt->macrobuf) - 1);
 	rpt_mutex_unlock(&myrpt->lock);
 	return DC_COMPLETE;	
 }
@@ -8749,7 +8745,7 @@ static void do_scheduler(struct rpt *myrpt)
 				return; /* Macro buffer full */
 			}
 			myrpt->macrotimer = MACROTIME;
-			strncat(myrpt->macrobuf,val,MAXMACRO - 1);
+			strncat(myrpt->macrobuf,val,MAXMACRO - strlen(myrpt->macrobuf) - 1);
 		}
 		else{
 			ast_log(LOG_WARNING,"Malformed scheduler entry in rpt.conf: %s = %s\n",

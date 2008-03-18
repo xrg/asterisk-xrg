@@ -54,7 +54,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/socket.h>
 #include <sys/signal.h>
 #include <sys/param.h>
-#if defined(BSD)
+#if defined(BSD) || defined(SOLARIS)
 #ifndef IPTOS_MINCOST
 #define IPTOS_MINCOST 0x02
 #endif
@@ -913,6 +913,10 @@ static int oh323_indicate(struct ast_channel *c, int condition, const void *data
 		break;
 	case AST_CONTROL_UNHOLD:
 		ast_moh_stop(c);
+		res = 0;
+		break;
+	case AST_CONTROL_SRCUPDATE:
+		ast_rtp_new_source(pvt->rtp);
 		res = 0;
 		break;
 	case AST_CONTROL_PROCEEDING:

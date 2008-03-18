@@ -1385,8 +1385,11 @@ static void aji_handle_presence(struct aji_client *client, ikspak *pak)
  */
 static void aji_handle_subscribe(struct aji_client *client, ikspak *pak)
 {
-	if(pak->subtype == IKS_TYPE_SUBSCRIBE) { 
-		iks *presence = NULL, *status = NULL;
+	iks *presence = NULL, *status = NULL;
+	struct aji_buddy* buddy = NULL;
+
+	switch (pak->subtype) { 
+	case IKS_TYPE_SUBSCRIBE:
 		presence = iks_new("presence");
 		status = iks_new("status");
 		if(presence && status) {
@@ -1406,24 +1409,14 @@ static void aji_handle_subscribe(struct aji_client *client, ikspak *pak)
 			iks_delete(status);
 		if(client->component)
 			aji_set_presence(client, pak->from->full, iks_find_attrib(pak->x, "to"), 1, client->statusmessage);
-	}
-	if (option_verbose > 4) {
-		switch (pak->subtype) {
-		case IKS_TYPE_SUBSCRIBE:
+	case IKS_TYPE_SUBSCRIBED:
+		buddy = ASTOBJ_CONTAINER_FIND(&client->buddies, pak->from->partial);
+		if (!buddy && pak->from->partial) {
+			aji_create_buddy(pak->from->partial, client);
+		}
+	default:
+		if (option_verbose > 4) {
 			ast_verbose(VERBOSE_PREFIX_3 "JABBER: This is a subcription of type %i\n", pak->subtype);
-			break;
-		case IKS_TYPE_SUBSCRIBED:
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: This is a subcription of type %i\n", pak->subtype);
-			break;
-		case IKS_TYPE_UNSUBSCRIBE:
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: This is a subcription of type %i\n", pak->subtype);
-			break;
-		case IKS_TYPE_UNSUBSCRIBED:
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: This is a subcription of type %i\n", pak->subtype);
-			break;
-		default:				/*IKS_TYPE_ERROR: */
-			ast_verbose(VERBOSE_PREFIX_3 "JABBER: This is a subcription of type %i\n", pak->subtype);
-			break;
 		}
 	}
 }
@@ -1462,6 +1455,7 @@ int ast_aji_create_chat(struct aji_client *client, char *room, char *server, cha
 	int res = 0;
 	iks *iq = NULL;
 	iq = iks_new("iq");
+
 	if (iq && client) {
 		iks_insert_attrib(iq, "type", "get");
 		iks_insert_attrib(iq, "to", server);
@@ -1470,6 +1464,9 @@ int ast_aji_create_chat(struct aji_client *client, char *room, char *server, cha
 		iks_send(client->p, iq);
 	} else 
 		ast_log(LOG_ERROR, "Out of memory.\n");
+
+	iks_delete(iq);
+
 	return res;
 }
 

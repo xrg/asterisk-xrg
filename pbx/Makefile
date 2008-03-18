@@ -35,10 +35,12 @@ clean::
 	rm -f ael/*.o
 
 ael/ael_lex.o: ael/ael_lex.c ../include/asterisk/ael_structs.h ael/ael.tab.h
-ael/ael_lex.o: ASTCFLAGS+=-I.
+ael/ael_lex.o: ASTCFLAGS+=-I. -Wno-unused
 
 ael/ael.tab.o: ael/ael.tab.c ael/ael.tab.h ../include/asterisk/ael_structs.h
 ael/ael.tab.o: ASTCFLAGS+=-I.
+
+ael/ael.tab.o ael/ael_lex.o: ASTCFLAGS+=$(MENUSELECT_OPTS_pbx_ael:%=-D%) $(foreach dep,$(MENUSELECT_DEPENDS_pbx_ael),$(value $(dep)_INCLUDE))
 
 $(if $(filter pbx_ael,$(EMBEDDED_MODS)),modules.link,pbx_ael.so): ael/ael.tab.o ael/ael_lex.o
 
@@ -51,5 +53,7 @@ ael/ael.tab.c ael/ael.tab.h:
 
 dundi-parser.o: dundi-parser.h
 dundi-parser.o: ASTCFLAGS+=-I.
+
+dundi-parser.o: ASTCFLAGS+=$(MENUSELECT_OPTS_pbx_dundi:%=-D%) $(foreach dep,$(MENUSELECT_DEPENDS_pbx_dundi),$(value $(dep)_INCLUDE))
 
 $(if $(filter pbx_dundi,$(EMBEDDED_MODS)),modules.link,pbx_dundi.so): dundi-parser.o

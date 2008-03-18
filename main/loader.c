@@ -578,8 +578,16 @@ int ast_module_reload(const char *name)
 		if (name && resource_name_match(name, cur->resource))
 			continue;
 
-		if (!(cur->flags.running || cur->flags.declined))
-			continue;
+		if (!cur->flags.running || cur->flags.declined) {
+			if (!name)
+				continue;
+			ast_log(LOG_NOTICE, "The module '%s' was not properly initialized.  "
+				"Before reloading the module, you must run \"module load %s\" "
+				"and fix whatever is preventing the module from being initialized.\n",
+				name, name);
+			res = 2; /* Don't report that the module was not found */
+			break;
+		}
 
 		if (!info->reload) {	/* cannot be reloaded */
 			if (res < 1)	/* store result if possible */
@@ -897,10 +905,10 @@ void ast_update_use_count(void)
 	   resource has changed */
 	struct loadupdate *m;
 
-	AST_LIST_LOCK(&module_list);
+	AST_LIST_LOCK(&updaters);
 	AST_LIST_TRAVERSE(&updaters, m, entry)
 		m->updater();
-	AST_LIST_UNLOCK(&module_list);
+	AST_LIST_UNLOCK(&updaters);
 }
 
 int ast_update_module_list(int (*modentry)(const char *module, const char *description, int usecnt, const char *like),
@@ -931,9 +939,9 @@ int ast_loader_register(int (*v)(void))
 		return -1;
 
 	tmp->updater = v;
-	AST_LIST_LOCK(&module_list);
+	AST_LIST_LOCK(&updaters);
 	AST_LIST_INSERT_HEAD(&updaters, tmp, entry);
-	AST_LIST_UNLOCK(&module_list);
+	AST_LIST_UNLOCK(&updaters);
 
 	return 0;
 }
@@ -942,7 +950,7 @@ int ast_loader_unregister(int (*v)(void))
 {
 	struct loadupdate *cur;
 
-	AST_LIST_LOCK(&module_list);
+	AST_LIST_LOCK(&updaters);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&updaters, cur, entry) {
 		if (cur->updater == v)	{
 			AST_LIST_REMOVE_CURRENT(&updaters, entry);
@@ -950,7 +958,7 @@ int ast_loader_unregister(int (*v)(void))
 		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
-	AST_LIST_UNLOCK(&module_list);
+	AST_LIST_UNLOCK(&updaters);
 
 	return cur ? 0 : -1;
 }

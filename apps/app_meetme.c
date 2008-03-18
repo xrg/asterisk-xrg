@@ -1658,7 +1658,9 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		}
 	}
 
-	if (confflags & CONFFLAG_MONITOR)
+	if (confflags & CONFFLAG_WAITMARKED && !conf->markedusers)
+		ztc.confmode = ZT_CONF_CONF;
+	else if (confflags & CONFFLAG_MONITOR)
 		ztc.confmode = ZT_CONF_CONFMON | ZT_CONF_LISTENER;
 	else if (confflags & CONFFLAG_TALKER)
 		ztc.confmode = ZT_CONF_CONF | ZT_CONF_TALKER;
@@ -4790,7 +4792,8 @@ static int sla_load_config(void)
 
 	ast_config_destroy(cfg);
 
-	ast_pthread_create(&sla.thread, NULL, sla_thread, NULL);
+	if (!AST_LIST_EMPTY(&sla_stations) || !AST_LIST_EMPTY(&sla_stations))
+		ast_pthread_create(&sla.thread, NULL, sla_thread, NULL);
 
 	return res;
 }

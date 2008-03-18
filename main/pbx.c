@@ -60,6 +60,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/devicestate.h"
 #include "asterisk/stringfields.h"
+#include "asterisk/threadstorage.h"
 
 /*!
  * \note I M P O R T A N T :
@@ -105,6 +106,8 @@ AST_APP_OPTIONS(waitexten_opts, {
 
 struct ast_context;
 
+AST_THREADSTORAGE(switch_data, switch_data_init);
+
 /*!
    \brief ast_exten: An extension
 	The dialplan is saved as a linked list with each context
@@ -145,7 +148,6 @@ struct ast_sw {
 	char *data;				/*!< Data load */
 	int eval;
 	AST_LIST_ENTRY(ast_sw) list;
-	char *tmpdata;
 	char stuff[0];
 };
 
@@ -516,7 +518,7 @@ int pbx_exec(struct ast_channel *c, 		/*!< Channel */
 	const char *saved_c_appl;
 	const char *saved_c_data;
 
-	if (c->cdr &&  !ast_check_hangup(c))
+	if (c->cdr && !ast_check_hangup(c))
 		ast_cdr_setapp(c->cdr, app->name, data);
 
 	/* save channel values */
@@ -529,7 +531,7 @@ int pbx_exec(struct ast_channel *c, 		/*!< Channel */
 	if (app->module) {
 		/* XXX LOCAL_USER_ADD(app->module) */
 	}
-	res = app->execute(c, data);
+	res = app->execute(c, S_OR(data, ""));
 	if (app->module) {
 		/* XXX LOCAL_USER_REMOVE(app->module) */
 	}
@@ -946,6 +948,7 @@ static struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 	struct ast_exten *e, *eroot;
 	struct ast_include *i;
 	struct ast_sw *sw;
+	char *tmpdata = NULL;
 
 	/* Initialize status if appropriate */
 	if (q->stacklen == 0) {
@@ -1024,8 +1027,13 @@ static struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 			continue;
 		}
 		/* Substitute variables now */
-		if (sw->eval)
-			pbx_substitute_variables_helper(chan, sw->data, sw->tmpdata, SWITCH_DATA_LENGTH - 1);
+		if (sw->eval) {
+			if (!(tmpdata = ast_threadstorage_get(&switch_data, 512))) {
+				ast_log(LOG_WARNING, "Can't evaluate switch?!");
+				continue;
+			}
+			pbx_substitute_variables_helper(chan, sw->data, tmpdata, 512);
+		}
 
 		/* equivalent of extension_match_core() at the switch level */
 		if (action == E_CANMATCH)
@@ -1034,7 +1042,7 @@ static struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 			aswf = asw->matchmore;
 		else /* action == E_MATCH */
 			aswf = asw->exists;
-		datap = sw->eval ? sw->tmpdata : sw->data;
+		datap = sw->eval ? tmpdata : sw->data;
 		if (!aswf)
 			res = 0;
 		else {
@@ -4389,11 +4397,6 @@ int ast_context_add_switch2(struct ast_context *con, const char *value,
 	if (data)
 		length += strlen(data);
 	length++;
-	if (eval) {
-		/* Create buffer for evaluation of variables */
-		length += SWITCH_DATA_LENGTH;
-		length++;
-	}
 
 	/* allocate new sw structure ... */
 	if (!(new_sw = ast_calloc(1, length)))
@@ -4411,8 +4414,6 @@ int ast_context_add_switch2(struct ast_context *con, const char *value,
 		strcpy(new_sw->data, "");
 		p++;
 	}
-	if (eval)
-		new_sw->tmpdata = p;
 	new_sw->eval	  = eval;
 	new_sw->registrar = registrar;
 
@@ -5016,6 +5017,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 						if (channel)
 							*channel = NULL;
 						ast_hangup(chan);
+						chan = NULL;
 						res = -1;
 					}
 				} else {
@@ -5028,6 +5030,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 						ast_hangup(chan);
 						res = -1;
 					}
+					chan = NULL;
 				}
 			} else {
 				if (option_verbose > 3)
@@ -5045,6 +5048,7 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 					ast_channel_unlock(chan);
 				}
 				ast_hangup(chan);
+				chan = NULL;
 			}
 		}
 
@@ -5072,7 +5076,11 @@ int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout
 					pbx_builtin_setvar_helper(chan, "REASON", failed_reason);
 					if (account)
 						ast_cdr_setaccount(chan, account);
-					ast_pbx_run(chan);
+					if (ast_pbx_run(chan)) {
+						ast_log(LOG_ERROR, "Unable to run PBX on %s\n", chan->name);
+						ast_hangup(chan);
+					}
+					chan = NULL;
 				}
 			}
 		}
@@ -5166,9 +5174,7 @@ int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, 
 	if (sync) {
 		chan = __ast_request_and_dial(type, format, data, timeout, reason, cid_num, cid_name, &oh);
 		if (chan) {
-			if (chan->cdr) { /* check if the channel already has a cdr record, if not give it one */
-				ast_log(LOG_WARNING, "%s already has a call record??\n", chan->name);
-			} else {
+			if (!chan->cdr) { /* check if the channel already has a cdr record, if not give it one */
 				chan->cdr = ast_cdr_alloc();   /* allocate a cdr for the channel */
 				if(!chan->cdr) {
 					/* allocation of the cdr failed */
@@ -6305,12 +6311,16 @@ int ast_context_verify_includes(struct ast_context *con)
 	struct ast_include *inc = NULL;
 	int res = 0;
 
-	while ( (inc = ast_walk_context_includes(con, inc)) )
-		if (!ast_context_find(inc->rname)) {
-			res = -1;
-			ast_log(LOG_WARNING, "Context '%s' tries includes nonexistent context '%s'\n",
-					ast_get_context_name(con), inc->rname);
-		}
+	while ( (inc = ast_walk_context_includes(con, inc)) ) {
+		if (ast_context_find(inc->rname))
+			continue;
+
+		res = -1;
+		ast_log(LOG_WARNING, "Context '%s' tries includes nonexistent context '%s'\n",
+			ast_get_context_name(con), inc->rname);
+		break;
+	}
+
 	return res;
 }
 

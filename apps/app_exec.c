@@ -28,7 +28,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,7 +183,7 @@ static int execif_exec(struct ast_channel *chan, void *data)
 			if ((app = pbx_findapp(myapp))) {
 				res = pbx_exec(chan, app, mydata);
 			} else {
-				ast_log(LOG_WARNING, "Count not find application! (%s)\n", myapp);
+				ast_log(LOG_WARNING, "Could not find application! (%s)\n", myapp);
 				res = -1;
 			}
 		}

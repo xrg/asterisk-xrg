@@ -1,9 +1,10 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2008, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
+ * Russell Bryant <russell@digium.com>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -21,6 +22,7 @@
  * \brief Automatic channel service routines
  *
  * \author Mark Spencer <markster@digium.com> 
+ * \author Russell Bryant <russell@digium.com>
  */
 
 #include "asterisk.h"
@@ -64,8 +66,11 @@ struct asent {
 };
 
 static AST_LIST_HEAD_STATIC(aslist, asent);
+static ast_cond_t as_cond;
 
 static pthread_t asthread = AST_PTHREADT_NULL;
+
+static int as_chan_list_state;
 
 static void defer_frame(struct ast_channel *chan, struct ast_frame *f)
 {
@@ -91,6 +96,14 @@ static void *autoservice_run(void *ign)
 		int x = 0, ms = 500;
 
 		AST_LIST_LOCK(&aslist);
+
+		/* At this point, we know that no channels that have been removed are going
+		 * to get used again. */
+		as_chan_list_state++;
+
+		if (AST_LIST_EMPTY(&aslist))
+			ast_cond_wait(&as_cond, &aslist.lock);
+
 		AST_LIST_TRAVERSE(&aslist, as, list) {
 			if (!as->chan->_softhangup) {
 				if (x < MAX_AUTOMONS)
@@ -99,6 +112,7 @@ static void *autoservice_run(void *ign)
 					ast_log(LOG_WARNING, "Exceeded maximum number of automatic monitoring events.  Fix autoservice.c\n");
 			}
 		}
+
 		AST_LIST_UNLOCK(&aslist);
 
 		chan = ast_waitfor_n(mons, x, &ms);
@@ -187,6 +201,8 @@ int ast_autoservice_start(struct ast_channel *chan)
 	ast_channel_unlock(chan);
 
 	AST_LIST_LOCK(&aslist);
+	if (AST_LIST_EMPTY(&aslist))
+		ast_cond_signal(&as_cond);
 	AST_LIST_INSERT_HEAD(&aslist, as, list);
 	AST_LIST_UNLOCK(&aslist);
 
@@ -215,10 +231,18 @@ int ast_autoservice_stop(struct ast_channel *chan)
 	struct ast_frame *f;
 	int removed = 0;
 	int orig_end_dtmf_flag = 0;
+	int chan_list_state;
 
 	AST_LIST_HEAD_INIT_NOLOCK(&dtmf_frames);
 
 	AST_LIST_LOCK(&aslist);
+
+	/* Save the autoservice channel list state.  We _must_ verify that the channel
+	 * list has been rebuilt before we return.  Because, after we return, the channel
+	 * could get destroyed and we don't want our poor autoservice thread to step on
+	 * it after its gone! */
+	chan_list_state = as_chan_list_state;
+
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&aslist, as, list) {	
 		if (as->chan == chan) {
 			as->use_count--;
@@ -256,5 +280,13 @@ int ast_autoservice_stop(struct ast_channel *chan)
 		ast_frfree(f);
 	}
 
+	while (chan_list_state == as_chan_list_state)
+		usleep(1000);
+
 	return res;
+}
+
+void ast_autoservice_init(void)
+{
+	ast_cond_init(&as_cond, NULL);
 }

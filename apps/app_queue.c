@@ -99,6 +99,20 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/global_datastores.h"
 
+/* Please read before modifying this file.
+ * There are three locks which are regularly used
+ * throughout this file, the queue list lock, the lock
+ * for each individual queue, and the interface list lock.
+ * Please be extra careful to always lock in the following order
+ * 1) queue list lock
+ * 2) individual queue lock
+ * 3) interface list lock
+ * This order has sort of "evolved" over the lifetime of this
+ * application, but it is now in place this way, so please adhere
+ * to this order!
+ */
+
+
 enum {
 	QUEUE_STRATEGY_RINGALL = 0,
 	QUEUE_STRATEGY_ROUNDROBIN,
@@ -558,12 +572,62 @@ struct statechange {
 	int state;
 	char dev[0];
 };
+
+static int update_status(const char *interface, const int status)
+{
+	struct member *cur;
+	struct ao2_iterator mem_iter;
+	struct call_queue *q;
+
+	AST_LIST_LOCK(&queues);
+	AST_LIST_TRAVERSE(&queues, q, list) {
+		ast_mutex_lock(&q->lock);
+		mem_iter = ao2_iterator_init(q->members, 0);
+		while ((cur = ao2_iterator_next(&mem_iter))) {
+			char *tmp_interface;
+			char *slash_pos;
+			tmp_interface = ast_strdupa(cur->interface);
+			if ((slash_pos = strchr(tmp_interface, '/')))
+				if ((slash_pos = strchr(slash_pos + 1, '/')))
+					*slash_pos = '\0';
+
+			if (strcasecmp(interface, tmp_interface)) {
+				ao2_ref(cur, -1);
+				continue;
+			}
+
+			if (cur->status != status) {
+				cur->status = status;
+				if (q->maskmemberstatus) {
+					ao2_ref(cur, -1);
+					continue;
+				}
+
+				manager_event(EVENT_FLAG_AGENT, "QueueMemberStatus",
+					"Queue: %s\r\n"
+					"Location: %s\r\n"
+					"MemberName: %s\r\n"
+					"Membership: %s\r\n"
+					"Penalty: %d\r\n"
+					"CallsTaken: %d\r\n"
+					"LastCall: %d\r\n"
+					"Status: %d\r\n"
+					"Paused: %d\r\n",
+					q->name, cur->interface, cur->membername, cur->dynamic ? "dynamic" : cur->realtime ? "realtime" : "static",
+					cur->penalty, cur->calls, (int)cur->lastcall, cur->status, cur->paused);
+			}
+			ao2_ref(cur, -1);
+		}
+		ast_mutex_unlock(&q->lock);
+	}
+	AST_LIST_UNLOCK(&queues);
+
+	return 0;
+}
+
 /*! \brief set a member's status based on device state of that member's interface*/
 static void *handle_statechange(struct statechange *sc)
 {
-	struct call_queue *q;
-	struct member *cur;
-	struct ao2_iterator mem_iter;
 	struct member_interface *curint;
 	char *loc;
 	char *technology;
@@ -598,48 +662,8 @@ static void *handle_statechange(struct statechange *sc)
 
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Device '%s/%s' changed to state '%d' (%s)\n", technology, loc, sc->state, devstate2str(sc->state));
-	AST_LIST_LOCK(&queues);
-	AST_LIST_TRAVERSE(&queues, q, list) {
-		ast_mutex_lock(&q->lock);
-		mem_iter = ao2_iterator_init(q->members, 0);
-		while ((cur = ao2_iterator_next(&mem_iter))) {
-			char *interface;
-			char *slash_pos;
-			interface = ast_strdupa(cur->interface);
-			if ((slash_pos = strchr(interface, '/')))
-				if ((slash_pos = strchr(slash_pos + 1, '/')))
-					*slash_pos = '\0';
 
-			if (strcasecmp(sc->dev, interface)) {
-				ao2_ref(cur, -1);
-				continue;
-			}
-
-			if (cur->status != sc->state) {
-				cur->status = sc->state;
-				if (q->maskmemberstatus) {
-					ao2_ref(cur, -1);
-					continue;
-				}
-
-				manager_event(EVENT_FLAG_AGENT, "QueueMemberStatus",
-					"Queue: %s\r\n"
-					"Location: %s\r\n"
-					"MemberName: %s\r\n"
-					"Membership: %s\r\n"
-					"Penalty: %d\r\n"
-					"CallsTaken: %d\r\n"
-					"LastCall: %d\r\n"
-					"Status: %d\r\n"
-					"Paused: %d\r\n",
-					q->name, cur->interface, cur->membername, cur->dynamic ? "dynamic" : cur->realtime ? "realtime" : "static",
-					cur->penalty, cur->calls, (int)cur->lastcall, cur->status, cur->paused);
-			}
-			ao2_ref(cur, -1);
-		}
-		ast_mutex_unlock(&q->lock);
-	}
-	AST_LIST_UNLOCK(&queues);
+	update_status(sc->dev, sc->state);
 
 	return NULL;
 }
@@ -889,15 +913,16 @@ static int remove_from_interfaces(const char *interface)
 {
 	struct member_interface *curint;
 
+	if (interface_exists_global(interface))
+		return 0;
+
 	AST_LIST_LOCK(&interfaces);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&interfaces, curint, list) {
 		if (!strcasecmp(curint->interface, interface)) {
-			if (!interface_exists_global(interface)) {
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Removing %s from the list of interfaces that make up all of our queue members.\n", interface);
-				AST_LIST_REMOVE_CURRENT(&interfaces, list);
-				free(curint);
-			}
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Removing %s from the list of interfaces that make up all of our queue members.\n", interface);
+			AST_LIST_REMOVE_CURRENT(&interfaces, list);
+			free(curint);
 			break;
 		}
 	}
@@ -1670,54 +1695,6 @@ static void hangupcalls(struct callattempt *outgoing, struct ast_channel *except
 	}
 }
 
-static int update_status(struct call_queue *q, struct member *member, int status)
-{
-	struct member *cur;
-	struct ao2_iterator mem_iter;
-
-	/* Since a reload could have taken place, we have to traverse the list to
-		be sure it's still valid */
-	ast_mutex_lock(&q->lock);
-	mem_iter = ao2_iterator_init(q->members, 0);
-	while ((cur = ao2_iterator_next(&mem_iter))) {
-		if (member != cur) {
-			ao2_ref(cur, -1);
-			continue;
-		}
-
-		cur->status = status;
-		if (!q->maskmemberstatus) {
-			manager_event(EVENT_FLAG_AGENT, "QueueMemberStatus",
-				"Queue: %s\r\n"
-				"Location: %s\r\n"
-				"MemberName: %s\r\n"
-				"Membership: %s\r\n"
-				"Penalty: %d\r\n"
-				"CallsTaken: %d\r\n"
-				"LastCall: %d\r\n"
-				"Status: %d\r\n"
-				"Paused: %d\r\n",
-				q->name, cur->interface, cur->membername, cur->dynamic ? "dynamic" : cur->realtime ? "realtime": "static",
-				cur->penalty, cur->calls, (int)cur->lastcall, cur->status, cur->paused);
-		}
-		ao2_ref(cur, -1);
-	}
-	ast_mutex_unlock(&q->lock);
-	return 0;
-}
-
-static int update_dial_status(struct call_queue *q, struct member *member, int status)
-{
-	if (status == AST_CAUSE_BUSY)
-		status = AST_DEVICE_BUSY;
-	else if (status == AST_CAUSE_UNREGISTERED)
-		status = AST_DEVICE_UNAVAILABLE;
-	else if (status == AST_CAUSE_NOSUCHDRIVER)
-		status = AST_DEVICE_INVALID;
-	else
-		status = AST_DEVICE_UNKNOWN;
-	return update_status(q, member, status);
-}
 
 /* traverse all defined queues which have calls waiting and contain this member
    return 0 if no other queue has precedence (higher weight) or 1 if found  */
@@ -1854,7 +1831,8 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 		if (qe->chan->cdr)
 			ast_cdr_busy(qe->chan->cdr);
 		tmp->stillgoing = 0;
-		update_dial_status(qe->parent, tmp->member, status);
+
+		update_status(tmp->member->interface, ast_device_state(tmp->member->interface));
 
 		ast_mutex_lock(&qe->parent->lock);
 		qe->parent->rrpos++;
@@ -1862,8 +1840,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 
 		(*busies)++;
 		return 0;
-	} else if (status != tmp->oldstatus)
-		update_dial_status(qe->parent, tmp->member, status);
+	}
 	
 	tmp->chan->appl = "AppQueue";
 	tmp->chan->data = "(Outgoing Line)";
@@ -2193,8 +2170,6 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 						ast_verbose(VERBOSE_PREFIX_3 "Now forwarding %s to '%s/%s' (thanks to %s)\n", in->name, tech, stuff, o->chan->name);
 					/* Setup parameters */
 					o->chan = ast_request(tech, in->nativeformats, stuff, &status);
-					if (status != o->oldstatus)
-						update_dial_status(qe->parent, o->member, status);						
 					if (!o->chan) {
 						ast_log(LOG_NOTICE, "Unable to create local channel for call forward to '%s/%s'\n", tech, stuff);
 						o->stillgoing = 0;
@@ -2378,6 +2353,10 @@ static int is_our_turn(struct queue_ent *qe)
 			struct ao2_iterator mem_iter = ao2_iterator_init(qe->parent->members, 0);
 			while ((cur = ao2_iterator_next(&mem_iter))) {
 				switch (cur->status) {
+				case AST_DEVICE_INUSE:
+					if (!qe->parent->ringinuse)
+						break;
+					/* else fall through */
 				case AST_DEVICE_NOT_INUSE:
 				case AST_DEVICE_UNKNOWN:
 					if (!cur->paused)
@@ -2769,8 +2748,8 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	else
 		to = (qe->parent->timeout) ? qe->parent->timeout * 1000 : -1;
 	++qe->pending;
-	ring_one(qe, outgoing, &numbusies);
 	ast_mutex_unlock(&qe->parent->lock);
+	ring_one(qe, outgoing, &numbusies);
 	if (use_weight)
 		AST_LIST_UNLOCK(&queues);
 	lpeer = wait_for_answer(qe, outgoing, &to, &digit, numbusies, ast_test_flag(&(bridge_config.features_caller), AST_FEATURE_DISCONNECT), forwardsallowed);
@@ -3987,6 +3966,7 @@ static int queue_function_queuewaitingcount(struct ast_channel *chan, char *cmd,
 	int count = 0;
 	struct call_queue *q;
 	struct ast_module_user *lu;
+	struct ast_variable *var = NULL;
 
 	buf[0] = '\0';
 	
@@ -4009,6 +3989,13 @@ static int queue_function_queuewaitingcount(struct ast_channel *chan, char *cmd,
 	if (q) {
 		count = q->count;
 		ast_mutex_unlock(&q->lock);
+	} else if ((var = ast_load_realtime("queues", "name", data, NULL))) {
+		/* if the queue is realtime but was not found in memory, this
+		 * means that the queue had been deleted from memory since it was 
+		 * "dead." This means it has a 0 waiting count
+		 */
+		count = 0;
+		ast_variables_destroy(var);
 	} else
 		ast_log(LOG_WARNING, "queue %s was not found\n", data);
 
@@ -4248,9 +4235,9 @@ static int reload_queues(void)
 						continue;
 					}
 
-					remove_from_interfaces(cur->interface);
 					q->membercount--;
 					ao2_unlink(q->members, cur);
+					remove_from_interfaces(cur->interface);
 					ao2_ref(cur, -1);
 				}
 

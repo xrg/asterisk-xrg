@@ -1193,10 +1193,21 @@ void ast_channel_free(struct ast_channel *chan)
 		AST_LIST_UNLOCK(&channels);
 		ast_log(LOG_ERROR, "Unable to find channel in list to free. Assuming it has already been done.\n");
 	}
-	/* Lock and unlock the channel just to be sure nobody
-	   has it locked still */
+	/* Lock and unlock the channel just to be sure nobody has it locked still
+	   due to a reference retrieved from the channel list. */
 	ast_channel_lock(chan);
 	ast_channel_unlock(chan);
+
+	/* Get rid of each of the data stores on the channel */
+	while ((datastore = AST_LIST_REMOVE_HEAD(&chan->datastores, entry)))
+		/* Free the data store */
+		ast_channel_datastore_free(datastore);
+
+	/* Lock and unlock the channel just to be sure nobody has it locked still
+	   due to a reference that was stored in a datastore. (i.e. app_chanspy) */
+	ast_channel_lock(chan);
+	ast_channel_unlock(chan);
+
 	if (chan->tech_pvt) {
 		ast_log(LOG_WARNING, "Channel '%s' may not have been hung up properly\n", chan->name);
 		free(chan->tech_pvt);
@@ -1223,7 +1234,6 @@ void ast_channel_free(struct ast_channel *chan)
 	if (chan->pbx)
 		ast_log(LOG_WARNING, "PBX may not have been terminated properly on '%s'\n", chan->name);
 	free_cid(&chan->cid);
-	ast_mutex_destroy(&chan->lock);
 	/* Close pipes if appropriate */
 	if ((fd = chan->alertpipe[0]) > -1)
 		close(fd);
@@ -1234,12 +1244,6 @@ void ast_channel_free(struct ast_channel *chan)
 	while ((f = AST_LIST_REMOVE_HEAD(&chan->readq, frame_list)))
 		ast_frfree(f);
 	
-	/* Get rid of each of the data stores on the channel */
-	while ((datastore = AST_LIST_REMOVE_HEAD(&chan->datastores, entry)))
-		/* Free the data store */
-		ast_channel_datastore_free(datastore);
-	AST_LIST_HEAD_INIT_NOLOCK(&chan->datastores);
-
 	/* loop over the variables list, freeing all data and deleting list items */
 	/* no need to lock the list, as the channel is already locked */
 	
@@ -1250,6 +1254,8 @@ void ast_channel_free(struct ast_channel *chan)
 
 	/* Destroy the jitterbuffer */
 	ast_jb_destroy(chan);
+	
+	ast_mutex_destroy(&chan->lock);
 
 	ast_string_field_free_memory(chan);
 	free(chan);
@@ -1554,14 +1560,18 @@ static int generator_force(const void *data)
 	/* Called if generator doesn't have data */
 	void *tmp;
 	int res;
-	int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples);
+	int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples) = NULL;
 	struct ast_channel *chan = (struct ast_channel *)data;
 
 	ast_channel_lock(chan);
 	tmp = chan->generatordata;
 	chan->generatordata = NULL;
-	generate = chan->generator->generate;
+	if (chan->generator)
+		generate = chan->generator->generate;
 	ast_channel_unlock(chan);
+
+	if (!tmp || !generate)
+		return 0;
 
 	res = generate(chan, tmp, 0, 160);
 
@@ -1616,7 +1626,7 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	int *exception, int *outfd, int *ms)
 {
 	struct timeval start = { 0 , 0 };
-	struct pollfd *pfds;
+	struct pollfd *pfds = NULL;
 	int res;
 	long rms;
 	int x, y, max;
@@ -1627,11 +1637,12 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	struct fdmap {
 		int chan;
 		int fdno;
-	} *fdmap;
+	} *fdmap = NULL;
 
-	sz = n * AST_MAX_FDS + nfds;
-	pfds = alloca(sizeof(*pfds) * sz);
-	fdmap = alloca(sizeof(*fdmap) * sz);
+	if ((sz = n * AST_MAX_FDS + nfds)) {
+		pfds = alloca(sizeof(*pfds) * sz);
+		fdmap = alloca(sizeof(*fdmap) * sz);
+	}
 
 	if (outfd)
 		*outfd = -99999;
@@ -1847,6 +1858,7 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 					return -1;
 				case AST_CONTROL_RINGING:
 				case AST_CONTROL_ANSWER:
+				case AST_CONTROL_SRCUPDATE:
 					/* Unimportant */
 					break;
 				default:
@@ -2153,7 +2165,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			break;
 		case AST_FRAME_DTMF_BEGIN:
 			ast_log(LOG_DTMF, "DTMF begin '%c' received on %s\n", f->subclass, chan->name);
-			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_END_DTMF_ONLY) || 
+			if ( ast_test_flag(chan, AST_FLAG_DEFER_DTMF | AST_FLAG_END_DTMF_ONLY | AST_FLAG_EMULATE_DTMF) || 
 			    (!ast_tvzero(chan->dtmf_tv) && 
 			      ast_tvdiff_ms(ast_tvnow(), chan->dtmf_tv) < AST_MIN_DTMF_GAP) ) {
 				ast_log(LOG_DTMF, "DTMF begin ignored '%c' on %s\n", f->subclass, chan->name);
@@ -2166,9 +2178,16 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			}
 			break;
 		case AST_FRAME_NULL:
+			/* The EMULATE_DTMF flag must be cleared here as opposed to when the duration
+			 * is reached , because we want to make sure we pass at least one
+			 * voice frame through before starting the next digit, to ensure a gap
+			 * between DTMF digits. */
 			if (ast_test_flag(chan, AST_FLAG_EMULATE_DTMF)) {
 				struct timeval now = ast_tvnow();
-				if (ast_tvdiff_ms(now, chan->dtmf_tv) >= chan->emulate_dtmf_duration) {
+				if (!chan->emulate_dtmf_duration) {
+					ast_clear_flag(chan, AST_FLAG_EMULATE_DTMF);
+					chan->emulate_dtmf_digit = 0;
+				} else if (ast_tvdiff_ms(now, chan->dtmf_tv) >= chan->emulate_dtmf_duration) {
 					chan->emulate_dtmf_duration = 0;
 					ast_frfree(f);
 					f = &chan->dtmff;
@@ -2364,6 +2383,8 @@ int ast_indicate_data(struct ast_channel *chan, int condition, const void *data,
 				/* Do nothing.... */
 			} else if (condition == AST_CONTROL_VIDUPDATE) {
 				/* Do nothing.... */
+			} else if (condition == AST_CONTROL_SRCUPDATE) {
+				/* Do nothing... */
 			} else {
 				/* not handled */
 				ast_log(LOG_WARNING, "Unable to handle indication %d for '%s'\n", condition, chan->name);
@@ -2882,6 +2903,7 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 				case AST_CONTROL_HOLD:
 				case AST_CONTROL_UNHOLD:
 				case AST_CONTROL_VIDUPDATE:
+				case AST_CONTROL_SRCUPDATE:
 				case -1:			/* Ignore -- just stopping indications */
 					break;
 
@@ -3472,8 +3494,14 @@ int ast_do_masquerade(struct ast_channel *original)
 
 	ast_app_group_update(clone, original);
 	/* Move data stores over */
-	if (AST_LIST_FIRST(&clone->datastores))
+	if (AST_LIST_FIRST(&clone->datastores)) {
+		struct ast_datastore *ds;
 		AST_LIST_APPEND_LIST(&original->datastores, &clone->datastores, entry);
+		AST_LIST_TRAVERSE(&original->datastores, ds, entry) {
+			if (ds->info->chan_fixup)
+				ds->info->chan_fixup(ds->data, clone, original);
+		}
+	}
 
 	clone_variables(original, clone);
 	/* Presense of ADSI capable CPE follows clone */
@@ -3766,6 +3794,7 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
 			case AST_CONTROL_VIDUPDATE:
+			case AST_CONTROL_SRCUPDATE:
 				ast_indicate_data(other, f->subclass, f->data, f->datalen);
 				break;
 			default:
@@ -3898,6 +3927,10 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		ast_set_flag(c1, AST_FLAG_END_DTMF_ONLY);
 	if (!c1->tech->send_digit_begin)
 		ast_set_flag(c0, AST_FLAG_END_DTMF_ONLY);
+
+	/* Before we enter in and bridge these two together tell them both the source of audio has changed */
+	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
+	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
 
 	for (/* ever */;;) {
 		struct timeval now = { 0, };
@@ -4061,6 +4094,10 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 
 	ast_clear_flag(c0, AST_FLAG_END_DTMF_ONLY);
 	ast_clear_flag(c1, AST_FLAG_END_DTMF_ONLY);
+
+	/* Now that we have broken the bridge the source will change yet again */
+	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
+	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
 
 	c0->_bridge = NULL;
 	c1->_bridge = NULL;
@@ -4353,12 +4390,12 @@ char *ast_print_group(char *buf, int buflen, ast_group_t group)
 	for (i = 0; i <= 63; i++) {	/* Max group is 63 */
 		if (group & ((ast_group_t) 1 << i)) {
 	   		if (!first) {
-				strncat(buf, ", ", buflen);
+				strncat(buf, ", ", buflen - strlen(buf) - 1);
 			} else {
 				first=0;
 	  		}
 			snprintf(num, sizeof(num), "%u", i);
-			strncat(buf, num, buflen);
+			strncat(buf, num, buflen - strlen(buf) - 1);
 		}
 	}
 	return buf;

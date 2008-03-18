@@ -1176,9 +1176,12 @@ static void *get_button_template(struct skinnysession *s, struct button_definiti
 			(btn++)->buttonDefinition = BT_HOLD;
 			break;
 		case SKINNY_DEVICE_7920:
-		case SKINNY_DEVICE_7921:
 			/* XXX I don't know if this is right. */
 			for (i = 0; i < 4; i++)
+				(btn++)->buttonDefinition = BT_CUST_LINESPEEDDIAL;
+			break;
+		case SKINNY_DEVICE_7921:
+			for (i = 0; i < 6; i++)
 				(btn++)->buttonDefinition = BT_CUST_LINESPEEDDIAL;
 			break;
 		case SKINNY_DEVICE_7902:
@@ -2551,6 +2554,7 @@ static int skinny_answer(struct ast_channel *ast)
 	transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, exten, exten, l->instance, sub->callid, 2);
 	transmit_callstate(s, l->instance, SKINNY_CONNECTED, sub->callid);
 	transmit_selectsoftkeys(s, l->instance, sub->callid, KEYDEF_CONNECTED);
+	transmit_dialednumber(s, exten, l->instance, sub->callid);
 	transmit_displaypromptstatus(s, "Connected", 0, l->instance, sub->callid);
 	return res;
 }
@@ -2790,6 +2794,9 @@ static int skinny_indicate(struct ast_channel *ast, int ind, const void *data, s
 		ast_moh_stop(ast);
 		break;
 	case AST_CONTROL_PROCEEDING:
+		break;
+	case AST_CONTROL_SRCUPDATE:
+		ast_rtp_new_source(sub->rtp);
 		break;
 	default:
 		ast_log(LOG_WARNING, "Don't know how to indicate condition %d\n", ind);

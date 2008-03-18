@@ -113,6 +113,8 @@ ast_expr2f.c:
 	sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' ast_expr2f.c > zz
 	mv zz ast_expr2f.c
 
+ast_expr2f.o: ASTCFLAGS+=-Wno-unused
+
 testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
 	$(CC) -g -c -Iinclude -DSTANDALONE ast_expr2f.c
 	$(CC) -g -c -Iinclude -DSTANDALONE ast_expr2.c
@@ -120,6 +122,8 @@ testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
 	rm ast_expr2.o ast_expr2f.o 
 
 channel.o: ASTCFLAGS+=$(ZAPTEL_INCLUDE)
+
+stdtime/localtime.o: ASTCFLAGS+=$(AST_NO_STRICT_OVERFLOW)
 
 AST_EMBED_LDSCRIPTS:=$(sort $(EMBED_LDSCRIPTS))
 AST_EMBED_LDFLAGS:=$(foreach dep,$(EMBED_LDFLAGS),$(value $(dep)))
@@ -146,7 +150,7 @@ ifneq ($(findstring chan_h323,$(MENUSELECT_CHANNELS)),)
 else
 	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(ASTLDFLAGS) $(H323LDFLAGS) $^ buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(H323LDLIBS)
 endif
-	@$(ASTTOPDIR)/build_tools/strip_nonapi $@
+	$(CMD_PREFIX) $(ASTTOPDIR)/build_tools/strip_nonapi $@ || rm $@
 
 clean::
 	rm -f asterisk

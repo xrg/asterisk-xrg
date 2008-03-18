@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 42422 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <unistd.h>
@@ -168,8 +168,10 @@ static int auth_exec(struct ast_channel *chan, void *data)
 
 					while (!feof(f)) {
 						fgets(buf, sizeof(buf), f);
-						if (!feof(f) && !ast_strlen_zero(buf)) {
-							buf[strlen(buf) - 1] = '\0';
+						if (!ast_strlen_zero(buf)) {
+							size_t len = strlen(buf);
+							if (buf[len - 1] == '\n')
+								buf[len - 1] = '\0';
 							if (ast_test_flag(&flags,OPT_MULTIPLE)) {
 								md5secret = strchr(buf, ':');
 								if (md5secret == NULL)

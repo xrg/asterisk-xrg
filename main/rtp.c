@@ -172,6 +172,7 @@ struct ast_rtp {
 	struct ast_rtcp *rtcp;
 	struct ast_codec_pref pref;
 	struct ast_rtp *bridged;        /*!< Who we are Packet bridged to */
+	int set_marker_bit:1;           /*!< Whether to set the marker bit or not */
 };
 
 /* Forward declarations */
@@ -1314,7 +1315,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		/* Add timing data to let ast_generic_bridge() put the frame into a jitterbuf */
 		ast_set_flag(&rtp->f, AST_FRFLAG_HAS_TIMING_INFO);
 		rtp->f.ts = timestamp / 8;
-		rtp->f.len = rtp->f.samples / 8;
+		rtp->f.len = rtp->f.samples / ( (ast_format_rate(rtp->f.subclass) == 16000) ? 16 : 8 );
 	} else {
 		/* Video -- samples is # of samples vs. 90000 */
 		if (!rtp->lastividtimestamp)
@@ -1653,6 +1654,9 @@ void ast_rtp_set_m_type(struct ast_rtp* rtp, int pt)
     an unknown media type */
 void ast_rtp_unset_m_type(struct ast_rtp* rtp, int pt) 
 {
+	if (pt < 0 || pt > MAX_RTP_PT)
+		return; /* bogus payload type */
+
 	ast_mutex_lock(&rtp->bridge_lock);
 	rtp->current_RTP_PT[pt].isAstFormat = 0;
 	rtp->current_RTP_PT[pt].code = 0;
@@ -1865,6 +1869,7 @@ static struct ast_rtcp *ast_rtcp_new(void)
 	rtcp->s = rtp_socket();
 	rtcp->us.sin_family = AF_INET;
 	rtcp->them.sin_family = AF_INET;
+	rtcp->schedid = -1;
 
 	if (rtcp->s < 0) {
 		free(rtcp);
@@ -1994,6 +1999,13 @@ int ast_rtp_settos(struct ast_rtp *rtp, int tos)
 	if ((res = setsockopt(rtp->s, IPPROTO_IP, IP_TOS, &tos, sizeof(tos)))) 
 		ast_log(LOG_WARNING, "Unable to set TOS to %d %s\n", tos,strerror(errno));
 	return res;
+}
+
+void ast_rtp_new_source(struct ast_rtp *rtp)
+{
+	rtp->set_marker_bit = 1;
+	rtp->ssrc = ast_random();
+	return;
 }
 
 void ast_rtp_set_peer(struct ast_rtp *rtp, struct sockaddr_in *them)
@@ -2643,6 +2655,13 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 			}
 		}
 	}
+
+	/* If we have been explicitly told to set the marker bit do so */
+	if (rtp->set_marker_bit) {
+		mark = 1;
+		rtp->set_marker_bit = 0;
+	}
+
 	/* If the timestamp for non-digit packets has moved beyond the timestamp
 	   for digits, update the digit timestamp.
 	*/
@@ -2955,7 +2974,8 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 		} else if ((fr->frametype == AST_FRAME_CONTROL) && !(flags & AST_BRIDGE_IGNORE_SIGS)) {
 			if ((fr->subclass == AST_CONTROL_HOLD) ||
 			    (fr->subclass == AST_CONTROL_UNHOLD) ||
-			    (fr->subclass == AST_CONTROL_VIDUPDATE)) {
+			    (fr->subclass == AST_CONTROL_VIDUPDATE) ||
+			    (fr->subclass == AST_CONTROL_SRCUPDATE)) {
 				if (fr->subclass == AST_CONTROL_HOLD) {
 					/* If we someone went on hold we want the other side to reinvite back to us */
 					if (who == c0)
@@ -3186,7 +3206,8 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 		} else if ((fr->frametype == AST_FRAME_CONTROL) && !(flags & AST_BRIDGE_IGNORE_SIGS)) {
 			if ((fr->subclass == AST_CONTROL_HOLD) ||
 			    (fr->subclass == AST_CONTROL_UNHOLD) ||
-			    (fr->subclass == AST_CONTROL_VIDUPDATE)) {
+			    (fr->subclass == AST_CONTROL_VIDUPDATE) ||
+			    (fr->subclass == AST_CONTROL_SRCUPDATE)) {
 				/* If we are going on hold, then break callback mode and P2P bridging */
 				if (fr->subclass == AST_CONTROL_HOLD) {
 					if (p0_callback)
@@ -3268,6 +3289,14 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 		ast_channel_lock(c0);
 	}
 
+	/* Ensure neither channel got hungup during lock avoidance */
+	if (ast_check_hangup(c0) || ast_check_hangup(c1)) {
+		ast_log(LOG_WARNING, "Got hangup while attempting to bridge '%s' and '%s'\n", c0->name, c1->name);
+		ast_channel_unlock(c0);
+		ast_channel_unlock(c1);
+		return AST_BRIDGE_FAILED;
+	}
+		
 	/* Find channel driver interfaces */
 	if (!(pr0 = get_proto(c0))) {
 		ast_log(LOG_WARNING, "Can't find native functions for channel '%s'\n", c0->name);

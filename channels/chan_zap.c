@@ -461,6 +461,7 @@ static struct zt_pvt {
 	unsigned int ignoredtmf:1;
 	unsigned int immediate:1;			/*!< Answer before getting digits? */
 	unsigned int inalarm:1;
+	unsigned int unknown_alarm:1;
 	unsigned int mate:1;				/*!< flag to say its in MATE mode */
 	unsigned int outgoing:1;
 	unsigned int overlapdial:1;
@@ -2219,7 +2220,7 @@ static void destroy_zt_pvt(struct zt_pvt **pvt)
 	if (p->next)
 		p->next->prev = p->prev;
 	if (p->use_smdi)
-		ASTOBJ_UNREF(p->smdi_iface, ast_smdi_interface_destroy);
+		ast_smdi_interface_unref(p->smdi_iface);
 	ast_mutex_destroy(&p->lock);
 	free(p);
 	*pvt = NULL;
@@ -3832,11 +3833,24 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 #endif
 			p->inalarm = 1;
 			res = get_alarms(p);
-			ast_log(LOG_WARNING, "Detected alarm on channel %d: %s\n", p->channel, alarm2str(res));
-			manager_event(EVENT_FLAG_SYSTEM, "Alarm",
-								"Alarm: %s\r\n"
-								"Channel: %d\r\n",
-								alarm2str(res), p->channel);
+			do {
+				const char *alarm_str = alarm2str(res);
+
+				/* hack alert!  Zaptel 1.4 now exposes FXO battery as an alarm, but asterisk 1.4
+				 * doesn't know what to do with it.  Don't confuse users with log messages. */
+				if (!strcasecmp(alarm_str, "No Alarm") || !strcasecmp(alarm_str, "Unknown Alarm")) {
+					p->unknown_alarm = 1;
+					break;
+				} else {
+					p->unknown_alarm = 0;
+				}
+					
+				ast_log(LOG_WARNING, "Detected alarm on channel %d: %s\n", p->channel, alarm_str);
+				manager_event(EVENT_FLAG_SYSTEM, "Alarm",
+					"Alarm: %s\r\n"
+					"Channel: %d\r\n",
+					alarm_str, p->channel);
+			} while (0);
 #ifdef HAVE_LIBPRI
 			if (!p->pri || !p->pri->pri || pri_get_timer(p->pri->pri, PRI_TIMER_T309) < 0) {
 				/* fall through intentionally */
@@ -4167,9 +4181,13 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			if (p->bearer)
 				p->bearer->inalarm = 0;
 #endif				
-			ast_log(LOG_NOTICE, "Alarm cleared on channel %d\n", p->channel);
-			manager_event(EVENT_FLAG_SYSTEM, "AlarmClear",
-								"Channel: %d\r\n", p->channel);
+			if (!p->unknown_alarm) {
+				ast_log(LOG_NOTICE, "Alarm cleared on channel %d\n", p->channel);
+				manager_event(EVENT_FLAG_SYSTEM, "AlarmClear",
+					"Channel: %d\r\n", p->channel);
+			} else {
+				p->unknown_alarm = 0;
+			}
 			break;
 		case ZT_EVENT_WINKFLASH:
 			if (p->inalarm) break;
@@ -4553,6 +4571,7 @@ static struct ast_frame *__zt_exception(struct ast_channel *ast)
 			update_conf(p);
 			break;
 		case ZT_EVENT_RINGOFFHOOK:
+			zt_enable_ec(p);
 			zt_set_hook(p->subs[SUB_REAL].zfd, ZT_OFFHOOK);
 			if (p->owner && (p->owner->_state == AST_STATE_RINGING)) {
 				p->subs[SUB_REAL].needanswer = 1;
@@ -5167,6 +5186,9 @@ static int zt_indicate(struct ast_channel *chan, int condition, const void *data
 					res = 0;
 			} else
 				res = 0;
+			break;
+		case AST_CONTROL_SRCUPDATE:
+			res = 0;
 			break;
 		case -1:
 			res = tone_zone_play_tone(p->subs[index].zfd, -1);
@@ -6675,18 +6697,35 @@ static int handle_init_event(struct zt_pvt *i, int event)
 		break;
 	case ZT_EVENT_NOALARM:
 		i->inalarm = 0;
-		ast_log(LOG_NOTICE, "Alarm cleared on channel %d\n", i->channel);
-		manager_event(EVENT_FLAG_SYSTEM, "AlarmClear",
-			"Channel: %d\r\n", i->channel);
+		if (!i->unknown_alarm) {
+			ast_log(LOG_NOTICE, "Alarm cleared on channel %d\n", i->channel);
+			manager_event(EVENT_FLAG_SYSTEM, "AlarmClear",
+				"Channel: %d\r\n", i->channel);
+		} else {
+			i->unknown_alarm = 0;
+		}
 		break;
 	case ZT_EVENT_ALARM:
 		i->inalarm = 1;
 		res = get_alarms(i);
-		ast_log(LOG_WARNING, "Detected alarm on channel %d: %s\n", i->channel, alarm2str(res));
-		manager_event(EVENT_FLAG_SYSTEM, "Alarm",
-			"Alarm: %s\r\n"
-			"Channel: %d\r\n",
-			alarm2str(res), i->channel);
+		do {
+			const char *alarm_str = alarm2str(res);
+
+			/* hack alert!  Zaptel 1.4 now exposes FXO battery as an alarm, but asterisk 1.4
+			 * doesn't know what to do with it.  Don't confuse users with log messages. */
+			if (!strcasecmp(alarm_str, "No Alarm") || !strcasecmp(alarm_str, "Unknown Alarm")) {
+				i->unknown_alarm = 1;
+				break;
+			} else {
+				i->unknown_alarm = 0;
+			}
+
+			ast_log(LOG_WARNING, "Detected alarm on channel %d: %s\n", i->channel, alarm_str);
+			manager_event(EVENT_FLAG_SYSTEM, "Alarm",
+				"Alarm: %s\r\n"
+				"Channel: %d\r\n",
+				alarm_str, i->channel);
+		} while (0);
 		/* fall thru intentionally */
 	case ZT_EVENT_ONHOOK:
 		if (i->radio)
@@ -6938,12 +6977,6 @@ static void *do_monitor(void *data)
 					} else {
 						ast_log(LOG_WARNING, "Read failed with %d: %s\n", res, strerror(errno));
 					}
-					if (option_debug)
-						ast_log(LOG_DEBUG, "Monitor doohicky got event %s on channel %d\n", event2str(res), i->channel);
-					/* Don't hold iflock while handling init events -- race with chlock */
-					ast_mutex_unlock(&iflock);
-					handle_init_event(i, res);
-					ast_mutex_lock(&iflock);	
 				}
 				if (pollres & POLLPRI) {
 					if (i->owner || i->subs[SUB_REAL].owner) {
@@ -7426,7 +7459,13 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 		tmp->echocancel = conf.chan.echocancel;
 		tmp->echotraining = conf.chan.echotraining;
 		tmp->pulse = conf.chan.pulse;
-		tmp->echocanbridged = conf.chan.echocanbridged;
+		if (tmp->echocancel)
+			tmp->echocanbridged = conf.chan.echocanbridged;
+		else {
+			if (conf.chan.echocanbridged)
+				ast_log(LOG_NOTICE, "echocancelwhenbridged requires echocancel to be enabled; ignoring\n");
+			tmp->echocanbridged = 0;
+		}
 		tmp->busydetect = conf.chan.busydetect;
 		tmp->busycount = conf.chan.busycount;
 		tmp->busy_tonelength = conf.chan.busy_tonelength;
@@ -7706,7 +7745,10 @@ static struct zt_pvt *chandup(struct zt_pvt *src)
 	}
 	p->destroy = 1;
 	p->next = iflist;
+	p->prev = NULL;
 	iflist = p;
+	if (iflist->next)
+		iflist->next->prev = p;
 	return p;
 }
 	
@@ -8022,30 +8064,37 @@ static int pri_fixup_principle(struct zt_pri *pri, int principle, q931_call *c)
 		if (pri->pvts[x]->call == c) {
 			/* Found our call */
 			if (principle != x) {
+				struct zt_pvt *new = pri->pvts[principle], *old = pri->pvts[x];
+
 				if (option_verbose > 2)
 					ast_verbose(VERBOSE_PREFIX_3 "Moving call from channel %d to channel %d\n",
-						pri->pvts[x]->channel, pri->pvts[principle]->channel);
-				if (pri->pvts[principle]->owner) {
+						old->channel, new->channel);
+				if (new->owner) {
 					ast_log(LOG_WARNING, "Can't fix up channel from %d to %d because %d is already in use\n",
-						pri->pvts[x]->channel, pri->pvts[principle]->channel, pri->pvts[principle]->channel);
+						old->channel, new->channel, new->channel);
 					return -1;
 				}
 				/* Fix it all up now */
-				pri->pvts[principle]->owner = pri->pvts[x]->owner;
-				if (pri->pvts[principle]->owner) {
-					ast_string_field_build(pri->pvts[principle]->owner, name, 
+				new->owner = old->owner;
+				old->owner = NULL;
+				if (new->owner) {
+					ast_string_field_build(new->owner, name, 
 							       "Zap/%d:%d-%d", pri->trunkgroup,
-							       pri->pvts[principle]->channel, 1);
-					pri->pvts[principle]->owner->tech_pvt = pri->pvts[principle];
-					pri->pvts[principle]->owner->fds[0] = pri->pvts[principle]->subs[SUB_REAL].zfd;
-					pri->pvts[principle]->subs[SUB_REAL].owner = pri->pvts[x]->subs[SUB_REAL].owner;
+							       new->channel, 1);
+					new->owner->tech_pvt = new;
+					new->owner->fds[0] = new->subs[SUB_REAL].zfd;
+					new->subs[SUB_REAL].owner = old->subs[SUB_REAL].owner;
+					old->subs[SUB_REAL].owner = NULL;
 				} else
-					ast_log(LOG_WARNING, "Whoa, there's no  owner, and we're having to fix up channel %d to channel %d\n", pri->pvts[x]->channel, pri->pvts[principle]->channel);
-				pri->pvts[principle]->call = pri->pvts[x]->call;
-				/* Free up the old channel, now not in use */
-				pri->pvts[x]->subs[SUB_REAL].owner = NULL;
-				pri->pvts[x]->owner = NULL;
-				pri->pvts[x]->call = NULL;
+					ast_log(LOG_WARNING, "Whoa, there's no  owner, and we're having to fix up channel %d to channel %d\n", old->channel, new->channel);
+				new->call = old->call;
+				old->call = NULL;
+
+				/* Copy any DSP that may be present */
+				new->dsp = old->dsp;
+				new->dsp_features = old->dsp_features;
+				old->dsp = NULL;
+				old->dsp_features = 0;
 			}
 			return principle;
 		}
@@ -8507,8 +8556,20 @@ static void *pri_dchannel(void *vpri)
 		if (e) {
 			if (pri->debug)
 				pri_dump_event(pri->dchans[which], e);
-			if (e->e != PRI_EVENT_DCHAN_DOWN)
+
+			if (e->e != PRI_EVENT_DCHAN_DOWN) {
+				if (!(pri->dchanavail[which] & DCHAN_UP)) {
+					if (option_verbose > 1) 
+						ast_verbose(VERBOSE_PREFIX_2 "%s D-Channel on span %d up\n", pri_order(which), pri->span);
+				}
 				pri->dchanavail[which] |= DCHAN_UP;
+			} else {
+				if (pri->dchanavail[which] & DCHAN_UP) {
+					if (option_verbose > 1) 
+						ast_verbose(VERBOSE_PREFIX_2 "%s D-Channel on span %d down\n", pri_order(which), pri->span);
+				}
+				pri->dchanavail[which] &= ~DCHAN_UP;
+			}
 
 			if ((e->e != PRI_EVENT_DCHAN_UP) && (e->e != PRI_EVENT_DCHAN_DOWN) && (pri->pri != pri->dchans[which]))
 				/* Must be an NFAS group that has the secondary dchan active */
@@ -8516,9 +8577,6 @@ static void *pri_dchannel(void *vpri)
 
 			switch (e->e) {
 			case PRI_EVENT_DCHAN_UP:
-				if (option_verbose > 1) 
-					ast_verbose(VERBOSE_PREFIX_2 "%s D-Channel on span %d up\n", pri_order(which), pri->span);
-				pri->dchanavail[which] |= DCHAN_UP;
 				if (!pri->pri) pri_find_dchan(pri);
 
 				/* Note presense of D-channel */
@@ -8537,9 +8595,6 @@ static void *pri_dchannel(void *vpri)
 					}
 				break;
 			case PRI_EVENT_DCHAN_DOWN:
-				if (option_verbose > 1) 
-					ast_verbose(VERBOSE_PREFIX_2 "%s D-Channel on span %d down\n", pri_order(which), pri->span);
-				pri->dchanavail[which] &= ~DCHAN_UP;
 				pri_find_dchan(pri);
 				if (!pri_is_up(pri)) {
 					pri->resetting = 0;
@@ -8801,7 +8856,7 @@ static void *pri_dchannel(void *vpri)
 						pri->pvts[chanpos]->callingpres = e->ring.callingpres;
 					
 						/* Start PBX */
-						if (pri->overlapdial && ast_matchmore_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) {
+						if (!e->ring.complete && pri->overlapdial && ast_matchmore_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) {
 							/* Release the PRI lock while we create the channel */
 							ast_mutex_unlock(&pri->lock);
 							if (crv) {

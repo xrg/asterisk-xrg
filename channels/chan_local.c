@@ -150,6 +150,16 @@ static int local_devicestate(void *data)
 		return AST_DEVICE_UNKNOWN;
 }
 
+/*!
+ * \note Assumes the pvt is no longer in the pvts list
+ */
+static struct local_pvt *local_pvt_destroy(struct local_pvt *pvt)
+{
+	ast_mutex_destroy(&pvt->lock);
+	free(pvt);
+	return NULL;
+}
+
 static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_frame *f, struct ast_channel *us)
 {
 	struct ast_channel *other = NULL;
@@ -163,8 +173,7 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		/* We had a glare on the hangup.  Forget all this business,
 		return and destroy p.  */
 		ast_mutex_unlock(&p->lock);
-		ast_mutex_destroy(&p->lock);
-		free(p);
+		p = local_pvt_destroy(p);
 		return -1;
 	}
 	if (!other) {
@@ -172,24 +181,22 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		return 0;
 	}
 
-	ast_mutex_unlock(&p->lock);
-
 	/* Ensure that we have both channels locked */
-	if (us) {
-		while (ast_channel_trylock(other)) {
+	while (other && ast_channel_trylock(other)) {
+		ast_mutex_unlock(&p->lock);
+		if (us)
 			ast_channel_unlock(us);
-			usleep(1);
+		usleep(1);
+		if (us)
 			ast_channel_lock(us);
-		}
-	} else {
-		ast_channel_lock(other);
+		ast_mutex_lock(&p->lock);
+		other = isoutbound ? p->owner : p->chan;
 	}
 
-	ast_queue_frame(other, f);
-
-	ast_channel_unlock(other);
-
-	ast_mutex_lock(&p->lock);
+	if (other) {
+		ast_queue_frame(other, f);
+		ast_channel_unlock(other);
+	}
 
 	ast_clear_flag(p, LOCAL_GLARE_DETECT);
 
@@ -505,13 +512,15 @@ static int local_hangup(struct ast_channel *ast)
 		const char *status = pbx_builtin_getvar_helper(p->chan, "DIALSTATUS");
 		if ((status) && (p->owner)) {
 			/* Deadlock avoidance */
-			while (ast_channel_trylock(p->owner)) {
+			while (p->owner && ast_channel_trylock(p->owner)) {
 				ast_mutex_unlock(&p->lock);
 				usleep(1);
 				ast_mutex_lock(&p->lock);
 			}
-			pbx_builtin_setvar_helper(p->owner, "CHANLOCALSTATUS", status);
-			ast_channel_unlock(p->owner);
+			if (p->owner) {
+				pbx_builtin_setvar_helper(p->owner, "CHANLOCALSTATUS", status);
+				ast_channel_unlock(p->owner);
+			}
 		}
 		p->chan = NULL;
 		ast_clear_flag(p, LOCAL_LAUNCHED_PBX);
@@ -540,8 +549,7 @@ static int local_hangup(struct ast_channel *ast)
 		ast_mutex_unlock(&p->lock);
 		/* And destroy */
 		if (!glaredetect) {
-			ast_mutex_destroy(&p->lock);
-			free(p);
+			p = local_pvt_destroy(p);
 		}
 		return 0;
 	}
@@ -587,9 +595,7 @@ static struct local_pvt *local_alloc(const char *data, int format)
 
 	if (!ast_exists_extension(NULL, tmp->context, tmp->exten, 1, NULL)) {
 		ast_log(LOG_NOTICE, "No such extension/context %s@%s creating local channel\n", tmp->exten, tmp->context);
-		ast_mutex_destroy(&tmp->lock);
-		free(tmp);
-		tmp = NULL;
+		tmp = local_pvt_destroy(tmp);
 	} else {
 		/* Add to list */
 		AST_LIST_LOCK(&locals);
@@ -662,7 +668,6 @@ static struct ast_channel *local_new(struct local_pvt *p, int state)
 	return tmp;
 }
 
-
 /*! \brief Part of PBX interface */
 static struct ast_channel *local_request(const char *type, int format, void *data, int *cause)
 {
@@ -670,8 +675,14 @@ static struct ast_channel *local_request(const char *type, int format, void *dat
 	struct ast_channel *chan = NULL;
 
 	/* Allocate a new private structure and then Asterisk channel */
-	if ((p = local_alloc(data, format)))
-		chan = local_new(p, AST_STATE_DOWN);
+	if ((p = local_alloc(data, format))) {
+		if (!(chan = local_new(p, AST_STATE_DOWN))) {
+			AST_LIST_LOCK(&locals);
+			AST_LIST_REMOVE(&locals, p, list);
+			AST_LIST_UNLOCK(&locals);
+			p = local_pvt_destroy(p);
+		}
+	}
 
 	return chan;
 }
