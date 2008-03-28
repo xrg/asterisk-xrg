@@ -149,7 +149,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/compiler.h"
 #include "asterisk/threadstorage.h"
 #include "asterisk/translate.h"
-#include "asterisk/dnsmgr.h"
 
 #ifndef FALSE
 #define FALSE    0
@@ -2557,11 +2556,10 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 			 */
 			if (var) {
 				for (tmp = var; tmp; tmp = tmp->next) {
-					if (!strcasecmp(var->name, "host")) {
-						struct in_addr sin2;
-						struct ast_dnsmgr_entry *dnsmgr = NULL;
-						memset(&sin2, 0, sizeof(sin2));
-						if ((ast_dnsmgr_lookup(tmp->value, &sin2, &dnsmgr) < 0) || (memcmp(&sin2, &sin->sin_addr, sizeof(sin2)) != 0)) {
+					if (!strcasecmp(tmp->name, "host")) {
+						struct hostent *hp;
+						struct ast_hostent ahp;
+						if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(&hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
 							/* No match */
 							ast_variables_destroy(var);
 							var = NULL;
@@ -3055,7 +3053,7 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 			p->invitestate = INV_CALLING;
 
 			/* Initialize auto-congest time */
-			ast_sched_del(sched, p->initid);
+			AST_SCHED_DEL(sched, p->initid);
 			p->initid = ast_sched_add(sched, p->maxtime ? (p->maxtime * 4) : SIP_TRANS_TIMEOUT, auto_congest, p);
 		}
 	}
@@ -3128,7 +3126,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner)
 
 	if (p->stateid > -1)
 		ast_extension_state_del(p->stateid, NULL);
-	ast_sched_del(sched, p->initid);
+	AST_SCHED_DEL(sched, p->initid);
 	AST_SCHED_DEL(sched, p->waitid);
 	AST_SCHED_DEL(sched, p->autokillid);
 
@@ -7159,7 +7157,7 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 		ast_channel_unlock(chan);
 	}
 	if (sdp) {
-		if (p->udptl && p->t38.state == T38_LOCAL_DIRECT) {
+		if (p->udptl && (p->t38.state == T38_LOCAL_DIRECT || p->t38.state == T38_LOCAL_REINVITE)) {
 			ast_udptl_offered_from_local(p->udptl, 1);
 			if (option_debug)
 				ast_log(LOG_DEBUG, "T38 is in state %d on channel %s\n", p->t38.state, p->owner ? p->owner->name : "<none>");
@@ -12089,7 +12087,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 
 	/* Acknowledge sequence number - This only happens on INVITE from SIP-call */
 	/* Don't auto congest anymore since we've gotten something useful back */
-	ast_sched_del(sched, p->initid);
+	AST_SCHED_DEL(sched, p->initid);
 
 	/* RFC3261 says we must treat every 1xx response (but not 100)
 	   that we don't recognize as if it was 183.
@@ -14674,7 +14672,6 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 		update_call_counter(p, DEC_CALL_LIMIT);
 
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
-
 	if (p->owner)
 		ast_queue_hangup(p->owner);
 	else

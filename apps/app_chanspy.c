@@ -441,16 +441,15 @@ static struct chanspy_ds *setup_chanspy_ds(struct ast_channel *chan, struct chan
 
 	ast_mutex_lock(&chanspy_ds->lock);
 
-	chanspy_ds->chan = chan;
-
 	if (!(datastore = ast_channel_datastore_alloc(&chanspy_ds_info, NULL))) {
+		ast_mutex_unlock(&chanspy_ds->lock);
 		chanspy_ds = chanspy_ds_free(chanspy_ds);
 		ast_channel_unlock(chan);
 		return NULL;
 	}
-
+	
+	chanspy_ds->chan = chan;
 	datastore->data = chanspy_ds;
-
 	ast_channel_datastore_add(chan, datastore);
 
 	return chanspy_ds;
@@ -612,8 +611,10 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 					res = ast_streamfile(chan, peer_name, chan->language);
 					if (!res)
 						res = ast_waitstream(chan, "");
-					if (res)
+					if (res) {
+						chanspy_ds_free(peer_chanspy_ds);
 						break;
+					}
 				} else
 					res = ast_say_character_str(chan, peer_name, "", chan->language);
 				if ((num = atoi(ptr))) 

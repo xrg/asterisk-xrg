@@ -481,3 +481,15 @@ Formats:
   future release.  The use of GAIN for the increasing of voicemail message
   volume should use the 'volgain' option in voicemail.conf
 
+iLBC Codec:
+
+* Previously, the Asterisk source code distribution included the iLBC
+  encoder/decoder source code, from Global IP Solutions
+  (http://www.gipscorp.com). This code is not licensed for
+  distribution, and thus has been removed from the Asterisk source
+  code distribution. If you wish to use codec_ilbc to support iLBC
+  channels in Asterisk, you can run the contrib/scripts/get_ilbc_source.sh
+  script to download the source and put it in the proper place in
+  the Asterisk build tree. Once that is done you can follow your normal
+  steps of building Asterisk. You will need to run 'menuselect' and enable
+  the iLBC codec in the 'Codec  Translators' category.

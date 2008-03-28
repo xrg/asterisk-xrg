@@ -480,6 +480,8 @@ struct chan_iax2_pvt {
 	unsigned int last;
 	/*! Last sent timestamp - never send the same timestamp twice in a single call */
 	unsigned int lastsent;
+	/*! Timestamp of the last video frame sent */
+	unsigned int lastvsent;
 	/*! Next outgoing timestamp if everything is good */
 	unsigned int nextpred;
 	/*! True if the last voice we transmitted was not silence/CNG */
@@ -955,8 +957,8 @@ static int __schedule_action(void (*func)(const void *data), const void *data, c
 		return 0;
 	}
 	time(&t);
-	if (t != lasterror) 
-		ast_log(LOG_NOTICE, "Out of idle IAX2 threads for scheduling!\n");
+	if (t != lasterror && option_debug) 
+		ast_log(LOG_DEBUG, "Out of idle IAX2 threads for scheduling!\n");
 	lasterror = t;
 
 	return -1;
@@ -2692,10 +2694,9 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 		if (var && sin) {
 			for (tmp = var; tmp; tmp = tmp->next) {
 				if (!strcasecmp(tmp->name, "host")) {
-					struct in_addr sin2;
-					struct ast_dnsmgr_entry *dnsmgr = NULL;
-					memset(&sin2, 0, sizeof(sin2));
-					if ((ast_dnsmgr_lookup(tmp->value, &sin2, &dnsmgr) < 0) || (memcmp(&sin2, &sin->sin_addr, sizeof(sin2)) != 0)) {
+					struct ast_hostent ahp;
+					struct hostent *hp;
+					if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(&hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
 						/* No match */
 						ast_variables_destroy(var);
 						var = NULL;
@@ -2807,10 +2808,9 @@ static struct iax2_user *realtime_user(const char *username, struct sockaddr_in 
 		if (var) {
 			for (tmp = var; tmp; tmp = tmp->next) {
 				if (!strcasecmp(tmp->name, "host")) {
-					struct in_addr sin2;
-					struct ast_dnsmgr_entry *dnsmgr = NULL;
-					memset(&sin2, 0, sizeof(sin2));
-					if ((ast_dnsmgr_lookup(tmp->value, &sin2, &dnsmgr) < 0) || (memcmp(&sin2, &sin->sin_addr, sizeof(sin2)) != 0)) {
+					struct ast_hostent ahp;
+					struct hostent *hp;
+					if (!(hp = ast_gethostbyname(tmp->value, &ahp)) || (memcmp(&hp->h_addr, &sin->sin_addr, sizeof(hp->h_addr)))) {
 						/* No match */
 						ast_variables_destroy(var);
 						var = NULL;
@@ -3787,6 +3787,17 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 				p->nextpred = ms;
 				p->notsilenttx = 1;
 			}
+		} else if ( f->frametype == AST_FRAME_VIDEO ) {
+			/*
+			* IAX2 draft 03 says that timestamps MUST be in order.
+			* It does not say anything about several frames having the same timestamp
+			* When transporting video, we can have a frame that spans multiple iax packets
+			* (so called slices), so it would make sense to use the same timestamp for all of
+			* them
+			* We do want to make sure that frames don't go backwards though
+			*/
+			if ( (unsigned int)ms < p->lastsent )
+				ms = p->lastsent;
 		} else {
 			/* On a dataframe, use last value + 3 (to accomodate jitter buffer shrinking) if appropriate unless
 			   it's a genuine frame */
@@ -4156,11 +4167,22 @@ static int iax2_send(struct chan_iax2_pvt *pvt, struct ast_frame *f, unsigned in
 			/* Mark that mini-style frame is appropriate */
 			sendmini = 1;
 	}
-	if (((fts & 0xFFFF8000L) == (lastsent & 0xFFFF8000L)) && 
-		(f->frametype == AST_FRAME_VIDEO) &&
-		((f->subclass & ~0x1) == pvt->svideoformat)) {
+	if ( f->frametype == AST_FRAME_VIDEO ) {
+		/*
+		 * If the lower 15 bits of the timestamp roll over, or if
+		 * the video format changed then send a full frame.
+		 * Otherwise send a mini video frame
+		 */
+		if (((fts & 0xFFFF8000L) == (pvt->lastvsent & 0xFFFF8000L)) &&
+		    ((f->subclass & ~0x1) == pvt->svideoformat)
+		   ) {
 			now = 1;
 			sendmini = 1;
+		} else {
+			now = 0;
+			sendmini = 0;
+		}
+		pvt->lastvsent = fts;
 	}
 	/* Allocate an iax_frame */
 	if (now) {
@@ -6700,8 +6722,8 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 
 	if (!(thread = find_idle_thread())) {
 		time(&t);
-		if (t != last_errtime)
-			ast_log(LOG_NOTICE, "Out of idle IAX2 threads for I/O, pausing!\n");
+		if (t != last_errtime && option_debug)
+			ast_log(LOG_DEBUG, "Out of idle IAX2 threads for I/O, pausing!\n");
 		last_errtime = t;
 		usleep(1);
 		return 1;
