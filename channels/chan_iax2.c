@@ -919,7 +919,7 @@ static struct iax2_thread *find_idle_thread(void)
 				} else {
 					/* All went well and the thread is up, so increment our count */
 					iaxdynamicthreadcount++;
-					
+					ast_copy_string(thread->curfunc, "find_idle_thread", 16);
 					/* Wait for the thread to be ready before returning it to the caller */
 					while (!thread->ready_for_signal)
 						usleep(1);
@@ -1442,7 +1442,7 @@ static int iax2_queue_frame(int callno, struct ast_frame *f)
 			if (ast_mutex_trylock(&iaxs[callno]->owner->lock)) {
 				/* Avoid deadlock by pausing and trying again */
 				ast_mutex_unlock(&iaxsl[callno]);
-				usleep(1);
+				usleep(100);
 				ast_mutex_lock(&iaxsl[callno]);
 			} else {
 				ast_queue_frame(iaxs[callno]->owner, f);
@@ -4494,15 +4494,20 @@ static int iax2_show_threads(int fd, int argc, char *argv[])
 
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
-		
-	ast_cli(fd, "IAX2 Thread Information\n");
+
+#ifdef SCHED_MULTITHREADED
+	ast_cli(fd, "IAX2 Thread Information (multithread sched)\n");
+#else
+	ast_cli(fd, "IAX2 Thread Information (single-thread sched.)\n");
+#endif
 	time(&t);
 	ast_cli(fd, "Idle Threads:\n");
 	AST_LIST_LOCK(&idle_list);
 	AST_LIST_TRAVERSE(&idle_list, thread, list) {
 #ifdef DEBUG_SCHED_MULTITHREAD
-		ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d, func ='%s'\n", 
-			thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc);
+		ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d, func ='%s', iofd=%d, callno=%d\n", 
+			thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc, 
+			thread->iofd, thread->ffinfo.callno);
 #else
 		ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d\n", 
 			thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions);
@@ -4518,8 +4523,9 @@ static int iax2_show_threads(int fd, int argc, char *argv[])
 		else
 			type = 'P';
 #ifdef DEBUG_SCHED_MULTITHREAD
-		ast_cli(fd, "Thread %c%d: state=%d, update=%d, actions=%d, func ='%s'\n", 
-			type, thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc);
+		ast_cli(fd, "Thread %c%d: state=%d, update=%d, actions=%d, func ='%s', iofd=%d, callno=%d\n", 
+			type, thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc,
+			thread->iofd, thread->ffinfo.callno);
 #else
 		ast_cli(fd, "Thread %c%d: state=%d, update=%d, actions=%d\n", 
 			type, thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions);
@@ -4531,8 +4537,9 @@ static int iax2_show_threads(int fd, int argc, char *argv[])
         AST_LIST_LOCK(&dynamic_list);
         AST_LIST_TRAVERSE(&dynamic_list, thread, list) {
 #ifdef DEBUG_SCHED_MULTITHREAD
-                ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d, func ='%s'\n",
-                        thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc);
+                ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d, func ='%s', iofd=%d, callno=%d\n",
+                        thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc,
+			thread->iofd, thread->ffinfo.callno);
 #else
                 ast_cli(fd, "Thread %d: state=%d, update=%d, actions=%d\n",
                         thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions);
@@ -6661,6 +6668,7 @@ static void handle_deferred_full_frames(struct iax2_thread *thread)
 	ast_mutex_lock(&thread->lock);
 
 	while ((pkt_buf = AST_LIST_REMOVE_HEAD(&thread->full_frames, entry))) {
+		ast_copy_string(thread->curfunc, "handle_deferred", 16);
 		ast_mutex_unlock(&thread->lock);
 
 		thread->buf = pkt_buf->buf;
@@ -6763,6 +6771,7 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 				break;
 		}
 		if (cur) {
+			ast_log(LOG_WARNING, "Reuse thread for callno\n");
 			/* we found another thread processing a full frame for this call,
 			   so queue it up for processing later. */
 			defer_full_frame(thread, cur);
@@ -6783,7 +6792,7 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 	/* Mark as ready and send on its way */
 	thread->iostate = IAX_IOSTATE_READY;
 #ifdef DEBUG_SCHED_MULTITHREAD
-	ast_copy_string(thread->curfunc, "socket_process", sizeof(thread->curfunc));
+	ast_copy_string(thread->curfunc, "socket_process", 15);
 #endif
 	signal_condition(&thread->lock, &thread->cond);
 
@@ -8853,8 +8862,9 @@ static void *network_thread(void *ignore)
 
 		/* Go through the queue, sending messages which have not yet been
 		   sent, and scheduling retransmissions if appropriate */
-		AST_LIST_LOCK(&iaxq.queue);
 		count = 0;
+		wakeup = 2;
+		if (AST_LIST_TRYLOCK(&iaxq.queue) ==0){
 		wakeup = -1;
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&iaxq.queue, f, list) {
 			if (f->sentyet)
@@ -8889,6 +8899,7 @@ static void *network_thread(void *ignore)
 		}
 		AST_LIST_TRAVERSE_SAFE_END
 		AST_LIST_UNLOCK(&iaxq.queue);
+		}
 
 		pthread_testcancel();
 

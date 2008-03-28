@@ -270,6 +270,7 @@ static int iax_template_parse(struct iax_template *cur, struct ast_config *cfg, 
 	struct ast_hostent h;
 	struct iax_template *src, tmp;
 	const char *t;
+	if (!cfg) abort();
 	if (def) {
 		t = ast_variable_retrieve(cfg, s ,"template");
 		src = NULL;
