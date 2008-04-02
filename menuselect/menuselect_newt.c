@@ -316,6 +316,7 @@ int run_menu(void)
 				done = 0;
 				break;
 			case NEWT_KEY_ESCAPE:
+			case NEWT_KEY_F10:
 				if (changes_made) {
 					done = run_confirmation_dialog(&res);
 				} else {
