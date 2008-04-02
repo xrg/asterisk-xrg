@@ -6,7 +6,7 @@
 
 #define DEFINE_G711_CAPABILITY(cls, code, capName) \
 class cls : public AST_G711Capability { \
-  public: \
+public: \
     cls() : AST_G711Capability(240, code) { } \
 }; \
 H323_REGISTER_CAPABILITY(cls, capName) \
@@ -17,6 +17,101 @@ H323_REGISTER_CAPABILITY(AST_G7231Capability, OPAL_G7231);
 H323_REGISTER_CAPABILITY(AST_G729Capability,  OPAL_G729);
 H323_REGISTER_CAPABILITY(AST_G729ACapability, OPAL_G729A);
 H323_REGISTER_CAPABILITY(AST_GSM0610Capability, OPAL_GSM0610);
+H323_REGISTER_CAPABILITY(AST_CiscoG726Capability, CISCO_G726r32);
+H323_REGISTER_CAPABILITY(AST_CiscoDtmfCapability, CISCO_DTMF_RELAY);
+
+OPAL_MEDIA_FORMAT_DECLARE(OpalG711ALaw64kFormat,
+	OPAL_G711_ALAW_64K,
+	OpalMediaFormat::DefaultAudioSessionID,
+	RTP_DataFrame::PCMA,
+	TRUE,	// Needs jitter
+	64000,	// bits/sec
+	8,		// bytes/frame
+	8,		// 1 millisecond/frame
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+OPAL_MEDIA_FORMAT_DECLARE(OpalG711uLaw64kFormat,
+	OPAL_G711_ULAW_64K,
+	OpalMediaFormat::DefaultAudioSessionID,
+	RTP_DataFrame::PCMU,
+	TRUE,	// Needs jitter
+	64000,	// bits/sec
+	8,		// bytes/frame
+	8,		// 1 millisecond/frame
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+OPAL_MEDIA_FORMAT_DECLARE(OpalG729Format,
+	OPAL_G729,
+	OpalMediaFormat::DefaultAudioSessionID,
+	RTP_DataFrame::G729,
+	TRUE,	// Needs jitter
+	8000,	// bits/sec
+	10,		// bytes
+	80,		// 10 milliseconds
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+OPAL_MEDIA_FORMAT_DECLARE(OpalG729AFormat,
+	OPAL_G729 "A",
+	OpalMediaFormat::DefaultAudioSessionID,
+	RTP_DataFrame::G729,
+	TRUE,	// Needs jitter
+	8000,	// bits/sec
+	10,		// bytes
+	80,		// 10 milliseconds
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+OPAL_MEDIA_FORMAT_DECLARE(OpalG7231_6k3Format,
+	OPAL_G7231_6k3,
+	OpalMediaFormat::DefaultAudioSessionID,
+	RTP_DataFrame::G7231,
+	TRUE,	// Needs jitter
+	6400,	// bits/sec
+	24,		// bytes
+	240,	// 30 milliseconds
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+OPAL_MEDIA_FORMAT_DECLARE(OpalG7231A_6k3Format,
+	OPAL_G7231A_6k3,
+	OpalMediaFormat::DefaultAudioSessionID,
+	RTP_DataFrame::G7231,
+	TRUE,	// Needs jitter
+	6400,	// bits/sec
+	24,		// bytes
+	240,	// 30 milliseconds
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+OPAL_MEDIA_FORMAT_DECLARE(OpalGSM0610Format,
+	OPAL_GSM0610,
+	OpalMediaFormat::DefaultAudioSessionID,
+	RTP_DataFrame::GSM,
+	TRUE,	// Needs jitter
+	13200,	// bits/sec
+	33,		// bytes
+	160,	// 20 milliseconds
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+OPAL_MEDIA_FORMAT_DECLARE(OpalCiscoG726Format,
+	CISCO_G726r32,
+	OpalMediaFormat::DefaultAudioSessionID,
+	RTP_DataFrame::G726,
+	TRUE,	// Needs jitter
+	32000,	// bits/sec
+	4,		// bytes
+	8,		// 1 millisecond
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+#if 0
+OPAL_MEDIA_FORMAT_DECLARE(OpalCiscoDTMFRelayFormat,
+	CISCO_DTMF_RELAY,
+	OpalMediaFormat::DefaultAudioSessionID,
+	(RTP_DataFrame::PayloadTypes)121, // Choose this for Cisco IOS compatibility
+	TRUE,	// Needs jitter
+	100,	// bits/sec
+	4,		// bytes/frame
+	8*150,	// 150 millisecond
+	OpalMediaFormat::AudioTimeUnits,
+	0);
+#endif
 
 /*
  * Capability: G.711
@@ -236,4 +331,53 @@ PString AST_GSM0610Capability::GetFormatName() const
 H323Codec * AST_GSM0610Capability::CreateCodec(H323Codec::Direction direction) const
 {
 	return NULL;
+}
+
+/*
+ * Capability: G.726 32 Kbps
+ */
+AST_CiscoG726Capability::AST_CiscoG726Capability(int rx_frames)
+	: H323NonStandardAudioCapability(rx_frames, 240,
+		181, 0, 18,
+		(const BYTE *)"G726r32", 0)
+{
+}
+
+PObject *AST_CiscoG726Capability::Clone() const
+{
+	return new AST_CiscoG726Capability(*this);
+}
+
+H323Codec *AST_CiscoG726Capability::CreateCodec(H323Codec::Direction direction) const
+{
+	return NULL;
+}
+
+PString AST_CiscoG726Capability::GetFormatName() const
+{
+	return PString(CISCO_G726r32);
+}
+
+/*
+ * Capability: Cisco RTP DTMF Relay
+ */
+AST_CiscoDtmfCapability::AST_CiscoDtmfCapability()
+	: H323NonStandardDataCapability(0, 181, 0, 18, (const BYTE *)"RtpDtmfRelay", 0)
+{
+	rtpPayloadType = (RTP_DataFrame::PayloadTypes)121;
+}
+
+PObject *AST_CiscoDtmfCapability::Clone() const
+{
+	return new AST_CiscoDtmfCapability(*this);
+}
+
+H323Codec *AST_CiscoDtmfCapability::CreateCodec(H323Codec::Direction direction) const
+{
+	return NULL;
+}
+
+PString AST_CiscoDtmfCapability::GetFormatName() const
+{
+	return PString(CISCO_DTMF_RELAY);
 }

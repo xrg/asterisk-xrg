@@ -44,11 +44,27 @@ AC_LANG(C)
 
 AC_CHECK_FUNCS([asprintf getloadavg setenv strcasestr strndup strnlen strsep strtoq unsetenv vasprintf])
 
+# The frontend can use curses, ncurses, newt or GTK2 so check for all of them
+
+AST_EXT_LIB_SETUP([NEWT], [newt], [newt])
 AST_EXT_LIB_SETUP([CURSES], [curses], [curses])
 AST_EXT_LIB_SETUP([NCURSES], [ncurses], [ncurses])
 
+AST_EXT_LIB_CHECK([NEWT], [newt], [newtBell], [newt.h])
 AST_EXT_LIB_CHECK([CURSES], [curses], [initscr], [curses.h])
 AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
+
+PBX_GTK2=0
+AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)
+if test ! "x${PKGCONFIG}" = xNo; then
+   GTK2_INCLUDE=$(${PKGCONFIG} gtk+-2.0 --cflags 2>/dev/null)
+   GTK2_LIB=$(${PKGCONFIG} gtk+-2.0 --libs)   
+   PBX_GTK2=1
+   AC_DEFINE([HAVE_GTK2], 1, [Define if your system has the GTK2 libraries.])
+fi
+AC_SUBST(PBX_GTK2)
+AC_SUBST(GTK2_INCLUDE)
+AC_SUBST(GTK2_LIB)
 
 test "$silent"=yes && ac_sub_configure_args="${ac_sub_configure_args} --silent"
 

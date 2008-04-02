@@ -17,6 +17,9 @@
 /* Define to 1 if you have the `getloadavg' function. */
 #undef HAVE_GETLOADAVG
 
+/* Define if your system has the GTK2 libraries. */
+#undef HAVE_GTK2
+
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
@@ -25,6 +28,9 @@
 
 /* Define to indicate the ${NCURSES_DESCRIP} library */
 #undef HAVE_NCURSES
+
+/* Define to indicate the ${NEWT_DESCRIP} library */
+#undef HAVE_NEWT
 
 /* Define to 1 if you have the `setenv' function. */
 #undef HAVE_SETENV

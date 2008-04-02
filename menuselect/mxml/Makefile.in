@@ -116,9 +116,11 @@ clean:
 	$(RM) $(OBJS) $(TARGETS)
 	$(RM) mxmldoc-static libmxml.a
 	$(RM) *.bck *.bak
-	$(RM) config.cache config.log config.status
+	$(RM) config.cache config.log config.status config.h
 	$(RM) -r autom4te*.cache
 
+distclean: clean
+	$(RM) mxml.list Makefile
 
 #
 # Install everything...
@@ -224,7 +226,6 @@ Makefile:	Makefile.in
 
 
 config.h:	configure config.h.in
-	autoconf
 	if test -f config.status; then \
 		./config.status --recheck; \
 		./config.status; \

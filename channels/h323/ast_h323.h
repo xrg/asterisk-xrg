@@ -95,6 +95,11 @@ public:
 	virtual BOOL HandleSignalPDU(H323SignalPDU &pdu);
 	BOOL EmbedTunneledInfo(H323SignalPDU &pdu);
 #endif
+#ifdef H323_H450
+	virtual void OnReceivedLocalCallHold(int linkedId);
+	virtual void OnReceivedLocalCallRetrieve(int linkedId);
+#endif
+	void MyHoldCall(BOOL localHold);
 
 	PString sourceAliases;
 	PString destAliases;
@@ -113,11 +118,12 @@ public:
 	int tunnelOptions;
 #endif
 
+	unsigned holdHandling;
 	unsigned progressSetup;
 	unsigned progressAlert;
 	int cause;
 
-	RTP_DataFrame::PayloadTypes dtmfCodec;
+	RTP_DataFrame::PayloadTypes dtmfCodec[2];
 	int dtmfMode;
 };
 
@@ -160,6 +166,23 @@ public:
 	~MyProcess();
 	void Main();
 };
+
+#ifdef H323_H450
+#include <h450pdu.h>
+
+class MyH4504Handler : public H4504Handler
+{
+	PCLASSINFO(MyH4504Handler, H4504Handler);
+
+public:
+	MyH4504Handler(MyH323Connection &_conn, H450xDispatcher &_disp);
+	virtual void OnReceivedLocalCallHold(int linkedId);
+	virtual void OnReceivedLocalCallRetrieve(int linkedId);
+
+private:
+	MyH323Connection *conn;
+};
+#endif
 
 #include "compat_h323.h"
 

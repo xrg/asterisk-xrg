@@ -8,7 +8,7 @@ ABOUT
 
 Menuselect is a tool designed to be used in conjunction with GNU make. It
 allows for an XML specification of Makefile variables and optional space
-delimeted values of these variables. These values can then be used in the
+delimited values of these variables. These values can then be used in the
 Makefile to make various decisions during the build process.
 
 Menuselect also provides a mechanism for dependency checking for each possible
@@ -33,8 +33,10 @@ of the known information, the build is going to be successful.
 MENUSELECT DEPENDENCIES
 
 libncurses -- This is needed for the curses frontend.
+libnewt -- This is needed for the newt frontend (optional).
 libmxml -- This library, Mini-XML, is used for XML parsing. 
            (http://www.easysw.com/~mike/mxml/)
+	   (Asterisk uses the code in http://svn.digium.com/svn/mxml/ )
 
 
 ENVIRONMENT SETUP
