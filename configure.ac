@@ -245,7 +245,7 @@ AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
 AST_EXT_LIB_SETUP([SQLITE3], [SQLite], [sqlite3])
 AST_EXT_LIB_SETUP([SUPPSERV], [mISDN Supplemental Services], [suppserv])
 AST_EXT_LIB_SETUP([OPENSSL], [OpenSSL Secure Sockets Layer support], [ssl])
-AST_EXT_LIB_SETUP([FREETDS], [FreeTDS], [tds])
+AST_EXT_LIB_SETUP([FREETDS], [FreeTDS], [tds_mssql])
 AST_EXT_LIB_SETUP([TERMCAP], [Termcap], [termcap])
 AST_EXT_LIB_SETUP([TINFO], [Term Info], [tinfo])
 AST_EXT_LIB_SETUP([TONEZONE], [tonezone], [tonezone])
@@ -1333,12 +1333,12 @@ fi
 
 AST_EXT_TOOL_CHECK([GMIME], [gmime])
 
-AST_EXT_LIB_CHECK([FREETDS], [tds], [tds_version], [tds.h])
+AST_EXT_LIB_CHECK([FREETDS], [tds_mssql], [tds_version], [freetds_mssql/tds.h])
 if test "${PBX_FREETDS}" != "0";
 then
-    case `grep TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/tdsver.h` in
-	*0.64*)
-		FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
+    case `grep TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/freetds_mssql/tdsver.h` in
+    *0.64*)
+	FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
 	;;
     *0.63*)
         FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_63"

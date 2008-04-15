@@ -66,8 +66,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <time.h>
 #include <math.h>
 
-#include <tds.h>
-#include <tdsconvert.h>
+#include <freetds_mssql/tds.h>
+#include <freetds_mssql/tdsconvert.h>
 #include <ctype.h>
 
 #include "asterisk/config.h"
