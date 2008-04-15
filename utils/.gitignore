@@ -11,6 +11,8 @@ astdb2bdb
 ast_expr2.c
 ast_expr2f.c
 astman
+astman.i
+.astman.i.d
 astobj2.c
 check_expr
 check_expr2
