@@ -464,9 +464,9 @@ static int __ast_devstate_changed_literal(enum ast_device_state state, char *buf
 	 * to ensure that the right one gets notified.  Not a huge performance hit,
 	 * but it might could be fixed by an enterprising programmer in trunk.
 	 */
-	if (!norecurse && (tmp = strrchr(device, '-'))) {
+	if (!norecurse && (tmp = strrchr(device, '-')) && (tmp != device)) {
 		*tmp = '\0';
-		__ast_devstate_changed_literal(state, device, 1);
+		return __ast_devstate_changed_literal(state, device, 1);
 	}
 	
 	return 1;
@@ -484,6 +484,8 @@ int ast_devstate_changed_literal(enum ast_device_state state, const char *dev)
 int ast_device_state_changed_literal(const char *dev)
 {
 	char *buf;
+	if (!dev)
+		return -1;
 
 	buf = ast_strdupa(dev);
 
