@@ -754,7 +754,7 @@ static unsigned int default_primary_transport;     /*!< Default primary Transpor
 
 static struct sip_settings sip_cfg;		/*!< SIP configuration data.
 					\note in the future we could have multiple of these (per domain, per device group etc) */
-	int rtsave_useragent,   /*!< G: Save user agent at registration? */
+	int rtsave_useragent;	/*!< G: Save user agent at registration? */
 
 /*!< use this macro when ast_uri_decode is dependent on pedantic checking to be on. */
 #define SIP_PEDANTIC_DECODE(str)	\
@@ -4930,7 +4930,7 @@ static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr
 		argc++;
 	}
 	
-	if((useragent) && (sip_cfg.rtsave_useragent))){
+	if ((useragent) && (sip_cfg.rtsave_useragent)){
 		argname[argc]="useragent";
 		argval[argc]=useragent;
 		argc++;
