@@ -12,6 +12,7 @@ agi/eagi-test
 agi/strcompat.c
 autom4te.cache
 build_tools/menuselect-deps
+main/version.c
 config.cache
 config.log
 config.status
