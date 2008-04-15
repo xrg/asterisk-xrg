@@ -656,7 +656,7 @@ static struct ast_codec_pref default_prefs;		/*!< Default codec prefs */
 struct sip_settings {
 	int peer_rtupdate;	/*!< G: Update database with registration data for peer? */
 	int rtsave_sysname;	/*!< G: Save system name at registration? */
-	int rtsave_useragent,   /*!< G: Save user agent at registration? */
+	int rtsave_useragent;	/*!< G: Save user agent at registration? */
 	int ignore_regexpire;	/*!< G: Ignore expiration of peer  */
 };
 
@@ -3436,7 +3436,7 @@ static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, 
 		argc++;
 	}
 	
-	if((useragent) && (sip_cfg.rtsave_useragent))){
+	if ((useragent) && (sip_cfg.rtsave_useragent)){
 		argname[argc]="useragent";
 		argval[argc]=useragent;
 		argc++;
