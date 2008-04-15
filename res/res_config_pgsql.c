@@ -1406,9 +1406,9 @@ static int parse_config(int is_reload)
 	}
 
 	if (!(s = ast_variable_retrieve(config, "general", "dbpass"))) {
-		ast_log(LOG_WARNING,
-				"PostgreSQL RealTime: No database password found, using 'asterisk' as default.\n");
-		strcpy(dbpass, "asterisk");
+		ast_log(LOG_DEBUG,
+				"Postgresql RealTime: No database password found, skipping\n");
+		dbpass[0]='\0';
 	} else {
 		ast_copy_string(dbpass, s, sizeof(dbpass));
 	}
@@ -1442,13 +1442,10 @@ static int parse_config(int is_reload)
 	} else {
 		ast_copy_string(dbappname, s, sizeof(dbappname));
 	}
-
-	if (!ast_strlen_zero(dbhost)) {
-		/* No socket needed */
-	} else if (!(s = ast_variable_retrieve(config, "general", "dbsock"))) {
-		ast_log(LOG_WARNING,
-				"PostgreSQL RealTime: No database socket found, using '/tmp/.s.PGSQL.%d' as default.\n", dbport);
-		strcpy(dbsock, "/tmp");
+	if (!(s = ast_variable_retrieve(config, "general", "dbsock"))) {
+		ast_log(LOG_DEBUG,
+				"Postgresql RealTime: No database socket found, using default.\n");
+		dbsock[0]='\0';
 	} else {
 		ast_copy_string(dbsock, s, sizeof(dbsock));
 	}
@@ -1503,46 +1500,55 @@ static int pgsql_reconnect(const char *database)
 		PQfinish(pgsqlConn);
 		pgsqlConn = NULL;
 	}
-
-	/* DB password can legitimately be 0-length */
-	if ((!pgsqlConn) && (!ast_strlen_zero(dbhost) || !ast_strlen_zero(dbsock)) && !ast_strlen_zero(dbuser) && !ast_strlen_zero(my_database)) {
-		struct ast_str *conn_info = ast_str_create(128);
-
-		if (!conn_info) {
-			ast_log(LOG_ERROR, "PostgreSQL RealTime: Failed to allocate memory for connection string.\n");
-			return 0;
-		}
-
-		ast_str_set(&conn_info, 0, "host=%s port=%d dbname=%s user=%s",
-			S_OR(dbhost, dbsock), dbport, my_database, dbuser);
-
-		if (!ast_strlen_zero(dbappname)) {
-			ast_str_append(&conn_info, 0, " application_name=%s", dbappname);
-		}
-
-		if (!ast_strlen_zero(dbpass)) {
-			ast_str_append(&conn_info, 0, " password=%s", dbpass);
-		}
-
-		pgsqlConn = PQconnectdb(ast_str_buffer(conn_info));
-		ast_free(conn_info);
-		conn_info = NULL;
-
-		ast_debug(1, "pgsqlConn=%p\n", pgsqlConn);
-		if (pgsqlConn && PQstatus(pgsqlConn) == CONNECTION_OK) {
-			ast_debug(1, "PostgreSQL RealTime: Successfully connected to database.\n");
-			connect_time = time(NULL);
-			version = PQserverVersion(pgsqlConn);
-			return 1;
-		} else {
-			ast_log(LOG_ERROR,
-					"PostgreSQL RealTime: Failed to connect database %s on %s: %s\n",
-					my_database, dbhost, PQresultErrorMessage(NULL));
-			return 0;
-		}
-	} else {
-		ast_debug(1, "PostgreSQL RealTime: One or more of the parameters in the config does not pass our validity checks.\n");
+	
+	if (pgsqlConn){
+		ast_log(LOG_DEBUG, "Postgresql RealTime: Everything is fine.\n");
 		return 1;
+	}
+	
+	if (ast_strlen_zero(dbuser) || ast_strlen_zero(my_database)){
+		ast_log(LOG_WARNING, "Postgresql RealTime: DBname/user not specified.\n");
+		return 0;
+	}
+
+	char *connInfo = NULL;
+	unsigned int size = 100 + strlen(dbhost) + strlen(dbsock)
+		+ strlen(dbuser)
+		+ strlen(dbpass)
+		+ strlen(my_database);
+	
+	if (!(connInfo = ast_malloc(size)))
+		return 0;
+	
+	if (!ast_strlen_zero(dbhost))
+		sprintf(connInfo, "host=%s port=%d", dbhost, dbport);
+	else if (!ast_strlen_zero(dbsock))
+		sprintf(connInfo,"host=%s",dbsock);
+	else connInfo[0]='\0';
+		
+	size=strlen(connInfo);
+	sprintf(&connInfo[size]," dbname=%s user=%s",my_database, dbuser);
+	size=strlen(connInfo);
+	
+	if (strlen(dbpass))
+		sprintf(&connInfo[size]," password=%s",dbpass);
+		
+	ast_log(LOG_DEBUG, "%u connInfo: %s\n", size, connInfo);
+	pgsqlConn = PQconnectdb(connInfo);
+	ast_free(connInfo);
+	connInfo = NULL;
+	ast_log(LOG_DEBUG, "pgsqlConn=%p\n", pgsqlConn);
+	if (pgsqlConn && PQstatus(pgsqlConn) == CONNECTION_OK) {
+		ast_log(LOG_DEBUG, "Postgresql RealTime: Successfully connected to database.\n");
+		connect_time = time(NULL);
+		return 1;
+	} else {
+		ast_log(LOG_ERROR,
+				"Postgresql RealTime: Failed to connect database server %s on %s. Check debug for more info.\n",
+				dbname, dbhost);
+		ast_log(LOG_DEBUG, "Postgresql RealTime: Cannot Connect: %s\n",
+				PQresultErrorMessage(NULL));
+		return 0;
 	}
 }
 
@@ -1649,6 +1655,10 @@ static char *handle_cli_realtime_pgsql_status(struct ast_cli_entry *e, int cmd, 
 
 		return CLI_SUCCESS;
 	} else {
+		if (!pgsqlConn)
+			ast_cli(fd,"No Postgres connection!\n");
+		else
+			ast_cli(fd, "Postgres connection error: %s\n",PQerrorMessage(pgsqlConn));
 		return CLI_FAILURE;
 	}
 }
