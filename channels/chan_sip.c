@@ -754,6 +754,7 @@ static unsigned int default_primary_transport;     /*!< Default primary Transpor
 
 static struct sip_settings sip_cfg;		/*!< SIP configuration data.
 					\note in the future we could have multiple of these (per domain, per device group etc) */
+	int rtsave_useragent,   /*!< G: Save user agent at registration? */
 
 /*!< use this macro when ast_uri_decode is dependent on pedantic checking to be on. */
 #define SIP_PEDANTIC_DECODE(str)	\
@@ -4902,11 +4903,10 @@ static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr
 	char *tablename = NULL;
 	char str_lastms[20];
 
-	const char *sysname = ast_config_AST_SYSTEM_NAME;
-	char *syslabel = NULL;
+	const char *argname[4], *argval[4];
+	int argc = 0;
 
 	time_t nowtime = time(NULL) + expirey;
-	const char *fc = fullcontact ? "fullcontact" : NULL;
 
 	int realtimeregs = ast_check_realtime("sipregs");
 
@@ -4917,51 +4917,39 @@ static void realtime_update_peer(const char *peername, struct ast_sockaddr *addr
 	ast_copy_string(ipaddr, ast_sockaddr_isnull(addr) ? "" : ast_sockaddr_stringify_addr(addr), sizeof(ipaddr));
 	ast_copy_string(port, ast_sockaddr_port(addr) ? ast_sockaddr_stringify_port(addr) : "", sizeof(port));
 
-	if (ast_strlen_zero(sysname)) {	/* No system name, disable this */
-		sysname = NULL;
-	} else if (sip_cfg.rtsave_sysname) {
-		syslabel = "regserver";
+	if ((!ast_strlen_zero(ast_config_AST_SYSTEM_NAME))
+		&& (sip_cfg.rtsave_sysname)){
+		argname[argc]= "regserver";
+		argval[argc] = ast_config_AST_SYSTEM_NAME;
+		argc++;
 	}
 
-	/* XXX IMPORTANT: Anytime you add a new parameter to be updated, you
-         *  must also add it to contrib/scripts/asterisk.ldap-schema,
-         *  contrib/scripts/asterisk.ldif,
-         *  and to configs/res_ldap.conf.sample as described in
-         *  bugs 15156 and 15895
-         */
-
-	/* This is ugly, we need something better ;-) */
-	if (sip_cfg.rtsave_path) {
-		if (fc) {
-			ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
-				"port", port, "regseconds", regseconds,
-				deprecated_username ? "username" : "defaultuser", defaultuser,
-				"useragent", useragent, "lastms", str_lastms,
-				"path", path,			/* Path data can be NULL */
-				fc, fullcontact, syslabel, sysname, SENTINEL); /* note fc and syslabel _can_ be NULL */
-		} else {
-			ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
-				"port", port, "regseconds", regseconds,
-				"useragent", useragent, "lastms", str_lastms,
-				deprecated_username ? "username" : "defaultuser", defaultuser,
-				"path", path,			/* Path data can be NULL */
-				syslabel, sysname, SENTINEL); /* note syslabel _can_ be NULL */
-		}
-	} else {
-		if (fc) {
-			ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
-				"port", port, "regseconds", regseconds,
-				deprecated_username ? "username" : "defaultuser", defaultuser,
-				"useragent", useragent, "lastms", str_lastms,
-				fc, fullcontact, syslabel, sysname, SENTINEL); /* note fc and syslabel _can_ be NULL */
-		} else {
-			ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
-				"port", port, "regseconds", regseconds,
-				"useragent", useragent, "lastms", str_lastms,
-				deprecated_username ? "username" : "defaultuser", defaultuser,
-				syslabel, sysname, SENTINEL); /* note syslabel _can_ be NULL */
-		}
+	if(fullcontact){
+		argname[argc]="fullcontact";
+		argval[argc]=fullcontact;
+		argc++;
 	}
+	
+	if((useragent) && (sip_cfg.rtsave_useragent))){
+		argname[argc]="useragent";
+		argval[argc]=useragent;
+		argc++;
+	}
+	
+	if (sip_cfg.rtsave_path){
+	      argname[argc] = "path";
+	      argval[argc] = path;
+	      argc++;
+	}
+	
+	for(;argc<sizeof(argc);argc++)
+		argname[argc]= argval[argc]= NULL;
+	
+	ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
+		"port", port, "regseconds", regseconds,
+		deprecated_username ? "username" : "defaultuser", defaultuser,
+		argname[0], argval[0], argname[1], argval[1], argname[2], argval[2],
+                argname[3], argval[3], NULL);
 }
 
 /*! \brief Automatically add peer extension to dial plan */
@@ -15856,6 +15844,7 @@ static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, uint32_t
 static void destroy_association(struct sip_peer *peer)
 {
 	int realtimeregs = ast_check_realtime("sipregs");
+		// todo: maybe reset the useragent (but only if it exists..)
 	char *tablename = (realtimeregs) ? "sipregs" : "sippeers";
 
 	if (!sip_cfg.ignore_regexpire) {
@@ -21129,6 +21118,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(a->fd, "  Ignore Reg. Expire:     %s\n", AST_CLI_YESNO(sip_cfg.ignore_regexpire));
 		ast_cli(a->fd, "  Save sys. name:         %s\n", AST_CLI_YESNO(sip_cfg.rtsave_sysname));
 		ast_cli(a->fd, "  Save path header:       %s\n", AST_CLI_YESNO(sip_cfg.rtsave_path));
+		ast_cli(a->fd, "  Save useragent:         %s\n", AST_CLI_YESNO(sip_cfg.rtsave_useragent));
 		ast_cli(a->fd, "  Auto Clear:             %d (%s)\n", sip_cfg.rtautoclear, ast_test_flag(&global_flags[1], SIP_PAGE2_RTAUTOCLEAR) ? "Enabled" : "Disabled");
 	}
 	ast_cli(a->fd, "\n----\n");
@@ -31504,6 +31494,8 @@ static int reload_config(enum channelreloadreason reason)
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_RTCACHEFRIENDS);
 		} else if (!strcasecmp(v->name, "rtsavesysname")) {
 			sip_cfg.rtsave_sysname = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "rtsaveuseragent")) {
+			sip_cfg.rtsave_useragent = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "rtsavepath")) {
 			sip_cfg.rtsave_path = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "rtupdate")) {
