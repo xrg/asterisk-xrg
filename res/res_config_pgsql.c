@@ -1656,9 +1656,9 @@ static char *handle_cli_realtime_pgsql_status(struct ast_cli_entry *e, int cmd, 
 		return CLI_SUCCESS;
 	} else {
 		if (!pgsqlConn)
-			ast_cli(fd,"No Postgres connection!\n");
+			ast_cli(a->fd,"No Postgres connection!\n");
 		else
-			ast_cli(fd, "Postgres connection error: %s\n",PQerrorMessage(pgsqlConn));
+			ast_cli(a->fd, "Postgres connection error: %s\n",PQerrorMessage(pgsqlConn));
 		return CLI_FAILURE;
 	}
 }
