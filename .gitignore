@@ -2,6 +2,7 @@ agi/eagi-sphinx-test
 agi/eagi-test
 agi/strcompat.c
 main/asterisk
+main/version.c
 makeopts
 menuselect.makedeps
 menuselect.makeopts
