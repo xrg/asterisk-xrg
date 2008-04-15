@@ -69,8 +69,8 @@ static struct ast_cli_entry cli_realtime[] = {
 static struct ast_variable *realtime_pgsql(const char *database, const char *table, va_list ap)
 {
 	PGresult *result = NULL;
-	int num_rows = 0, pgerror;
-	char sql[256], escapebuf[513];
+	int num_rows = 0;
+	char sql[256];
 	const char *sparams[20];
 	int  nparams = 0;
 	char *stringp;
@@ -203,8 +203,8 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 static struct ast_config *realtime_multi_pgsql(const char *database, const char *table, va_list ap)
 {
 	PGresult *result = NULL;
-	int num_rows = 0, pgerror;
-	char sql[256], escapebuf[513];
+	int num_rows = 0;
+	char sql[256];
 	const char *sparams[20];
 	int  nparams = 0;
 	const char *initfield = NULL;
@@ -356,8 +356,8 @@ static int update_pgsql(const char *database, const char *table, const char *key
 						const char *lookup, va_list ap)
 {
 	PGresult *result = NULL;
-	int numrows = 0, pgerror;
-	char sql[256], escapebuf[513];
+	int numrows = 0;
+	char sql[256];
 	const char *newparam, *newval;
 	const char *sparams[40];
 	int  nparams = 0;
@@ -459,7 +459,6 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
 	char sql[256];
 	char params[256];
 	char vals[256];
-	int pgresult;
 	const char *sparams[50];
 	int  nparams = 0;
 	const char *newparam, *newval;
@@ -481,14 +480,21 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
 			va_end(ap);
 			return -1;
 		}
-		newval = va_arg(ap, const char *);
-		if (nparams==0) {
-			ast_str_append(params,sizeof(params),"%s",newparam);
-			ast_str_append(vals,sizeof(vals),"?");
-		}else{
-			ast_str_append(params,sizeof(params),", %s",newparam);
-			ast_str_append(vals,sizeof(vals),", ?");
+		if (((strlen(params) + 3 + strlen(newparam)) > sizeof(params)) ||
+			((strlen(vals) + 4) > sizeof(vals))){
+			ast_log(LOG_ERROR, "PostgreSQL RealTime: Params buffer too short for query.\n");
+			va_end(ap);
+			return -1;
 		}
+		
+		newval = va_arg(ap, const char *);
+		if (nparams>0) {
+			strcat(params,", ");
+			strcat(vals,", ");
+		}
+		
+		strcat(params,newparam);
+		strcat(vals,"?");
 		sparams[nparams++]=newval;
 	}
  	va_end(ap);
@@ -557,7 +563,7 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
  
 	return -1;
 }
--
+
 static int destroy_pgsql(const char *database, const char *table, const char *keyfield, const char *lookup, va_list ap)
 {
 	PGresult *result = NULL;
@@ -652,7 +658,8 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 
 /* Note: we trust "database", "table" and "file" to be valid strings.  */
 static struct ast_config *config_pgsql(const char *database, const char *table,
-					struct ast_flags flags, const char *suggested_incl, const char *who_asked)
+						const char *file, struct ast_config *cfg,
+						struct ast_flags flags, const char *suggested_incl, const char *who_asked)
 {
 	PGresult *result = NULL;
 	long num_rows;
@@ -1005,9 +1012,9 @@ static char *handle_cli_realtime_pgsql_status(struct ast_cli_entry *e, int cmd, 
 		return CLI_SUCCESS;
 	} else {
 		if (!pgsqlConn)
-			ast_cli(fd,"No Postgres connection!\n");
+			ast_cli(a->fd,"No Postgres connection!\n");
 		else
-			ast_cli(fd, "Postgres connection error: %s\n",PQerrorMessage(pgsqlConn));
+			ast_cli(a->fd, "Postgres connection error: %s\n",PQerrorMessage(pgsqlConn));
 		return CLI_FAILURE;
 	}
 }
