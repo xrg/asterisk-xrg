@@ -140,16 +140,16 @@ else
   ASTHEADERDIR=$(includedir)/asterisk
   ASTBINDIR=$(bindir)
   ASTSBINDIR=$(sbindir)
-  ASTSPOOLDIR=$(localstatedir)/spool/asterisk
-  ASTLOGDIR=$(localstatedir)/log/asterisk
-  ASTVARRUNDIR=$(localstatedir)/run
+  ASTSPOOLDIR=/var/spool/asterisk
+  ASTLOGDIR=/var/log/asterisk
+  ASTVARRUNDIR=/var/run
   ASTMANDIR=$(mandir)
 ifneq ($(findstring BSD,$(OSARCH)),)
   ASTVARLIBDIR=$(prefix)/share/asterisk
   ASTVARRUNDIR=$(localstatedir)/run/asterisk
   ASTDBDIR=$(localstatedir)/db/asterisk
 else
-  ASTVARLIBDIR=$(localstatedir)/lib/asterisk
+  ASTVARLIBDIR=/var/lib/asterisk
   ASTDBDIR=$(ASTVARLIBDIR)
 endif
   ASTKEYDIR=$(ASTVARLIBDIR)
@@ -190,7 +190,7 @@ OPTIONS=
 ifeq ($(OSARCH),linux-gnu)
   ifeq ($(PROC),x86_64)
     # You must have GCC 3.4 to use k8, otherwise use athlon
-    PROC=k8
+    #PROC=k8
     #PROC=athlon
   endif
 
@@ -452,8 +452,9 @@ distclean: $(SUBDIRS_DIST_CLEAN) clean
 	rm -rf doc/api
 	rm -f build_tools/menuselect-deps
 
-datafiles: _all
-	if [ x`$(ID) -un` = xroot ]; then CFLAGS="$(ASTCFLAGS)" sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
+datafiles:
+	mkdir -p $(DESTDIR)/usr/lib/pkgconfig
+	CFLAGS="$(ASTCFLAGS)" sh build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
 # improved a lot.  I'll put it here for now.
@@ -498,7 +499,7 @@ update:
 NEWHEADERS=$(notdir $(wildcard include/asterisk/*.h))
 OLDHEADERS=$(filter-out $(NEWHEADERS),$(notdir $(wildcard $(DESTDIR)$(ASTHEADERDIR)/*.h)))
 
-bininstall: _all
+bininstall:
 	mkdir -p $(DESTDIR)$(MODULES_DIR)
 	mkdir -p $(DESTDIR)$(ASTSBINDIR)
 	mkdir -p $(DESTDIR)$(ASTETCDIR)
@@ -614,7 +615,7 @@ adsi:
 		$(INSTALL) -m 644 $$x $(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x` ; \
 	done
 
-samples: adsi
+samples:
 	@echo Installing other config files...
 	@mkdir -p $(DESTDIR)$(ASTETCDIR)
 	@for x in configs/*.sample; do \
