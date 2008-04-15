@@ -507,7 +507,10 @@ int ast_devstate_changed_literal(enum ast_device_state state, enum ast_devstate_
 
 int ast_device_state_changed_literal(const char *dev)
 {
+	if (!dev)
+		return -1;
 	return ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, AST_DEVSTATE_CACHABLE, dev);
+
 }
 
 int ast_devstate_changed(enum ast_device_state state, enum ast_devstate_cache cachable, const char *fmt, ...)
