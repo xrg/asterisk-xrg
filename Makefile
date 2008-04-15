@@ -341,7 +341,7 @@ all: _all
 	@echo " +               $(mK) install               +"  
 	@echo " +-------------------------------------------+"  
 
-_all: cleantest makeopts $(SUBDIRS)
+_all: cleantest makeopts menuselect.makeopts $(SUBDIRS)
 
 makeopts: configure
 	@echo "****"
