@@ -1741,7 +1741,7 @@ static int __sip_autodestruct(const void *data);
 static void sip_scheddestroy(struct sip_pvt *p, int ms);
 static int sip_cancel_destroy(struct sip_pvt *p);
 static struct sip_pvt *sip_destroy(struct sip_pvt *p);
-static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist);
+static int __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist);
 static void __sip_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod);
 static void __sip_pretend_ack(struct sip_pvt *p);
 static int __sip_semi_ack(struct sip_pvt *p, int seqno, int resp, int sipmethod);
@@ -2252,8 +2252,11 @@ cleanup2:
 	ser = ast_tcptls_session_instance_destroy(ser);
 	if (reqcpy.data)
 		ast_free(reqcpy.data);
-	if (req.data)
+	if (req.data) {
 		ast_free(req.data);
+		req.data = NULL;
+	}
+	
 
 	if (req.socket.lock) {
 		ast_mutex_destroy(req.socket.lock);
@@ -3605,7 +3608,7 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 			 * is because we only have the IP address and the host field might be
 			 * set as a name (and the reverse PTR might not match).
 			 */
-			if (var) {
+			if (var && sin) {
 				for (tmp = var; tmp; tmp = tmp->next) {
 					if (!strcasecmp(tmp->name, "host")) {
 						struct hostent *hp;
@@ -4272,10 +4275,21 @@ static void sip_registry_destroy(struct sip_registry *reg)
 }
 
 /*! \brief Execute destruction of SIP dialog structure, release memory */
-static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
+static int __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 {
 	struct sip_pvt *cur, *prev = NULL;
 	struct sip_pkt *cp;
+
+	/* We absolutely cannot destroy the rtp struct while a bridge is active or we WILL crash */
+	if (p->rtp && ast_rtp_get_bridged(p->rtp)) {
+		ast_verbose("Bridge still active.  Delaying destroy of SIP dialog '%s' Method: %s\n", p->callid, sip_methods[p->method].text);
+		return -1;
+	}
+
+	if (p->vrtp && ast_rtp_get_bridged(p->vrtp)) {
+		ast_verbose("Bridge still active.  Delaying destroy of SIP dialog '%s' Method: %s\n", p->callid, sip_methods[p->method].text);
+		return -1;
+	}
 
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Really destroying SIP dialog '%s' Method: %s\n", p->callid, sip_methods[p->method].text);
@@ -4316,15 +4330,10 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 	AST_SCHED_DEL(sched, p->waitid);
 	AST_SCHED_DEL(sched, p->autokillid);
 
-	/* We absolutely cannot destroy the rtp struct while a bridge is active or we WILL crash */
 	if (p->rtp) {
-		while (ast_rtp_get_bridged(p->rtp))
-			usleep(1);
 		ast_rtp_destroy(p->rtp);
 	}
 	if (p->vrtp) {
-		while (ast_rtp_get_bridged(p->vrtp))
-			usleep(1);
 		ast_rtp_destroy(p->vrtp);
 	}
 	if (p->trtp) {
@@ -4379,7 +4388,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 		dialoglist_unlock();
 	if (!cur) {
 		ast_log(LOG_WARNING, "Trying to destroy \"%s\", not found in dialog list?!?! \n", p->callid);
-		return;
+		return 0;
 	} 
 
 	/* remove all current packets in this dialog */
@@ -4400,6 +4409,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 	ast_string_field_free_memory(p);
 
 	ast_free(p);
+	return 0;
 }
 
 /*! \brief  update_call_counter: Handle call_limit for SIP users 
@@ -6886,7 +6896,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	}
 	if (!newjointcapability) {
 		/* If T.38 was not negotiated either, totally bail out... */
-		if (!p->t38.jointcapability || !p->t38.peercapability) {
+		if (!p->t38.jointcapability || !udptlportno) {
 			ast_log(LOG_NOTICE, "No compatible codecs, not accepting this offer!\n");
 			/* Do NOT Change current setting */
 			return -1;
@@ -8667,7 +8677,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	}
 
 	/* If custom URI options have been provided, append them */
-	if (p->options && p->options->uri_options)
+	if (p->options && !ast_strlen_zero(p->options->uri_options))
 		ast_str_append(&invite, 0, ";%s", p->options->uri_options);
 	
  	/* This is the request URI, which is the next hop of the call
@@ -9966,8 +9976,9 @@ static void build_route(struct sip_pvt *p, struct sip_request *req, int backward
 		free_old_route(p->route);
 		p->route = NULL;
 	}
-	
-	p->route_persistant = backwards;
+
+	/* We only want to create the route set the first time this is called */
+	p->route_persistant = 1;
 	
 	/* Build a tailq, then assign it to p->route when done.
 	 * If backwards, we add entries from the head so they end up
@@ -14866,6 +14877,9 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 			if (p->owner && !req->ignore)
 				ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
 			p->needdestroy = 1;
+			/* If there's no dialog to end, then mark p as already gone */
+			if (!reinvite)
+				sip_alreadygone(p);
 		}
 		break;
 	case 491: /* Pending */
@@ -16782,7 +16796,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 				struct ast_channel *bridgepeer = NULL;
 				struct sip_pvt *bridgepvt = NULL;
 				if ((bridgepeer = ast_bridged_channel(p->owner))) {
-					if (IS_SIP_TECH(bridgepeer->tech)) {
+					if (IS_SIP_TECH(bridgepeer->tech) && !ast_check_hangup(bridgepeer)) {
 						bridgepvt = (struct sip_pvt*)bridgepeer->tech_pvt;
 						/* Does the bridged peer have T38 ? */
 						if (bridgepvt->t38.state == T38_ENABLED) {
@@ -18129,8 +18143,10 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 	req.socket.lock = NULL;
 
 	handle_request_do(&req, &sin);
-	if (req.data)
+	if (req.data) {
 		ast_free(req.data);
+		req.data = NULL;
+	}
 
 	return 1;
 }
@@ -18159,8 +18175,7 @@ static int handle_request_do(struct sip_request *req, struct sockaddr_in *sin)
 		ast_verbose("--- (%d headers %d lines)%s ---\n", req->headers, req->lines, (req->headers + req->lines == 0) ? " Nat keepalive" : "");
 
 	if (req->headers < 2) {	/* Must have at least two headers */
-		ast_free(req->data);
-		req->data = NULL;
+		ast_str_reset(req->data); /* nulling this out is NOT a good idea here. */
 		return 1;
 	}
 
@@ -18493,9 +18508,9 @@ static void *do_monitor(void *data)
 			}
 		}
 
+restartsearch:		
 		/* Check for dialogs needing to be killed */
 		dialoglist_lock();
-restartsearch:		
 		t = time(NULL);
 		/* don't scan the dialogs list if it hasn't been a reasonable period
 		   of time since the last time we did it (when MWI is being sent, we can
@@ -18505,7 +18520,6 @@ restartsearch:
 			if (sip_pvt_trylock(dialog)) {
 				dialoglist_unlock();
 				usleep(1);
-				dialoglist_lock();
 				goto restartsearch;
 			}
 
@@ -18517,6 +18531,8 @@ restartsearch:
 			if (dialog->needdestroy && !dialog->packets && !dialog->owner) {
 				sip_pvt_unlock(dialog);
 				__sip_destroy(dialog, TRUE, FALSE);
+				dialoglist_unlock();
+				usleep(1);
 				goto restartsearch;
 			}
 			sip_pvt_unlock(dialog);
@@ -21602,13 +21618,20 @@ static int unload_module(void)
 	monitor_thread = AST_PTHREADT_STOP;
 	ast_mutex_unlock(&monlock);
 
+restartdestroy:
 	dialoglist_lock();
 	/* Destroy all the dialogs and free their memory */
 	p = dialoglist;
 	while (p) {
 		pl = p;
 		p = p->next;
-		__sip_destroy(pl, TRUE, TRUE);
+		if (__sip_destroy(pl, TRUE, TRUE) < 0) {
+			/* Something is still bridged, let it react to getting a hangup */
+			dialoglist = p;
+			dialoglist_unlock();
+			usleep(1);
+			goto restartdestroy;
+		}
 	}
 	dialoglist = NULL;
 	dialoglist_unlock();
