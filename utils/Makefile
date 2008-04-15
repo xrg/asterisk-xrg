@@ -110,7 +110,7 @@ ast_expr2.c: $(ASTTOPDIR)/main/ast_expr2.c
 ast_expr2f.c: $(ASTTOPDIR)/main/ast_expr2f.c
 	@cp $< $@
 
-ast_expr2f.o: ASTCFLAGS+=-DSTANDALONE_AEL -I$(ASTTOPDIR)/main -Wno-unused
+ast_expr2f.o: ASTCFLAGS+=-DSTANDALONE_AEL -DSTANDALONE -I$(ASTTOPDIR)/main -Wno-unused
 
 pval.o : ASTCFLAGS+=-DSTANDALONE
 
@@ -124,12 +124,12 @@ aelbison.o: ASTCFLAGS+=-I$(ASTTOPDIR)/res/ael  -DYYENABLE_NLS=0
 pbx_ael.c: $(ASTTOPDIR)/pbx/pbx_ael.c
 	@cp $< $@
 
-pbx_ael.o: ASTCFLAGS+=-DSTANDALONE_AEL
+pbx_ael.o: ASTCFLAGS+=-DSTANDALONE_AEL -DSTANDALONE
 
 aelparse.c: $(ASTTOPDIR)/res/ael/ael_lex.c
 	@cp $< $@
 
-aelparse.o: ASTCFLAGS+=-I$(ASTTOPDIR)/res -DSTANDALONE_AEL -Wno-unused
+aelparse.o: ASTCFLAGS+=-I$(ASTTOPDIR)/res -DSTANDALONE_AEL -DSTANDALONE -Wno-unused
 
 aelparse: aelparse.o aelbison.o pbx_ael.o hashtab.o ael_main.o ast_expr2f.o ast_expr2.o strcompat.o pval.o extconf.o
 
