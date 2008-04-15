@@ -12,3 +12,5 @@ config.status
 defaults.h
 .lastclean
 build_tools/menuselect-deps
+aclocal.m4
+autom4te.cache

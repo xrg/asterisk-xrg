@@ -1618,7 +1618,7 @@ Optional Packages:
   --with-suppserv=PATH    use mISDN Supplemental Services files in PATH
   --with-ssl=PATH         use OpenSSL Secure Sockets Layer support files in
                           PATH
-  --with-tds=PATH         use FreeTDS files in PATH
+  --with-tds_mssql=PATH   use FreeTDS files in PATH
   --with-termcap=PATH     use Termcap files in PATH
   --with-tinfo=PATH       use Term Info files in PATH
   --with-tonezone=PATH    use tonezone files in PATH
@@ -9117,11 +9117,11 @@ fi
 
 
     FREETDS_DESCRIP="FreeTDS"
-    FREETDS_OPTION="tds"
+    FREETDS_OPTION="tds_mssql"
 
-# Check whether --with-tds was given.
-if test "${with_tds+set}" = set; then
-  withval=$with_tds;
+# Check whether --with-tds_mssql was given.
+if test "${with_tds_mssql+set}" = set; then
+  withval=$with_tds_mssql;
 	case ${withval} in
 	n|no)
 	USE_FREETDS=no
@@ -43430,14 +43430,14 @@ if test "x${PBX_FREETDS}" != "x1" -a "${USE_FREETDS}" != "no"; then
    if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
       AST_FREETDS_FOUND=yes
    else
-      as_ac_Lib=`echo "ac_cv_lib_tds_${pbxfuncname}" | $as_tr_sh`
-{ echo "$as_me:$LINENO: checking for ${pbxfuncname} in -ltds" >&5
-echo $ECHO_N "checking for ${pbxfuncname} in -ltds... $ECHO_C" >&6; }
+      as_ac_Lib=`echo "ac_cv_lib_tds_mssql_${pbxfuncname}" | $as_tr_sh`
+{ echo "$as_me:$LINENO: checking for ${pbxfuncname} in -ltds_mssql" >&5
+echo $ECHO_N "checking for ${pbxfuncname} in -ltds_mssql... $ECHO_C" >&6; }
 if { as_var=$as_ac_Lib; eval "test \"\${$as_var+set}\" = set"; }; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-ltds ${pbxlibdir}  $LIBS"
+LIBS="-ltds_mssql ${pbxlibdir}  $LIBS"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
@@ -43503,29 +43503,29 @@ fi
 
    # now check for the header.
    if test "${AST_FREETDS_FOUND}" = "yes"; then
-      FREETDS_LIB="${pbxlibdir} -ltds "
+      FREETDS_LIB="${pbxlibdir} -ltds_mssql "
       # if --with-FREETDS=DIR has been specified, use it.
       if test "x${FREETDS_DIR}" != "x"; then
 	 FREETDS_INCLUDE="-I${FREETDS_DIR}/include"
       fi
       FREETDS_INCLUDE="${FREETDS_INCLUDE} "
-      if test "xtds.h" = "x" ; then	# no header, assume found
+      if test "xfreetds_mssql/tds.h" = "x" ; then	# no header, assume found
          FREETDS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
          CPPFLAGS="${CPPFLAGS} ${FREETDS_INCLUDE} "
-	 if test "${ac_cv_header_tds_h+set}" = set; then
-  { echo "$as_me:$LINENO: checking for tds.h" >&5
-echo $ECHO_N "checking for tds.h... $ECHO_C" >&6; }
-if test "${ac_cv_header_tds_h+set}" = set; then
+	 if test "${ac_cv_header_freetds_mssql_tds_h+set}" = set; then
+  { echo "$as_me:$LINENO: checking for freetds_mssql/tds.h" >&5
+echo $ECHO_N "checking for freetds_mssql/tds.h... $ECHO_C" >&6; }
+if test "${ac_cv_header_freetds_mssql_tds_h+set}" = set; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 fi
-{ echo "$as_me:$LINENO: result: $ac_cv_header_tds_h" >&5
-echo "${ECHO_T}$ac_cv_header_tds_h" >&6; }
+{ echo "$as_me:$LINENO: result: $ac_cv_header_freetds_mssql_tds_h" >&5
+echo "${ECHO_T}$ac_cv_header_freetds_mssql_tds_h" >&6; }
 else
   # Is the header compilable?
-{ echo "$as_me:$LINENO: checking tds.h usability" >&5
-echo $ECHO_N "checking tds.h usability... $ECHO_C" >&6; }
+{ echo "$as_me:$LINENO: checking freetds_mssql/tds.h usability" >&5
+echo $ECHO_N "checking freetds_mssql/tds.h usability... $ECHO_C" >&6; }
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
@@ -43533,7 +43533,7 @@ cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
 $ac_includes_default
-#include <tds.h>
+#include <freetds_mssql/tds.h>
 _ACEOF
 rm -f conftest.$ac_objext
 if { (ac_try="$ac_compile"
@@ -43565,15 +43565,15 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 echo "${ECHO_T}$ac_header_compiler" >&6; }
 
 # Is the header present?
-{ echo "$as_me:$LINENO: checking tds.h presence" >&5
-echo $ECHO_N "checking tds.h presence... $ECHO_C" >&6; }
+{ echo "$as_me:$LINENO: checking freetds_mssql/tds.h presence" >&5
+echo $ECHO_N "checking freetds_mssql/tds.h presence... $ECHO_C" >&6; }
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-#include <tds.h>
+#include <freetds_mssql/tds.h>
 _ACEOF
 if { (ac_try="$ac_cpp conftest.$ac_ext"
 case "(($ac_try" in
@@ -43606,25 +43606,25 @@ echo "${ECHO_T}$ac_header_preproc" >&6; }
 # So?  What about this header?
 case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
   yes:no: )
-    { echo "$as_me:$LINENO: WARNING: tds.h: accepted by the compiler, rejected by the preprocessor!" >&5
-echo "$as_me: WARNING: tds.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
-    { echo "$as_me:$LINENO: WARNING: tds.h: proceeding with the compiler's result" >&5
-echo "$as_me: WARNING: tds.h: proceeding with the compiler's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: accepted by the compiler, rejected by the preprocessor!" >&5
+echo "$as_me: WARNING: freetds_mssql/tds.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
+    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: proceeding with the compiler's result" >&5
+echo "$as_me: WARNING: freetds_mssql/tds.h: proceeding with the compiler's result" >&2;}
     ac_header_preproc=yes
     ;;
   no:yes:* )
-    { echo "$as_me:$LINENO: WARNING: tds.h: present but cannot be compiled" >&5
-echo "$as_me: WARNING: tds.h: present but cannot be compiled" >&2;}
-    { echo "$as_me:$LINENO: WARNING: tds.h:     check for missing prerequisite headers?" >&5
-echo "$as_me: WARNING: tds.h:     check for missing prerequisite headers?" >&2;}
-    { echo "$as_me:$LINENO: WARNING: tds.h: see the Autoconf documentation" >&5
-echo "$as_me: WARNING: tds.h: see the Autoconf documentation" >&2;}
-    { echo "$as_me:$LINENO: WARNING: tds.h:     section \"Present But Cannot Be Compiled\"" >&5
-echo "$as_me: WARNING: tds.h:     section \"Present But Cannot Be Compiled\"" >&2;}
-    { echo "$as_me:$LINENO: WARNING: tds.h: proceeding with the preprocessor's result" >&5
-echo "$as_me: WARNING: tds.h: proceeding with the preprocessor's result" >&2;}
-    { echo "$as_me:$LINENO: WARNING: tds.h: in the future, the compiler will take precedence" >&5
-echo "$as_me: WARNING: tds.h: in the future, the compiler will take precedence" >&2;}
+    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: present but cannot be compiled" >&5
+echo "$as_me: WARNING: freetds_mssql/tds.h: present but cannot be compiled" >&2;}
+    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h:     check for missing prerequisite headers?" >&5
+echo "$as_me: WARNING: freetds_mssql/tds.h:     check for missing prerequisite headers?" >&2;}
+    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: see the Autoconf documentation" >&5
+echo "$as_me: WARNING: freetds_mssql/tds.h: see the Autoconf documentation" >&2;}
+    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h:     section \"Present But Cannot Be Compiled\"" >&5
+echo "$as_me: WARNING: freetds_mssql/tds.h:     section \"Present But Cannot Be Compiled\"" >&2;}
+    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: proceeding with the preprocessor's result" >&5
+echo "$as_me: WARNING: freetds_mssql/tds.h: proceeding with the preprocessor's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: in the future, the compiler will take precedence" >&5
+echo "$as_me: WARNING: freetds_mssql/tds.h: in the future, the compiler will take precedence" >&2;}
     ( cat <<\_ASBOX
 ## ------------------------------- ##
 ## Report this to www.asterisk.org ##
@@ -43633,18 +43633,18 @@ _ASBOX
      ) | sed "s/^/$as_me: WARNING:     /" >&2
     ;;
 esac
-{ echo "$as_me:$LINENO: checking for tds.h" >&5
-echo $ECHO_N "checking for tds.h... $ECHO_C" >&6; }
-if test "${ac_cv_header_tds_h+set}" = set; then
+{ echo "$as_me:$LINENO: checking for freetds_mssql/tds.h" >&5
+echo $ECHO_N "checking for freetds_mssql/tds.h... $ECHO_C" >&6; }
+if test "${ac_cv_header_freetds_mssql_tds_h+set}" = set; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
-  ac_cv_header_tds_h=$ac_header_preproc
+  ac_cv_header_freetds_mssql_tds_h=$ac_header_preproc
 fi
-{ echo "$as_me:$LINENO: result: $ac_cv_header_tds_h" >&5
-echo "${ECHO_T}$ac_cv_header_tds_h" >&6; }
+{ echo "$as_me:$LINENO: result: $ac_cv_header_freetds_mssql_tds_h" >&5
+echo "${ECHO_T}$ac_cv_header_freetds_mssql_tds_h" >&6; }
 
 fi
-if test $ac_cv_header_tds_h = yes; then
+if test $ac_cv_header_freetds_mssql_tds_h = yes; then
   FREETDS_HEADER_FOUND=1
 else
   FREETDS_HEADER_FOUND=0
@@ -43678,9 +43678,9 @@ fi
 
 if test "${PBX_FREETDS}" != "0";
 then
-    case `grep TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/tdsver.h` in
-	*0.64*)
-		FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
+    case `grep TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/freetds_mssql/tdsver.h` in
+    *0.64*)
+	FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
 	;;
     *0.63*)
         FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_63"
