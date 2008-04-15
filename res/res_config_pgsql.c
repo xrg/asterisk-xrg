@@ -187,8 +187,11 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 		}
 		ast_free(fieldnames);
 	} else {
+		int i=0;
 		ast_log(LOG_WARNING,
 				"PostgreSQL RealTime: Could not find any rows in table %s.\n", table);
+		for (i=0;i<nparams;i++)
+			ast_log(LOG_DEBUG, "Query param $%d =\"%s\"\n",i,sparams[i]);
 	}
 
 	ast_mutex_unlock(&pgsql_lock);
