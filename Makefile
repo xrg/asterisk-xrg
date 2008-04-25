@@ -140,16 +140,16 @@ else
   ASTHEADERDIR=$(includedir)/asterisk
   ASTBINDIR=$(bindir)
   ASTSBINDIR=$(sbindir)
-  ASTSPOOLDIR=/var/spool/asterisk
-  ASTLOGDIR=/var/log/asterisk
-  ASTVARRUNDIR=/var/run
+  ASTSPOOLDIR=$(localstatedir)/spool/asterisk
+  ASTLOGDIR=$(localstatedir)/log/asterisk
+  ASTVARRUNDIR=$(localstatedir)/run
   ASTMANDIR=$(mandir)
 ifneq ($(findstring BSD,$(OSARCH)),)
   ASTVARLIBDIR=$(prefix)/share/asterisk
   ASTVARRUNDIR=$(localstatedir)/run/asterisk
   ASTDBDIR=$(localstatedir)/db/asterisk
 else
-  ASTVARLIBDIR=/var/lib/asterisk
+  ASTVARLIBDIR=$(localstatedir)/lib/asterisk
   ASTDBDIR=$(ASTVARLIBDIR)
 endif
   ASTKEYDIR=$(ASTVARLIBDIR)
