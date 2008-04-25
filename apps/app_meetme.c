@@ -2706,35 +2706,56 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 		char useropts[32] = "";
 		char adminopts[32] = "";
 		struct ast_tm tm, etm;
-		struct timeval starttime = { .tv_sec = 0 }, endtime = { .tv_sec = 0 };
+		struct timeval endtime = { .tv_sec = 0 };
 
 		if (rt_schedule) {
 			now = ast_tvnow();
 
-			if (fuzzystart)
-				now.tv_sec += fuzzystart;
-
 			ast_localtime(&now, &tm, NULL);
 			ast_strftime(currenttime, sizeof(currenttime), DATE_FORMAT, &tm);
-
-			if (earlyalert) {
-				now.tv_sec += earlyalert;
-				ast_localtime(&now, &etm, NULL);
-				ast_strftime(eatime, sizeof(eatime), DATE_FORMAT, &etm);
-			} else {
-				ast_copy_string(eatime, currenttime, sizeof(eatime));
-			}
 
 			ast_debug(1, "Looking for conference %s that starts after %s\n", confno, eatime);
 
 			var = ast_load_realtime("meetme", "confno",
-				confno, "starttime <= ", eatime, "endtime >= ",
+				confno, "starttime <= ", currenttime, "endtime >= ",
 				currenttime, NULL);
+
+			if (!var && fuzzystart) {
+				now = ast_tvnow();
+				now.tv_sec += fuzzystart;
+
+				ast_localtime(&now, &tm, NULL);
+				ast_strftime(currenttime, sizeof(currenttime), DATE_FORMAT, &tm);
+				var = ast_load_realtime("meetme", "confno",
+					confno, "starttime <= ", currenttime, "endtime >= ",
+					currenttime, NULL);
+			}
+
+			if (!var && earlyalert) {
+				now = ast_tvnow();
+				now.tv_sec += earlyalert;
+				ast_localtime(&now, &etm, NULL);
+				ast_strftime(eatime, sizeof(eatime), DATE_FORMAT, &etm);
+				var = ast_load_realtime("meetme", "confno",
+					confno, "starttime <= ", eatime, "endtime >= ",
+					currenttime, NULL);
+				if (var)
+					*too_early = 1;
+			}
+
 		} else
 			 var = ast_load_realtime("meetme", "confno", confno, NULL);
 
 		if (!var)
 			return NULL;
+
+		if (rt_schedule && *too_early) {
+			/* Announce that the caller is early and exit */
+			if (!ast_streamfile(chan, "conf-has-not-started", chan->language))
+				ast_waitstream(chan, "");
+			ast_variables_destroy(var);
+			return NULL;
+		}
 
 		while (var) {
 			if (!strcasecmp(var->name, "pin")) {
@@ -2753,31 +2774,18 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 					struct tm tm;
 				} t = { { 0, }, };
 				strptime(var->value, "%Y-%m-%d %H:%M:%S", &t.tm);
+				/* strptime does not determine if a time is
+				 * in DST or not.  Set tm_isdst to -1 to 
+				 * allow ast_mktime to adjust for DST 
+				 * if needed */
+				t.tm.tm_isdst = -1; 
 				endtime = ast_mktime(&t.atm, NULL);
-			} else if (!strcasecmp(var->name, "starttime")) {
-				union {
-					struct ast_tm atm;
-					struct tm tm;
-				} t = { { 0, }, };
-				strptime(var->value, "%Y-%m-%d %H:%M:%S", &t.tm);
-				starttime = ast_mktime(&t.atm, NULL);
 			}
 
 			var = var->next;
 		}
+
 		ast_variables_destroy(var);
-
-		if (earlyalert) {
-			now = ast_tvnow();
-
-			if (now.tv_sec + fuzzystart < starttime.tv_sec) {
-				/* Announce that the caller is early and exit */
-				if (!ast_streamfile(chan, "conf-has-not-started", chan->language))
-					 ast_waitstream(chan, "");
-				*too_early = 1;
-				return NULL;
-			}
-		}
 
 		cnf = build_conf(confno, pin ? pin : "", pinadmin ? pinadmin : "", make, dynamic, refcount, chan);
 
@@ -5525,6 +5533,88 @@ static int sla_load_config(int reload)
 	return res;
 }
 
+static int acf_meetme_info_eval(char *keyword, struct ast_conference *conf)
+{
+	if (!strcasecmp("lock", keyword)) {
+		return conf->locked;
+	} else if (!strcasecmp("parties", keyword)) {
+		return conf->users;
+	} else if (!strcasecmp("activity", keyword)) {
+		time_t now;
+		now = time(NULL);
+		return (now - conf->start);
+	} else if (!strcasecmp("dynamic", keyword)) {
+		return conf->isdynamic;
+	} else {
+		return -1;
+	}
+
+}
+
+static int acf_meetme_info(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+{
+	struct ast_conference *conf;
+	char *parse;
+	int result = -2; /* only non-negative numbers valid, -1 is used elsewhere */
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(keyword);
+		AST_APP_ARG(confno);
+	);
+
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_ERROR, "Syntax: MEETME_INFO() requires two arguments\n");
+		return -1;
+	}
+
+	parse = ast_strdupa(data);
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	if (ast_strlen_zero(args.keyword)) {
+		ast_log(LOG_ERROR, "Syntax: MEETME_INFO() requires a keyword\n");
+		return -1;
+	}
+
+	if (ast_strlen_zero(args.confno)) {
+		ast_log(LOG_ERROR, "Syntax: MEETME_INFO() requires a conference number\n");
+		return -1;
+	}
+
+	AST_LIST_LOCK(&confs);
+	AST_LIST_TRAVERSE(&confs, conf, list) {
+		if (!strcmp(args.confno, conf->confno)) {
+			result = acf_meetme_info_eval(args.keyword, conf);
+			break;
+		}
+	}
+	AST_LIST_UNLOCK(&confs);
+
+	if (result > -1) {
+		snprintf(buf, len, "%d", result);
+	} else if (result == -1) {
+		snprintf(buf, len, "%s %s", "Error: invalid keyword:", args.keyword);
+	} else if (result == -2) {
+		snprintf(buf, len, "Error: conference (%s) not found", args.confno);
+	}
+
+	return 0;
+}
+
+
+static struct ast_custom_function meetme_info_acf = {
+	.name = "MEETME_INFO",
+	.synopsis = "Query a given conference of various properties.",
+	.syntax = "MEETME_INFO(<keyword>,<confno>)",
+	.read = acf_meetme_info,
+	.desc =
+"Returns information from a given keyword. (For booleans 1-true, 0-false)\n"
+"  Options:\n"
+"    lock     - boolean of whether the corresponding conference is locked\n" 
+"    parties  - number of parties in a given conference\n"
+"    activity - duration of conference in seconds\n"
+"    dynamic  - boolean of whether the corresponding coference is dynamic\n",
+};
+
+
 static int load_config(int reload)
 {
 	load_config_meetme();
@@ -5558,6 +5648,8 @@ static int unload_module(void)
 	ast_devstate_prov_del("SLA");
 	
 	sla_destroy();
+	
+	res |= ast_custom_function_unregister(&meetme_info_acf);
 
 	return res;
 }
@@ -5586,6 +5678,8 @@ static int load_module(void)
 
 	res |= ast_devstate_prov_add("Meetme", meetmestate);
 	res |= ast_devstate_prov_add("SLA", sla_state);
+
+	res |= ast_custom_function_register(&meetme_info_acf);
 
 	return res;
 }

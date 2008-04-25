@@ -499,7 +499,7 @@ update:
 NEWHEADERS=$(notdir $(wildcard include/asterisk/*.h))
 OLDHEADERS=$(filter-out $(NEWHEADERS),$(notdir $(wildcard $(DESTDIR)$(ASTHEADERDIR)/*.h)))
 
-bininstall:
+installdirs:
 	mkdir -p $(DESTDIR)$(MODULES_DIR)
 	mkdir -p $(DESTDIR)$(ASTSBINDIR)
 	mkdir -p $(DESTDIR)$(ASTETCDIR)
@@ -511,6 +511,8 @@ bininstall:
 	mkdir -p $(DESTDIR)$(ASTSPOOLDIR)/tmp
 	mkdir -p $(DESTDIR)$(ASTSPOOLDIR)/meetme
 	mkdir -p $(DESTDIR)$(ASTSPOOLDIR)/monitor
+
+bininstall: _all installdirs $(SUBDIRS_INSTALL)
 	$(INSTALL) -m 755 main/asterisk $(DESTDIR)$(ASTSBINDIR)/
 	$(LN) -sf asterisk $(DESTDIR)$(ASTSBINDIR)/rasterisk
 	$(INSTALL) -m 755 contrib/scripts/astgenkey $(DESTDIR)$(ASTSBINDIR)/
@@ -572,7 +574,7 @@ ifneq ($(findstring ~,$(DESTDIR)),)
 	@exit 1
 endif
 
-install: badshell datafiles bininstall $(SUBDIRS_INSTALL)
+install: badshell datafiles bininstall
 	@if [ -x /usr/sbin/asterisk-post-install ]; then \
 		/usr/sbin/asterisk-post-install $(DESTDIR) . ; \
 	fi
@@ -868,4 +870,4 @@ pdf: asterisk.pdf
 asterisk.pdf:
 	$(MAKE) -C doc/tex asterisk.pdf
 
-.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all pdf dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell main/version.c include/asterisk/version.h
+.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all pdf dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell main/version.c include/asterisk/version.h installdirs

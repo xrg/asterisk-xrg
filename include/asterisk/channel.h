@@ -434,6 +434,7 @@ struct ast_channel {
 		AST_STRING_FIELD(accountcode);		/*!< Account code for billing */
 		AST_STRING_FIELD(call_forward);		/*!< Where to forward to if asked to dial on this interface */
 		AST_STRING_FIELD(uniqueid);		/*!< Unique Channel Identifier */
+		AST_STRING_FIELD(parkinglot);		/*! Default parking lot, if empty, default parking lot  */
 	);
 	
 	int fds[AST_MAX_FDS];				/*!< File descriptors for channel -- Drivers will poll on
@@ -730,7 +731,7 @@ int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
  *
  * \note The channel does not need to be locked before calling this function.
  */
-int ast_queue_hangup(struct ast_channel *chan);
+int ast_queue_hangup(struct ast_channel *chan, int cause);
 
 /*!
  * \brief Queue a control frame with payload

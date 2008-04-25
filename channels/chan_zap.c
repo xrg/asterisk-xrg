@@ -237,6 +237,8 @@ static const char config[] = "zapata.conf";
 static char defaultcic[64] = "";
 static char defaultozz[64] = "";
 
+static char parkinglot[AST_MAX_EXTENSION] = "";		/*!< Default parking lot for this channel */
+
 /*! Run this script when the MWI state changes on an FXO line, if mwimonitor is enabled */
 static char mwimonitornotify[PATH_MAX] = "";
 
@@ -595,6 +597,7 @@ static struct zt_pvt {
 	char language[MAX_LANGUAGE];
 	char mohinterpret[MAX_MUSICCLASS];
 	char mohsuggest[MAX_MUSICCLASS];
+	char parkinglot[AST_MAX_EXTENSION]; /*!< Parking lot for this channel */
 #if defined(PRI_ANI) || defined(HAVE_SS7)
 	char cid_ani[AST_MAX_EXTENSION];
 #endif
@@ -687,6 +690,8 @@ static struct zt_pvt {
 	char gen_add_number[50];
 	char gen_dig_number[50];
 	char orig_called_num[50];
+	char redirecting_num[50];
+	char generic_name[50];
 	unsigned char gen_add_num_plan;
 	unsigned char gen_add_nai;
 	unsigned char gen_add_pres_ind;
@@ -775,6 +780,7 @@ static struct zt_chan_conf zt_chan_conf_default(void) {
 			.cid_name = "",
 			.mohinterpret = "default",
 			.mohsuggest = "",
+			.parkinglot = "",
 			.transfertobusy = 1,
 
 			.cid_signalling = CID_SIG_BELL,
@@ -2379,11 +2385,13 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		const char *gen_digits = NULL;
 		const char *gen_dig_type = NULL;
 		const char *gen_dig_scheme = NULL;
+		const char *gen_name = NULL;
 		const char *jip_digits = NULL;
 		const char *lspi_ident = NULL;
 		const char *rlt_flag = NULL;
 		const char *call_ref_id = NULL;
 		const char *call_ref_pc = NULL;
+		const char *send_far = NULL;
 
 		c = strchr(dest, '/');
 		if (c)
@@ -2447,6 +2455,7 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		isup_set_oli(p->ss7call, ast->cid.cid_ani2);
 		isup_init_call(p->ss7->ss7, p->ss7call, p->cic, p->dpc);
 
+		ast_channel_lock(ast);
 		/* Set the charge number if it is set */
 		charge_str = pbx_builtin_getvar_helper(ast, "SS7_CHARGE_NUMBER");
 		if (charge_str)
@@ -2462,6 +2471,10 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 		if (gen_digits)
 			isup_set_gen_digits(p->ss7call, gen_digits, atoi(gen_dig_type), atoi(gen_dig_scheme)); 
 		
+		gen_name = pbx_builtin_getvar_helper(ast, "SS7_GENERIC_NAME");
+		if (gen_name)
+			isup_set_generic_name(p->ss7call, gen_name, GEN_NAME_TYPE_CALLING_NAME, GEN_NAME_AVAIL_AVAILABLE, GEN_NAME_PRES_ALLOWED);
+
 		jip_digits = pbx_builtin_getvar_helper(ast, "SS7_JIP");
 		if (jip_digits)
 			isup_set_jip_digits(p->ss7call, jip_digits);
@@ -2471,16 +2484,23 @@ static int zt_call(struct ast_channel *ast, char *rdest, int timeout)
 			isup_set_lspi(p->ss7call, lspi_ident, 0x18, 0x7, 0x00); 
 		
 		rlt_flag = pbx_builtin_getvar_helper(ast, "SS7_RLT_ON");
-		if ((rlt_flag) && ((strncmp("NO", rlt_flag, strlen(rlt_flag))) != 0 ))
+		if ((rlt_flag) && ((strncmp("NO", rlt_flag, strlen(rlt_flag))) != 0 )) {
 			isup_set_lspi(p->ss7call, rlt_flag, 0x18, 0x7, 0x00); /* Setting for Nortel DMS-250/500 */
+		}
 		
 		call_ref_id = pbx_builtin_getvar_helper(ast, "SS7_CALLREF_IDENT");
 		call_ref_pc = pbx_builtin_getvar_helper(ast, "SS7_CALLREF_PC");
-		if (call_ref_id) {
+		if (call_ref_id && call_ref_pc) {
 			isup_set_callref(p->ss7call, atoi(call_ref_id),
 					 call_ref_pc ? atoi(call_ref_pc) : 0);
 		}
 		
+		send_far = pbx_builtin_getvar_helper(ast, "SS7_SEND_FAR");
+		if ((send_far) && ((strncmp("NO", send_far, strlen(send_far))) != 0 ))
+			(isup_far(p->ss7->ss7, p->ss7call));
+		
+		ast_channel_unlock(ast);
+
 		isup_iam(p->ss7->ss7, p->ss7call);
 		ast_setstate(ast, AST_STATE_DIALING);
 		ss7_rel(p->ss7);
@@ -4502,7 +4522,7 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 							/* It hasn't been long enough since the last flashook.  This is probably a bounce on 
 							   hanging up.  Hangup both channels now */
 							if (p->subs[SUB_THREEWAY].owner)
-								ast_queue_hangup(p->subs[SUB_THREEWAY].owner);
+								ast_queue_hangup(p->subs[SUB_THREEWAY].owner, AST_CAUSE_NO_ANSWER);
 							p->subs[SUB_THREEWAY].owner->_softhangup |= AST_SOFTHANGUP_DEV;
 							ast_debug(1, "Looks like a bounced flash, hanging up both calls on %d\n", p->channel);
 							ast_channel_unlock(p->subs[SUB_THREEWAY].owner);
@@ -5947,6 +5967,8 @@ static struct ast_channel *zt_new(struct zt_pvt *i, int state, int startpbx, int
 		tmp->callgroup = i->callgroup;
 		tmp->pickupgroup = i->pickupgroup;
 	}
+	if (!ast_strlen_zero(i->parkinglot))
+		ast_string_field_set(tmp, parkinglot, i->parkinglot);
 	if (!ast_strlen_zero(i->language))
 		ast_string_field_set(tmp, language, i->language);
 	if (!i->owner)
@@ -6855,7 +6877,7 @@ static void *ss_thread(void *data)
 							}
 
 							if (res < 0) {
-								ast_log(LOG_WARNING, "CallerID feed failed: %s\n", strerror(errno));
+								ast_log(LOG_WARNING, "CallerID feed failed on channel '%s'\n", chan->name);
 								break;
 							} else if (res)
 								break;
@@ -6866,9 +6888,6 @@ static void *ss_thread(void *data)
 					if (res == 1) {
 						callerid_get(cs, &name, &number, &flags);
 						ast_log(LOG_NOTICE, "CallerID number: %s, name: %s, flags=%d\n", number, name, flags);
-					}
-					if (res < 0) {
-						ast_log(LOG_WARNING, "CallerID returned with error on channel '%s'\n", chan->name);
 					}
 
 					if (p->cid_signalling == CID_SIG_V23_JP) {
@@ -8064,6 +8083,7 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 	struct zt_bufferinfo bi;
 #endif
 	struct zt_spaninfo si;
+
 	int res;
 	int span=0;
 	int here = 0;
@@ -8480,6 +8500,7 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 		ast_copy_string(tmp->mohsuggest, conf.chan.mohsuggest, sizeof(tmp->mohsuggest));
 		ast_copy_string(tmp->context, conf.chan.context, sizeof(tmp->context));
 		ast_copy_string(tmp->cid_num, conf.chan.cid_num, sizeof(tmp->cid_num));
+		ast_copy_string(tmp->parkinglot, conf.chan.parkinglot, sizeof(tmp->parkinglot));
 		tmp->cid_ton = 0;
 		ast_copy_string(tmp->cid_name, conf.chan.cid_name, sizeof(tmp->cid_name));
 		ast_copy_string(tmp->mailbox, conf.chan.mailbox, sizeof(tmp->mailbox));
@@ -9201,7 +9222,17 @@ static void ss7_start_call(struct zt_pvt *p, struct zt_ss7 *linkset)
 	pbx_builtin_setvar_helper(c, "SS7_CALLREF_PC", tmp);
 	/* Clear this after we set it */
 	p->call_ref_pc = 0;
-	
+
+	if (!ast_strlen_zero(p->redirecting_num)) {
+		pbx_builtin_setvar_helper(c, "SS7_REDIRECTING_NUMBER", p->redirecting_num);
+		/* Clear this after we set it */
+		p->redirecting_num[0] = 0;
+	}
+	if (!ast_strlen_zero(p->generic_name)) {
+		pbx_builtin_setvar_helper(c, "SS7_GENERIC_NAME", p->generic_name);
+		/* Clear this after we set it */
+		p->generic_name[0] = 0;
+	}
 }
 
 static void ss7_apply_plan_to_number(char *buf, size_t size, const struct zt_ss7 *ss7, const char *number, const unsigned nai)
@@ -9450,12 +9481,10 @@ static void *ss7_linkset(void *data)
 				p->ss7call = e->iam.call;
 				isup_set_call_dpc(p->ss7call, dpc);
 
-				if ( (p->use_callerid) && (!ast_strlen_zero(e->iam.calling_party_num)) )
-				{
+				if ((p->use_callerid) && (!ast_strlen_zero(e->iam.calling_party_num))) {
 					ss7_apply_plan_to_number(p->cid_num, sizeof(p->cid_num), linkset, e->iam.calling_party_num, e->iam.calling_nai);
 					p->callingpres = ss7_pres_scr2cid_pres(e->iam.presentation_ind, e->iam.screening_ind);
-				}
-				else
+				} else
 					p->cid_num[0] = 0;
 
 				if (p->immediate) {
@@ -9471,7 +9500,11 @@ static void *ss7_linkset(void *data)
 						p->exten[0] = '\0';
 
 				p->cid_ani[0] = '\0';
-				p->cid_name[0] = '\0';
+				if ((p->use_callerid) && (!ast_strlen_zero(e->iam.generic_name)))
+					ast_copy_string(p->cid_name, e->iam.generic_name, sizeof(p->cid_name));
+				else
+					p->cid_name[0] = '\0';
+				
 				p->cid_ani2 = e->iam.oli_ani2;
 				p->cid_ton = 0;
 				ast_copy_string(p->charge_number, e->iam.charge_number, sizeof(p->charge_number));
@@ -9485,6 +9518,8 @@ static void *ss7_linkset(void *data)
 				p->gen_dig_scheme = e->iam.gen_dig_scheme;
 				ast_copy_string(p->jip_number, e->iam.jip_number, sizeof(p->jip_number));
 				ast_copy_string(p->orig_called_num, e->iam.orig_called_num, sizeof(p->orig_called_num));
+				ast_copy_string(p->redirecting_num, e->iam.redirecting_num, sizeof(p->redirecting_num));
+				ast_copy_string(p->generic_name, e->iam.generic_name, sizeof(p->generic_name));
 					
 				/* Set DNID */
 				if (!ast_strlen_zero(e->iam.called_party_num))
@@ -9536,6 +9571,22 @@ static void *ss7_linkset(void *data)
 				ast_mutex_unlock(&p->lock);
 
 				isup_lpa(linkset->ss7, e->ccr.cic, p->dpc);
+				break;
+			case ISUP_EVENT_CVT:
+				ast_debug(1, "Got CVT request on CIC %d\n", e->cvt.cic);
+				chanpos = ss7_find_cic(linkset, e->cvt.cic, e->cvt.opc);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "CVT on unconfigured CIC %d\n", e->cvt.cic);
+					break;
+				}
+				
+				p = linkset->pvts[chanpos];
+				
+				ast_mutex_lock(&p->lock);
+				zt_loopback(p, 1);
+				ast_mutex_unlock(&p->lock);
+				
+				isup_cvr(linkset->ss7, e->cvt.cic, p->dpc);
 				break;
 			case ISUP_EVENT_REL:
 				chanpos = ss7_find_cic(linkset, e->rel.cic, e->rel.opc);
@@ -10045,7 +10096,7 @@ static int pri_hangup_all(struct zt_pvt *p, struct zt_pri *pri)
 				ast_mutex_lock(&p->lock);
 			}
 			if (p->subs[x].owner) {
-				ast_queue_hangup(p->subs[x].owner);
+				ast_queue_hangup(p->subs[x].owner, AST_CAUSE_PRE_EMPTED);
 				ast_channel_unlock(p->subs[x].owner);
 			}
 		}
@@ -13215,11 +13266,16 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 	const char *ringc; /* temporary string for parsing the dring number. */
 	int y;
 	int found_pseudo = 0;
-        char zapchan[MAX_CHANLIST_LEN] = {};
+	char zapchan[MAX_CHANLIST_LEN] = {};
 
 	for (; v; v = v->next) {
 		if (!ast_jb_read_conf(&global_jbconf, v->name, v->value))
 			continue;
+
+		/* must have parkinglot in confp before build_channels is called */
+		if (!strcasecmp(v->name, "parkinglot")) {
+			ast_copy_string(confp->chan.parkinglot, v->value, sizeof(confp->chan.parkinglot));
+		}
 
 		/* Create the interface list */
 		if (!strcasecmp(v->name, "channel")
@@ -13381,6 +13437,8 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 			ast_copy_string(confp->chan.mohinterpret, v->value, sizeof(confp->chan.mohinterpret));
 		} else if (!strcasecmp(v->name, "mohsuggest")) {
 			ast_copy_string(confp->chan.mohsuggest, v->value, sizeof(confp->chan.mohsuggest));
+		} else if (!strcasecmp(v->name, "parkinglot")) {
+			ast_copy_string(parkinglot, v->value, sizeof(parkinglot));
 		} else if (!strcasecmp(v->name, "stripmsd")) {
 			ast_log(LOG_NOTICE, "Configuration option \"%s\" has been deprecated. Please use dialplan instead\n", v->name);
 			confp->chan.stripmsd = atoi(v->value);
@@ -13958,6 +14016,8 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 
 				toneduration = atoi(v->value);
 				if (toneduration > -1) {
+					memset(&dps, 0, sizeof(dps));
+
 					dps.dtmf_tonelen = dps.mfv1_tonelen = toneduration;
 					res = ioctl(ctlfd, ZT_SET_DIALPARAMS, &dps);
 					if (res < 0) {

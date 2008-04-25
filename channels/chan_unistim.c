@@ -404,6 +404,8 @@ struct unistim_line {
 	int amaflags;
 	/*! Codec supported */
 	int capability;
+	/*! Parkinglot */
+	char parkinglot[AST_MAX_CONTEXT];
 	struct unistim_line *next;
 	struct unistim_device *parent;
 };
@@ -513,7 +515,7 @@ const static unsigned char packet_recv_r2[] = { 0x00, 0x00, 0x00, 0x13, 0x96, 0x
 const static unsigned char packet_recv_resume_connection_with_server[] =
 	{ 0xff, 0xff, 0xff, 0xff, 0x9e, 0x03, 0x08 };
 const static unsigned char packet_recv_mac_addr[] =
-	{ 0xff, 0xff, 0xff, 0xff, 0x9a, 0x0d, 0x07, 0x31, 0x38 /*MacAddr */  };
+	{ 0xff, 0xff, 0xff, 0xff, 0x9a, 0x0d, 0x07 /*MacAddr */  };
 
 const static unsigned char packet_send_date_time3[] =
 	{ 0x11, 0x09, 0x02, 0x02, /*Month */ 0x05, /*Day */ 0x06, /*Hour */ 0x07,
@@ -1123,7 +1125,7 @@ static void close_client(struct unistimsession *s)
 				if (sub->owner) {       /* Call in progress ? */
 					if (unistimdebug)
 						ast_verb(0, "Aborting call\n");
-					ast_queue_hangup(sub->owner);
+					ast_queue_hangup(sub->owner, AST_CAUSE_NETWORK_OUT_OF_ORDER);
 				}
 			} else
 				ast_log(LOG_WARNING, "Freeing a client with no subchannel !\n");
@@ -1972,11 +1974,11 @@ static void close_call(struct unistimsession *pte)
 			if (attempt_transfer(sub, l->subs[SUB_THREEWAY]) < 0)
 				ast_verb(0, "attempt_transfer failed.\n");
 		} else
-			ast_queue_hangup(sub->owner);
+			ast_queue_hangup(sub->owner, -1);
 	} else {
 		if (l->subs[SUB_THREEWAY]) {
 			if (l->subs[SUB_THREEWAY]->owner)
-				ast_queue_hangup(l->subs[SUB_THREEWAY]->owner);
+				ast_queue_hangup(l->subs[SUB_THREEWAY]->owner, AST_CAUSE_NORMAL_CLEARING);
 			else
 				ast_log(LOG_WARNING, "threeway sub without owner\n");
 		} else
@@ -2310,7 +2312,7 @@ static void TransferCallStep1(struct unistimsession *pte)
 		if (unistimdebug)
 			ast_verb(0, "Transfer canceled, hangup our threeway channel\n");
 		if (p->subs[SUB_THREEWAY]->owner)
-			ast_queue_hangup(p->subs[SUB_THREEWAY]->owner);
+			ast_queue_hangup(p->subs[SUB_THREEWAY]->owner, AST_CAUSE_NORMAL_CLEARING);
 		else
 			ast_log(LOG_WARNING, "Canceling a threeway channel without owner\n");
 		return;
@@ -2366,7 +2368,7 @@ static void HandleCallOutgoing(struct unistimsession *s)
 			/* start switch */
 			if (ast_pthread_create(&t, NULL, unistim_ss, c)) {
 				display_last_error("Unable to create switch thread");
-				ast_queue_hangup(c);
+				ast_queue_hangup(c, AST_CAUSE_SWITCH_CONGESTION);
 			}
 		} else
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n",
@@ -4459,6 +4461,7 @@ static struct ast_channel *unistim_new(struct unistim_subchannel *sub, int state
 	ast_setstate(tmp, state);
 	if (state == AST_STATE_RING)
 		tmp->rings = 1;
+	tmp->adsicpe = AST_ADSI_UNAVAILABLE;
 	tmp->writeformat = fmt;
 	tmp->rawwriteformat = fmt;
 	tmp->readformat = fmt;
@@ -5110,6 +5113,8 @@ static struct unistim_device *build_device(const char *cat, const struct ast_var
 			l->pickupgroup = ast_get_group(v->value);
 		else if (!strcasecmp(v->name, "mailbox"))
 			ast_copy_string(l->mailbox, v->value, sizeof(l->mailbox));
+		else if (!strcasecmp(v->name, "parkinglot"))
+			ast_copy_string(l->parkinglot, v->value, sizeof(l->parkinglot));
 		else if (!strcasecmp(v->name, "linelabel"))
 			unquote(linelabel, v->value, sizeof(linelabel) - 1);
 		else if (!strcasecmp(v->name, "extension")) {

@@ -77,6 +77,8 @@ static const char *desc_chan =
 "    r[(basename)] - Record the session to the monitor spool directory. An\n"
 "                    optional base for the filename may be specified. The\n"
 "                    default is 'chanspy'.\n"
+"    s             - Skip the playback of the channel type (i.e. SIP, IAX, etc) when\n"
+"                    speaking the selected channel name.\n"
 "    v([value])    - Adjust the initial volume in the range from -4 to 4. A\n"
 "                    negative value refers to a quieter setting.\n"
 "    w             - Enable 'whisper' mode, so the spying channel can talk to\n"
@@ -117,6 +119,8 @@ static const char *desc_ext =
 "    r[(basename)] - Record the session to the monitor spool directory. An\n"
 "                    optional base for the filename may be specified. The\n"
 "                    default is 'chanspy'.\n"
+"    s             - Skip the playback of the channel type (i.e. SIP, IAX, etc) when\n"
+"                    speaking the selected channel name.\n"
 "    v([value])    - Adjust the initial volume in the range from -4 to 4. A\n"
 "                    negative value refers to a quieter setting.\n"
 "    w             - Enable 'whisper' mode, so the spying channel can talk to\n"
@@ -143,6 +147,7 @@ enum {
 	OPTION_READONLY  = (1 << 7),    /* Don't mix the two channels */
 	OPTION_EXIT      = (1 << 8),    /* Exit to a valid single digit extension */
 	OPTION_ENFORCED  = (1 << 9),    /* Enforced mode */
+	OPTION_NOTECH    = (1 << 10),   /* Skip technology name playback */
 } chanspy_opt_flags;
 
 enum {
@@ -164,6 +169,7 @@ AST_APP_OPTIONS(spy_opts, {
 	AST_APP_OPTION_ARG('e', OPTION_ENFORCED, OPT_ARG_ENFORCED),
 	AST_APP_OPTION('o', OPTION_READONLY),
 	AST_APP_OPTION('X', OPTION_EXIT),
+	AST_APP_OPTION('s', OPTION_NOTECH),
 });
 
 
@@ -496,30 +502,29 @@ static struct chanspy_ds *next_channel(struct ast_channel *chan,
 	const struct ast_channel *last, const char *spec,
 	const char *exten, const char *context, struct chanspy_ds *chanspy_ds)
 {
-	struct ast_channel *this;
+	struct ast_channel *next;
 
 redo:
 	if (!ast_strlen_zero(spec))
-		this = ast_walk_channel_by_name_prefix_locked(last, spec, strlen(spec));
-
+		next = ast_walk_channel_by_name_prefix_locked(last, spec, strlen(spec));
 	else if (!ast_strlen_zero(exten))
-		this = ast_walk_channel_by_exten_locked(last, exten, context);
+		next = ast_walk_channel_by_exten_locked(last, exten, context);
 	else
-		this = ast_channel_walk_locked(last);
+		next = ast_channel_walk_locked(last);
 
-	if (!this)
+	if (!next)
 		return NULL;
 
-	if (!strncmp(this->name, "Zap/pseudo", 10)) {
-		ast_channel_unlock(this);
+	if (!strncmp(next->name, "Zap/pseudo", 10)) {
+		ast_channel_unlock(next);
 		goto redo;
-	} else if (this == chan) {
-		last = this;
-		ast_channel_unlock(this);
+	} else if (next == chan) {
+		last = next;
+		ast_channel_unlock(next);
 		goto redo;
 	}
 
-	return setup_chanspy_ds(this, chanspy_ds);
+	return setup_chanspy_ds(next, chanspy_ds);
 }
 
 static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
@@ -615,7 +620,6 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 			char *ext;
 			char *form_enforced;
 			int ienf = !myenforced;
-			struct ast_channel *peer;
 
 			peer = peer_chanspy_ds->chan;
 
@@ -701,29 +705,31 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 
 			for (s = peer_name; s < ptr; s++)
 				*s = tolower(*s);
-		
 			/* We have to unlock the peer channel here to avoid a deadlock.
-			 * So, when we need it again, we have to lock the datastore and get
-			 * the pointer from there to see if the channel is still valid. */
+			 * So, when we need to dereference it again, we have to lock the 
+			 * datastore and get the pointer from there to see if the channel 
+			 * is still valid. */
 			ast_channel_unlock(peer);
-			peer = NULL;
 
 			if (!ast_test_flag(flags, OPTION_QUIET)) {
-				if (ast_fileexists(peer_name, NULL, NULL) != -1) {
-					res = ast_streamfile(chan, peer_name, chan->language);
-					if (!res)
-						res = ast_waitstream(chan, "");
-					if (res) {
-						chanspy_ds_free(peer_chanspy_ds);
-						break;
+				if (!ast_test_flag(flags, OPTION_NOTECH)) {
+					if (ast_fileexists(peer_name, NULL, NULL) != -1) {
+						res = ast_streamfile(chan, peer_name, chan->language);
+						if (!res) {
+							res = ast_waitstream(chan, "");
+						}
+						if (res) {
+							chanspy_ds_free(peer_chanspy_ds);
+							break;
+						}
+					} else {
+						res = ast_say_character_str(chan, peer_name, "", chan->language);
 					}
-				} else
-					res = ast_say_character_str(chan, peer_name, "", chan->language);
+				}
 				if ((num = atoi(ptr)))
 					ast_say_digits(chan, atoi(ptr), "", chan->language);
 			}
 
-			waitms = 5000;
 			res = channel_spy(chan, peer_chanspy_ds, &volfactor, fd, flags, exitcontext);
 			num_spyed_upon++;	
 
@@ -830,7 +836,7 @@ static int chanspy_exec(struct ast_channel *chan, void *data)
 	}
 
 	if (recbase) {
-		char filename[512];
+		char filename[PATH_MAX];
 
 		snprintf(filename, sizeof(filename), "%s/%s.%d.raw", ast_config_AST_MONITOR_DIR, recbase, (int) time(NULL));
 		if ((fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, AST_FILE_MODE)) <= 0) {
@@ -909,7 +915,7 @@ static int extenspy_exec(struct ast_channel *chan, void *data)
 	}
 
 	if (recbase) {
-		char filename[512];
+		char filename[PATH_MAX];
 
 		snprintf(filename, sizeof(filename), "%s/%s.%d.raw", ast_config_AST_MONITOR_DIR, recbase, (int) time(NULL));
 		if ((fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, AST_FILE_MODE)) <= 0) {

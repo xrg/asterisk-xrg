@@ -404,7 +404,6 @@ static int spawn_mp3(struct mohclass *class)
 	int argc = 0;
 	DIR *dir = NULL;
 	struct dirent *de;
-	sigset_t signal_set, old_set;
 
 	
 	if (!strcasecmp(class->dir, "nodir")) {
@@ -490,12 +489,8 @@ static int spawn_mp3(struct mohclass *class)
 		sleep(respawn_time - (time(NULL) - class->start));
 	}
 
-	/* Block signals during the fork() */
-	sigfillset(&signal_set);
-	pthread_sigmask(SIG_BLOCK, &signal_set, &old_set);
-
 	time(&class->start);
-	class->pid = fork();
+	class->pid = ast_safe_fork(0);
 	if (class->pid < 0) {
 		close(fds[0]);
 		close(fds[1]);
@@ -503,24 +498,16 @@ static int spawn_mp3(struct mohclass *class)
 		return -1;
 	}
 	if (!class->pid) {
-		int x;
-
 		if (ast_opt_high_priority)
 			ast_set_priority(0);
-
-		/* Reset ignored signals back to default */
-		signal(SIGPIPE, SIG_DFL);
-		pthread_sigmask(SIG_UNBLOCK, &signal_set, NULL);
 
 		close(fds[0]);
 		/* Stdout goes to pipe */
 		dup2(fds[1], STDOUT_FILENO);
-		/* Close unused file descriptors */
-		for (x=3;x<8192;x++) {
-			if (-1 != fcntl(x, F_GETFL)) {
-				close(x);
-			}
-		}
+
+		/* Close everything else */
+		ast_close_fds_above_n(STDERR_FILENO);
+
 		/* Child */
 		chdir(class->dir);
 		if (ast_test_flag(class, MOH_CUSTOM)) {
@@ -533,12 +520,12 @@ static int spawn_mp3(struct mohclass *class)
 			/* Check PATH as a last-ditch effort */
 			execvp("mpg123", argv);
 		}
-		ast_log(LOG_WARNING, "Exec failed: %s\n", strerror(errno));
+		/* Can't use logger, since log FDs are closed */
+		fprintf(stderr, "MOH: exec failed: %s\n", strerror(errno));
 		close(fds[1]);
 		_exit(1);
 	} else {
 		/* Parent */
-		pthread_sigmask(SIG_SETMASK, &old_set, NULL);
 		close(fds[1]);
 	}
 	return fds[0];
@@ -1001,18 +988,16 @@ static int moh_register(struct mohclass *moh, int reload)
 	int x;
 #endif
 	struct mohclass *mohclass = NULL;
+	int res = 0;
 
 	AST_RWLIST_WRLOCK(&mohclasses);
 	if ((mohclass = get_mohbyname(moh->name, 0)) && !moh_diff(mohclass, moh)) {
-		mohclass->delete = 0;
-		if (reload) {
-			ast_debug(1, "Music on Hold class '%s' left alone from initial load.\n", moh->name);
-		} else {
+		if (!mohclass->delete) {
 			ast_log(LOG_WARNING, "Music on Hold class '%s' already exists\n", moh->name);
+			ast_free(moh);
+			AST_RWLIST_UNLOCK(&mohclasses);
+			return -1;
 		}
-		ast_free(moh);	
-		AST_RWLIST_UNLOCK(&mohclasses);
-		return -1;
 	}
 	AST_RWLIST_UNLOCK(&mohclasses);
 
@@ -1020,7 +1005,12 @@ static int moh_register(struct mohclass *moh, int reload)
 	moh->start -= respawn_time;
 	
 	if (!strcasecmp(moh->mode, "files")) {
-		if (!moh_scan_files(moh)) {
+		res = moh_scan_files(moh);
+		if (res <= 0) {
+			if (res == 0) {
+				if (option_verbose > 2)
+					ast_verbose(VERBOSE_PREFIX_3 "Files not found in %s for moh class:%s\n", moh->dir, moh->name);
+			}
 			ast_moh_free_class(&moh);
 			return -1;
 		}
@@ -1577,14 +1567,6 @@ static int init_classes(int reload)
 			AST_RWLIST_REMOVE_CURRENT(list);
 			if (!moh->inuse)
 				ast_moh_destroy_one(moh);
-		} else if (moh->total_files) {
-			if (moh_scan_files(moh) <= 0) {
-				ast_log(LOG_WARNING, "No files found for class '%s'\n", moh->name);
-				moh->delete = 1;
-				AST_LIST_REMOVE_CURRENT(list);
-				if (!moh->inuse)
-					ast_moh_destroy_one(moh);
-			}
 		}
 	}
 	AST_RWLIST_TRAVERSE_SAFE_END
@@ -1628,7 +1610,31 @@ static int reload(void)
 
 static int unload_module(void)
 {
-	return -1;
+	int res = 0;
+	struct mohclass *class = NULL;
+
+	AST_RWLIST_WRLOCK(&mohclasses);
+	AST_LIST_TRAVERSE(&mohclasses, class, list) {
+		if (class->inuse > 0) {
+			res = -1;
+			break;
+		}
+	}
+	AST_RWLIST_UNLOCK(&mohclasses);
+	if (res < 0) {
+		ast_log(LOG_WARNING, "Unable to unload res_musiconhold due to active MOH channels\n");
+		return res;
+	}
+
+	ast_uninstall_music_functions();
+	ast_moh_destroy();
+	res = ast_unregister_application(play_moh);
+	res |= ast_unregister_application(wait_moh);
+	res |= ast_unregister_application(set_moh);
+	res |= ast_unregister_application(start_moh);
+	res |= ast_unregister_application(stop_moh);
+	ast_cli_unregister_multiple(cli_moh, sizeof(cli_moh) / sizeof(struct ast_cli_entry));
+	return res;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Music On Hold Resource",

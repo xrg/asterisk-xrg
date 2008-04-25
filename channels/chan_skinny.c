@@ -968,6 +968,7 @@ static char mohsuggest[MAX_MUSICCLASS] = "";
 static char cid_num[AST_MAX_EXTENSION] = "";
 static char cid_name[AST_MAX_EXTENSION] = "";
 static char linelabel[AST_MAX_EXTENSION] ="";
+static char parkinglot[AST_MAX_CONTEXT] ="";
 static int nat = 0;
 static ast_group_t cur_callergroup = 0;
 static ast_group_t cur_pickupgroup = 0;
@@ -1162,6 +1163,7 @@ struct skinny_line {
 	char vmexten[AST_MAX_EXTENSION];
 	char regexten[AST_MAX_EXTENSION];		/* Extension for auto-extensions */
 	char regcontext[AST_MAX_CONTEXT];		/* Context for auto-extensions */
+	char parkinglot[AST_MAX_CONTEXT];		/* Parkinglot for parkedcalls */
 	char mohinterpret[MAX_MUSICCLASS];
 	char mohsuggest[MAX_MUSICCLASS];
 	char lastnumberdialed[AST_MAX_EXTENSION];	/* Last number that was dialed - used for redial */
@@ -3024,6 +3026,8 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 				ast_copy_string(linelabel, v->value, sizeof(linelabel));
 			} else if (!strcasecmp(v->name, "setvar")) {
 				chanvars = add_var(v->value, chanvars);
+			} else if ( !strcasecmp(v->name, "parkinglot")) {
+				ast_copy_string(parkinglot, v->value, sizeof(parkinglot));
 			} else if (!strcasecmp(v->name, "speeddial")) {
 				if (!(sd = ast_calloc(1, sizeof(*sd)))) {
 					return NULL;
@@ -3077,6 +3081,7 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 					ast_copy_string(l->cid_num, cid_num, sizeof(l->cid_num));
 					ast_copy_string(l->cid_name, cid_name, sizeof(l->cid_name));
 					ast_copy_string(l->label, linelabel, sizeof(l->label));
+					ast_copy_string(l->parkinglot, parkinglot, sizeof(l->parkinglot));
 					ast_copy_string(l->language, language, sizeof(l->language));
 					ast_copy_string(l->mohinterpret, mohinterpret, sizeof(l->mohinterpret));
 					ast_copy_string(l->mohsuggest, mohsuggest, sizeof(l->mohsuggest));
@@ -4508,7 +4513,7 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 		if ((res = attempt_transfer(p)) < 0) {
 			if (sub->next && sub->next->owner) {
 				sub->next->alreadygone = 1;
-				ast_queue_hangup(sub->next->owner,1);
+				ast_queue_hangup(sub->next->owner, -1);
 			}
 		} else if (res) {
 			ast_log(LOG_WARNING, "Transfer attempt failed\n");
@@ -4520,7 +4525,7 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 		/* If there is another active call, skinny_hangup will ring the phone with the other call */
 		if (sub->owner) {
 			sub->alreadygone = 1;
-			ast_queue_hangup(sub->owner);
+			ast_queue_hangup(sub->owner, -1);
 		} else {
 			ast_log(LOG_WARNING, "Skinny(%s@%s-%d) channel already destroyed\n",
 				l->name, d->name, sub->callid);
@@ -5217,7 +5222,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 				if ((res = attempt_transfer(p)) < 0) {
 					if (sub->next && sub->next->owner) {
 						sub->next->alreadygone = 1;
-						ast_queue_hangup(sub->next->owner, 1);
+						ast_queue_hangup(sub->next->owner, -1);
 					}
 				} else if (res) {
 					ast_log(LOG_WARNING, "Transfer attempt failed\n");
@@ -5229,7 +5234,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 				/* If there is another active call, skinny_hangup will ring the phone with the other call */
 				if (sub->owner) {
 					sub->alreadygone = 1;
-					ast_queue_hangup(sub->owner);
+					ast_queue_hangup(sub->owner, -1);
 				} else {
 					ast_log(LOG_WARNING, "Skinny(%s@%s-%d) channel already destroyed\n",
 						l->name, d->name, sub->callid);

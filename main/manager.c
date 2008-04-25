@@ -154,7 +154,7 @@ struct mansession {
 	int inuse;		/*!< number of HTTP sessions using this entry */
 	int needdestroy;	/*!< Whether an HTTP session should be destroyed */
 	pthread_t waiting_thread;	/*!< Sleeping thread using this descriptor */
-	unsigned long managerid;	/*!< Unique manager identifier, 0 for AMI sessions */
+	uint32_t managerid;	/*!< Unique manager identifier, 0 for AMI sessions */
 	time_t sessionstart;    /*!< Session start time */
 	time_t sessiontimeout;	/*!< Session timeout if HTTP */
 	char username[80];	/*!< Logged in username */
@@ -1064,7 +1064,8 @@ static char mandescr_ping[] =
 
 static int action_ping(struct mansession *s, const struct message *m)
 {
-	astman_send_response(s, m, "Success", "Ping: Pong\r\n");
+	astman_append(s, "Response: Success\r\n"
+			 "Ping: Pong\r\n");
 	return 0;
 }
 
@@ -1576,10 +1577,11 @@ static int action_events(struct mansession *s, const struct message *m)
 
 	res = set_eventmask(s, mask);
 	if (res > 0)
-		astman_send_response(s, m, "Success", "Events: On\r\n");
+		astman_append(s, "Response: Success\r\n"
+				 "Events: On\r\n");
 	else if (res == 0)
-		astman_send_response(s, m, "Success", "Events: Off\r\n");
-
+		astman_append(s, "Response: Success\r\n"
+				 "Events: Off\r\n");
 	return 0;
 }
 
@@ -2847,7 +2849,7 @@ static int get_input(struct mansession *s, char *output)
 		/* If we get a signal from some other thread (typically because
 		 * there are new events queued), return 0 to notify the caller.
 		 */
-		if (errno == EINTR)
+		if (errno == EINTR || errno == EAGAIN)
 			return 0;
 		ast_log(LOG_WARNING, "poll() returned error: %s\n", strerror(errno));
 		return -1;
@@ -3207,7 +3209,7 @@ static char *contenttype[] = {
  * the value of the mansession_id cookie (0 is not valid and means
  * a session on the AMI socket).
  */
-static struct mansession *find_session(unsigned long ident)
+static struct mansession *find_session(uint32_t ident)
 {
 	struct mansession *s;
 
@@ -3228,7 +3230,7 @@ static struct mansession *find_session(unsigned long ident)
 	return s;
 }
 
-int astman_verify_session_readpermissions(unsigned long ident, int perm)
+int astman_verify_session_readpermissions(uint32_t ident, int perm)
 {
 	int result = 0;
 	struct mansession *s;
@@ -3247,7 +3249,7 @@ int astman_verify_session_readpermissions(unsigned long ident, int perm)
 	return result;
 }
 
-int astman_verify_session_writepermissions(unsigned long ident, int perm)
+int astman_verify_session_writepermissions(uint32_t ident, int perm)
 {
 	int result = 0;
 	struct mansession *s;
@@ -3431,11 +3433,13 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *v
 				ast_str_append(out, 0, xml ? "'" : "</td></tr>\n");
 				in_data = 0;
 			}
-			ast_str_append(out, 0, xml ? " /></response>\n" :
-				"<tr><td colspan=\"2\"><hr></td></tr>\r\n");
-			inobj = 0;
-			ao2_ref(vco, -1);
-			vco = NULL;
+			if (inobj) {
+				ast_str_append(out, 0, xml ? " /></response>\n" :
+					"<tr><td colspan=\"2\"><hr></td></tr>\r\n");
+				inobj = 0;
+				ao2_ref(vco, -1);
+				vco = NULL;
+			}
 			continue;
 		}
 
@@ -3500,7 +3504,7 @@ static struct ast_str *generic_http_callback(enum output_format format,
 					     char **title, int *contentlength)
 {
 	struct mansession *s = NULL;
-	unsigned long ident = 0; /* invalid, so find_session will fail if not set through the cookie */
+	uint32_t ident = 0;
 	int blastaway = 0;
 	struct ast_variable *v;
 	char template[] = "/tmp/ast-http-XXXXXX";	/* template for temporary file */
@@ -3511,7 +3515,7 @@ static struct ast_str *generic_http_callback(enum output_format format,
 
 	for (v = params; v; v = v->next) {
 		if (!strcasecmp(v->name, "mansession_id")) {
-			sscanf(v->value, "%lx", &ident);
+			sscanf(v->value, "%x", &ident);
 			break;
 		}
 	}
@@ -3578,7 +3582,7 @@ static struct ast_str *generic_http_callback(enum output_format format,
 	ast_str_append(&out, 0,
 		       "Content-type: text/%s\r\n"
 		       "Cache-Control: no-cache;\r\n"
-		       "Set-Cookie: mansession_id=\"%08lx\"; Version=\"1\"; Max-Age=%d\r\n"
+		       "Set-Cookie: mansession_id=\"%08x\"; Version=\"1\"; Max-Age=%d\r\n"
 		       "\r\n",
 			contenttype[format],
 			s->managerid, httptimeout);

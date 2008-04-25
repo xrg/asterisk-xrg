@@ -1000,12 +1000,19 @@ int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
 }
 
 /*! \brief Queue a hangup frame for channel */
-int ast_queue_hangup(struct ast_channel *chan)
+int ast_queue_hangup(struct ast_channel *chan, int cause)
 {
 	struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_HANGUP };
+
+	if (cause >= 0)
+		f.seqno = cause;
+
 	/* Yeah, let's not change a lock-critical value without locking */
 	if (!ast_channel_trylock(chan)) {
 		chan->_softhangup |= AST_SOFTHANGUP_DEV;
+		if (cause < 0)
+			f.seqno = chan->hangupcause;
+
 		ast_channel_unlock(chan);
 	}
 	return ast_queue_frame(chan, &f);
@@ -2260,8 +2267,7 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 		int samples;
 
 		if (chan->timingfunc) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Generator got voice, switching to phase locked mode\n");
+			ast_debug(1, "Generator got voice, switching to phase locked mode\n");
 			ast_settimeout(chan, 0, NULL, NULL);
 		}
 
@@ -2287,19 +2293,17 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 		 * avoidance not to work in deeper functions
 		 */
 		ast_channel_unlock(chan);
-		res = generate(chan, tmp, f->datalen, f->samples);
+		res = generate(chan, tmp, f->datalen, samples);
 		ast_channel_lock(chan);
 		chan->generatordata = tmp;
 		if (res) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Auto-deactivating generator\n");
+			ast_debug(1, "Auto-deactivating generator\n");
 			ast_deactivate_generator(chan);
 		}
 
 	} else if (f->frametype == AST_FRAME_CNG) {
 		if (chan->generator && !chan->timingfunc && (chan->timingfd > -1)) {
-			if (option_debug > 1)
-				ast_log(LOG_DEBUG, "Generator got CNG, switching to timed mode\n");
+			ast_debug(1, "Generator got CNG, switching to timed mode\n");
 			ast_settimeout(chan, 160, generator_force, chan);
 		}
 	}
@@ -2310,7 +2314,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	struct ast_frame *f = NULL;	/* the return value */
 	int blah;
 	int prestate;
-	int count = 0;
+	int count = 0, cause = 0;
 
 	/* this function is very long so make sure there is only one return
 	 * point at the end (there are only two exceptions to this).
@@ -2421,6 +2425,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		/* Interpret hangup and return NULL */
 		/* XXX why not the same for frames from the channel ? */
 		if (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_HANGUP) {
+			cause = f->seqno;
 			ast_frfree(f);
 			f = NULL;
 		}
@@ -2690,6 +2695,8 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	} else {
 		/* Make sure we always return NULL in the future */
 		chan->_softhangup |= AST_SOFTHANGUP_DEV;
+		if (cause)
+			chan->hangupcause = cause;
 		if (chan->generator)
 			ast_deactivate_generator(chan);
 		/* End the CDR if appropriate */

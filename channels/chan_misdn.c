@@ -2320,13 +2320,13 @@ static int misdn_answer(struct ast_channel *ast)
 	
 	if (!p) {
 		ast_log(LOG_WARNING, " --> Channel not connected ??\n");
-		ast_queue_hangup(ast);
+		ast_queue_hangup(ast, AST_CAUSE_NETWORK_OUT_OF_ORDER);
 	}
 
 	if (!p->bc) {
 		chan_misdn_log(1, 0, " --> Got Answer, but theres no bc obj ??\n");
 
-		ast_queue_hangup(ast);
+		ast_queue_hangup(ast, AST_CAUSE_PROTOCOL_ERROR);
 	}
 
 	tmp = pbx_builtin_getvar_helper(p->ast, "CRYPT_KEY");
@@ -2533,9 +2533,11 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 			start_bc_tones(p);
 		break;
 	case AST_CONTROL_HOLD:
+		ast_moh_start(ast,data,ast->musicclass); 
 		chan_misdn_log(1, p->bc->port, " --> *\tHOLD pid:%d\n", p->bc ? p->bc->pid : -1);
 		break;
 	case AST_CONTROL_UNHOLD:
+		ast_moh_stop(ast);
 		chan_misdn_log(1, p->bc->port, " --> *\tUNHOLD pid:%d\n", p->bc ? p->bc->pid : -1);
 		break;
 	default:
@@ -3663,7 +3665,7 @@ static void hangup_chan(struct chan_list *ch)
 		send_cause2ast(ch->ast, ch->bc, ch);
 
 		if (ch->ast)
-			ast_queue_hangup(ch->ast);
+			ast_queue_hangup(ch->ast, ch->bc->cause);
 		cb_log(2, port, " --> queue_hangup\n");
 	} else {
 		cb_log(1, port, "Cannot hangup chan, no ast\n");

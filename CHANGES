@@ -6,6 +6,7 @@ Dialplan Functions
 ------------------
  * Added a new dialplan function, AST_CONFIG(), which allows you to access
    variables from an Asterisk configuration file.
+ * The JACK_HOOK function now has a c() option to supply a custom client name.
 
 Zaptel channel driver (chan_zap) Changes
 ----------------------------------------
@@ -29,12 +30,25 @@ Application Changes
    messages, if the "messagewrap" option is set to a true value.
  * Dial has a new option: F(context^extension^pri), which permits a callee to
    continue in the dialplan, at the specified label, if the caller hangs up.
+ * ChanSpy and ExtenSpy have a new option, 's' which suppresses speaking the
+   technology name (e.g. SIP, IAX, etc) of the channel being spied on.
+ * The Jack application now has a c() option to supply a custom client name.
 
 SIP Changes
 -----------
  * The ATTENDED_TRANSFER_COMPLETE_SOUND can now be set using setvar to cause a given
    audio file to be played upon completion of an attended transfer.
  * Added DNS manager support to registrations for peers referencing peer entries.
+   DNS manager runs in the background which allows DNS lookups to be run asynchronously 
+   as well as periodically updating the IP address. These properties allow for
+   better performance as well as recovery in the event of an IP change.
+ * Performance improvements via using hash tables (astobj2) and doubly-linked lists to improve 
+   load/reload of large numbers of peers/users by ~40x (for large lists of peers.
+   Initially, we saw 4x improvement in call setup/destruction, but at the time
+   of merging, this gain has disappeared; further research will be done to try
+   and restore this performance improvement. Astobj2 refcounting is now used
+   for users, peers, and dialogs.  Users are encouraged to assist in regression
+   testing and problem reporting!
 
 IAX Changes
 -----------
@@ -155,6 +169,10 @@ CLI Changes
   * Added a CLI command, "devstate change", which allows you to set custom device
      states from the func_devstate module that provides the DEVICE_STATE() function
      and handling of the "Custom:" devices.
+  * New CLI command: "sip show sched" which shows all ast_sched entries for sip,
+    sorted into the different possible callbacks, with the number of entries
+    currently scheduled for each. Gives you a feel for how busy the sip channel
+    driver is.
 
 SIP changes
 -----------
@@ -414,6 +432,8 @@ MeetMe Changes
      for the "meetme" command.
   * Added the ability to specify the music on hold class used to play into the
      conference when there is only one member and the M option is used.
+  * Added MEETME_INFO dialplan function which provides a way to query
+     various properties of a Meetme conference.
 
 Other Dialplan Application Changes
 ----------------------------------
@@ -486,6 +506,17 @@ AEL Changes
      first pass at conversion.
   * aelparse will now read extensions.conf to see if a referenced
      macro or context is there before issueing a warning.
+  * AEL parser sets a local channel variable ~~EXTEN~~, to 
+    preserve the value of ${EXTEN} thru switch statements.
+  * New operator in $[...] expressions: the ~~ operator serves
+    as a concatenation operator. AT THE MOMENT, it is really only
+    necessary and useful in AEL, especially in if() expressions.
+    Operation: ${a} ~~ ${b|  with force both a and b to strings, strip 
+    any enclosing double-quotes, and evaluate to the value of a
+    concatenated with the value of b.  For example if a is set to
+    "xyz"  and b has the value "abc", then ${a} ~~ ${b| would
+    evaluate to xyzabc .
+
 
 Call Features (res_features) Changes
 ------------------------------------
@@ -615,6 +646,18 @@ Miscellaneous
   * A new option when starting a remote asterisk (rasterisk, asterisk -r) for
      specifying which socket to use to connect to the running Asterisk daemon
      (-s)
+  * Performance enhancements to the sched facility, which is used in
+    the channel drivers, etc. Added hashtabs and doubly-linked lists
+    to speed up deletion; start at the beginning or end of list to
+    speed up insertion.
+  * Added Doubly-linked lists after the fashion of linkedlists.h. They are in
+    dlinkedlists.h. Doubly-linked lists feature fast deletion times.
+    Added regression tests to the tests/ dir, also.
+  * Added a refcount trace feature to astobj2 for those trying to balance
+    object creation, deletion; work, play; space and time. See the
+    notes in astobj2.h. Also, see utils/refcounter as well, as a
+    quick way to find unbalanced refcounts in what could be a sea
+    of objects that were balanced.
   * Added logging to 'make update' command.  See update.log
   * Added strictrtp option to rtp.conf. If enabled this will drop RTP packets that
      do not come from the remote party.
