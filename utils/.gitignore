@@ -17,6 +17,7 @@ md5.c
 muted
 pbx_ael.c
 pval.c
+refcounter
 sha1.c
 smsq
 stereorize
