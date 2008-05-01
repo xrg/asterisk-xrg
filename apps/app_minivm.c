@@ -736,8 +736,9 @@ static void prep_email_sub_vars(struct ast_channel *channel, const struct minivm
 		return;
 	}
 
-	for (var = vmu->chanvars ; var ; var = var->next)
-                pbx_builtin_setvar_helper(channel, var->name, var->value);
+	for (var = vmu->chanvars ; var ; var = var->next) {
+		pbx_builtin_setvar_helper(channel, var->name, var->value);
+	}
 
 	/* Prepare variables for substition in email body and subject */
 	pbx_builtin_setvar_helper(channel, "MVM_NAME", vmu->fullname);
@@ -1411,7 +1412,12 @@ static int notify_new_message(struct ast_channel *chan, const char *templatename
 
 
 	/* Read counter if available */
-	counter = pbx_builtin_getvar_helper(chan, "MVM_COUNTER");
+	ast_channel_lock(chan);
+	if ((counter = pbx_builtin_getvar_helper(chan, "MVM_COUNTER"))) {
+		counter = ast_strdupa(counter);
+	}
+	ast_channel_unlock(chan);
+
 	if (ast_strlen_zero(counter)) {
 		ast_debug(2, "-_-_- MVM_COUNTER not found\n");
 	} else {
@@ -1658,14 +1664,24 @@ static int minivm_notify_exec(struct ast_channel *chan, void *data)
 		pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", "FAILED");
 		return -1;
 	}
-	
-	filename = pbx_builtin_getvar_helper(chan, "MVM_FILENAME");
-	format = pbx_builtin_getvar_helper(chan, "MVM_FORMAT");
-	duration_string = pbx_builtin_getvar_helper(chan, "MVM_DURATION");
+
+	ast_channel_lock(chan);
+	if ((filename = pbx_builtin_getvar_helper(chan, "MVM_FILENAME"))) {
+		filename = ast_strdupa(filename);
+	}
+	ast_channel_unlock(chan);
 	/* Notify of new message to e-mail and pager */
 	if (!ast_strlen_zero(filename)) {
+		ast_channel_lock(chan);	
+		if ((format = pbx_builtin_getvar_helper(chan, "MVM_FORMAT"))) {
+			format = ast_strdupa(format);
+		}
+		if ((duration_string = pbx_builtin_getvar_helper(chan, "MVM_DURATION"))) {
+			duration_string = ast_strdupa(duration_string);
+		}
+		ast_channel_unlock(chan);
 		res = notify_new_message(chan, template, vmu, filename, atoi(duration_string), format, chan->cid.cid_num, chan->cid.cid_name);
-	};
+	}
 
 	pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", res == 0 ? "SUCCESS" : "FAILED");
 
@@ -1927,10 +1943,13 @@ static int minivm_delete_exec(struct ast_channel *chan, void *data)
 	int res = 0;
 	char filename[BUFSIZ];
 		
-	if (!ast_strlen_zero(data))
+	if (!ast_strlen_zero(data)) {
 		ast_copy_string(filename, (char *) data, sizeof(filename));
-	else
+	} else {
+		ast_channel_lock(chan);
 		ast_copy_string(filename, pbx_builtin_getvar_helper(chan, "MVM_FILENAME"), sizeof(filename));
+		ast_channel_unlock(chan);
+	}
 
 	if (ast_strlen_zero(filename)) {
 		ast_log(LOG_ERROR, "No filename given in application arguments or channel variable MVM_FILENAME\n");
@@ -2778,12 +2797,12 @@ static int minivm_account_func_read(struct ast_channel *chan, const char *cmd, c
 */
 static int vm_lock_path(const char *path)
 {
-        switch (ast_lock_path(path)) {
-        case AST_LOCK_TIMEOUT:
-                return -1;
-        default:
-                return 0;
-        }
+	switch (ast_lock_path(path)) {
+	case AST_LOCK_TIMEOUT:
+		return -1;
+	default:
+		return 0;
+	}
 }
 
 /*! \brief Access counter file, lock directory, read and possibly write it again changed 

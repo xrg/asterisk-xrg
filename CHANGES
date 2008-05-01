@@ -18,6 +18,13 @@ PBX Changes
  * It is now possible to specify a pattern match as a hint. Once a phone subscribes
    to something that matches the pattern a hint will be created using the contents
    and variables evaluated.
+ * Dialplan matching has been extended to allow an extension to return to the
+   PBX core to wait for more digits.  This is done by using the new dialplan
+   application called "Incomplete".  This will permit a whole new level of
+   extension control, by giving the administrator more control over early
+   matches employing one of the short-circuit pattern match operators.  Note
+   that custom applications can trigger this same behavior by returning the
+   special value AST_PBX_INCOMPLETE.
 
 Application Changes
 -------------------
@@ -33,6 +40,13 @@ Application Changes
  * ChanSpy and ExtenSpy have a new option, 's' which suppresses speaking the
    technology name (e.g. SIP, IAX, etc) of the channel being spied on.
  * The Jack application now has a c() option to supply a custom client name.
+ * Chanspy has a new option, 'B', which can be used to "barge" on a call. This is
+   like the pre-existing whisper mode, except that the spy can also talk to the
+   participant on the bridged channel as well.
+ * Chanspy has a new option, 'n', which will allow for the spied-on party's name
+   to be spoken instead of the channel name or number. For more information on the
+   use of this option, issue the command "core show application ChanSpy" from the 
+   Asterisk CLI.
 
 SIP Changes
 -----------
@@ -49,6 +63,8 @@ SIP Changes
    and restore this performance improvement. Astobj2 refcounting is now used
    for users, peers, and dialogs.  Users are encouraged to assist in regression
    testing and problem reporting!
+ * Added ability to specify registration expiry time on a per registration basis in
+   the register line.
 
 IAX Changes
 -----------
@@ -403,6 +419,12 @@ Queue changes
   * New configuration option: randomperiodicannounce. If a list of periodic announcements is
     specified by the periodic-announce option, then one will be chosen randomly when it is time
 	to play a periodic announcment
+  * New configuration options: announce-position now takes two more values in addition to "yes" and
+    "no." Two new options, "limit" and "more," are allowed. These are tied to another option,
+	announce-position-limit. By setting announce-position to "limit" callers will only have their
+	position announced if their position is less than what is specified by announce-position-limit.
+	If announce-position is set to "more" then callers beyond the position specified by announce-position-limit
+	will be told that their are more than announce-position-limit callers waiting.
 
 MeetMe Changes
 --------------

@@ -1945,7 +1945,7 @@ static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target
 static int cb_extensionstate(char *context, char* exten, int state, void *data);
 static int sip_devicestate(void *data);
 static int sip_poke_noanswer(const void *data);
-static int sip_poke_peer(struct sip_peer *peer);
+static int sip_poke_peer(struct sip_peer *peer, int force);
 static void sip_poke_all_peers(void);
 static void sip_peer_hold(struct sip_pvt *p, int hold);
 static void mwi_event_cb(const struct ast_event *, void *);
@@ -1974,6 +1974,8 @@ static char *sip_show_domains(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct message *m, int argc, const char *argv[]);
 static char *sip_show_peer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_show_user(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *_sip_qualify_peer(int type, int fd, struct mansession *s, const struct message *m, int argc, const char *argv[]);
+static char *sip_qualify_peer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_show_registry(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_unregister(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
@@ -2025,7 +2027,6 @@ static void sip_destroy_peer(struct sip_peer *peer);
 static void sip_destroy_peer_fn(void *peer);
 static void sip_destroy_user(struct sip_user *user);
 static void sip_destroy_user_fn(void *user);
-static int sip_poke_peer(struct sip_peer *peer);
 static void set_peer_defaults(struct sip_peer *peer);
 static struct sip_peer *temp_peer(const char *name);
 static void register_peer_exten(struct sip_peer *peer, int onoff);
@@ -2065,7 +2066,7 @@ static const struct cfsubscription_types *find_subscription_type(enum subscripti
 static const char *gettag(const struct sip_request *req, const char *header, char *tagbuf, int tagbufsize);
 static int find_sip_method(const char *msg);
 static unsigned int parse_sip_options(struct sip_pvt *pvt, const char *supported);
-static void parse_request(struct sip_request *req);
+static int parse_request(struct sip_request *req);
 static const char *get_header(const struct sip_request *req, const char *name);
 static const char *referstatus2str(enum referstatus rstatus) attribute_pure;
 static int method_match(enum sipmethod id, const char *name);
@@ -6309,7 +6310,7 @@ static int sip_register(const char *value, int lineno)
 	enum sip_transport transport = SIP_TRANSPORT_UDP;
 	char buf[256] = "";
 	char *username = NULL;
-	char *hostname=NULL, *secret=NULL, *authuser=NULL;
+	char *hostname=NULL, *secret=NULL, *authuser=NULL, *expiry=NULL;
 	char *porta=NULL;
 	char *callback=NULL;
 	char *trans=NULL;
@@ -6345,7 +6346,7 @@ static int sip_register(const char *value, int lineno)
 	if (hostname)
 		*hostname++ = '\0';
 	if (ast_strlen_zero(username) || ast_strlen_zero(hostname)) {
-		ast_log(LOG_WARNING, "Format for registration is user[:secret[:authuser]]@host[:port][/contact] at line %d\n", lineno);
+		ast_log(LOG_WARNING, "Format for registration is user[:secret[:authuser]]@host[:port][/contact][~expiry] at line %d\n", lineno);
 		return -1;
 	}
 	/* split user[:secret[:authuser]] */
@@ -6357,6 +6358,9 @@ static int sip_register(const char *value, int lineno)
 			*authuser++ = '\0';
 	}
 	/* split host[:port][/contact] */
+	expiry = strchr(hostname, '~');
+	if (expiry)
+		*expiry++ = '\0';
 	callback = strchr(hostname, '/');
 	if (callback)
 		*callback++ = '\0';
@@ -6395,9 +6399,9 @@ static int sip_register(const char *value, int lineno)
 		ast_string_field_set(reg, secret, secret);
 	reg->transport = transport;
 	reg->expire = -1;
-	reg->expiry = default_expiry;
+	reg->expiry = (expiry ? atoi(expiry) : default_expiry);
 	reg->timeout =  -1;
-	reg->refresh = default_expiry;
+	reg->refresh = reg->expiry;
 	reg->portno = portnum;
 	reg->callid_valid = FALSE;
 	reg->ocseq = INITIAL_CSEQ;
@@ -6455,7 +6459,7 @@ static int lws2sws(char *msgbuf, int len)
 /*! \brief Parse a SIP message 
 	\note this function is used both on incoming and outgoing packets
 */
-static void parse_request(struct sip_request *req)
+static int parse_request(struct sip_request *req)
 {
 	char *c = req->data->str, **dst = req->header;
 	int i = 0, lim = SIP_MAX_HEADERS - 1;
@@ -6505,7 +6509,7 @@ static void parse_request(struct sip_request *req)
 	if (*c)
 		ast_log(LOG_WARNING, "Too many lines, skipping <%s>\n", c);
 	/* Split up the first line parts */
-	determine_firstline_parts(req);
+	return determine_firstline_parts(req);
 }
 
 /*!
@@ -9994,7 +9998,7 @@ static int sip_poke_peer_s(const void *data)
 	struct sip_peer *peer = (struct sip_peer *)data;
 
 	peer->pokeexpire = -1;
-	sip_poke_peer(peer);
+	sip_poke_peer(peer, 0);
 	return 0;
 }
 
@@ -10047,8 +10051,9 @@ static void reg_source_db(struct sip_peer *peer)
 	if (sipsock < 0) {
 		/* SIP isn't up yet, so schedule a poke only, pretty soon */
 		AST_SCHED_REPLACE(peer->pokeexpire, sched, ast_random() % 5000 + 1, sip_poke_peer_s, peer);
-	} else
-		sip_poke_peer(peer);
+	} else {
+		sip_poke_peer(peer, 0);
+	}
 	AST_SCHED_REPLACE(peer->expire, sched, (expiry + 10) * 1000, expire_register, peer);
 	register_peer_exten(peer, TRUE);
 }
@@ -10253,7 +10258,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 
 	/* Is this a new IP address for us? */
 	if (inaddrcmp(&peer->addr, &oldsin)) {
-		sip_poke_peer(peer);
+		sip_poke_peer(peer, 0);
 		ast_verb(3, "Registered SIP '%s' at %s port %d expires %d\n", peer->name, ast_inet_ntoa(peer->addr.sin_addr), ntohs(peer->addr.sin_port), expiry);
 		register_peer_exten(peer, TRUE);
 	}
@@ -13333,6 +13338,65 @@ static char *sip_show_peer(struct ast_cli_entry *e, int cmd, struct ast_cli_args
 	return _sip_show_peer(0, a->fd, NULL, NULL, a->argc, (const char **) a->argv);
 }
 
+/*! \brief Show one peer in detail (main function) */
+static char *_sip_qualify_peer(int type, int fd, struct mansession *s, const struct message *m, int argc, const char *argv[])
+{
+	struct sip_peer *peer;
+	int load_realtime;
+
+	if (argc < 4)
+		return CLI_SHOWUSAGE;
+
+	load_realtime = (argc == 5 && !strcmp(argv[4], "load")) ? TRUE : FALSE;
+	if ((peer = find_peer(argv[3], NULL, load_realtime))) {
+		sip_poke_peer(peer, 1);
+		unref_peer(peer, "qualify: done with peer");
+	} else if (type == 0) {
+		ast_cli(fd, "Peer '%s' not found\n", argv[3]);
+	} else {
+		astman_send_error(s, m, "Peer not found\n");
+	}
+	return CLI_SUCCESS;
+}
+
+/*! \brief Qualify SIP peers in the manager API  */
+static int manager_sip_qualify_peer(struct mansession *s, const struct message *m)
+{
+	const char *a[4];
+	const char *peer;
+
+	peer = astman_get_header(m, "Peer");
+	if (ast_strlen_zero(peer)) {
+		astman_send_error(s, m, "Peer: <name> missing.\n");
+		return 0;
+	}
+	a[0] = "sip";
+	a[1] = "qualify";
+	a[2] = "peer";
+	a[3] = peer;
+
+	_sip_qualify_peer(1, -1, s, m, 4, a);
+	astman_append(s, "\r\n\r\n" );
+	return 0;
+}
+
+/*! \brief Send an OPTIONS packet to a SIP peer */
+static char *sip_qualify_peer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "sip qualify peer";
+		e->usage =
+			"Usage: sip qualify peer <name> [load]\n"
+			"       Requests a response from one SIP peer and the current status.\n"
+			"       Option \"load\" forces lookup of peer in realtime storage.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return complete_sip_show_peer(a->line, a->word, a->pos, a->n);
+	}
+	return _sip_qualify_peer(0, a->fd, NULL, NULL, a->argc, (const char **) a->argv);
+}
+
 /*! \brief list peer mailboxes to CLI */
 static void peer_mailboxes_to_str(struct ast_str **mailbox_str, struct sip_peer *peer)
 {
@@ -13621,7 +13685,6 @@ static char *sip_show_sched(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 	ast_cli(a->fd, "%s", cbuf);
 	return CLI_SUCCESS;
 }
-
 
 /*! \brief Show one user in detail */
 static char *sip_show_user(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -14187,8 +14250,9 @@ static char *complete_sip_show_history(const char *line, const char *word, int p
 /*! \brief Support routine for 'sip show peer' CLI */
 static char *complete_sip_show_peer(const char *line, const char *word, int pos, int state)
 {
-	if (pos == 3)
+	if (pos == 3) {
 		return complete_sip_peer(word, state, 0);
+	}
 
 	return NULL;
 }
@@ -19116,7 +19180,11 @@ static int handle_request_do(struct sip_request *req, struct sockaddr_in *sin)
 			ntohs(sin->sin_port), req->data->str);
 	}
 
-	parse_request(req);
+	if(parse_request(req) == -1) { /* Bad packet, can't parse */
+		ast_str_reset(req->data); /* nulling this out is NOT a good idea here. */
+		return 1;
+	}
+
 	req->method = find_sip_method(req->rlPart1);
 
 	if (req->debug)
@@ -19884,12 +19952,12 @@ static int sip_poke_noanswer(const void *data)
 /*! \brief Check availability of peer, also keep NAT open
 \note	This is done with the interval in qualify= configuration option
 	Default is 2 seconds */
-static int sip_poke_peer(struct sip_peer *peer)
+static int sip_poke_peer(struct sip_peer *peer, int force)
 {
 	struct sip_pvt *p;
 	int xmitres = 0;
 	
-	if (!peer->maxms || !peer->addr.sin_addr.s_addr) {
+	if ((!peer->maxms && !force) || !peer->addr.sin_addr.s_addr) {
 		/* IF we have no IP, or this isn't to be monitored, return
 		  immediately after clearing things out */
 		AST_SCHED_DEL(sched, peer->pokeexpire);
@@ -19945,9 +20013,9 @@ static int sip_poke_peer(struct sip_peer *peer)
 	xmitres = transmit_invite(p, SIP_OPTIONS, 0, 2); /* sinks the p refcount */
 #endif
 	peer->ps = ast_tvnow();
-	if (xmitres == XMIT_ERROR)
+	if (xmitres == XMIT_ERROR) {
 		sip_poke_noanswer(peer);	/* Immediately unreachable, network problems */
-	else {
+	} else if (!force) {
 		AST_SCHED_REPLACE(peer->pokeexpire, sched, 
 			peer->maxms * 2, sip_poke_noanswer, peer);
 	}
@@ -22497,6 +22565,7 @@ static struct ast_cli_entry cli_sip[] = {
 	AST_CLI_DEFINE(sip_show_channel, "Show detailed SIP channel info"),
 	AST_CLI_DEFINE(sip_show_history, "Show SIP dialog history"),
 	AST_CLI_DEFINE(sip_show_peer, "Show details on specific SIP peer"),
+	AST_CLI_DEFINE(sip_qualify_peer, "Send an OPTIONS packet to a peer"),
 	AST_CLI_DEFINE(sip_show_users, "List defined SIP users"),
 	AST_CLI_DEFINE(sip_show_user, "Show details on specific SIP user"),
 	AST_CLI_DEFINE(sip_show_sched, "Present a report on the status of the sched queue"),
@@ -22575,6 +22644,8 @@ static int load_module(void)
 			"List SIP peers (text format)", mandescr_show_peers);
 	ast_manager_register2("SIPshowpeer", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_sip_show_peer,
 			"Show SIP peer (text format)", mandescr_show_peer);
+	ast_manager_register2("SIPqualifypeer", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_sip_qualify_peer,
+			"Show SIP peer (text format)", mandescr_show_peer);
 	ast_manager_register2("SIPshowregistry", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_show_registry,
 			"Show SIP registrations (text format)", mandescr_show_registry);
 	sip_poke_all_peers();	
@@ -22621,6 +22692,7 @@ static int unload_module(void)
 	/* Unregister AMI actions */
 	ast_manager_unregister("SIPpeers");
 	ast_manager_unregister("SIPshowpeer");
+	ast_manager_unregister("SIPqualifypeer");
 	ast_manager_unregister("SIPshowregistry");
 	
 	/* Kill TCP/TLS server threads */

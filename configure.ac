@@ -1267,7 +1267,7 @@ AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_new_bri], [libpri.h])
 
-AST_EXT_LIB_CHECK([SS7], [ss7], [isup_cqr], [libss7.h])
+AST_EXT_LIB_CHECK([SS7], [ss7], [isup_set_generic_name], [libss7.h])
 
 if test "${USE_PWLIB}" != "no"; then
 	if test -n "${PWLIB_DIR}"; then
@@ -1336,9 +1336,19 @@ AST_EXT_TOOL_CHECK([GMIME], [gmime])
 AST_EXT_LIB_CHECK([FREETDS], [tds_mssql], [tds_version], [freetds_mssql/tds.h])
 if test "${PBX_FREETDS}" != "0";
 then
-    case `grep TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/freetds_mssql/tdsver.h` in
+    if test "${FREETDS_DIR}x" = "x";
+    then
+        for tds_dir in /usr /usr/local;
+        do
+            if test -f "${tds_dir}/include/tdsver.h";
+            then
+                FREETDS_DIR="${tds_dir}"
+            fi
+        done
+    fi
+    case `${GREP} TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/tdsver.h` in
     *0.64*)
-	FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
+        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
 	;;
     *0.63*)
         FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_63"
