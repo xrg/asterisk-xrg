@@ -1,9 +1,9 @@
 #!/bin/sh
-# $Id: asterisk,v 1.3 2005/11/17 22:30:01 Gregory Boehnlein <damin@nacs.net>
+# $Id$
 #
 # asterisk    Starts, Stops and Reloads Asterisk.
 #
-# chkconfig: 2345 40 60
+# chkconfig: 2345 90 60
 # description: Asterisk PBX and telephony daemon.
 # processname: asterisk
 # pidfile: /var/run/asterisk.pid
@@ -20,36 +20,11 @@
 # - Added support for -U and -G command line options
 # - Modified "reload" to call asterisk -rx 'reload' 
 
-### BEGIN INIT INFO
-# Provides:                    asterisk
-# Required-Start:      +zaptel $network $named
-# Required-Stop:
-# Default-Start:     3 5
-# Default-Stop:      0 1 2 4 6
-# Description: zaptel - zaptel modules for Asterisk
-### END INIT INFO
+# Use this option to specify a different configuration directory
+#AST_CONFIG=/etc/asterisk
 
-# Source function library.
-. /lib/lsb/init-functions
-
-if ! [ -x /usr/sbin/asterisk ] ; then
-	echo "ERROR: /usr/sbin/asterisk not found"
-	exit 0
-fi
-
-if ! [ -d /etc/asterisk ] ; then
-	echo "ERROR: /etc/asterisk directory not found"
-	exit 0
-fi
-
-# Uncomment this ONLY if you know what you are doing.
-# export LD_ASSUME_KERNEL=2.4.1
-
-# Full path to asterisk binary
-DAEMON=/usr/sbin/asterisk
-
-# Full path to safe_asterisk script
-SAFE_ASTERISK=/usr/sbin/safe_asterisk
+# Installation directory
+AST_SBIN=/usr/sbin
 
 # Uncomment the following and set them to the user/groups that you
 # want to run Asterisk as. NOTE: this requires substantial work to
@@ -59,19 +34,49 @@ SAFE_ASTERISK=/usr/sbin/safe_asterisk
 #AST_USER="asterisk"
 #AST_GROUP="asterisk"
 
+# Source function library.
+. /etc/rc.d/init.d/functions
+
+if ! [ -x $AST_SBIN/asterisk ] ; then
+	echo "ERROR: $AST_SBIN/asterisk not found"
+	exit 0
+fi
+
+if ! [ -d $AST_CONFIG ] ; then
+	echo "ERROR: $AST_CONFIG directory not found"
+	exit 0
+fi
+
+# Uncomment this ONLY if you know what you are doing.
+# export LD_ASSUME_KERNEL=2.4.1
+
+# Full path to asterisk binary
+DAEMON=$AST_SBIN/asterisk
+
+# Full path to safe_asterisk script
+SAFE_ASTERISK=$AST_SBIN/safe_asterisk
+
+# Allow configuration overrides in /etc/sysconfig/asterisk
+CONFIG0=`readlink $0`
+if [ "$CONFIG0" = "" ]; then
+	CONFIGFILE=/etc/sysconfig/`basename $0`
+else
+	CONFIGFILE=/etc/sysconfig/`basename $CONFIG0`
+fi
+[ -x $CONFIGFILE ] && . $CONFIGFILE
+
 RETVAL=0
 
 start() {
-	# Start daemons.
-
 	# Check if Asterisk is already running.  If it is, then bug out, because
-	# starting Asterisk when Asterisk is already running is very bad.
-	VERSION=`/usr/sbin/asterisk -rx 'core show version'`
+	# starting safe_asterisk when Asterisk is running is very bad.
+	VERSION=`${AST_SBIN}/asterisk -rx 'core show version'`
 	if [ "${VERSION:0:8}" = "Asterisk" ]; then # otherwise "Unable t"
-		echo "Asterisk is already running.  $0 will exit now."
+		echo "Asterisk is already running."
 		exit 1
 	fi
 
+	# Start daemons.
 	echo -n $"Starting asterisk: "
         if [ -f $SAFE_ASTERISK ] ; then
 		DAEMON=$SAFE_ASTERISK
@@ -80,9 +85,12 @@ start() {
 		ASTARGS="-U $AST_USER"
 	fi
 	if [ $AST_GROUP ] ; then
-		ASTARGS="`echo $ASTARGS` -G $AST_GROUP"
+		ASTARGS="$ASTARGS -G $AST_GROUP"
 	fi
-	$DAEMON $ASTARGS
+	if [ $AST_CONFIG ]; then
+		ASTARGS="$ASTARGS -C $AST_CONFIG"
+	fi
+	daemon $DAEMON $ASTARGS
 	RETVAL=$?
 	[ $RETVAL -eq 0 ] && touch /var/lock/subsys/asterisk
 	echo
