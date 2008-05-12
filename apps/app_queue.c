@@ -1715,6 +1715,8 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	int pos = 0;
 	int inserted = 0;
 	enum queue_member_status stat;
+	char timebuf[20] = "0";
+	char priobuf[5] = "0";
 
 	if (!(q = load_realtime_queue(queuename)))
 		return res;
@@ -1766,6 +1768,23 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 			S_OR(qe->chan->cid.cid_name, "unknown"),
 			q->name, qe->pos, q->count, qe->chan->uniqueid );
 		ast_debug(1, "Queue '%s' Join, Channel '%s', Position '%d'\n", q->name, qe->chan->name, qe->pos );
+		/* Add to realtime caller list.
+		 * Position is not stored, as it changes often, but
+		 * can be calculated from started time and priority */
+		if (ast_check_realtime("queue_callers")) {
+			snprintf(timebuf, sizeof(timebuf), "%ld", (long)(qe->start));
+			snprintf(priobuf, sizeof(priobuf), "%d", qe->prio);
+			ast_store_realtime("queue_callers",
+				"queue",q->name,
+				"uniqueid",qe->chan->uniqueid,
+				"channel",qe->chan->name,
+				"priority",priobuf,
+				"callerid_name",qe->chan->cid.cid_name,
+				"callerid_num",qe->chan->cid.cid_num,
+				"accountcode",qe->chan->accountcode,
+				"started",timebuf,
+				NULL);
+		}
 	}
 	ao2_unlock(q);
 	ao2_unlock(queues);
@@ -2007,6 +2026,10 @@ static void leave_queue(struct queue_ent *qe)
 				"Channel: %s\r\nQueue: %s\r\nCount: %d\r\nUniqueid: %s\r\n",
 				qe->chan->name, q->name,  q->count, qe->chan->uniqueid);
 			ast_debug(1, "Queue '%s' Leave, Channel '%s'\n", q->name, qe->chan->name );
+			/* Remove from realtime caller list */
+			if (ast_check_realtime("queue_callers")) {
+				ast_destroy_realtime("queue_callers","uniqueid",qe->chan->uniqueid,NULL);
+			}
 			/* Take us out of the queue */
 			if (prev)
 				prev->next = cur->next;
@@ -4687,6 +4710,10 @@ stop:
 	if (reason != QUEUE_UNKNOWN)
 		set_queue_result(chan, reason);
 
+	if (ast_check_realtime("queue_callers")) {
+		ast_destroy_realtime("queue_callers", "1", "1", NULL);
+	}
+
 	return res;
 }
 
@@ -6318,6 +6345,10 @@ static int load_module(void)
 
 	if (queue_persistent_members)
 		reload_queue_members();
+
+	if (ast_check_realtime("queue_callers")) {
+		ast_destroy_realtime("queue_callers", "1", "1", NULL);
+	}
 
 	ast_mutex_init(&device_state.lock);
 	ast_cond_init(&device_state.cond, NULL);
