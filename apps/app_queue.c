@@ -3540,6 +3540,8 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	int res = -1;
 	int pos = 0;
 	int inserted = 0;
+	char timebuf[20] = "0";
+	char priobuf[5] = "0";
 
 	if (!(q = find_load_queue_rt_friendly(queuename))) {
 		return res;
@@ -3610,6 +3612,23 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 				     "Count", q->count);
 		ast_channel_publish_cached_blob(qe->chan, queue_caller_join_type(), blob);
 		ast_debug(1, "Queue '%s' Join, Channel '%s', Position '%d'\n", q->name, ast_channel_name(qe->chan), qe->pos );
+		/* Add to realtime caller list.
+		 * Position is not stored, as it changes often, but
+		 * can be calculated from started time and priority */
+		if (ast_check_realtime("queue_callers")) {
+			snprintf(timebuf, sizeof(timebuf), "%ld", (long)(qe->start));
+			snprintf(priobuf, sizeof(priobuf), "%d", qe->prio);
+			ast_store_realtime("queue_callers",
+				"queue",q->name,
+				"uniqueid",qe->chan->uniqueid,
+				"channel",qe->chan->name,
+				"priority",priobuf,
+				"callerid_name",qe->chan->cid.cid_name,
+				"callerid_num",qe->chan->cid.cid_num,
+				"accountcode",qe->chan->accountcode,
+				"started",timebuf,
+				NULL);
+		}
 	}
 	ao2_unlock(q);
 	queue_t_unref(q, "Done with realtime queue");
@@ -3890,12 +3909,17 @@ static void leave_queue(struct queue_ent *qe)
 					     "Count", q->count);
 			ast_channel_publish_cached_blob(qe->chan, queue_caller_leave_type(), blob);
 			ast_debug(1, "Queue '%s' Leave, Channel '%s'\n", q->name, ast_channel_name(qe->chan));
+			/* Remove from realtime caller list */
+			if (ast_check_realtime("queue_callers")) {
+				ast_destroy_realtime("queue_callers","uniqueid",qe->chan->uniqueid,NULL);
+			}
 			/* Take us out of the queue */
 			if (prev) {
 				prev->next = current->next;
 			} else {
 				q->head = current->next;
 			}
+
 			/* Free penalty rules */
 			while ((pr_iter = AST_LIST_REMOVE_HEAD(&qe->qe_rules, list))) {
 				ast_free(pr_iter);
@@ -7983,6 +8007,10 @@ stop:
 	if (reason != QUEUE_UNKNOWN)
 		set_queue_result(chan, reason);
 
+	if (ast_check_realtime("queue_callers")) {
+		ast_destroy_realtime("queue_callers", "1", "1", NULL);
+	}
+
 	/*
 	 * every queue_ent is given a reference to it's parent
 	 * call_queue when it joins the queue.  This ref must be taken
@@ -10752,6 +10780,10 @@ static int load_module(void)
 
 	if (queue_persistent_members) {
 		reload_queue_members();
+	}
+
+	if (ast_check_realtime("queue_callers")) {
+		ast_destroy_realtime("queue_callers", "1", "1", NULL);
 	}
 
 	ast_data_register_multiple(queue_data_providers, ARRAY_LEN(queue_data_providers));
