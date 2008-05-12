@@ -4623,7 +4623,7 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 	/* Destroy Session-Timers if allocated */
 	if (p->stimer) {
 		if (p->stimer->st_active == TRUE && p->stimer->st_schedid > -1)
-			ast_sched_del(sched, p->stimer->st_schedid);
+			AST_SCHED_DEL(sched, p->stimer->st_schedid);
 		ast_free(p->stimer);
 		p->stimer = NULL;
 	}
@@ -6186,11 +6186,6 @@ static struct sip_pvt *find_call(struct sip_request *req, struct sockaddr_in *si
 	const char *to = get_header(req, "To");
 	const char *cseq = get_header(req, "Cseq");
 	struct sip_pvt *sip_pvt_ptr;
-
-	callid = get_header(req, "Call-ID");
-	from = get_header(req, "From");
-	to = get_header(req, "To");
-	cseq = get_header(req, "Cseq");
 
 	/* Call-ID, to, from and Cseq are required by RFC 3261. (Max-forwards and via too - ignored now) */
 	/* get_header always returns non-NULL so we must use ast_strlen_zero() */
@@ -15073,6 +15068,7 @@ static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int d
 	char resp[256];
 	char resp_hash[256];
 	char uri[256];
+	char opaque[256] = "";
 	char cnonce[80];
 	const char *username;
 	const char *secret;
@@ -15121,11 +15117,17 @@ static int build_reply_digest(struct sip_pvt *p, int method, char* digest, int d
 	else
 		snprintf(resp, sizeof(resp), "%s:%s:%s", a1_hash, p->nonce, a2_hash);
 	ast_md5_hash(resp_hash, resp);
+
+	/* only include the opaque string if it's set */
+	if (!ast_strlen_zero(p->opaque)) {
+	  snprintf(opaque, sizeof(opaque), ", opaque=\"%s\"", p->opaque);
+	}
+
 	/* XXX We hard code our qop to "auth" for now.  XXX */
 	if (!ast_strlen_zero(p->qop))
-		snprintf(digest, digest_len, "Digest username=\"%s\", realm=\"%s\", algorithm=MD5, uri=\"%s\", nonce=\"%s\", response=\"%s\", opaque=\"%s\", qop=auth, cnonce=\"%s\", nc=%08x", username, p->realm, uri, p->nonce, resp_hash, p->opaque, cnonce, p->noncecount);
+		snprintf(digest, digest_len, "Digest username=\"%s\", realm=\"%s\", algorithm=MD5, uri=\"%s\", nonce=\"%s\", response=\"%s\"%s, qop=auth, cnonce=\"%s\", nc=%08x", username, p->realm, uri, p->nonce, resp_hash, opaque, cnonce, p->noncecount);
 	else
-		snprintf(digest, digest_len, "Digest username=\"%s\", realm=\"%s\", algorithm=MD5, uri=\"%s\", nonce=\"%s\", response=\"%s\", opaque=\"%s\"", username, p->realm, uri, p->nonce, resp_hash, p->opaque);
+		snprintf(digest, digest_len, "Digest username=\"%s\", realm=\"%s\", algorithm=MD5, uri=\"%s\", nonce=\"%s\", response=\"%s\"%s", username, p->realm, uri, p->nonce, resp_hash, opaque);
 
 	append_history(p, "AuthResp", "Auth response sent for %s in realm %s - nc %d", username, p->realm, p->noncecount);
 
@@ -15986,8 +15988,6 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		}
 		break;
 	case 408:	/* Request timeout */
-		if (global_regattempts_max)
-			p->registry->regattempts = global_regattempts_max+1;
 		p->needdestroy = 1;
 		if (r->call)
 			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 408");
@@ -15996,7 +15996,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 	case 423:	/* Interval too brief */
 		r->expiry = atoi(get_header(req, "Min-Expires"));
 		ast_log(LOG_WARNING, "Got 423 Interval too brief for service %s@%s, minimum is %d seconds\n", p->registry->username, p->registry->hostname, r->expiry);
-		ast_sched_del(sched, r->timeout);
+		AST_SCHED_DEL(sched, r->timeout);
 		r->timeout = -1;
 		if (r->call) {
 			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 423");
@@ -19372,7 +19372,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, const struct ast_event *e
 {
 	/* Called with peerl lock, but releases it */
 	struct sip_pvt *p;
-	int newmsgs = 0, oldmsgs = 0;
+	int newmsgs = 0, oldmsgs = 0, urgentmsgs = 0;
 
 	if (ast_test_flag((&peer->flags[1]), SIP_PAGE2_SUBSCRIBEMWIONLY) && !peer->mwipvt)
 		return 0;
@@ -19391,7 +19391,7 @@ static int sip_send_mwi_to_peer(struct sip_peer *peer, const struct ast_event *e
 	} else { /* Fall back to manually checking the mailbox */
 		struct ast_str *mailbox_str = ast_str_alloca(512);
 		peer_mailboxes_to_str(&mailbox_str, peer);
-		ast_app_inboxcount(mailbox_str->str, &newmsgs, &oldmsgs);
+		ast_app_inboxcount(mailbox_str->str, &urgentmsgs, &newmsgs, &oldmsgs);
 	}
 	
 	if (peer->mwipvt) {
@@ -21987,7 +21987,7 @@ static int reload_config(enum channelreloadreason reason)
 	/* Done, tell the manager */
 	manager_event(EVENT_FLAG_SYSTEM, "ChannelReload", "ChannelType: SIP\r\nReloadReason: %s\r\nRegistry_Count: %d\r\nPeer_Count: %d\r\nUser_Count: %d\r\n", channelreloadreason2txt(reason), registry_count, peer_count, user_count);
 	run_end = time(0);
-	ast_log(LOG_NOTICE, "reload_config done...Runtime= %d sec\n", (int)(run_end-run_start));
+	ast_debug(4, "reload_config done...Runtime= %d sec\n", (int)(run_end-run_start));
 
 	return 0;
 }
@@ -22506,7 +22506,7 @@ static int sip_do_reload(enum channelreloadreason reason)
 	sip_send_all_registers();
 	end_poke = time(0);
 	
-	ast_log(LOG_NOTICE, "do_reload finished. peer poke/prune reg contact time = %d sec.\n", (int)(end_poke-start_poke));
+	ast_debug(4, "do_reload finished. peer poke/prune reg contact time = %d sec.\n", (int)(end_poke-start_poke));
 
 	ast_debug(4, "--------------- SIP reload done\n");
 

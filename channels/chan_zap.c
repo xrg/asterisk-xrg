@@ -8380,7 +8380,15 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 			if (conf.timing.debouncetime >= 0)
 				p.debouncetime = conf.timing.debouncetime;
 		}
-		
+
+		/* 10 is a nice default. */
+		if (conf.chan.drings.ringnum[0].range == 0)
+			conf.chan.drings.ringnum[0].range = 10;
+		if (conf.chan.drings.ringnum[1].range == 0)
+			conf.chan.drings.ringnum[1].range = 10;
+		if (conf.chan.drings.ringnum[2].range == 0)
+			conf.chan.drings.ringnum[2].range = 10;
+
 		/* dont set parms on a pseudo-channel (or CRV) */
 		if (tmp->subs[SUB_REAL].zfd >= 0)
 		{
@@ -9307,7 +9315,7 @@ static void *ss7_linkset(void *data)
 
 		for (i = 0; i < linkset->numsigchans; i++) {
 			pollers[i].fd = linkset->fds[i];
-			pollers[i].events = POLLIN | POLLOUT | POLLPRI;
+			pollers[i].events = ss7_pollflags(ss7, linkset->fds[i]);
 			pollers[i].revents = 0;
 		}
 
@@ -9361,20 +9369,16 @@ static void *ss7_linkset(void *data)
 				res = ss7_read(ss7, pollers[i].fd);
 				ast_mutex_unlock(&linkset->lock);
 			}
+
 			if (pollers[i].revents & POLLOUT) {
 				ast_mutex_lock(&linkset->lock);
 				res = ss7_write(ss7, pollers[i].fd);
 				ast_mutex_unlock(&linkset->lock);
 				if (res < 0) {
-					ast_log(LOG_ERROR, "Error in write %s", strerror(errno));
+					ast_debug(1, "Error in write %s\n", strerror(errno));
 				}
 			}
 		}
-
-#if 0
-		if (res < 0)
-			exit(-1);
-#endif
 
 		while ((e = ss7_check_event(ss7))) {
 			switch (e->e) {
@@ -9628,6 +9632,7 @@ static void *ss7_linkset(void *data)
 					break;
 				} else {
 					struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_PROCEEDING, };
+					struct ast_frame g = { AST_FRAME_CONTROL, AST_CONTROL_PROGRESS, };
 
 					p = linkset->pvts[chanpos];
 
@@ -9640,6 +9645,8 @@ static void *ss7_linkset(void *data)
 					ast_mutex_lock(&p->lock);
 					zap_queue_frame(p, &f, linkset);
 					p->proceeding = 1;
+					zap_queue_frame(p, &g, linkset);
+					p->progress = 1;
 
 					ast_mutex_unlock(&p->lock);
 				}
@@ -11683,6 +11690,21 @@ static char *handle_pri_show_debug(struct ast_cli_entry *e, int cmd, struct ast_
 	return CLI_SUCCESS;
 }
 
+static char *handle_pri_version(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "pri show version";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_cli(a->fd, "libpri version: %s\n", pri_get_version());
+
+	return CLI_SUCCESS;
+}
+
 static struct ast_cli_entry zap_pri_cli[] = {
 	AST_CLI_DEFINE(handle_pri_debug, "Enables PRI debugging on a span"),
 	AST_CLI_DEFINE(handle_pri_no_debug, "Disables PRI debugging on a span"),
@@ -11692,6 +11714,7 @@ static struct ast_cli_entry zap_pri_cli[] = {
 	AST_CLI_DEFINE(handle_pri_show_debug, "Displays current PRI debug settings"),
 	AST_CLI_DEFINE(handle_pri_set_debug_file, "Sends PRI debug output to the specified file"),
 	AST_CLI_DEFINE(handle_pri_unset_debug_file, "Ends PRI debug output to file"),
+	AST_CLI_DEFINE(handle_pri_version, "Displays libpri version"),
 };
 
 #endif /* HAVE_PRI */
@@ -12826,7 +12849,11 @@ static int linkset_addsigchan(int sigchan)
 			ast_log(LOG_ERROR, "Unable to get parameters for sigchan %d (%s)\n", sigchan, strerror(errno));
 			return -1;
 		}
-		if ((p.sigtype != ZT_SIG_HDLCFCS) && (p.sigtype != ZT_SIG_HARDHDLC)) {
+		if ((p.sigtype != ZT_SIG_HDLCFCS) && (p.sigtype != ZT_SIG_HARDHDLC) 
+#if defined(HAVE_ZAPTEL_SIG_MTP2)
+				&& (p.sigtype != ZT_SIG_MTP2)
+#endif
+				) {
 			zt_close(link->fds[curfd]);
 			link->fds[curfd] = -1;
 			ast_log(LOG_ERROR, "sigchan %d is not in HDLC/FCS mode.  See /etc/zaptel.conf\n", sigchan);
@@ -13095,12 +13122,28 @@ static char *handle_ss7_show_linkset(struct ast_cli_entry *e, int cmd, struct as
 	return CLI_SUCCESS;
 }
 
+static char *handle_ss7_version(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "ss7 show version";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_cli(a->fd, "libss7 version: %s\n", ss7_get_version());
+
+	return CLI_SUCCESS;
+}
+
 static struct ast_cli_entry zap_ss7_cli[] = {
 	AST_CLI_DEFINE(handle_ss7_debug, "Enables SS7 debugging on a linkset"), 
 	AST_CLI_DEFINE(handle_ss7_no_debug, "Disables SS7 debugging on a linkset"), 
 	AST_CLI_DEFINE(handle_ss7_block_cic, "Disables SS7 debugging on a linkset"),
 	AST_CLI_DEFINE(handle_ss7_unblock_cic, "Disables SS7 debugging on a linkset"),
 	AST_CLI_DEFINE(handle_ss7_show_linkset, "Shows the status of a linkset"),
+	AST_CLI_DEFINE(handle_ss7_version, "Displays libss7 version"),
 };
 #endif /* HAVE_SS7 */
 
@@ -13313,19 +13356,10 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 			ast_copy_string(confp->chan.drings.ringContext[2].contextData,v->value,sizeof(confp->chan.drings.ringContext[2].contextData));
 		} else if (!strcasecmp(v->name, "dring1range")) {
 			confp->chan.drings.ringnum[0].range = atoi(v->value);
-			/* 10 is a nice default. */
-			if (confp->chan.drings.ringnum[0].range == 0)
-				confp->chan.drings.ringnum[0].range = 10;
 		} else if (!strcasecmp(v->name, "dring2range")) {
 			confp->chan.drings.ringnum[1].range = atoi(v->value);
-			/* 10 is a nice default. */
-			if (confp->chan.drings.ringnum[1].range == 0)
-				confp->chan.drings.ringnum[1].range = 10;
 		} else if (!strcasecmp(v->name, "dring3range")) {
 			confp->chan.drings.ringnum[2].range = atoi(v->value);
-			/* 10 is a nice default. */
-			if (confp->chan.drings.ringnum[2].range == 0)
-				confp->chan.drings.ringnum[2].range = 10;
 		} else if (!strcasecmp(v->name, "dring1")) {
 			ringc = v->value;
 			sscanf(ringc, "%d,%d,%d", &confp->chan.drings.ringnum[0].ring[0], &confp->chan.drings.ringnum[0].ring[1], &confp->chan.drings.ringnum[0].ring[2]);

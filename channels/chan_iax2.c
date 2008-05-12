@@ -87,7 +87,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/netsock.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/linkedlists.h"
-#include "asterisk/dlinkedlists.h"
 #include "asterisk/event.h"
 #include "asterisk/astobj2.h"
 
@@ -640,8 +639,6 @@ struct chan_iax2_pvt {
 	int frames_dropped;
 	/*! received frame count: (just for stats) */
 	int frames_received;
-
-	AST_DLLIST_ENTRY(chan_iax2_pvt) entry;
 };
 
 /*!
@@ -1588,20 +1585,7 @@ static void remove_by_peercallno(struct chan_iax2_pvt *pvt)
 	ao2_unlink(iax_peercallno_pvts, pvt);
 }
 
-/*!
- * \todo XXX Note that this function contains a very expensive operation that
- * happens for *every* incoming media frame.  It iterates through every
- * possible call number, locking and unlocking each one, to try to match the
- * incoming frame to an active call.  Call numbers can be up to 2^15, 32768.
- * So, for a call with a local call number of 20000, every incoming audio
- * frame would require 20000 mutex lock and unlock operations.  Ouch.
- *
- * It's a shame that IAX2 media frames carry the source call number instead of
- * the destination call number.  If they did, this lookup wouldn't be needed.
- * However, it's too late to change that now.  Instead, we need to come up with
- * a better way of indexing active calls so that these frequent lookups are not
- * so expensive.
- *
+/*
  * \note Calling this function while holding another pvt lock can cause a deadlock.
  */
 static int __find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int return_locked, int full_frame)
@@ -3942,6 +3926,21 @@ static int iax2_indicate(struct ast_channel *c, int condition, const void *data,
 
 	ast_mutex_lock(&iaxsl[callno]);
 	pvt = iaxs[callno];
+
+	if (!pvt->peercallno) {
+		/* We don't know the remote side's call number, yet.  :( */
+		int count = 10;
+		while (count-- && pvt && !pvt->peercallno) {
+			ast_mutex_unlock(&iaxsl[callno]);
+			usleep(1);
+			ast_mutex_lock(&iaxsl[callno]);
+			pvt = iaxs[callno];
+		}
+		if (!pvt->peercallno) {
+			res = -1;
+			goto done;
+		}
+	}
 
 	switch (condition) {
 	case AST_CONTROL_HOLD:
@@ -6870,7 +6869,7 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 		iax_ie_append_addr(&ied, IAX_IE_APPARENT_ADDR, &p->addr);
 		if (!ast_strlen_zero(p->mailbox)) {
 			struct ast_event *event;
-			int new, old;
+			int new, old, urgent;
 			char *mailbox, *context;
 
 			context = mailbox = ast_strdupa(p->mailbox);
@@ -6889,8 +6888,10 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 				old = ast_event_get_ie_uint(event, AST_EVENT_IE_OLDMSGS);
 				ast_event_destroy(event);
 			} else /* Fall back on checking the mailbox directly */
-				ast_app_inboxcount(p->mailbox, &new, &old);
+				ast_app_inboxcount(p->mailbox, &urgent, &new, &old);
 
+			if (urgent > 255)
+				urgent = 255;
 			if (new > 255)
 				new = 255;
 			if (old > 255)

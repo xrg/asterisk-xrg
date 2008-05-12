@@ -7,6 +7,13 @@ Dialplan Functions
  * Added a new dialplan function, AST_CONFIG(), which allows you to access
    variables from an Asterisk configuration file.
  * The JACK_HOOK function now has a c() option to supply a custom client name.
+ * Added two new dialplan functions from libspeex for audio gain control and 
+   denoise, AGC() and DENOISE(). Both functions can be applied to the tx and 
+   rx directions of a channel from the dialplan.
+ * The SMDI_MSG_RETRIEVE function now has the ability to search for SMDI messages
+   based on other parameters.  The default is still to search based on the
+   forwarding station ID.  However, there are new options that allow you to search
+   based on the message desk terminal ID, or the message desk number.
 
 Zaptel channel driver (chan_zap) Changes
 ----------------------------------------
@@ -35,6 +42,11 @@ Application Changes
    quite helpful.
  * Voicemail now permits a mailbox setting to wrap around from first to last
    messages, if the "messagewrap" option is set to a true value.
+ * Voicemail now permits an external script to be run, for password validation.
+   The script should output "VALID" or "INVALID" on stdout, depending upon the
+   wish to validate or invalidate the password given.  Arguments are:
+   "mailbox" "context" "oldpass" "newpass".  See the sample voicemail.conf for
+   more details
  * Dial has a new option: F(context^extension^pri), which permits a callee to
    continue in the dialplan, at the specified label, if the caller hangs up.
  * ChanSpy and ExtenSpy have a new option, 's' which suppresses speaking the
@@ -75,11 +87,31 @@ CLI Changes
   * New CLI command, "config reload <file.conf>" which reloads any module that
      references that particular configuration file.  Also added "config list"
      which shows which configuration files are in use.
+  * New CLI commands, "pri show version" and "ss7 show version" that will
+     display which version of libpri and libss7 are being used, respectively.
+	 A new API call was added so trunk will now have to be compiled against
+	 a versions of libpri and libss7 that have them or it will not know that
+	 these libraries exist.
 
 DNS manager changes
 -------------------
   * Addresses managed by DNS manager now can check to see if there is a DNS
     SRV record for a given domain and will use that hostname/port if present.
+
+Dialplan function changes
+-------------------------
+ * TIMEOUT() has been modified to be accurate down to the millisecond.
+ * ENUM*() functions now include the following new options:
+     - 'u' returns the full URI and does not strip off the URI-scheme.
+	 - 's' triggers ISN specific rewriting
+	 - 'i' looks for branches into an Infrastructure ENUM tree
+	 - 'd' for a direct DNS lookup without any flipping of digits.
+ * TXCIDNAME() has a new zone-suffix parameter (which defaults to 'e164.arpa')
+
+AMI - The manager (TCP/TLS/HTTP)
+--------------------------------
+  * The Status command now takes an optional list of variables to display
+    along with channel status.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.4.X to Asterisk 1.6.0  -------------
@@ -385,6 +417,12 @@ Voicemail Changes
      voicemail boxes.  The SMDI interface can also poll for MWI changes when some
      outside entity is modifying the state of the mailbox (such as IMAP storage or
      a web interface of some kind).
+  * Added the support for marking messages as "urgent." There are two methods to accomplish
+     this. One is to pass the 'U' option to VoiceMail(). Another way to mark a message as urgent
+	 is to specify "review=yes" in voicemail.conf. Doing this will cause allow the user to mark
+	 the message as urgent after he has recorded a voicemail by following the voice instructions.
+	When listening to voicemails using VoiceMailMain urgent messages will be presented before other
+	 messages
 
 Queue changes
 -------------

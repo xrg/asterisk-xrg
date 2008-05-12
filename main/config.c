@@ -1056,9 +1056,10 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 				/* #exec </path/to/executable>
 				   We create a tmp file, then we #include it, then we delete it. */
 				if (!do_include) {
+					struct timeval tv = ast_tvnow();
 					if (!ast_test_flag(&flags, CONFIG_FLAG_NOCACHE))
 						config_cache_attribute(configfile, ATTRIBUTE_EXEC, NULL, who_asked);
-					snprintf(exec_file, sizeof(exec_file), "/var/tmp/exec.%d.%ld", (int)time(NULL), (long)pthread_self());
+					snprintf(exec_file, sizeof(exec_file), "/var/tmp/exec.%d%d.%ld", (int)tv.tv_sec, (int)tv.tv_usec, (long)pthread_self());
 					snprintf(cmd, sizeof(cmd), "%s > %s 2>&1", cur, exec_file);
 					ast_safe_system(cmd);
 					cur = exec_file;
@@ -2130,7 +2131,8 @@ int ast_update_realtime(const char *family, const char *keyfield, const char *lo
 	return res;
 }
 
-int ast_store_realtime(const char *family, ...) {
+int ast_store_realtime(const char *family, ...)
+{
 	struct ast_config_engine *eng;
 	int res = -1;
 	char db[256]="";
@@ -2146,7 +2148,8 @@ int ast_store_realtime(const char *family, ...) {
 	return res;
 }
 
-int ast_destroy_realtime(const char *family, const char *keyfield, const char *lookup, ...) {
+int ast_destroy_realtime(const char *family, const char *keyfield, const char *lookup, ...)
+{
 	struct ast_config_engine *eng;
 	int res = -1;
 	char db[256]="";

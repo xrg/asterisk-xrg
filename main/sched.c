@@ -198,34 +198,45 @@ static void schedule(struct sched_context *con, struct sched *s)
 	int de = 0;
 	struct sched *first = AST_DLLIST_FIRST(&con->schedq);
 	struct sched *last = AST_DLLIST_LAST(&con->schedq);
+
 	if (first)
 		df = ast_tvdiff_us(s->when, first->when);
 	if (last)
 		de = ast_tvdiff_us(s->when, last->when);
+
 	if (df < 0)
 		df = -df;
 	if (de < 0)
 		de = -de;
-	if (df < de)
+
+	if (df < de) {
 		AST_DLLIST_TRAVERSE(&con->schedq, cur, list) {
 			if (ast_tvcmp(s->when, cur->when) == -1) {
 				AST_DLLIST_INSERT_BEFORE(&con->schedq, cur, s, list);
 				break;
 			}
 		}
-	else
+		if (!cur) {
+			AST_DLLIST_INSERT_TAIL(&con->schedq, s, list);
+		}
+	} else {
 		AST_DLLIST_TRAVERSE_BACKWARDS(&con->schedq, cur, list) {
 			if (ast_tvcmp(s->when, cur->when) == 1) {
 				AST_DLLIST_INSERT_AFTER(&con->schedq, cur, s, list);
 				break;
 			}
 		}
-	if (!cur)
-		AST_DLLIST_INSERT_TAIL(&con->schedq, s, list);
+		if (!cur) {
+			AST_DLLIST_INSERT_HEAD(&con->schedq, s, list);
+		}
+	}
+
 	ret = ast_hashtab_insert_safe(con->schedq_ht, s);
 	if (!ret)
 		ast_log(LOG_WARNING,"Schedule Queue entry %d is already in table!\n",s->id);
+
 	con->schedcnt++;
+
 	if (con->schedcnt > con->highwater)
 		con->highwater = con->schedcnt;
 }
@@ -252,8 +263,9 @@ static int sched_settime(struct timeval *tv, int when)
 int ast_sched_replace_variable(int old_id, struct sched_context *con, int when, ast_sched_cb callback, const void *data, int variable)
 {
 	/* 0 means the schedule item is new; do not delete */
-	if (old_id > 0)
-		ast_sched_del(con, old_id);
+	if (old_id > 0) {
+		AST_SCHED_DEL(con, old_id);
+	}
 	return ast_sched_add_variable(con, when, callback, data, variable);
 }
 
@@ -295,8 +307,9 @@ int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb cal
 
 int ast_sched_replace(int old_id, struct sched_context *con, int when, ast_sched_cb callback, const void *data)
 {
-	if (old_id > -1)
-		ast_sched_del(con, old_id);
+	if (old_id > -1) {
+		AST_SCHED_DEL(con, old_id);
+	}
 	return ast_sched_add(con, when, callback, data);
 }
 

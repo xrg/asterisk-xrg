@@ -42,17 +42,11 @@ extern "C" {
  * then whatever callback had been running will complete
  * and reinsert the task into the scheduler.
  *
- * Note that this is NOT always appropriate. This should 
- * only be used for tasks whose callback may return non-zero 
- * to indicate that the task needs to be rescheduled with the
- * SAME id as previously.
- *
- * Some scheduler callbacks instead may reschedule the task themselves,
- * thus removing the previous task id from the queue. If the task is rescheduled
- * in this manner, then the id for the task will be different than before
- * and so it makes no sense to use this macro. Note that if using the scheduler
- * in this manner, it is perfectly acceptable for ast_sched_del to fail, and this
- * macro should NOT be used.
+ * Since macro expansion essentially works like pass-by-name
+ * parameter passing, this macro will still work correctly even
+ * if the id of the task to delete changes. This holds as long as 
+ * the name of the id which could change is passed to the macro 
+ * and not a copy of the value of the id.
  */
 #define AST_SCHED_DEL(sched, id) \
 	do { \
@@ -155,7 +149,7 @@ char *ast_sched_report(struct sched_context *con, char *buf, int bufsiz, struct 
  * \param data data to pass to the callback
  * \return Returns a schedule item ID on success, -1 on failure
  */
-int ast_sched_add(struct sched_context *con, int when, ast_sched_cb callback, const void *data);
+int ast_sched_add(struct sched_context *con, int when, ast_sched_cb callback, const void *data) __attribute__((warn_unused_result));
 
 /*!
  * \brief replace a scheduler entry
@@ -168,7 +162,7 @@ int ast_sched_add(struct sched_context *con, int when, ast_sched_cb callback, co
  * \retval -1 failure
  * \retval otherwise, returns scheduled item ID
  */
-int ast_sched_replace(int old_id, struct sched_context *con, int when, ast_sched_cb callback, const void *data);
+int ast_sched_replace(int old_id, struct sched_context *con, int when, ast_sched_cb callback, const void *data) __attribute__((warn_unused_result));
 
 /*!Adds a scheduled event with rescheduling support
  * \param con Scheduler context to add
@@ -183,7 +177,7 @@ int ast_sched_replace(int old_id, struct sched_context *con, int when, ast_sched
  * If callback returns 0, no further events will be re-scheduled
  * \return Returns a schedule item ID on success, -1 on failure
  */
-int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb callback, const void *data, int variable);
+int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb callback, const void *data, int variable) __attribute__((warn_unused_result));
 
 /*!
  * \brief replace a scheduler entry
@@ -196,7 +190,7 @@ int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb cal
  * \retval -1 failure
  * \retval otherwise, returns scheduled item ID
  */
-int ast_sched_replace_variable(int old_id, struct sched_context *con, int when, ast_sched_cb callback, const void *data, int variable);
+int ast_sched_replace_variable(int old_id, struct sched_context *con, int when, ast_sched_cb callback, const void *data, int variable) __attribute__((warn_unused_result));
 
 	
 /*! \brief Find a sched structure and return the data field associated with it. 
@@ -216,8 +210,7 @@ const void *ast_sched_find_data(struct sched_context *con, int id);
  * \param id ID of the scheduled item to delete
  * \return Returns 0 on success, -1 on failure
  */
-
-int ast_sched_del(struct sched_context *con, int id);
+int ast_sched_del(struct sched_context *con, int id) __attribute__((warn_unused_result));
 
 /*! \brief Determines number of seconds until the next outstanding event to take place
  * Determine the number of seconds until the next outstanding event
@@ -228,7 +221,7 @@ int ast_sched_del(struct sched_context *con, int id);
  * \return Returns "-1" if there is nothing there are no scheduled events
  * (and thus the poll should not timeout)
  */
-int ast_sched_wait(struct sched_context *con);
+int ast_sched_wait(struct sched_context *con) __attribute__((warn_unused_result));
 
 /*! \brief Runs the queue
  * \param con Scheduling context to run

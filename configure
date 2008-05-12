@@ -963,12 +963,14 @@ OPENH323_INCDIR
 OPENH323_LIBDIR
 OPENH323_SUFFIX
 OPENH323_BUILD
+PBX_SPEEX_PREPROCESS
 CONFIG_GMIME
 PBX_ZAPTEL_VLDTMF
 PBX_ZAPTEL_ECHOCANPARAMS
 PBX_ZAPTEL_TRANSCODE
 PBX_ZAPTEL_HWGAIN
 PBX_ZAPTEL_NEONMWI
+PBX_ZAPTEL_SIG_MTP2
 EDITLINE_LIB
 PBX_H323
 PBX_IXJUSER
@@ -10263,7 +10265,8 @@ fi
 
 
 
-for ac_header in arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h
+
+for ac_header in arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h
 do
 as_ac_Header=`echo "ac_cv_header_$ac_header" | $as_tr_sh`
 if { as_var=$as_ac_Header; eval "test \"\${$as_var+set}\" = set"; }; then
@@ -16549,13 +16552,15 @@ rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
 
 { echo "$as_me:$LINENO: checking for compiler 'attribute pure' support" >&5
 echo $ECHO_N "checking for compiler 'attribute pure' support... $ECHO_C" >&6; }
+saved_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Werror"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-static int __attribute__((pure)) test(void) {}
+static void __attribute__((pure)) *test(void *muffin, ...) {}
 int
 main ()
 {
@@ -16598,16 +16603,20 @@ fi
 
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
+CFLAGS="$saved_CFLAGS"
+
 
 { echo "$as_me:$LINENO: checking for compiler 'attribute malloc' support" >&5
 echo $ECHO_N "checking for compiler 'attribute malloc' support... $ECHO_C" >&6; }
+saved_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Werror"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-static int __attribute__((malloc)) test(void) {}
+static void __attribute__((malloc)) *test(void *muffin, ...) {}
 int
 main ()
 {
@@ -16650,16 +16659,20 @@ fi
 
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
+CFLAGS="$saved_CFLAGS"
+
 
 { echo "$as_me:$LINENO: checking for compiler 'attribute const' support" >&5
 echo $ECHO_N "checking for compiler 'attribute const' support... $ECHO_C" >&6; }
+saved_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Werror"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-static int __attribute__((const)) test(void) {}
+static void __attribute__((const)) *test(void *muffin, ...) {}
 int
 main ()
 {
@@ -16702,16 +16715,20 @@ fi
 
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
+CFLAGS="$saved_CFLAGS"
+
 
 { echo "$as_me:$LINENO: checking for compiler 'attribute unused' support" >&5
 echo $ECHO_N "checking for compiler 'attribute unused' support... $ECHO_C" >&6; }
+saved_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Werror"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-static int __attribute__((unused)) test(void) {}
+static void __attribute__((unused)) *test(void *muffin, ...) {}
 int
 main ()
 {
@@ -16754,16 +16771,20 @@ fi
 
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
+CFLAGS="$saved_CFLAGS"
+
 
 { echo "$as_me:$LINENO: checking for compiler 'attribute always_inline' support" >&5
 echo $ECHO_N "checking for compiler 'attribute always_inline' support... $ECHO_C" >&6; }
+saved_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Werror"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-static int __attribute__((always_inline)) test(void) {}
+static void __attribute__((always_inline)) *test(void *muffin, ...) {}
 int
 main ()
 {
@@ -16806,16 +16827,20 @@ fi
 
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
+CFLAGS="$saved_CFLAGS"
+
 
 { echo "$as_me:$LINENO: checking for compiler 'attribute deprecated' support" >&5
 echo $ECHO_N "checking for compiler 'attribute deprecated' support... $ECHO_C" >&6; }
+saved_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Werror"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-static int __attribute__((deprecated)) test(void) {}
+static void __attribute__((deprecated)) *test(void *muffin, ...) {}
 int
 main ()
 {
@@ -16857,6 +16882,64 @@ echo "${ECHO_T}no" >&6; }
 fi
 
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+
+CFLAGS="$saved_CFLAGS"
+
+
+{ echo "$as_me:$LINENO: checking for compiler 'attribute sentinel' support" >&5
+echo $ECHO_N "checking for compiler 'attribute sentinel' support... $ECHO_C" >&6; }
+saved_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Werror"
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+static void __attribute__((sentinel)) *test(void *muffin, ...) {}
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  { echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6; }
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_ATTRIBUTE_sentinel 1
+_ACEOF
+
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	{ echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6; }
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+
+CFLAGS="$saved_CFLAGS"
 
 
 { echo "$as_me:$LINENO: checking for -ffunction-sections support" >&5
@@ -17044,6 +17127,89 @@ fi
 rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
       conftest$ac_exeext conftest.$ac_ext
 
+{ echo "$as_me:$LINENO: checking for library containing res_9_ninit" >&5
+echo $ECHO_N "checking for library containing res_9_ninit... $ECHO_C" >&6; }
+if test "${ac_cv_search_res_9_ninit+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  ac_func_search_save_LIBS=$LIBS
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char res_9_ninit ();
+int
+main ()
+{
+return res_9_ninit ();
+  ;
+  return 0;
+}
+_ACEOF
+for ac_lib in '' resolv; do
+  if test -z "$ac_lib"; then
+    ac_res="none required"
+  else
+    ac_res=-l$ac_lib
+    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
+  fi
+  rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest$ac_exeext &&
+       $as_test_x conftest$ac_exeext; then
+  ac_cv_search_res_9_ninit=$ac_res
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
+      conftest$ac_exeext
+  if test "${ac_cv_search_res_9_ninit+set}" = set; then
+  break
+fi
+done
+if test "${ac_cv_search_res_9_ninit+set}" = set; then
+  :
+else
+  ac_cv_search_res_9_ninit=no
+fi
+rm conftest.$ac_ext
+LIBS=$ac_func_search_save_LIBS
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_search_res_9_ninit" >&5
+echo "${ECHO_T}$ac_cv_search_res_9_ninit" >&6; }
+ac_res=$ac_cv_search_res_9_ninit
+if test "$ac_res" != no; then
+  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
+
+fi
+
 { echo "$as_me:$LINENO: checking for res_ninit" >&5
 echo $ECHO_N "checking for res_ninit... $ECHO_C" >&6; }
 cat >conftest.$ac_ext <<_ACEOF
@@ -17052,7 +17218,17 @@ _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-#include <resolv.h>
+
+			#ifdef HAVE_SYS_SOCKET_H
+			#include <sys/socket.h>
+			#endif
+			#ifdef HAVE_NETINET_IN_H
+			#include <netinet/in.h>
+			#endif
+			#ifdef HAVE_ARPA_NAMESER_H
+			#include <arpa/nameser.h>
+			#endif
+			#include <resolv.h>
 int
 main ()
 {
@@ -17086,6 +17262,89 @@ cat >>confdefs.h <<\_ACEOF
 #define HAVE_RES_NINIT 1
 _ACEOF
 
+	{ echo "$as_me:$LINENO: checking for library containing res_9_ndestroy" >&5
+echo $ECHO_N "checking for library containing res_9_ndestroy... $ECHO_C" >&6; }
+if test "${ac_cv_search_res_9_ndestroy+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  ac_func_search_save_LIBS=$LIBS
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char res_9_ndestroy ();
+int
+main ()
+{
+return res_9_ndestroy ();
+  ;
+  return 0;
+}
+_ACEOF
+for ac_lib in '' resolv; do
+  if test -z "$ac_lib"; then
+    ac_res="none required"
+  else
+    ac_res=-l$ac_lib
+    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
+  fi
+  rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest$ac_exeext &&
+       $as_test_x conftest$ac_exeext; then
+  ac_cv_search_res_9_ndestroy=$ac_res
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
+      conftest$ac_exeext
+  if test "${ac_cv_search_res_9_ndestroy+set}" = set; then
+  break
+fi
+done
+if test "${ac_cv_search_res_9_ndestroy+set}" = set; then
+  :
+else
+  ac_cv_search_res_9_ndestroy=no
+fi
+rm conftest.$ac_ext
+LIBS=$ac_func_search_save_LIBS
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_search_res_9_ndestroy" >&5
+echo "${ECHO_T}$ac_cv_search_res_9_ndestroy" >&6; }
+ac_res=$ac_cv_search_res_9_ndestroy
+if test "$ac_res" != no; then
+  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
+
+fi
+
 	{ echo "$as_me:$LINENO: checking for res_ndestroy" >&5
 echo $ECHO_N "checking for res_ndestroy... $ECHO_C" >&6; }
 	cat >conftest.$ac_ext <<_ACEOF
@@ -17094,11 +17353,21 @@ _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-#include <resolv.h>
+
+				#ifdef HAVE_SYS_SOCKET_H
+				#include <sys/socket.h>
+				#endif
+				#ifdef HAVE_NETINET_IN_H
+				#include <netinet/in.h>
+				#endif
+				#ifdef HAVE_ARPA_NAMESER_H
+				#include <arpa/nameser.h>
+				#endif
+				#include <resolv.h>
 int
 main ()
 {
-int foo = res_ndestroy(NULL);
+res_ndestroy(NULL);
   ;
   return 0;
 }
@@ -38310,7 +38579,7 @@ if test "x${PBX_PRI}" != "x1" -a "${USE_PRI}" != "no"; then
       	 pbxlibdir="-L${PRI_DIR}"
       fi
    fi
-   pbxfuncname="pri_new_bri"
+   pbxfuncname="pri_get_version"
    if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
       AST_PRI_FOUND=yes
    else
@@ -38572,7 +38841,7 @@ if test "x${PBX_SS7}" != "x1" -a "${USE_SS7}" != "no"; then
       	 pbxlibdir="-L${SS7_DIR}"
       fi
    fi
-   pbxfuncname="isup_set_generic_name"
+   pbxfuncname="ss7_pollflags"
    if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
       AST_SS7_FOUND=yes
    else
@@ -41658,6 +41927,272 @@ _ACEOF
 fi
 
 
+# See if the main speex library contains the preprocess functions
+
+if test "x${PBX_SPEEX_PREPROCESS}" != "x1" -a "${USE_SPEEX_PREPROCESS}" != "no"; then
+   pbxlibdir=""
+   # if --with-SPEEX_PREPROCESS=DIR has been specified, use it.
+   if test "x${SPEEX_PREPROCESS_DIR}" != "x"; then
+      if test -d ${SPEEX_PREPROCESS_DIR}/lib; then
+      	 pbxlibdir="-L${SPEEX_PREPROCESS_DIR}/lib"
+      else
+      	 pbxlibdir="-L${SPEEX_PREPROCESS_DIR}"
+      fi
+   fi
+   pbxfuncname="speex_preprocess_ctl"
+   if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
+      AST_SPEEX_PREPROCESS_FOUND=yes
+   else
+      as_ac_Lib=`echo "ac_cv_lib_speex_${pbxfuncname}" | $as_tr_sh`
+{ echo "$as_me:$LINENO: checking for ${pbxfuncname} in -lspeex" >&5
+echo $ECHO_N "checking for ${pbxfuncname} in -lspeex... $ECHO_C" >&6; }
+if { as_var=$as_ac_Lib; eval "test \"\${$as_var+set}\" = set"; }; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lspeex ${pbxlibdir} -lm $LIBS"
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char ${pbxfuncname} ();
+int
+main ()
+{
+return ${pbxfuncname} ();
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest$ac_exeext &&
+       $as_test_x conftest$ac_exeext; then
+  eval "$as_ac_Lib=yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	eval "$as_ac_Lib=no"
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
+      conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+ac_res=`eval echo '${'$as_ac_Lib'}'`
+	       { echo "$as_me:$LINENO: result: $ac_res" >&5
+echo "${ECHO_T}$ac_res" >&6; }
+if test `eval echo '${'$as_ac_Lib'}'` = yes; then
+  AST_SPEEX_PREPROCESS_FOUND=yes
+else
+  AST_SPEEX_PREPROCESS_FOUND=no
+fi
+
+   fi
+
+   # now check for the header.
+   if test "${AST_SPEEX_PREPROCESS_FOUND}" = "yes"; then
+      SPEEX_PREPROCESS_LIB="${pbxlibdir} -lspeex -lm"
+      # if --with-SPEEX_PREPROCESS=DIR has been specified, use it.
+      if test "x${SPEEX_PREPROCESS_DIR}" != "x"; then
+	 SPEEX_PREPROCESS_INCLUDE="-I${SPEEX_PREPROCESS_DIR}/include"
+      fi
+      SPEEX_PREPROCESS_INCLUDE="${SPEEX_PREPROCESS_INCLUDE} "
+      if test "xspeex/speex.h" = "x" ; then	# no header, assume found
+         SPEEX_PREPROCESS_HEADER_FOUND="1"
+      else				# check for the header
+         saved_cppflags="${CPPFLAGS}"
+         CPPFLAGS="${CPPFLAGS} ${SPEEX_PREPROCESS_INCLUDE} "
+	 if test "${ac_cv_header_speex_speex_h+set}" = set; then
+  { echo "$as_me:$LINENO: checking for speex/speex.h" >&5
+echo $ECHO_N "checking for speex/speex.h... $ECHO_C" >&6; }
+if test "${ac_cv_header_speex_speex_h+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_header_speex_speex_h" >&5
+echo "${ECHO_T}$ac_cv_header_speex_speex_h" >&6; }
+else
+  # Is the header compilable?
+{ echo "$as_me:$LINENO: checking speex/speex.h usability" >&5
+echo $ECHO_N "checking speex/speex.h usability... $ECHO_C" >&6; }
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+$ac_includes_default
+#include <speex/speex.h>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+  ac_header_compiler=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_header_compiler=no
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+{ echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
+echo "${ECHO_T}$ac_header_compiler" >&6; }
+
+# Is the header present?
+{ echo "$as_me:$LINENO: checking speex/speex.h presence" >&5
+echo $ECHO_N "checking speex/speex.h presence... $ECHO_C" >&6; }
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <speex/speex.h>
+_ACEOF
+if { (ac_try="$ac_cpp conftest.$ac_ext"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_cpp conftest.$ac_ext") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } >/dev/null && {
+	 test -z "$ac_c_preproc_warn_flag$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       }; then
+  ac_header_preproc=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+  ac_header_preproc=no
+fi
+
+rm -f conftest.err conftest.$ac_ext
+{ echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
+echo "${ECHO_T}$ac_header_preproc" >&6; }
+
+# So?  What about this header?
+case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
+  yes:no: )
+    { echo "$as_me:$LINENO: WARNING: speex/speex.h: accepted by the compiler, rejected by the preprocessor!" >&5
+echo "$as_me: WARNING: speex/speex.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
+    { echo "$as_me:$LINENO: WARNING: speex/speex.h: proceeding with the compiler's result" >&5
+echo "$as_me: WARNING: speex/speex.h: proceeding with the compiler's result" >&2;}
+    ac_header_preproc=yes
+    ;;
+  no:yes:* )
+    { echo "$as_me:$LINENO: WARNING: speex/speex.h: present but cannot be compiled" >&5
+echo "$as_me: WARNING: speex/speex.h: present but cannot be compiled" >&2;}
+    { echo "$as_me:$LINENO: WARNING: speex/speex.h:     check for missing prerequisite headers?" >&5
+echo "$as_me: WARNING: speex/speex.h:     check for missing prerequisite headers?" >&2;}
+    { echo "$as_me:$LINENO: WARNING: speex/speex.h: see the Autoconf documentation" >&5
+echo "$as_me: WARNING: speex/speex.h: see the Autoconf documentation" >&2;}
+    { echo "$as_me:$LINENO: WARNING: speex/speex.h:     section \"Present But Cannot Be Compiled\"" >&5
+echo "$as_me: WARNING: speex/speex.h:     section \"Present But Cannot Be Compiled\"" >&2;}
+    { echo "$as_me:$LINENO: WARNING: speex/speex.h: proceeding with the preprocessor's result" >&5
+echo "$as_me: WARNING: speex/speex.h: proceeding with the preprocessor's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: speex/speex.h: in the future, the compiler will take precedence" >&5
+echo "$as_me: WARNING: speex/speex.h: in the future, the compiler will take precedence" >&2;}
+    ( cat <<\_ASBOX
+## ------------------------------- ##
+## Report this to www.asterisk.org ##
+## ------------------------------- ##
+_ASBOX
+     ) | sed "s/^/$as_me: WARNING:     /" >&2
+    ;;
+esac
+{ echo "$as_me:$LINENO: checking for speex/speex.h" >&5
+echo $ECHO_N "checking for speex/speex.h... $ECHO_C" >&6; }
+if test "${ac_cv_header_speex_speex_h+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  ac_cv_header_speex_speex_h=$ac_header_preproc
+fi
+{ echo "$as_me:$LINENO: result: $ac_cv_header_speex_speex_h" >&5
+echo "${ECHO_T}$ac_cv_header_speex_speex_h" >&6; }
+
+fi
+if test $ac_cv_header_speex_speex_h = yes; then
+  SPEEX_PREPROCESS_HEADER_FOUND=1
+else
+  SPEEX_PREPROCESS_HEADER_FOUND=0
+fi
+
+
+         CPPFLAGS="${saved_cppflags}"
+      fi
+      if test "x${SPEEX_PREPROCESS_HEADER_FOUND}" = "x0" ; then
+         SPEEX_PREPROCESS_LIB=""
+         SPEEX_PREPROCESS_INCLUDE=""
+      else
+         if test "x${pbxfuncname}" = "x" ; then		# only checking headers -> no library
+	    SPEEX_PREPROCESS_LIB=""
+	 fi
+         PBX_SPEEX_PREPROCESS=1
+         # XXX don't know how to evaluate the description (third argument) in AC_DEFINE_UNQUOTED
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_SPEEX_PREPROCESS 1
+_ACEOF
+
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_SPEEX_PREPROCESS_VERSION
+_ACEOF
+
+      fi
+   fi
+fi
+
+if test "${PBX_SPEEX_PREPROCESS}" = 1; then
+   PBX_SPEEX_PREPROCESS=1
+fi
+
 
 if test "x${PBX_SPEEXDSP}" != "x1" -a "${USE_SPEEXDSP}" != "no"; then
    pbxlibdir=""
@@ -41918,6 +42453,11 @@ _ACEOF
       fi
    fi
 fi
+
+if test "${PBX_SPEEXDSP}" = 1; then
+   PBX_SPEEX_PREPROCESS=1
+fi
+
 
 
 
@@ -46259,6 +46799,84 @@ fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 	CPPFLAGS="${saved_cppflags}"
     fi
+
+
+# Check for ZT_SIG_MTP2
+
+    if test "x${PBX_ZAPTEL_SIG_MTP2}" != "x1"; then
+	{ echo "$as_me:$LINENO: checking for ZT_SIG_MTP2 in zaptel/zaptel.h" >&5
+echo $ECHO_N "checking for ZT_SIG_MTP2 in zaptel/zaptel.h... $ECHO_C" >&6; }
+	saved_cppflags="${CPPFLAGS}"
+	if test "x${ZAPTEL_SIG_MTP2_DIR}" != "x"; then
+	    ZAPTEL_SIG_MTP2_INCLUDE="-I${ZAPTEL_SIG_MTP2_DIR}/include"
+	fi
+	CPPFLAGS="${CPPFLAGS} ${ZAPTEL_SIG_MTP2_INCLUDE}"
+
+	cat >conftest.$ac_ext <<_ACEOF
+ /* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <zaptel/zaptel.h>
+int
+main ()
+{
+#if defined(ZT_SIG_MTP2)
+				int foo = 0;
+			        #else
+			        int foo = bar;
+			        #endif
+				0
+
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (ac_try="$ac_compile"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
+  (eval "$ac_compile") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest.$ac_objext; then
+     { echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6; }
+		PBX_ZAPTEL_SIG_MTP2=1
+
+cat >>confdefs.h <<\_ACEOF
+#define HAVE_ZAPTEL_SIG_MTP2 1
+_ACEOF
+
+
+cat >>confdefs.h <<\_ACEOF
+#define HAVE_ZAPTEL_SIG_MTP2_VERSION
+_ACEOF
+
+
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	   { echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6; }
+
+fi
+
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+	CPPFLAGS="${saved_cppflags}"
+    fi
+
 
 
 # On FreeBSD, try old zaptel (0.80 or so) and pretend we have vldtmf
@@ -50643,12 +51261,14 @@ OPENH323_INCDIR!$OPENH323_INCDIR$ac_delim
 OPENH323_LIBDIR!$OPENH323_LIBDIR$ac_delim
 OPENH323_SUFFIX!$OPENH323_SUFFIX$ac_delim
 OPENH323_BUILD!$OPENH323_BUILD$ac_delim
+PBX_SPEEX_PREPROCESS!$PBX_SPEEX_PREPROCESS$ac_delim
 CONFIG_GMIME!$CONFIG_GMIME$ac_delim
 PBX_ZAPTEL_VLDTMF!$PBX_ZAPTEL_VLDTMF$ac_delim
 PBX_ZAPTEL_ECHOCANPARAMS!$PBX_ZAPTEL_ECHOCANPARAMS$ac_delim
 PBX_ZAPTEL_TRANSCODE!$PBX_ZAPTEL_TRANSCODE$ac_delim
 PBX_ZAPTEL_HWGAIN!$PBX_ZAPTEL_HWGAIN$ac_delim
 PBX_ZAPTEL_NEONMWI!$PBX_ZAPTEL_NEONMWI$ac_delim
+PBX_ZAPTEL_SIG_MTP2!$PBX_ZAPTEL_SIG_MTP2$ac_delim
 EDITLINE_LIB!$EDITLINE_LIB$ac_delim
 PBX_H323!$PBX_H323$ac_delim
 PBX_IXJUSER!$PBX_IXJUSER$ac_delim
@@ -50659,7 +51279,7 @@ CURL_CONFIG!$CURL_CONFIG$ac_delim
 LTLIBOBJS!$LTLIBOBJS$ac_delim
 _ACEOF
 
-  if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 67; then
+  if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 69; then
     break
   elif $ac_last_try; then
     { { echo "$as_me:$LINENO: error: could not make $CONFIG_STATUS" >&5

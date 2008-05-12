@@ -263,7 +263,7 @@ AC_FUNC_ALLOCA
 AC_HEADER_DIRENT
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
-AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h])
+AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h])
 
 AC_CHECK_HEADERS([winsock.h winsock2.h])
 
@@ -437,6 +437,7 @@ AST_GCC_ATTRIBUTE(const)
 AST_GCC_ATTRIBUTE(unused)
 AST_GCC_ATTRIBUTE(always_inline)
 AST_GCC_ATTRIBUTE(deprecated)
+AST_GCC_ATTRIBUTE(sentinel)
 
 AC_MSG_CHECKING(for -ffunction-sections support)
 saved_CFLAGS="${CFLAGS}"
@@ -490,16 +491,38 @@ AC_LINK_IFELSE(
         AC_MSG_RESULT(no)
 )
 
+AC_SEARCH_LIBS(res_9_ninit, resolv)
 AC_MSG_CHECKING(for res_ninit)
 AC_LINK_IFELSE(
-	AC_LANG_PROGRAM([#include <resolv.h>],
+	AC_LANG_PROGRAM([
+			#ifdef HAVE_SYS_SOCKET_H
+			#include <sys/socket.h>
+			#endif
+			#ifdef HAVE_NETINET_IN_H
+			#include <netinet/in.h>
+			#endif
+			#ifdef HAVE_ARPA_NAMESER_H
+			#include <arpa/nameser.h>
+			#endif
+			#include <resolv.h>],
 			[int foo = res_ninit(NULL);]),
 	AC_MSG_RESULT(yes)
 	AC_DEFINE([HAVE_RES_NINIT], 1, [Define to 1 if your system has the re-entrant resolver functions.])
+	AC_SEARCH_LIBS(res_9_ndestroy, resolv)
 	AC_MSG_CHECKING(for res_ndestroy)
 	AC_LINK_IFELSE(
-		AC_LANG_PROGRAM([#include <resolv.h>],
-				[int foo = res_ndestroy(NULL);]),
+		AC_LANG_PROGRAM([
+				#ifdef HAVE_SYS_SOCKET_H
+				#include <sys/socket.h>
+				#endif
+				#ifdef HAVE_NETINET_IN_H
+				#include <netinet/in.h>
+				#endif
+				#ifdef HAVE_ARPA_NAMESER_H
+				#include <arpa/nameser.h>
+				#endif
+				#include <resolv.h>],
+				[res_ndestroy(NULL);]),
 		AC_MSG_RESULT(yes)
 		AC_DEFINE([HAVE_RES_NDESTROY], 1, [Define to 1 if your system has the ndestroy resolver function.]),
 		AC_MSG_RESULT(no)
@@ -1265,9 +1288,9 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
 AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
-AST_EXT_LIB_CHECK([PRI], [pri], [pri_new_bri], [libpri.h])
+AST_EXT_LIB_CHECK([PRI], [pri], [pri_get_version], [libpri.h])
 
-AST_EXT_LIB_CHECK([SS7], [ss7], [isup_set_generic_name], [libss7.h])
+AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_pollflags], [libss7.h])
 
 if test "${USE_PWLIB}" != "no"; then
 	if test -n "${PWLIB_DIR}"; then
@@ -1313,7 +1336,18 @@ AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-n
 
 AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 
+# See if the main speex library contains the preprocess functions
+AST_EXT_LIB_CHECK([SPEEX_PREPROCESS], [speex], [speex_preprocess_ctl], [speex/speex.h], [-lm])
+if test "${PBX_SPEEX_PREPROCESS}" = 1; then
+   PBX_SPEEX_PREPROCESS=1
+fi
+
 AST_EXT_LIB_CHECK([SPEEXDSP], [speexdsp], [speex_preprocess_ctl], [speex/speex.h], [-lm])
+if test "${PBX_SPEEXDSP}" = 1; then
+   PBX_SPEEX_PREPROCESS=1
+fi
+
+AC_SUBST(PBX_SPEEX_PREPROCESS)
 
 AST_EXT_LIB_CHECK([SQLITE], [sqlite], [sqlite_exec], [sqlite.h])
 
@@ -1450,6 +1484,9 @@ AST_C_DEFINE_CHECK([ZAPTEL_NEONMWI], [ZT_EVENT_NEONMWI_ACTIVE], [zaptel/zaptel.h
 
 # Check for channel alarm support
 AST_C_COMPILE_CHECK([ZAPTEL_CHANALARMS], [size_t foo = sizeof(struct zt_params_v1)], [zaptel/zaptel.h])
+
+# Check for ZT_SIG_MTP2
+AST_C_DEFINE_CHECK([ZAPTEL_SIG_MTP2], [ZT_SIG_MTP2], [zaptel/zaptel.h])
 
 # On FreeBSD, try old zaptel (0.80 or so) and pretend we have vldtmf
 case "${host_os}" in

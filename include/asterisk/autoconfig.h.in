@@ -46,6 +46,9 @@
 /* Define to 1 if you have the <arpa/inet.h> header file. */
 #undef HAVE_ARPA_INET_H
 
+/* Define to 1 if you have the <arpa/nameser.h> header file. */
+#undef HAVE_ARPA_NAMESER_H
+
 /* Define this to indicate the ${ASIN_DESCRIP} library */
 #undef HAVE_ASIN
 
@@ -103,6 +106,9 @@
 
 /* Define to 1 if your GCC C compiler supports the 'pure' attribute. */
 #undef HAVE_ATTRIBUTE_pure
+
+/* Define to 1 if your GCC C compiler supports the 'sentinel' attribute. */
+#undef HAVE_ATTRIBUTE_sentinel
 
 /* Define to 1 if your GCC C compiler supports the 'unused' attribute. */
 #undef HAVE_ATTRIBUTE_unused
@@ -721,6 +727,12 @@
 /* Define to indicate the ${SPEEXDSP_DESCRIP} library version */
 #undef HAVE_SPEEXDSP_VERSION
 
+/* Define this to indicate the ${SPEEX_PREPROCESS_DESCRIP} library */
+#undef HAVE_SPEEX_PREPROCESS
+
+/* Define to indicate the ${SPEEX_PREPROCESS_DESCRIP} library version */
+#undef HAVE_SPEEX_PREPROCESS_VERSION
+
 /* Define to indicate the ${SPEEX_DESCRIP} library version */
 #undef HAVE_SPEEX_VERSION
 
@@ -1049,6 +1061,12 @@
 
 /* Define ZAPTEL_NEONMWI headers version */
 #undef HAVE_ZAPTEL_NEONMWI_VERSION
+
+/* Define if your system has the ZAPTEL_SIG_MTP2 headers. */
+#undef HAVE_ZAPTEL_SIG_MTP2
+
+/* Define ZAPTEL_SIG_MTP2 headers version */
+#undef HAVE_ZAPTEL_SIG_MTP2_VERSION
 
 /* Define if your system has the ZAPTEL_TRANSCODE headers. */
 #undef HAVE_ZAPTEL_TRANSCODE
