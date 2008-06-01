@@ -2439,7 +2439,7 @@ static int __ast_pbx_run(struct ast_channel *c)
 				if (option_verbose > 1)
 					ast_verbose( VERBOSE_PREFIX_2 "Spawn extension (%s, %s, %d) exited non-zero on '%s'\n", c->context, c->exten, c->priority, c->name);
 				if (c->_softhangup == AST_SOFTHANGUP_ASYNCGOTO) {
-					c->_softhangup =0;
+					c->_softhangup = 0;
 				} else if (c->_softhangup == AST_SOFTHANGUP_TIMEOUT) {
 					/* atimeout, nothing bad */
 				} else {
@@ -2449,7 +2449,9 @@ static int __ast_pbx_run(struct ast_channel *c)
 					break;
 				}
 			}
-			if (c->_softhangup == AST_SOFTHANGUP_TIMEOUT && ast_exists_extension(c,c->context,"T",1,c->cid.cid_num)) {
+			if (c->_softhangup == AST_SOFTHANGUP_ASYNCGOTO) {
+				c->_softhangup = 0;
+			} else if (c->_softhangup == AST_SOFTHANGUP_TIMEOUT && ast_exists_extension(c,c->context,"T",1,c->cid.cid_num)) {
 				set_ext_pri(c, "T", 0); /* 0 will become 1 with the c->priority++; at the end */
 				/* If the AbsoluteTimeout is not reset to 0, we'll get an infinite loop */
 				c->whentohangup = 0;
@@ -4607,13 +4609,13 @@ int ast_async_goto(struct ast_channel *chan, const char *context, const char *ex
 		   the PBX, we have to make a new channel, masquerade, and start the PBX
 		   at the new location */
 		struct ast_channel *tmpchan = ast_channel_alloc(0, chan->_state, 0, 0, chan->accountcode, chan->exten, chan->context, chan->amaflags, "AsyncGoto/%s", chan->name);
-		if (chan->cdr) {
-			ast_cdr_discard(tmpchan->cdr);
-			tmpchan->cdr = ast_cdr_dup(chan->cdr);  /* share the love */
-		}
-		if (!tmpchan)
+		if (!tmpchan) {
 			res = -1;
-		else {
+		} else {
+			if (chan->cdr) {
+				ast_cdr_discard(tmpchan->cdr);
+				tmpchan->cdr = ast_cdr_dup(chan->cdr);  /* share the love */
+			}
 			/* Make formats okay */
 			tmpchan->readformat = chan->readformat;
 			tmpchan->writeformat = chan->writeformat;
@@ -6074,7 +6076,12 @@ static int pbx_builtin_saynumber(struct ast_channel *chan, void *data)
 			return -1;
 		}
 	}
-	return ast_say_number(chan, atoi(tmp), "", chan->language, options);
+
+	if (ast_say_number(chan, atoi(tmp), "", chan->language, options)) {
+		ast_log(LOG_WARNING, "We were unable to say the number %s, is it too large?\n", tmp);
+	}
+
+	return 0;
 }
 
 static int pbx_builtin_saydigits(struct ast_channel *chan, void *data)

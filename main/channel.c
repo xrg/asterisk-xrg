@@ -912,7 +912,7 @@ int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
 	if (((fin->frametype == AST_FRAME_VOICE) && (qlen > 96)) || (qlen  > 128)) {
 		if (fin->frametype != AST_FRAME_VOICE) {
 			ast_log(LOG_WARNING, "Exceptionally long queue length queuing to %s\n", chan->name);
-			CRASH;
+			ast_assert(0);
 		} else {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Dropping voice to exceptionally long queue on %s\n", chan->name);
@@ -1024,7 +1024,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 	struct ast_channel *c;
 	const struct ast_channel *_prev = prev;
 
-	for (retries = 0; retries < 10; retries++) {
+	for (retries = 0; retries < 200; retries++) {
 		int done;
 		AST_LIST_LOCK(&channels);
 		AST_LIST_TRAVERSE(&channels, c, chan_list) {
@@ -1066,7 +1066,7 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 		if (!done) {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Avoiding %s for channel '%p'\n", msg, c);
-			if (retries == 9) {
+			if (retries == 199) {
 				/* We are about to fail due to a deadlock, so report this
 				 * while we still have the list lock.
 				 */
@@ -1476,7 +1476,7 @@ int ast_hangup(struct ast_channel *chan)
 		ast_log(LOG_WARNING, "Hard hangup called by thread %ld on %s, while fd "
 					"is blocked by thread %ld in procedure %s!  Expect a failure\n",
 					(long)pthread_self(), chan->name, (long)chan->blocker, chan->blockproc);
-		CRASH;
+		ast_assert(0);
 	}
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE)) {
 		if (option_debug)
@@ -1573,7 +1573,7 @@ static int generator_force(const void *data)
 	if (!tmp || !generate)
 		return 0;
 
-	res = generate(chan, tmp, 0, 160);
+	res = generate(chan, tmp, 0, ast_format_rate(chan->writeformat & AST_FORMAT_AUDIO_MASK) / 50);
 
 	chan->generatordata = tmp;
 
@@ -1887,7 +1887,9 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 {
 	if (chan->generatordata &&  !ast_internal_timing_enabled(chan)) {
 		void *tmp = chan->generatordata;
+		int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples) = NULL;
 		int res;
+		int samples;
 
 		if (chan->timingfunc) {
 			if (option_debug > 1)
@@ -1896,7 +1898,29 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 		}
 
 		chan->generatordata = NULL;     /* reset, to let writes go through */
-		res = chan->generator->generate(chan, tmp, f->datalen, f->samples);
+
+		if (f->subclass != chan->writeformat) {
+			float factor;
+			factor = ((float) ast_format_rate(chan->writeformat)) / ((float) ast_format_rate(f->subclass));
+			samples = (int) ( ((float) f->samples) * factor );
+		} else {
+			samples = f->samples;
+		}
+
+		if (chan->generator->generate) {
+			generate = chan->generator->generate;
+		}
+		/* This unlock is here based on two assumptions that hold true at this point in the
+		 * code. 1) this function is only called from within __ast_read() and 2) all generators
+		 * call ast_write() in their generate callback.
+		 *
+		 * The reason this is added is so that when ast_write is called, the lock that occurs 
+		 * there will not recursively lock the channel. Doing this will cause intended deadlock 
+		 * avoidance not to work in deeper functions
+		 */
+		ast_channel_unlock(chan);
+		res = generate(chan, tmp, f->datalen, samples);
+		ast_channel_lock(chan);
 		chan->generatordata = tmp;
 		if (res) {
 			if (option_debug > 1)
@@ -4510,7 +4534,7 @@ const char *channelreloadreason2txt(enum channelreloadreason reason)
 /*! \brief Unlock AST channel (and print debugging output) 
 \note You need to enable DEBUG_CHANNEL_LOCKS for this function
 */
-int ast_channel_unlock(struct ast_channel *chan)
+int __ast_channel_unlock(struct ast_channel *chan, const char *filename, int lineno, const char *func)
 {
 	int res = 0;
 	if (option_debug > 2) 
@@ -4521,8 +4545,11 @@ int ast_channel_unlock(struct ast_channel *chan)
 			ast_log(LOG_DEBUG, "::::==== Unlocking non-existing channel \n");
 		return 0;
 	}
-
+#ifdef DEBUG_THREADS
+	res = __ast_pthread_mutex_unlock(filename, lineno, func, "(channel lock)", &chan->lock);
+#else
 	res = ast_mutex_unlock(&chan->lock);
+#endif
 
 	if (option_debug > 2) {
 #ifdef DEBUG_THREADS
@@ -4549,14 +4576,18 @@ int ast_channel_unlock(struct ast_channel *chan)
 
 /*! \brief Lock AST channel (and print debugging output)
 \note You need to enable DEBUG_CHANNEL_LOCKS for this function */
-int ast_channel_lock(struct ast_channel *chan)
+int __ast_channel_lock(struct ast_channel *chan, const char *filename, int lineno, const char *func)
 {
 	int res;
 
 	if (option_debug > 3)
 		ast_log(LOG_DEBUG, "====:::: Locking AST channel %s\n", chan->name);
 
+#ifdef DEBUG_THREADS
+	res = __ast_pthread_mutex_lock(filename, lineno, func, "(channel lock)", &chan->lock);
+#else
 	res = ast_mutex_lock(&chan->lock);
+#endif
 
 	if (option_debug > 3) {
 #ifdef DEBUG_THREADS
@@ -4581,14 +4612,17 @@ int ast_channel_lock(struct ast_channel *chan)
 
 /*! \brief Lock AST channel (and print debugging output)
 \note	You need to enable DEBUG_CHANNEL_LOCKS for this function */
-int ast_channel_trylock(struct ast_channel *chan)
+int __ast_channel_trylock(struct ast_channel *chan, const char *filename, int lineno, const char *func)
 {
 	int res;
 
 	if (option_debug > 2)
 		ast_log(LOG_DEBUG, "====:::: Trying to lock AST channel %s\n", chan->name);
-
+#ifdef DEBUG_THREADS
+	res = __ast_pthread_mutex_trylock(filename, lineno, func, "(channel lock)", &chan->lock);
+#else
 	res = ast_mutex_trylock(&chan->lock);
+#endif
 
 	if (option_debug > 2) {
 #ifdef DEBUG_THREADS

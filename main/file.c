@@ -487,7 +487,7 @@ static int fileexists_test(const char *filename, const char *fmt, const char *la
 		return -1;
 	}
 
-	if (ast_language_is_prefix) { /* new layout */
+	if (ast_language_is_prefix && !is_absolute_path(filename)) { /* new layout */
 		if (lang) {
 			snprintf(buf, buflen, "%s/%s", lang, filename);
 		} else {
@@ -525,11 +525,6 @@ static int fileexists_core(const char *filename, const char *fmt, const char *pr
 
 	if (buf == NULL) {
 		return -1;
-	}
-
-	if (is_absolute_path(filename)) {
-		ast_copy_string(buf, filename, buflen);
-		return ast_filehelper(buf, NULL, fmt, ACTION_EXISTS);
 	}
 
 	/* We try languages in the following order:
@@ -685,11 +680,21 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 	}
 	if (whennext != s->lasttimeout) {
 #ifdef HAVE_ZAPTEL
-		if (s->owner->timingfd > -1)
-			ast_settimeout(s->owner, whennext, ast_fsread_audio, s);
-		else
+		if (s->owner->timingfd > -1) {
+			int zap_timer_samples = whennext;
+			int rate;
+			/* whennext is in samples, but zaptel timers operate in 8 kHz samples. */
+			if ((rate = ast_format_rate(s->fmt->format)) != 8000) {
+				float factor;
+				factor = ((float) rate) / ((float) 8000.0); 
+				zap_timer_samples = (int) ( ((float) zap_timer_samples) / factor );
+			}
+			ast_settimeout(s->owner, zap_timer_samples, ast_fsread_audio, s);
+		} else
 #endif		
-			s->owner->streamid = ast_sched_add(s->owner->sched, whennext/8, ast_fsread_audio, s);
+			s->owner->streamid = ast_sched_add(s->owner->sched, 
+				whennext / (ast_format_rate(s->fmt->format) / 1000), 
+				ast_fsread_audio, s);
 		s->lasttimeout = whennext;
 		return FSREAD_SUCCESS_NOSCHED;
 	}
@@ -733,7 +738,8 @@ static enum fsread_res ast_readvideo_callback(struct ast_filestream *s)
 	}
 
 	if (whennext != s->lasttimeout) {
-		s->owner->vstreamid = ast_sched_add(s->owner->sched, whennext / 8, 
+		s->owner->vstreamid = ast_sched_add(s->owner->sched, 
+			whennext / (ast_format_rate(s->fmt->format) / 1000), 
 			ast_fsread_video, s);
 		s->lasttimeout = whennext;
 		return FSREAD_SUCCESS_NOSCHED;

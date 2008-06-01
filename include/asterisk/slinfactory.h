@@ -31,10 +31,12 @@
 extern "C" {
 #endif
 
+#define AST_SLINFACTORY_MAX_HOLD 1280
+
 struct ast_slinfactory {
 	AST_LIST_HEAD_NOLOCK(, ast_frame) queue;
 	struct ast_trans_pvt *trans;
-	short hold[1280];
+	short hold[AST_SLINFACTORY_MAX_HOLD];
 	short *offset;
 	size_t holdlen;			/*!< in samples */
 	unsigned int size;		/*!< in samples */
@@ -46,6 +48,7 @@ void ast_slinfactory_destroy(struct ast_slinfactory *sf);
 int ast_slinfactory_feed(struct ast_slinfactory *sf, struct ast_frame *f);
 int ast_slinfactory_read(struct ast_slinfactory *sf, short *buf, size_t samples);
 unsigned int ast_slinfactory_available(const struct ast_slinfactory *sf);
+void ast_slinfactory_flush(struct ast_slinfactory *sf);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

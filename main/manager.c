@@ -151,7 +151,7 @@ struct mansession {
 	/*! Whether an HTTP session has someone waiting on events */
 	pthread_t waiting_thread;
 	/*! Unique manager identifer */
-	unsigned long managerid;
+	uint32_t managerid;
 	/*! Session timeout if HTTP */
 	time_t sessiontimeout;
 	/*! Output from manager interface */
@@ -175,6 +175,7 @@ struct mansession {
 	struct eventqent *eventq;
 	/* Timeout for ast_carefulwrite() */
 	int writetimeout;
+	int pending_event;         /*!< Pending events indicator in case when waiting_thread is NULL */
 	AST_LIST_ENTRY(mansession) list;
 };
 
@@ -2202,6 +2203,11 @@ static int get_input(struct mansession *s, char *output)
 	fds[0].events = POLLIN;
 	do {
 		ast_mutex_lock(&s->__lock);
+		if (s->pending_event) {
+			s->pending_event = 0;
+			ast_mutex_unlock(&s->__lock);
+			return 0;
+		}
 		s->waiting_thread = pthread_self();
 		ast_mutex_unlock(&s->__lock);
 
@@ -2211,7 +2217,7 @@ static int get_input(struct mansession *s, char *output)
 		s->waiting_thread = AST_PTHREADT_NULL;
 		ast_mutex_unlock(&s->__lock);
 		if (res < 0) {
-			if (errno == EINTR) {
+			if (errno == EINTR || errno == EAGAIN) {
 				return 0;
 			}
 			ast_log(LOG_WARNING, "Select returned error: %s\n", strerror(errno));
@@ -2463,6 +2469,13 @@ int manager_event(int category, const char *event, const char *fmt, ...)
 		ast_mutex_lock(&s->__lock);
 		if (s->waiting_thread != AST_PTHREADT_NULL)
 			pthread_kill(s->waiting_thread, SIGURG);
+		else
+			/* We have an event to process, but the mansession is
+			 * not waiting for it. We still need to indicate that there
+			 * is an event waiting so that get_input processes the pending
+			 * event instead of polling.
+			 */
+			s->pending_event = 1;
 		ast_mutex_unlock(&s->__lock);
 	}
 	AST_LIST_UNLOCK(&sessions);
@@ -2565,7 +2578,7 @@ int ast_manager_register2(const char *action, int auth, int (*func)(struct manse
 /*! @}
  END Doxygen group */
 
-static struct mansession *find_session(unsigned long ident)
+static struct mansession *find_session(uint32_t ident)
 {
 	struct mansession *s;
 
@@ -2583,7 +2596,7 @@ static struct mansession *find_session(unsigned long ident)
 	return s;
 }
 
-int astman_verify_session_readpermissions(unsigned long ident, int perm)
+int astman_verify_session_readpermissions(uint32_t ident, int perm)
 {
 	int result = 0;
 	struct mansession *s;
@@ -2602,7 +2615,7 @@ int astman_verify_session_readpermissions(unsigned long ident, int perm)
 	return result;
 }
 
-int astman_verify_session_writepermissions(unsigned long ident, int perm)
+int astman_verify_session_writepermissions(uint32_t ident, int perm)
 {
 	int result = 0;
 	struct mansession *s;
@@ -2631,7 +2644,7 @@ static char *contenttype[] = { "plain", "html", "xml" };
 static char *generic_http_callback(int format, struct sockaddr_in *requestor, const char *uri, struct ast_variable *params, int *status, char **title, int *contentlength)
 {
 	struct mansession *s = NULL;
-	unsigned long ident = 0;
+	uint32_t ident = 0;
 	char workspace[512];
 	char cookie[128];
 	size_t len = sizeof(workspace);
@@ -2642,7 +2655,7 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 
 	for (v = params; v; v = v->next) {
 		if (!strcasecmp(v->name, "mansession_id")) {
-			sscanf(v->value, "%lx", &ident);
+			sscanf(v->value, "%x", &ident);
 			break;
 		}
 	}
@@ -2715,7 +2728,7 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 			s->needdestroy = 1;
 		}
 		ast_build_string(&c, &len, "Content-type: text/%s\r\n", contenttype[format]);
-		sprintf(tmp, "%08lx", s->managerid);
+		sprintf(tmp, "%08x", s->managerid);
 		ast_build_string(&c, &len, "%s\r\n", ast_http_setcookie("mansession_id", tmp, httptimeout, cookie, sizeof(cookie)));
 		if (format == FORMAT_HTML)
 			ast_build_string(&c, &len, "<title>Asterisk&trade; Manager Interface</title>");

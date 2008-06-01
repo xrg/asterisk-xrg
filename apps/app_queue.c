@@ -822,7 +822,6 @@ static void init_queue(struct call_queue *q)
 	q->reportholdtime = 0;
 	q->monjoin = 0;
 	q->wrapuptime = 0;
-	q->autofill = 0;
 	q->joinempty = 0;
 	q->leavewhenempty = 0;
 	q->memberdelay = 0;
@@ -1243,7 +1242,11 @@ static struct call_queue *find_queue_by_name_rt(const char *queuename, struct as
 				*tmp++ = '-';
 		} else
 			tmp_name = v->name;
-		queue_set_param(q, tmp_name, v->value, -1, 0);
+
+		if (!ast_strlen_zero(v->value)) {
+			/* Don't want to try to set the option if the value is empty */
+			queue_set_param(q, tmp_name, v->value, -1, 0);
+		}
 	}
 
 	if (q->strategy == QUEUE_STRATEGY_ROUNDROBIN)
@@ -1419,7 +1422,7 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	stat = get_member_status(q, qe->max_penalty);
 	if (!q->joinempty && (stat == QUEUE_NO_MEMBERS))
 		*reason = QUEUE_JOINEMPTY;
-	else if ((q->joinempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS))
+	else if ((q->joinempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS || stat == QUEUE_NO_MEMBERS))
 		*reason = QUEUE_JOINUNAVAIL;
 	else if (q->maxlen && (q->count >= q->maxlen))
 		*reason = QUEUE_FULL;
@@ -1758,10 +1761,10 @@ static char *vars2manager(struct ast_channel *chan, char *vars, size_t len)
 				j += 9;
 			}
 		}
-		if (j > len - 1)
-			j = len - 1;
-		vars[j - 2] = '\r';
-		vars[j - 1] = '\n';
+		if (j > len - 3)
+			j = len - 3;
+		vars[j++] = '\r';
+		vars[j++] = '\n';
 		vars[j] = '\0';
 	} else {
 		/* there are no channel variables; leave it blank */
@@ -1781,6 +1784,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 	int status;
 	char tech[256];
 	char *location;
+	const char *macrocontext, *macroexten;
 
 	/* on entry here, we know that tmp->chan == NULL */
 	if (qe->parent->wrapuptime && (time(NULL) - tmp->lastcall < qe->parent->wrapuptime)) {
@@ -1862,14 +1866,18 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 	tmp->chan->adsicpe = qe->chan->adsicpe;
 
 	/* Inherit context and extension */
-	if (!ast_strlen_zero(qe->chan->macrocontext))
-		ast_copy_string(tmp->chan->dialcontext, qe->chan->macrocontext, sizeof(tmp->chan->dialcontext));
+	ast_channel_lock(qe->chan);
+	macrocontext = pbx_builtin_getvar_helper(qe->chan, "MACRO_CONTEXT");
+	if (!ast_strlen_zero(macrocontext))
+		ast_copy_string(tmp->chan->dialcontext, macrocontext, sizeof(tmp->chan->dialcontext));
 	else
 		ast_copy_string(tmp->chan->dialcontext, qe->chan->context, sizeof(tmp->chan->dialcontext));
-	if (!ast_strlen_zero(qe->chan->macroexten))
-		ast_copy_string(tmp->chan->exten, qe->chan->macroexten, sizeof(tmp->chan->exten));
+	macroexten = pbx_builtin_getvar_helper(qe->chan, "MACRO_EXTEN");
+	if (!ast_strlen_zero(macroexten))
+		ast_copy_string(tmp->chan->exten, macroexten, sizeof(tmp->chan->exten));
 	else
 		ast_copy_string(tmp->chan->exten, qe->chan->exten, sizeof(tmp->chan->exten));
+	ast_channel_unlock(qe->chan);
 
 	/* Place the call, but don't wait on the answer */
 	if ((res = ast_call(tmp->chan, location, 0))) {
@@ -2753,8 +2761,13 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	if (use_weight)
 		AST_LIST_UNLOCK(&queues);
 	lpeer = wait_for_answer(qe, outgoing, &to, &digit, numbusies, ast_test_flag(&(bridge_config.features_caller), AST_FEATURE_DISCONNECT), forwardsallowed);
-	if (datastore) {
-		ast_channel_datastore_remove(qe->chan, datastore);
+	/* The ast_channel_datastore_remove() function could fail here if the
+	 * datastore was moved to another channel during a masquerade. If this is
+	 * the case, don't free the datastore here because later, when the channel
+	 * to which the datastore was moved hangs up, it will attempt to free this
+	 * datastore again, causing a crash
+	 */
+	if (datastore && !ast_channel_datastore_remove(qe->chan, datastore)) {
 		ast_channel_datastore_free(datastore);
 	}
 	ast_mutex_lock(&qe->parent->lock);
@@ -2778,7 +2791,6 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		/* Ah ha!  Someone answered within the desired timeframe.  Of course after this
 		   we will always return with -1 so that it is hung up properly after the
 		   conversation.  */
-		qe->handled++;
 		if (!strcmp(qe->chan->tech->type, "Zap"))
 			ast_channel_setoption(qe->chan, AST_OPTION_TONE_VERIFY, &nondataquality, sizeof(nondataquality), 0);
 		if (!strcmp(peer->tech->type, "Zap"))
@@ -2826,7 +2838,6 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				/* Agent must have hung up */
 				ast_log(LOG_WARNING, "Agent on %s hungup on the customer.\n", peer->name);
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "AGENTDUMP", "%s", "");
-				record_abandoned(qe);
 				if (qe->parent->eventwhencalled)
 					manager_event(EVENT_FLAG_AGENT, "AgentDump",
 							"Queue: %s\r\n"
@@ -2980,6 +2991,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			} else
 				ast_log(LOG_WARNING, "Asked to execute an AGI on this channel, but could not find application (agi)!\n");
 		}
+		qe->handled++;
 		ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "CONNECT", "%ld|%s", (long)time(NULL) - qe->start, peer->uniqueid);
 		if (qe->parent->eventwhencalled)
 			manager_event(EVENT_FLAG_AGENT, "AgentConnect",
@@ -3718,7 +3730,7 @@ static int queue_exec(struct ast_channel *chan, void *data)
 	qe.start = time(NULL);
 
 	/* set the expire time based on the supplied timeout; */
-	if (args.queuetimeoutstr)
+	if (!ast_strlen_zero(args.queuetimeoutstr))
 		qe.expire = qe.start + atoi(args.queuetimeoutstr);
 	else
 		qe.expire = 0;

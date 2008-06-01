@@ -61,7 +61,7 @@ struct odbc_obj {
  * This function really only ever worked with MySQL, where the statement handle is
  * not prepared on the server.  If you are not using MySQL, you should avoid it.
  */
-int ast_odbc_smart_execute(struct odbc_obj *obj, SQLHSTMT stmt); /* DEPRECATED */
+int ast_odbc_smart_execute(struct odbc_obj *obj, SQLHSTMT stmt) __attribute__ ((deprecated));
 
 /*! \brief Retrieves a connected ODBC object
  * \param name The name of the ODBC class for which a connection is needed.
@@ -88,7 +88,7 @@ int ast_odbc_sanity_check(struct odbc_obj *obj);
 
 /*! \brief Checks if the database natively supports backslash as an escape character.
  * \param obj The ODBC object
- * \return Returns 1 if an ESCAPE clause is needed to support '\', 0 otherwise
+ * \return Returns 1 if backslash is a native escape character, 0 if an ESCAPE clause is needed to support '\'
  */
 int ast_odbc_backslash_is_escape(struct odbc_obj *obj);
 

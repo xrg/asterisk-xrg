@@ -306,6 +306,7 @@ Changes since Asterisk 1.2:
                       o canreinvite variable can also now be set to 'nonat'
                       o rtsavesysname variable added
                       o JitterBuffer support added
+                      o t38pt_usertpsource variable added
               23. skinny.conf
                       o port variable renamed to bindport
                       o JitterBuffer support added
@@ -340,3 +341,6 @@ Changes since Asterisk 1.2:
     * New manager events:
          1. OriginateResponse event comes to replace OriginateSuccess and OriginateFailure
     * iLBC source code no longer included (see UPGRADE.txt for details)
+	* New CLI command "pri show version" that shows the current version of libpri
+	  that the library was built against (requires a version of libpri since this API
+	  feature was added).

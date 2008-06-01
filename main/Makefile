@@ -52,7 +52,7 @@ ifeq ($(wildcard /usr/include/dlfcn.h),)
   OBJS+=dlfcn.o
 endif
 
-ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc ),)
+ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi ),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
   AST_LIBS+=-ldl
   endif
@@ -122,6 +122,7 @@ testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
 	rm ast_expr2.o ast_expr2f.o 
 
 channel.o: ASTCFLAGS+=$(ZAPTEL_INCLUDE)
+asterisk.o: ASTCFLAGS+=$(ZAPTEL_INCLUDE)
 
 stdtime/localtime.o: ASTCFLAGS+=$(AST_NO_STRICT_OVERFLOW)
 

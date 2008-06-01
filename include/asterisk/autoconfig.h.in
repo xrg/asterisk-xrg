@@ -31,6 +31,9 @@
 /* Define to 1 if you have the <arpa/inet.h> header file. */
 #undef HAVE_ARPA_INET_H
 
+/* Define to 1 if you have the <arpa/nameser.h> header file. */
+#undef HAVE_ARPA_NAMESER_H
+
 /* Define to 1 if you have the `asprintf' function. */
 #undef HAVE_ASPRINTF
 
@@ -277,6 +280,9 @@
 /* Define to indicate the ${PRI_DESCRIP} library */
 #undef HAVE_PRI
 
+/* Define to indicate the ${PRI_VERSION_DESCRIP} library */
+#undef HAVE_PRI_VERSION
+
 /* Define if you have POSIX threads libraries and header files. */
 #undef HAVE_PTHREAD
 
@@ -340,6 +346,9 @@
 
 /* Define to indicate the ${SPEEXDSP_DESCRIP} library */
 #undef HAVE_SPEEXDSP
+
+/* Define to indicate the ${SPEEX_PREPROCESS_DESCRIP} library */
+#undef HAVE_SPEEX_PREPROCESS
 
 /* Define to indicate the ${SQLITE_DESCRIP} library */
 #undef HAVE_SQLITE
@@ -640,6 +649,9 @@
 #endif
 #ifndef _POSIX_PTHREAD_SEMANTICS
 # undef _POSIX_PTHREAD_SEMANTICS
+#endif
+#ifndef _TANDEM_SOURCE
+# undef _TANDEM_SOURCE
 #endif
 
 /* Define like PROTOTYPES; this can be used by system headers. */

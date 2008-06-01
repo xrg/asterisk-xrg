@@ -281,10 +281,10 @@ static inline int zt_wait_event(int fd)
 #define MASK_INUSE		(1 << 1)	/*!< Channel currently in use */
 
 #define CALLWAITING_SILENT_SAMPLES	( (300 * 8) / READ_SIZE) /*!< 300 ms */
-#define CALLWAITING_REPEAT_SAMPLES	( (10000 * 8) / READ_SIZE) /*!< 300 ms */
+#define CALLWAITING_REPEAT_SAMPLES	( (10000 * 8) / READ_SIZE) /*!< 10,000 ms */
 #define CIDCW_EXPIRE_SAMPLES		( (500 * 8) / READ_SIZE) /*!< 500 ms */
 #define MIN_MS_SINCE_FLASH			( (2000) )	/*!< 2000 ms */
-#define DEFAULT_RINGT 				( (8000 * 8) / READ_SIZE)
+#define DEFAULT_RINGT 				( (8000 * 8) / READ_SIZE) /*!< 8,000 ms */
 
 struct zt_pvt;
 
@@ -722,10 +722,7 @@ static inline int pri_grab(struct zt_pvt *pvt, struct zt_pri *pri)
 	do {
 		res = ast_mutex_trylock(&pri->lock);
 		if (res) {
-			ast_mutex_unlock(&pvt->lock);
-			/* Release the lock and try again */
-			usleep(1);
-			ast_mutex_lock(&pvt->lock);
+			DEADLOCK_AVOIDANCE(&pvt->lock);
 		}
 	} while (res);
 	/* Then break the poll */
@@ -792,9 +789,7 @@ static void wakeup_sub(struct zt_pvt *p, int a, void *pri)
 	for (;;) {
 		if (p->subs[a].owner) {
 			if (ast_mutex_trylock(&p->subs[a].owner->lock)) {
-				ast_mutex_unlock(&p->lock);
-				usleep(1);
-				ast_mutex_lock(&p->lock);
+				DEADLOCK_AVOIDANCE(&p->lock);
 			} else {
 				ast_queue_frame(p->subs[a].owner, &ast_null_frame);
 				ast_mutex_unlock(&p->subs[a].owner->lock);
@@ -823,9 +818,7 @@ static void zap_queue_frame(struct zt_pvt *p, struct ast_frame *f, void *pri)
 	for (;;) {
 		if (p->owner) {
 			if (ast_mutex_trylock(&p->owner->lock)) {
-				ast_mutex_unlock(&p->lock);
-				usleep(1);
-				ast_mutex_lock(&p->lock);
+				DEADLOCK_AVOIDANCE(&p->lock);
 			} else {
 				ast_queue_frame(p->owner, f);
 				ast_mutex_unlock(&p->owner->lock);
@@ -3038,9 +3031,7 @@ static void zt_unlink(struct zt_pvt *slave, struct zt_pvt *master, int needlock)
 		ast_mutex_lock(&master->lock);
 		if (slave) {
 			while (ast_mutex_trylock(&slave->lock)) {
-				ast_mutex_unlock(&master->lock);
-				usleep(1);
-				ast_mutex_lock(&master->lock);
+				DEADLOCK_AVOIDANCE(&master->lock);
 			}
 		}
 	}
@@ -3177,9 +3168,7 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 
 	ast_mutex_lock(&c0->lock);
 	while (ast_mutex_trylock(&c1->lock)) {
-		ast_mutex_unlock(&c0->lock);
-		usleep(1);
-		ast_mutex_lock(&c0->lock);
+		DEADLOCK_AVOIDANCE(&c0->lock);
 	}
 
 	p0 = c0->tech_pvt;
@@ -3349,9 +3338,7 @@ static enum ast_bridge_result zt_bridge(struct ast_channel *c0, struct ast_chann
 		   and then balking if anything is wrong */
 		ast_mutex_lock(&c0->lock);
 		while (ast_mutex_trylock(&c1->lock)) {
-			ast_mutex_unlock(&c0->lock);
-			usleep(1);
-			ast_mutex_lock(&c0->lock);
+			DEADLOCK_AVOIDANCE(&c0->lock);
 		}
 
 		p0 = c0->tech_pvt;
@@ -3910,12 +3897,10 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 						while (p->subs[SUB_THREEWAY].owner && ast_mutex_trylock(&p->subs[SUB_THREEWAY].owner->lock)) {
 							/* Yuck, didn't get the lock on the 3-way, gotta release everything and re-grab! */
 							ast_mutex_unlock(&p->lock);
-							ast_mutex_unlock(&ast->lock);
-							usleep(1);
+							DEADLOCK_AVOIDANCE(&ast->lock);
 							/* We can grab ast and p in that order, without worry.  We should make sure
 							   nothing seriously bad has happened though like some sort of bizarre double
 							   masquerade! */
-							ast_mutex_lock(&ast->lock);
 							ast_mutex_lock(&p->lock);
 							if (p->owner != ast) {
 								ast_log(LOG_WARNING, "This isn't good...\n");
@@ -4413,14 +4398,15 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			case SIG_SF_FEATDMF:
 			case SIG_SF_FEATB:
 				/* FGD MF *Must* wait for wink */
-				if (!ast_strlen_zero(p->dop.dialstr))
+				if (!ast_strlen_zero(p->dop.dialstr)) {
 					res = ioctl(p->subs[SUB_REAL].zfd, ZT_DIAL, &p->dop);
-				else if (res < 0) {
-					ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
-					p->dop.dialstr[0] = '\0';
-					return NULL;
-				} else 
-					ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
+					if (res < 0) {
+						ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
+						p->dop.dialstr[0] = '\0';
+						return NULL;
+					} else 
+						ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
+				}
 				p->dop.dialstr[0] = '\0';
 				break;
 			default:
@@ -4441,14 +4427,15 @@ static struct ast_frame *zt_handle_event(struct ast_channel *ast)
 			case SIG_SF:
 			case SIG_SFWINK:
 			case SIG_SF_FEATD:
-				if (!ast_strlen_zero(p->dop.dialstr)) 
+				if (!ast_strlen_zero(p->dop.dialstr)) {
 					res = ioctl(p->subs[SUB_REAL].zfd, ZT_DIAL, &p->dop);
-				else if (res < 0) {
-					ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
-					p->dop.dialstr[0] = '\0';
-					return NULL;
-				} else 
-					ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
+					if (res < 0) {
+						ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
+						p->dop.dialstr[0] = '\0';
+						return NULL;
+					} else 
+						ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
+				}
 				p->dop.dialstr[0] = '\0';
 				p->dop.op = ZT_DIAL_OP_REPLACE;
 				break;
@@ -4836,8 +4823,10 @@ static struct ast_frame  *zt_read(struct ast_channel *ast)
 			return &p->subs[index].f;
 		}
 	}
-	if (p->callwaitingrepeat)
+	/* Ensure the CW timer decrements only on a single subchannel */
+	if (p->callwaitingrepeat && zt_get_index(ast, p, 1) == SUB_REAL) {
 		p->callwaitingrepeat--;
+	}
 	if (p->cidcwexpire)
 		p->cidcwexpire--;
 	/* Repeat callwaiting */
@@ -6221,7 +6210,7 @@ static void *ss_thread(void *data)
 							}
 
 							if (res < 0) {
-								ast_log(LOG_WARNING, "CallerID feed failed: %s\n", strerror(errno));
+								ast_log(LOG_WARNING, "CallerID feed failed on channel '%s'\n", chan->name);
 								break;
 							} else if (res)
 								break;
@@ -6232,9 +6221,6 @@ static void *ss_thread(void *data)
 					if (res == 1) {
 						callerid_get(cs, &name, &number, &flags);
 						ast_log(LOG_NOTICE, "CallerID number: %s, name: %s, flags=%d\n", number, name, flags);
-					}
-					if (res < 0) {
-						ast_log(LOG_WARNING, "CallerID returned with error on channel '%s'\n", chan->name);
 					}
 
 					if (p->cid_signalling == CID_SIG_V23_JP) {
@@ -7150,7 +7136,7 @@ static int pri_create_spanmap(int span, int trunkgroup, int logicalspan)
 
 #endif
 
-static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pri *pri, int reloading)
+static struct zt_pvt *mkintf(int channel, const struct zt_chan_conf *conf, struct zt_pri *pri, int reloading)
 {
 	/* Make a zt_pvt structure for this interface (or CRV if "pri" is specified) */
 	struct zt_pvt *tmp = NULL, *tmp2,  *prev = NULL;
@@ -7208,6 +7194,7 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 	}
 
 	if (tmp) {
+		int chan_sig = conf->chan.sig;
 		if (!here) {
 			if ((channel != CHAN_PSEUDO) && !pri) {
 				snprintf(fn, sizeof(fn), "%d", channel);
@@ -7227,8 +7214,8 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 					destroy_zt_pvt(&tmp);
 					return NULL;
 				}
-				if (p.sigtype != (conf.chan.sig & 0x3ffff)) {
-					ast_log(LOG_ERROR, "Signalling requested on channel %d is %s but line is in %s signalling\n", channel, sig2str(conf.chan.sig), sig2str(p.sigtype));
+				if (p.sigtype != (conf->chan.sig & 0x3ffff)) {
+					ast_log(LOG_ERROR, "Signalling requested on channel %d is %s but line is in %s signalling\n", channel, sig2str(conf->chan.sig), sig2str(p.sigtype));
 					destroy_zt_pvt(&tmp);
 					return NULL;
 				}
@@ -7237,20 +7224,20 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 				span = p.spanno - 1;
 			} else {
 				if (channel == CHAN_PSEUDO)
-					conf.chan.sig = 0;
-				else if ((conf.chan.sig != SIG_FXOKS) && (conf.chan.sig != SIG_FXSKS)) {
+					chan_sig = 0;
+				else if ((chan_sig != SIG_FXOKS) && (chan_sig != SIG_FXSKS)) {
 					ast_log(LOG_ERROR, "CRV's must use FXO/FXS Kewl Start (fxo_ks/fxs_ks) signalling only.\n");
 					return NULL;
 				}
 			}
 #ifdef HAVE_PRI
-			if ((conf.chan.sig == SIG_PRI) || (conf.chan.sig == SIG_GR303FXOKS) || (conf.chan.sig == SIG_GR303FXSKS)) {
+			if ((chan_sig == SIG_PRI) || (chan_sig == SIG_GR303FXOKS) || (chan_sig == SIG_GR303FXSKS)) {
 				int offset;
 				int myswitchtype;
 				int matchesdchan;
 				int x,y;
 				offset = 0;
-				if ((conf.chan.sig == SIG_PRI) && ioctl(tmp->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &offset)) {
+				if ((chan_sig == SIG_PRI) && ioctl(tmp->subs[SUB_REAL].zfd, ZT_AUDIOMODE, &offset)) {
 					ast_log(LOG_ERROR, "Unable to set clear mode on clear channel %d of span %d: %s\n", channel, p.spanno, strerror(errno));
 					destroy_zt_pvt(&tmp);
 					return NULL;
@@ -7274,8 +7261,8 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 						destroy_zt_pvt(&tmp);
 						return NULL;
 					}
-					if (conf.chan.sig == SIG_PRI)
-						myswitchtype = conf.pri.switchtype;
+					if (chan_sig == SIG_PRI)
+						myswitchtype = conf->pri.switchtype;
 					else
 						myswitchtype = PRI_SWITCH_GR303_TMC;
 					/* Make sure this isn't a d-channel */
@@ -7290,7 +7277,7 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 					}
 					offset = p.chanpos;
 					if (!matchesdchan) {
-						if (pris[span].nodetype && (pris[span].nodetype != conf.pri.nodetype)) {
+						if (pris[span].nodetype && (pris[span].nodetype != conf->pri.nodetype)) {
 							ast_log(LOG_ERROR, "Span %d is already a %s node\n", span + 1, pri_node2str(pris[span].nodetype));
 							destroy_zt_pvt(&tmp);
 							return NULL;
@@ -7300,28 +7287,28 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 							destroy_zt_pvt(&tmp);
 							return NULL;
 						}
-						if ((pris[span].dialplan) && (pris[span].dialplan != conf.pri.dialplan)) {
+						if ((pris[span].dialplan) && (pris[span].dialplan != conf->pri.dialplan)) {
 							ast_log(LOG_ERROR, "Span %d is already a %s dialing plan\n", span + 1, dialplan2str(pris[span].dialplan));
 							destroy_zt_pvt(&tmp);
 							return NULL;
 						}
-						if (!ast_strlen_zero(pris[span].idledial) && strcmp(pris[span].idledial, conf.pri.idledial)) {
-							ast_log(LOG_ERROR, "Span %d already has idledial '%s'.\n", span + 1, conf.pri.idledial);
+						if (!ast_strlen_zero(pris[span].idledial) && strcmp(pris[span].idledial, conf->pri.idledial)) {
+							ast_log(LOG_ERROR, "Span %d already has idledial '%s'.\n", span + 1, conf->pri.idledial);
 							destroy_zt_pvt(&tmp);
 							return NULL;
 						}
-						if (!ast_strlen_zero(pris[span].idleext) && strcmp(pris[span].idleext, conf.pri.idleext)) {
-							ast_log(LOG_ERROR, "Span %d already has idleext '%s'.\n", span + 1, conf.pri.idleext);
+						if (!ast_strlen_zero(pris[span].idleext) && strcmp(pris[span].idleext, conf->pri.idleext)) {
+							ast_log(LOG_ERROR, "Span %d already has idleext '%s'.\n", span + 1, conf->pri.idleext);
 							destroy_zt_pvt(&tmp);
 							return NULL;
 						}
-						if (pris[span].minunused && (pris[span].minunused != conf.pri.minunused)) {
-							ast_log(LOG_ERROR, "Span %d already has minunused of %d.\n", span + 1, conf.pri.minunused);
+						if (pris[span].minunused && (pris[span].minunused != conf->pri.minunused)) {
+							ast_log(LOG_ERROR, "Span %d already has minunused of %d.\n", span + 1, conf->pri.minunused);
 							destroy_zt_pvt(&tmp);
 							return NULL;
 						}
-						if (pris[span].minidle && (pris[span].minidle != conf.pri.minidle)) {
-							ast_log(LOG_ERROR, "Span %d already has minidle of %d.\n", span + 1, conf.pri.minidle);
+						if (pris[span].minidle && (pris[span].minidle != conf->pri.minidle)) {
+							ast_log(LOG_ERROR, "Span %d already has minidle of %d.\n", span + 1, conf->pri.minidle);
 							destroy_zt_pvt(&tmp);
 							return NULL;
 						}
@@ -7331,24 +7318,24 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 							destroy_zt_pvt(&tmp);
 							return NULL;
 						}
-						pris[span].nodetype = conf.pri.nodetype;
+						pris[span].nodetype = conf->pri.nodetype;
 						pris[span].switchtype = myswitchtype;
-						pris[span].nsf = conf.pri.nsf;
-						pris[span].dialplan = conf.pri.dialplan;
-						pris[span].localdialplan = conf.pri.localdialplan;
+						pris[span].nsf = conf->pri.nsf;
+						pris[span].dialplan = conf->pri.dialplan;
+						pris[span].localdialplan = conf->pri.localdialplan;
 						pris[span].pvts[pris[span].numchans++] = tmp;
-						pris[span].minunused = conf.pri.minunused;
-						pris[span].minidle = conf.pri.minidle;
-						pris[span].overlapdial = conf.pri.overlapdial;
-						pris[span].facilityenable = conf.pri.facilityenable;
-						ast_copy_string(pris[span].idledial, conf.pri.idledial, sizeof(pris[span].idledial));
-						ast_copy_string(pris[span].idleext, conf.pri.idleext, sizeof(pris[span].idleext));
-						ast_copy_string(pris[span].internationalprefix, conf.pri.internationalprefix, sizeof(pris[span].internationalprefix));
-						ast_copy_string(pris[span].nationalprefix, conf.pri.nationalprefix, sizeof(pris[span].nationalprefix));
-						ast_copy_string(pris[span].localprefix, conf.pri.localprefix, sizeof(pris[span].localprefix));
-						ast_copy_string(pris[span].privateprefix, conf.pri.privateprefix, sizeof(pris[span].privateprefix));
-						ast_copy_string(pris[span].unknownprefix, conf.pri.unknownprefix, sizeof(pris[span].unknownprefix));
-						pris[span].resetinterval = conf.pri.resetinterval;
+						pris[span].minunused = conf->pri.minunused;
+						pris[span].minidle = conf->pri.minidle;
+						pris[span].overlapdial = conf->pri.overlapdial;
+						pris[span].facilityenable = conf->pri.facilityenable;
+						ast_copy_string(pris[span].idledial, conf->pri.idledial, sizeof(pris[span].idledial));
+						ast_copy_string(pris[span].idleext, conf->pri.idleext, sizeof(pris[span].idleext));
+						ast_copy_string(pris[span].internationalprefix, conf->pri.internationalprefix, sizeof(pris[span].internationalprefix));
+						ast_copy_string(pris[span].nationalprefix, conf->pri.nationalprefix, sizeof(pris[span].nationalprefix));
+						ast_copy_string(pris[span].localprefix, conf->pri.localprefix, sizeof(pris[span].localprefix));
+						ast_copy_string(pris[span].privateprefix, conf->pri.privateprefix, sizeof(pris[span].privateprefix));
+						ast_copy_string(pris[span].unknownprefix, conf->pri.unknownprefix, sizeof(pris[span].unknownprefix));
+						pris[span].resetinterval = conf->pri.resetinterval;
 						
 						tmp->pri = &pris[span];
 						tmp->prioffset = offset;
@@ -7364,23 +7351,35 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 			}
 #endif
 		} else {
-			conf.chan.sig = tmp->sig;
-			conf.chan.radio = tmp->radio;
+			chan_sig = tmp->sig;
 			memset(&p, 0, sizeof(p));
 			if (tmp->subs[SUB_REAL].zfd > -1)
 				res = ioctl(tmp->subs[SUB_REAL].zfd, ZT_GET_PARAMS, &p);
 		}
 		/* Adjust starttime on loopstart and kewlstart trunks to reasonable values */
-		if ((conf.chan.sig == SIG_FXSKS) || (conf.chan.sig == SIG_FXSLS) ||
-		    (conf.chan.sig == SIG_EM) || (conf.chan.sig == SIG_EM_E1) ||  (conf.chan.sig == SIG_EMWINK) ||
-			(conf.chan.sig == SIG_FEATD) || (conf.chan.sig == SIG_FEATDMF) || (conf.chan.sig == SIG_FEATDMF_TA) ||
-			  (conf.chan.sig == SIG_FEATB) || (conf.chan.sig == SIG_E911) ||
-		    (conf.chan.sig == SIG_SF) || (conf.chan.sig == SIG_SFWINK) || (conf.chan.sig == SIG_FGC_CAMA) || (conf.chan.sig == SIG_FGC_CAMAMF) ||
-			(conf.chan.sig == SIG_SF_FEATD) || (conf.chan.sig == SIG_SF_FEATDMF) ||
-			  (conf.chan.sig == SIG_SF_FEATB)) {
+		switch (chan_sig) {
+		case SIG_FXSKS:
+		case SIG_FXSLS:
+		case SIG_EM:
+		case SIG_EM_E1:
+		case SIG_EMWINK:
+		case SIG_FEATD:
+		case SIG_FEATDMF:
+		case SIG_FEATDMF_TA:
+		case SIG_FEATB:
+		case SIG_E911:
+		case SIG_SF:
+		case SIG_SFWINK:
+		case SIG_FGC_CAMA:
+		case SIG_FGC_CAMAMF:
+		case SIG_SF_FEATD:
+		case SIG_SF_FEATDMF:
+		case SIG_SF_FEATB:
 			p.starttime = 250;
+			break;
 		}
-		if (conf.chan.radio) {
+
+		if (tmp->radio) {
 			/* XXX Waiting to hear back from Jim if these should be adjustable XXX */
 			p.channo = channel;
 			p.rxwinktime = 1;
@@ -7388,25 +7387,25 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 			p.starttime = 1;
 			p.debouncetime = 5;
 		}
-		if (!conf.chan.radio) {
+		if (!tmp->radio) {
 			p.channo = channel;
 			/* Override timing settings based on config file */
-			if (conf.timing.prewinktime >= 0)
-				p.prewinktime = conf.timing.prewinktime;
-			if (conf.timing.preflashtime >= 0)
-				p.preflashtime = conf.timing.preflashtime;
-			if (conf.timing.winktime >= 0)
-				p.winktime = conf.timing.winktime;
-			if (conf.timing.flashtime >= 0)
-				p.flashtime = conf.timing.flashtime;
-			if (conf.timing.starttime >= 0)
-				p.starttime = conf.timing.starttime;
-			if (conf.timing.rxwinktime >= 0)
-				p.rxwinktime = conf.timing.rxwinktime;
-			if (conf.timing.rxflashtime >= 0)
-				p.rxflashtime = conf.timing.rxflashtime;
-			if (conf.timing.debouncetime >= 0)
-				p.debouncetime = conf.timing.debouncetime;
+			if (conf->timing.prewinktime >= 0)
+				p.prewinktime = conf->timing.prewinktime;
+			if (conf->timing.preflashtime >= 0)
+				p.preflashtime = conf->timing.preflashtime;
+			if (conf->timing.winktime >= 0)
+				p.winktime = conf->timing.winktime;
+			if (conf->timing.flashtime >= 0)
+				p.flashtime = conf->timing.flashtime;
+			if (conf->timing.starttime >= 0)
+				p.starttime = conf->timing.starttime;
+			if (conf->timing.rxwinktime >= 0)
+				p.rxwinktime = conf->timing.rxwinktime;
+			if (conf->timing.rxflashtime >= 0)
+				p.rxflashtime = conf->timing.rxflashtime;
+			if (conf->timing.debouncetime >= 0)
+				p.debouncetime = conf->timing.debouncetime;
 		}
 		
 		/* dont set parms on a pseudo-channel (or CRV) */
@@ -7435,56 +7434,55 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 				ast_log(LOG_WARNING, "Unable to check buffer policy on channel %d\n", channel);
 		}
 #endif
-		tmp->immediate = conf.chan.immediate;
-		tmp->transfertobusy = conf.chan.transfertobusy;
-		tmp->sig = conf.chan.sig;
-		tmp->outsigmod = conf.chan.outsigmod;
-		tmp->radio = conf.chan.radio;
+		tmp->immediate = conf->chan.immediate;
+		tmp->transfertobusy = conf->chan.transfertobusy;
+		tmp->sig = chan_sig;
+		tmp->outsigmod = conf->chan.outsigmod;
 		tmp->ringt_base = ringt_base;
 		tmp->firstradio = 0;
-		if ((conf.chan.sig == SIG_FXOKS) || (conf.chan.sig == SIG_FXOLS) || (conf.chan.sig == SIG_FXOGS))
-			tmp->permcallwaiting = conf.chan.callwaiting;
+		if ((chan_sig == SIG_FXOKS) || (chan_sig == SIG_FXOLS) || (chan_sig == SIG_FXOGS))
+			tmp->permcallwaiting = conf->chan.callwaiting;
 		else
 			tmp->permcallwaiting = 0;
 		/* Flag to destroy the channel must be cleared on new mkif.  Part of changes for reload to work */
 		tmp->destroy = 0;
 		tmp->drings = drings;
-		tmp->usedistinctiveringdetection = conf.chan.usedistinctiveringdetection;
-		tmp->callwaitingcallerid = conf.chan.callwaitingcallerid;
-		tmp->threewaycalling = conf.chan.threewaycalling;
-		tmp->adsi = conf.chan.adsi;
-		tmp->use_smdi = conf.chan.use_smdi;
-		tmp->permhidecallerid = conf.chan.hidecallerid;
-		tmp->callreturn = conf.chan.callreturn;
-		tmp->echocancel = conf.chan.echocancel;
-		tmp->echotraining = conf.chan.echotraining;
-		tmp->pulse = conf.chan.pulse;
+		tmp->usedistinctiveringdetection = conf->chan.usedistinctiveringdetection;
+		tmp->callwaitingcallerid = conf->chan.callwaitingcallerid;
+		tmp->threewaycalling = conf->chan.threewaycalling;
+		tmp->adsi = conf->chan.adsi;
+		tmp->use_smdi = conf->chan.use_smdi;
+		tmp->permhidecallerid = conf->chan.hidecallerid;
+		tmp->callreturn = conf->chan.callreturn;
+		tmp->echocancel = conf->chan.echocancel;
+		tmp->echotraining = conf->chan.echotraining;
+		tmp->pulse = conf->chan.pulse;
 		if (tmp->echocancel)
-			tmp->echocanbridged = conf.chan.echocanbridged;
+			tmp->echocanbridged = conf->chan.echocanbridged;
 		else {
-			if (conf.chan.echocanbridged)
+			if (conf->chan.echocanbridged)
 				ast_log(LOG_NOTICE, "echocancelwhenbridged requires echocancel to be enabled; ignoring\n");
 			tmp->echocanbridged = 0;
 		}
-		tmp->busydetect = conf.chan.busydetect;
-		tmp->busycount = conf.chan.busycount;
-		tmp->busy_tonelength = conf.chan.busy_tonelength;
-		tmp->busy_quietlength = conf.chan.busy_quietlength;
-		tmp->callprogress = conf.chan.callprogress;
-		tmp->cancallforward = conf.chan.cancallforward;
-		tmp->dtmfrelax = conf.chan.dtmfrelax;
+		tmp->busydetect = conf->chan.busydetect;
+		tmp->busycount = conf->chan.busycount;
+		tmp->busy_tonelength = conf->chan.busy_tonelength;
+		tmp->busy_quietlength = conf->chan.busy_quietlength;
+		tmp->callprogress = conf->chan.callprogress;
+		tmp->cancallforward = conf->chan.cancallforward;
+		tmp->dtmfrelax = conf->chan.dtmfrelax;
 		tmp->callwaiting = tmp->permcallwaiting;
 		tmp->hidecallerid = tmp->permhidecallerid;
 		tmp->channel = channel;
-		tmp->stripmsd = conf.chan.stripmsd;
-		tmp->use_callerid = conf.chan.use_callerid;
-		tmp->cid_signalling = conf.chan.cid_signalling;
-		tmp->cid_start = conf.chan.cid_start;
-		tmp->zaptrcallerid = conf.chan.zaptrcallerid;
-		tmp->restrictcid = conf.chan.restrictcid;
-		tmp->use_callingpres = conf.chan.use_callingpres;
-		tmp->priindication_oob = conf.chan.priindication_oob;
-		tmp->priexclusive = conf.chan.priexclusive;
+		tmp->stripmsd = conf->chan.stripmsd;
+		tmp->use_callerid = conf->chan.use_callerid;
+		tmp->cid_signalling = conf->chan.cid_signalling;
+		tmp->cid_start = conf->chan.cid_start;
+		tmp->zaptrcallerid = conf->chan.zaptrcallerid;
+		tmp->restrictcid = conf->chan.restrictcid;
+		tmp->use_callingpres = conf->chan.use_callingpres;
+		tmp->priindication_oob = conf->chan.priindication_oob;
+		tmp->priexclusive = conf->chan.priexclusive;
 		if (tmp->usedistinctiveringdetection) {
 			if (!tmp->use_callerid) {
 				ast_log(LOG_NOTICE, "Distinctive Ring detect requires 'usecallerid' be on\n");
@@ -7499,37 +7497,37 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 			}
 		}
 		if (tmp->use_smdi) {
-			tmp->smdi_iface = ast_smdi_interface_find(conf.smdi_port);
+			tmp->smdi_iface = ast_smdi_interface_find(conf->smdi_port);
 			if (!(tmp->smdi_iface)) {
 				ast_log(LOG_ERROR, "Invalid SMDI port specfied, disabling SMDI support\n");
 				tmp->use_smdi = 0;
 			}
 		}
 
-		ast_copy_string(tmp->accountcode, conf.chan.accountcode, sizeof(tmp->accountcode));
-		tmp->amaflags = conf.chan.amaflags;
+		ast_copy_string(tmp->accountcode, conf->chan.accountcode, sizeof(tmp->accountcode));
+		tmp->amaflags = conf->chan.amaflags;
 		if (!here) {
 			tmp->confno = -1;
 			tmp->propconfno = -1;
 		}
-		tmp->canpark = conf.chan.canpark;
-		tmp->transfer = conf.chan.transfer;
-		ast_copy_string(tmp->defcontext,conf.chan.context,sizeof(tmp->defcontext));
-		ast_copy_string(tmp->language, conf.chan.language, sizeof(tmp->language));
-		ast_copy_string(tmp->mohinterpret, conf.chan.mohinterpret, sizeof(tmp->mohinterpret));
-		ast_copy_string(tmp->mohsuggest, conf.chan.mohsuggest, sizeof(tmp->mohsuggest));
-		ast_copy_string(tmp->context, conf.chan.context, sizeof(tmp->context));
-		ast_copy_string(tmp->cid_num, conf.chan.cid_num, sizeof(tmp->cid_num));
+		tmp->canpark = conf->chan.canpark;
+		tmp->transfer = conf->chan.transfer;
+		ast_copy_string(tmp->defcontext,conf->chan.context,sizeof(tmp->defcontext));
+		ast_copy_string(tmp->language, conf->chan.language, sizeof(tmp->language));
+		ast_copy_string(tmp->mohinterpret, conf->chan.mohinterpret, sizeof(tmp->mohinterpret));
+		ast_copy_string(tmp->mohsuggest, conf->chan.mohsuggest, sizeof(tmp->mohsuggest));
+		ast_copy_string(tmp->context, conf->chan.context, sizeof(tmp->context));
+		ast_copy_string(tmp->cid_num, conf->chan.cid_num, sizeof(tmp->cid_num));
 		tmp->cid_ton = 0;
-		ast_copy_string(tmp->cid_name, conf.chan.cid_name, sizeof(tmp->cid_name));
-		ast_copy_string(tmp->mailbox, conf.chan.mailbox, sizeof(tmp->mailbox));
+		ast_copy_string(tmp->cid_name, conf->chan.cid_name, sizeof(tmp->cid_name));
+		ast_copy_string(tmp->mailbox, conf->chan.mailbox, sizeof(tmp->mailbox));
 		tmp->msgstate = -1;
-		tmp->group = conf.chan.group;
-		tmp->callgroup = conf.chan.callgroup;
-		tmp->pickupgroup= conf.chan.pickupgroup;
-		tmp->rxgain = conf.chan.rxgain;
-		tmp->txgain = conf.chan.txgain;
-		tmp->tonezone = conf.chan.tonezone;
+		tmp->group = conf->chan.group;
+		tmp->callgroup = conf->chan.callgroup;
+		tmp->pickupgroup= conf->chan.pickupgroup;
+		tmp->rxgain = conf->chan.rxgain;
+		tmp->txgain = conf->chan.txgain;
+		tmp->tonezone = conf->chan.tonezone;
 		tmp->onhooktime = time(NULL);
 		if (tmp->subs[SUB_REAL].zfd > -1) {
 			set_actual_gain(tmp->subs[SUB_REAL].zfd, 0, tmp->rxgain, tmp->txgain, tmp->law);
@@ -7537,7 +7535,7 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 				ast_dsp_digitmode(tmp->dsp, DSP_DIGITMODE_DTMF | tmp->dtmfrelax);
 			update_conf(tmp);
 			if (!here) {
-				if (conf.chan.sig != SIG_PRI)
+				if (chan_sig != SIG_PRI)
 					/* Hang it up to be sure it's good */
 					zt_set_hook(tmp->subs[SUB_REAL].zfd, ZT_ONHOOK);
 			}
@@ -7558,10 +7556,10 @@ static struct zt_pvt *mkintf(int channel, struct zt_chan_conf conf, struct zt_pr
 			if (si.alarms) tmp->inalarm = 1;
 		}
 
-		tmp->polarityonanswerdelay = conf.chan.polarityonanswerdelay;
-		tmp->answeronpolarityswitch = conf.chan.answeronpolarityswitch;
-		tmp->hanguponpolarityswitch = conf.chan.hanguponpolarityswitch;
-		tmp->sendcalleridafter = conf.chan.sendcalleridafter;
+		tmp->polarityonanswerdelay = conf->chan.polarityonanswerdelay;
+		tmp->answeronpolarityswitch = conf->chan.answeronpolarityswitch;
+		tmp->hanguponpolarityswitch = conf->chan.hanguponpolarityswitch;
+		tmp->sendcalleridafter = conf->chan.sendcalleridafter;
 
 	}
 	if (tmp && !here) {
@@ -8290,9 +8288,7 @@ static int pri_hangup_all(struct zt_pvt *p, struct zt_pri *pri)
 		for (x = 0; x < 3; x++) {
 			while (p->subs[x].owner && ast_mutex_trylock(&p->subs[x].owner->lock)) {
 				redo++;
-				ast_mutex_unlock(&p->lock);
-				usleep(1);
-				ast_mutex_lock(&p->lock);
+				DEADLOCK_AVOIDANCE(&p->lock);
 			}
 			if (p->subs[x].owner) {
 				ast_queue_hangup(p->subs[x].owner);
@@ -9611,6 +9607,13 @@ static int handle_pri_set_debug_file(int fd, int argc, char **argv)
 	return RESULT_SUCCESS;
 }
 
+#ifdef HAVE_PRI_VERSION
+static int handle_pri_version(int fd, int agc, char *argv[]) {
+	ast_cli(fd, "libpri version: %s\n", pri_get_version());
+	return RESULT_SUCCESS;
+}
+#endif
+
 static int handle_pri_debug(int fd, int argc, char *argv[])
 {
 	int span;
@@ -9847,6 +9850,11 @@ static struct ast_cli_entry zap_pri_cli[] = {
 
 	{ { "pri", "unset", "debug", "file", NULL },
 	handle_pri_set_debug_file, "Ends PRI debug output to file" },
+
+#ifdef HAVE_PRI_VERSION
+	{ { "pri", "show", "version", NULL },
+	handle_pri_version, "Displays version of libpri" },
+#endif
 };
 
 #endif /* HAVE_PRI */
@@ -10500,7 +10508,7 @@ static int unload_module(void)
 	return __unload_module();
 }
 
-static int build_channels(struct zt_chan_conf conf, int iscrv, const char *value, int reload, int lineno, int *found_pseudo)
+static int build_channels(struct zt_chan_conf *conf, int iscrv, const char *value, int reload, int lineno, int *found_pseudo)
 {
 	char *c, *chan;
 	int x, start, finish;
@@ -10510,7 +10518,7 @@ static int build_channels(struct zt_chan_conf conf, int iscrv, const char *value
 	int trunkgroup, y;
 #endif
 	
-	if ((reload == 0) && (conf.chan.sig < 0)) {
+	if ((reload == 0) && (conf->chan.sig < 0)) {
 		ast_log(LOG_ERROR, "Signalling must be specified before any channels are.\n");
 		return -1;
 	}
@@ -10615,7 +10623,7 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 			if (skipchannels)
 				continue;
 			iscrv = !strcasecmp(v->name, "crv");
-			if (build_channels(*confp, iscrv, v->value, reload, v->lineno, &found_pseudo))
+			if (build_channels(confp, iscrv, v->value, reload, v->lineno, &found_pseudo))
 					return -1;
 		} else if (!strcasecmp(v->name, "zapchan")) {
 			ast_copy_string(zapchan, v->value, sizeof(zapchan));
@@ -11215,6 +11223,8 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 
 				toneduration = atoi(v->value);
 				if (toneduration > -1) {
+					memset(&dps, 0, sizeof(dps));
+
 					dps.dtmf_tonelen = dps.mfv1_tonelen = toneduration;
 					res = ioctl(ctlfd, ZT_SET_DIALPARAMS, &dps);
 					if (res < 0) {
@@ -11234,7 +11244,7 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 	if (zapchan[0]) { 
 		/* The user has set 'zapchan' */
 		/*< \todo pass proper line number instead of 0 */
-		if (build_channels(*confp, 0, zapchan, reload, 0, &found_pseudo)) {
+		if (build_channels(confp, 0, zapchan, reload, 0, &found_pseudo)) {
 			return -1;
 		}
 	}
@@ -11248,7 +11258,7 @@ static int process_zap(struct zt_chan_conf *confp, struct ast_variable *v, int r
 		confp->chan.callgroup = 0;
 		confp->chan.pickupgroup = 0;
 
-		tmp = mkintf(CHAN_PSEUDO, *confp, NULL, reload);
+		tmp = mkintf(CHAN_PSEUDO, confp, NULL, reload);
 
 		if (tmp) {
 			if (option_verbose > 2)
@@ -11366,11 +11376,10 @@ static int setup_zap(int reload)
 				continue;
 			chans = ast_variable_retrieve(cfg, cat, "zapchan");
 			if (!ast_strlen_zero(chans)) {
-				/** \todo At this point we should probably 
-				 * duplicate conf, and pass a copy, to prevent 
-				 * one section from affecting another
-				 */
-				process_zap(&conf, ast_variable_browse(cfg, cat), reload, 0);
+				struct zt_chan_conf sect_conf;
+				memcpy(&sect_conf, &conf, sizeof(sect_conf));
+
+				process_zap(&sect_conf, ast_variable_browse(cfg, cat), reload, 0);
 			}
 		}
 		ast_config_destroy(cfg);

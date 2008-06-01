@@ -142,6 +142,7 @@ AST_APP_OPTIONS(spy_opts, {
 	AST_APP_OPTION_ARG('r', OPTION_RECORD, OPT_ARG_RECORD),
 });
 
+int next_unique_id_to_use = 0;
 
 struct chanspy_translation_helper {
 	/* spy data */
@@ -208,17 +209,15 @@ static int start_spying(struct ast_channel *chan, const char *spychan_name, stru
 
 	res = ast_audiohook_attach(chan, audiohook);
 
-	if (!res && ast_test_flag(chan, AST_FLAG_NBRIDGE) && (peer = ast_bridged_channel(chan))) {
-		ast_channel_unlock(chan);
+	if (!res && ast_test_flag(chan, AST_FLAG_NBRIDGE) && (peer = ast_bridged_channel(chan))) { 
 		ast_softhangup(peer, AST_SOFTHANGUP_UNBRIDGE);	
-	} else
-		ast_channel_unlock(chan);
-
+	}
 	return res;
 }
 
 struct chanspy_ds {
 	struct ast_channel *chan;
+	char unique_id[20];
 	ast_mutex_t lock;
 };
 
@@ -263,16 +262,18 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	
 	ast_audiohook_init(&csth.spy_audiohook, AST_AUDIOHOOK_TYPE_SPY, "ChanSpy");
 
-	if (start_spying(spyee, spyer_name, &csth.spy_audiohook)) { /* Unlocks spyee */
+	if (start_spying(spyee, spyer_name, &csth.spy_audiohook)) {
 		ast_audiohook_destroy(&csth.spy_audiohook);
+		ast_channel_unlock(spyee);
 		return 0;
 	}
 	
 	if (ast_test_flag(flags, OPTION_WHISPER)) {
 		ast_audiohook_init(&csth.whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "ChanSpy");
-		start_spying(spyee, spyer_name, &csth.whisper_audiohook); /* Unlocks spyee */
+		start_spying(spyee, spyer_name, &csth.whisper_audiohook);
 	}
 
+	ast_channel_unlock(spyee);
 	spyee = NULL;
 
 	csth.volfactor = *volfactor;
@@ -420,7 +421,7 @@ static struct chanspy_ds *chanspy_ds_free(struct chanspy_ds *chanspy_ds)
 		chan = chanspy_ds->chan;
 
 		ast_channel_lock(chan);
-		if ((datastore = ast_channel_datastore_find(chan, &chanspy_ds_info, NULL))) {
+		if ((datastore = ast_channel_datastore_find(chan, &chanspy_ds_info, chanspy_ds->unique_id))) {
 			ast_channel_datastore_remove(chan, datastore);
 			/* chanspy_ds->chan is NULL after this call */
 			chanspy_ds_destroy(datastore->data);
@@ -441,7 +442,7 @@ static struct chanspy_ds *setup_chanspy_ds(struct ast_channel *chan, struct chan
 
 	ast_mutex_lock(&chanspy_ds->lock);
 
-	if (!(datastore = ast_channel_datastore_alloc(&chanspy_ds_info, NULL))) {
+	if (!(datastore = ast_channel_datastore_alloc(&chanspy_ds_info, chanspy_ds->unique_id))) {
 		ast_mutex_unlock(&chanspy_ds->lock);
 		chanspy_ds = chanspy_ds_free(chanspy_ds);
 		ast_channel_unlock(chan);
@@ -500,6 +501,8 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 
 	ast_mutex_init(&chanspy_ds.lock);
 
+	snprintf(chanspy_ds.unique_id, sizeof(chanspy_ds.unique_id), "%d", ast_atomic_fetchadd_int(&next_unique_id_to_use, +1));
+
 	if (chan->_state != AST_STATE_UP)
 		ast_answer(chan);
 
@@ -543,7 +546,6 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 			char *dup_group;
 			int x;
 			char *s;
-			struct ast_channel *peer;
 
 			peer = peer_chanspy_ds->chan;
 
@@ -599,12 +601,11 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 			for (s = peer_name; s < ptr; s++)
 				*s = tolower(*s);
 
-		
 			/* We have to unlock the peer channel here to avoid a deadlock.
-			 * So, when we need it again, we have to lock the datastore and get
-			 * the pointer from there to see if the channel is still valid. */
+			 * So, when we need to dereference it again, we have to lock the 
+			 * datastore and get the pointer from there to see if the channel 
+			 * is still valid. */
 			ast_channel_unlock(peer);
-			peer = NULL;
 
 			if (!ast_test_flag(flags, OPTION_QUIET)) {
 				if (ast_fileexists(peer_name, NULL, NULL) != -1) {
@@ -621,7 +622,6 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 					ast_say_digits(chan, atoi(ptr), "", chan->language);
 			}
 			
-			waitms = 5000;
 			res = channel_spy(chan, peer_chanspy_ds, &volfactor, fd, flags);
 			num_spyed_upon++;	
 
@@ -728,7 +728,7 @@ static int chanspy_exec(struct ast_channel *chan, void *data)
 	}
 
 	if (recbase) {
-		char filename[512];
+		char filename[PATH_MAX];
 
 		snprintf(filename, sizeof(filename), "%s/%s.%d.raw", ast_config_AST_MONITOR_DIR, recbase, (int) time(NULL));
 		if ((fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0644)) <= 0) {
@@ -813,7 +813,7 @@ static int extenspy_exec(struct ast_channel *chan, void *data)
 	}
 
 	if (recbase) {
-		char filename[512];
+		char filename[PATH_MAX];
 
 		snprintf(filename, sizeof(filename), "%s/%s.%d.raw", ast_config_AST_MONITOR_DIR, recbase, (int) time(NULL));
 		if ((fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0644)) <= 0) {

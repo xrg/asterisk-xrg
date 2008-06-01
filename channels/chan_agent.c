@@ -1051,7 +1051,7 @@ static struct ast_channel *agent_new(struct agent_pvt *p, int state)
 	if (p->chan) {
 		if (ast_test_flag(p->chan, AST_FLAG_BLOCKING)) {
 			ast_log( LOG_ERROR, "A blocker exists after agent channel ownership acquired\n" );
-			CRASH;
+			ast_assert(0);
 		}
 	}
 	return tmp;
@@ -1500,7 +1500,7 @@ static int action_agents(struct mansession *s, const struct message *m)
 			loginChan = ast_strdupa(p->chan->name);
 			if (p->owner && p->owner->_bridge) {
 				if (ast_bridged_channel(p->owner)) {
-					talkingtoChan = ast_strdupa(ast_bridged_channel(p->owner)->cid.cid_num);
+					talkingtoChan = ast_strdupa(S_OR(ast_bridged_channel(p->owner)->cid.cid_num, ""));
 				} else {
 					talkingtoChan = "n/a";
 				}
@@ -1588,9 +1588,7 @@ static int agent_logoff(const char *agent, int soft)
 					ast_mutex_lock(&p->lock);
 
 					while (p->owner && ast_channel_trylock(p->owner)) {
-						ast_mutex_unlock(&p->lock);
-						usleep(1);
-						ast_mutex_lock(&p->lock);
+						DEADLOCK_AVOIDANCE(&p->lock);
 					}
 					if (p->owner) {
 						ast_softhangup(p->owner, AST_SOFTHANGUP_EXPLICIT);
@@ -1598,9 +1596,7 @@ static int agent_logoff(const char *agent, int soft)
 					}
 
 					while (p->chan && ast_channel_trylock(p->chan)) {
-						ast_mutex_unlock(&p->lock);
-						usleep(1);
-						ast_mutex_lock(&p->lock);
+						DEADLOCK_AVOIDANCE(&p->lock);
 					}
 					if (p->chan) {
 						ast_softhangup(p->chan, AST_SOFTHANGUP_EXPLICIT);

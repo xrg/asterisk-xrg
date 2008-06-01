@@ -855,8 +855,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 	rtcpheader = (unsigned int *)(rtcpdata + AST_FRIENDLY_OFFSET);
 	
 	if (res < 0) {
-		if (errno == EBADF)
-			CRASH;
+		ast_assert(errno != EBADF);
 		if (errno != EAGAIN) {
 			ast_log(LOG_WARNING, "RTCP Read error: %s.  Hanging up.\n", strerror(errno));
 			return NULL;
@@ -1136,8 +1135,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 
 	rtpheader = (unsigned int *)(rtp->rawdata + AST_FRIENDLY_OFFSET);
 	if (res < 0) {
-		if (errno == EBADF)
-			CRASH;
+		ast_assert(errno != EBADF);
 		if (errno != EAGAIN) {
 			ast_log(LOG_WARNING, "RTP Read error: %s.  Hanging up.\n", strerror(errno));
 			return NULL;
@@ -1315,7 +1313,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		/* Add timing data to let ast_generic_bridge() put the frame into a jitterbuf */
 		ast_set_flag(&rtp->f, AST_FRFLAG_HAS_TIMING_INFO);
 		rtp->f.ts = timestamp / 8;
-		rtp->f.len = rtp->f.samples / ( (ast_format_rate(rtp->f.subclass) == 16000) ? 16 : 8 );
+		rtp->f.len = rtp->f.samples / (ast_format_rate(rtp->f.subclass) / 1000);
 	} else {
 		/* Video -- samples is # of samples vs. 90000 */
 		if (!rtp->lastividtimestamp)
@@ -2004,7 +2002,6 @@ int ast_rtp_settos(struct ast_rtp *rtp, int tos)
 void ast_rtp_new_source(struct ast_rtp *rtp)
 {
 	rtp->set_marker_bit = 1;
-	rtp->ssrc = ast_random();
 	return;
 }
 
@@ -2798,17 +2795,28 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 			ast_smoother_feed(rtp->smoother, _f);
 		}
 
-		while((f = ast_smoother_read(rtp->smoother)) && (f->data))
+		while ((f = ast_smoother_read(rtp->smoother)) && (f->data)) {
+			if (f->subclass == AST_FORMAT_G722) {
+				/* G.722 is silllllllllllllly */
+				f->samples /= 2;
+			}
+
 			ast_rtp_raw_write(rtp, f, codec);
+		}
 	} else {
-	        /* Don't buffer outgoing frames; send them one-per-packet: */
+		/* Don't buffer outgoing frames; send them one-per-packet: */
 		if (_f->offset < hdrlen) {
 			f = ast_frdup(_f);
 		} else {
 			f = _f;
 		}
-		if (f->data)
+		if (f->data) {
+			if (f->subclass == AST_FORMAT_G722) {
+				/* G.722 is silllllllllllllly */
+				f->samples /= 2;
+			}
 			ast_rtp_raw_write(rtp, f, codec);
+		}
 		if (f != _f)
 			ast_frfree(f);
 	}
@@ -3370,9 +3378,9 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 		audio_p1_res = AST_RTP_TRY_PARTIAL;
 	}
 
-	/* If the core will need to compensate and the P2P bridge will need to feed up DTMF frames then we can not reliably do so yet, so do not P2P bridge */
-	if ((audio_p0_res == AST_RTP_TRY_PARTIAL && ast_test_flag(p0, FLAG_P2P_NEED_DTMF) && ast_test_flag(p0, FLAG_DTMF_COMPENSATE)) ||
-	    (audio_p1_res == AST_RTP_TRY_PARTIAL && ast_test_flag(p1, FLAG_P2P_NEED_DTMF) && ast_test_flag(p1, FLAG_DTMF_COMPENSATE))) {
+	/* If we need to feed frames into the core don't do a P2P bridge */
+	if ((audio_p0_res == AST_RTP_TRY_PARTIAL && ast_test_flag(p0, FLAG_P2P_NEED_DTMF)) ||
+	    (audio_p1_res == AST_RTP_TRY_PARTIAL && ast_test_flag(p1, FLAG_P2P_NEED_DTMF))) {
 		ast_channel_unlock(c0);
 		ast_channel_unlock(c1);
 		return AST_BRIDGE_FAILED_NOWARN;

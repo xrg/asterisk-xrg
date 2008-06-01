@@ -825,11 +825,20 @@ static int callnums = 1;
 #define SKINNY_DEVICE_ATA186		12	/* Cisco ATA-186 */
 #define SKINNY_DEVICE_7941		115
 #define SKINNY_DEVICE_7971		119
+#define SKINNY_DEVICE_7914		124	/* Expansion module */
 #define SKINNY_DEVICE_7985		302
 #define SKINNY_DEVICE_7911		307
 #define SKINNY_DEVICE_7961GE		308
 #define SKINNY_DEVICE_7941GE		309
+#define SKINNY_DEVICE_7931		348
 #define SKINNY_DEVICE_7921		365
+#define SKINNY_DEVICE_7906		369
+#define SKINNY_DEVICE_7962		404	/* Not found */
+#define SKINNY_DEVICE_7937		431
+#define SKINNY_DEVICE_7942		434
+#define SKINNY_DEVICE_7945		435
+#define SKINNY_DEVICE_7965		436
+#define SKINNY_DEVICE_7975		437
 #define SKINNY_DEVICE_7905		20000
 #define SKINNY_DEVICE_7920		30002
 #define SKINNY_DEVICE_7970		30006
@@ -1028,6 +1037,7 @@ static struct skinny_device {
 	int lastlineinstance;
 	int lastcallreference;
 	int capability;
+	int earlyrtp;
 	char exten[AST_MAX_EXTENSION];
 	struct sockaddr_in addr;
 	struct in_addr ourip;
@@ -1142,12 +1152,16 @@ static void *get_button_template(struct skinnysession *s, struct button_definiti
 		case SKINNY_DEVICE_7960:
 		case SKINNY_DEVICE_7961:
 		case SKINNY_DEVICE_7961GE:
+		case SKINNY_DEVICE_7962:
+		case SKINNY_DEVICE_7965:
 			for (i = 0; i < 6; i++)
 				(btn++)->buttonDefinition = BT_CUST_LINESPEEDDIAL;
 			break;
 		case SKINNY_DEVICE_7940:
 		case SKINNY_DEVICE_7941:
 		case SKINNY_DEVICE_7941GE:
+		case SKINNY_DEVICE_7942:
+		case SKINNY_DEVICE_7945:
 			for (i = 0; i < 2; i++)
 				(btn++)->buttonDefinition = BT_CUST_LINESPEEDDIAL;
 			break;
@@ -1161,6 +1175,7 @@ static void *get_button_template(struct skinnysession *s, struct button_definiti
 			break;
 		case SKINNY_DEVICE_7970:
 		case SKINNY_DEVICE_7971:
+		case SKINNY_DEVICE_7975:
 		case SKINNY_DEVICE_CIPC:
 			for (i = 0; i < 8; i++)
 				(btn++)->buttonDefinition = BT_CUST_LINESPEEDDIAL;
@@ -1186,6 +1201,18 @@ static void *get_button_template(struct skinnysession *s, struct button_definiti
 			break;
 		case SKINNY_DEVICE_7902:
 			ast_log(LOG_WARNING, "Unsupported device type '%d (7902)' found.\n", d->type);
+			break;
+		case SKINNY_DEVICE_7906:
+			ast_log(LOG_WARNING, "Unsupported device type '%d (7906)' found.\n", d->type);
+			break;
+		case SKINNY_DEVICE_7931:
+			ast_log(LOG_WARNING, "Unsupported device type '%d (7931)' found.\n", d->type);
+			break;
+		case SKINNY_DEVICE_7937:
+			ast_log(LOG_WARNING, "Unsupported device type '%d (7937)' found.\n", d->type);
+			break;
+		case SKINNY_DEVICE_7914:
+			ast_log(LOG_WARNING, "Unsupported device type '%d (7914)' found.  Expansion module registered by itself?\n", d->type);
 			break;
 		case SKINNY_DEVICE_SCCPGATEWAY_AN:
 		case SKINNY_DEVICE_SCCPGATEWAY_BRI:
@@ -1937,6 +1964,8 @@ static char *device2str(int type)
 		return "7941";
 	case SKINNY_DEVICE_7971:
 		return "7971";
+	case SKINNY_DEVICE_7914:
+		return "7914";
 	case SKINNY_DEVICE_7985:
 		return "7985";
 	case SKINNY_DEVICE_7911:
@@ -1945,8 +1974,24 @@ static char *device2str(int type)
 		return "7961GE";
 	case SKINNY_DEVICE_7941GE:
 		return "7941GE";
+	case SKINNY_DEVICE_7931:
+		return "7931";
 	case SKINNY_DEVICE_7921:
 		return "7921";
+	case SKINNY_DEVICE_7906:
+		return "7906";
+	case SKINNY_DEVICE_7962:
+		return "7962";
+	case SKINNY_DEVICE_7937:
+		return "7937";
+	case SKINNY_DEVICE_7942:
+		return "7942";
+	case SKINNY_DEVICE_7945:
+		return "7945";
+	case SKINNY_DEVICE_7965:
+		return "7965";
+	case SKINNY_DEVICE_7975:
+		return "7975";
 	case SKINNY_DEVICE_7905:
 		return "7905";
 	case SKINNY_DEVICE_7920:
@@ -2100,6 +2145,7 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 		d->lastlineinstance = 1;
 		d->capability = default_capability;
 		d->prefs = default_prefs;
+		d->earlyrtp = 1;
 		while(v) {
 			if (!strcasecmp(v->name, "host")) {
 				if (ast_get_ip(&d->addr, v->value)) {
@@ -2120,6 +2166,8 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 				ast_parse_allow_disallow(&d->prefs, &d->capability, v->value, 0);
 			} else if (!strcasecmp(v->name, "version")) {
 				ast_copy_string(d->version_id, v->value, sizeof(d->version_id));
+			} else if (!strcasecmp(v->name, "earlyrtp")) {
+				d->earlyrtp = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "nat")) {
 				nat = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "callerid")) {
@@ -2322,6 +2370,9 @@ static void *skinny_newcall(void *data)
 		l->hidecallerid ? "" : l->cid_name,
 		c->cid.cid_ani ? NULL : l->cid_num);
 	ast_setstate(c, AST_STATE_RING);
+	if (!sub->rtp) {
+		start_rtp(sub);
+	}
 	res = ast_pbx_run(c);
 	if (res) {
 		ast_log(LOG_WARNING, "PBX exited non-zero\n");
@@ -2746,45 +2797,61 @@ static int skinny_indicate(struct ast_channel *ast, int ind, const void *data, s
 	case AST_CONTROL_RINGING:
 		if (ast->_state != AST_STATE_UP) {
 			if (!sub->progress) {
-				transmit_tone(s, SKINNY_ALERT, l->instance, sub->callid);
+				if (!d->earlyrtp) {
+					transmit_tone(s, SKINNY_ALERT, l->instance, sub->callid);
+				}
 				transmit_callstate(s, l->instance, SKINNY_RINGOUT, sub->callid);
 				transmit_dialednumber(s, exten, l->instance, sub->callid);
 				transmit_displaypromptstatus(s, "Ring Out", 0, l->instance, sub->callid);
 				transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, exten, exten, l->instance, sub->callid, 2); /* 2 = outgoing from phone */
 				sub->ringing = 1;
-				break;
+				if (!d->earlyrtp) {
+					break;
+				}
 			}
 		}
-		return -1;
+		return -1; /* Tell asterisk to provide inband signalling */
 	case AST_CONTROL_BUSY:
 		if (ast->_state != AST_STATE_UP) {
-			transmit_tone(s, SKINNY_BUSYTONE, l->instance, sub->callid);
+			if (!d->earlyrtp) {
+				transmit_tone(s, SKINNY_BUSYTONE, l->instance, sub->callid);
+			}
 			transmit_callstate(s, l->instance, SKINNY_BUSY, sub->callid);
 			sub->alreadygone = 1;
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
-			break;
+			if (!d->earlyrtp) {
+				break;
+			}
 		}
-		return -1;
+		return -1; /* Tell asterisk to provide inband signalling */
 	case AST_CONTROL_CONGESTION:
 		if (ast->_state != AST_STATE_UP) {
-			transmit_tone(s, SKINNY_REORDER, l->instance, sub->callid);
+			if (!d->earlyrtp) {
+				transmit_tone(s, SKINNY_REORDER, l->instance, sub->callid);
+			}
 			transmit_callstate(s, l->instance, SKINNY_CONGESTION, sub->callid);
 			sub->alreadygone = 1;
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
-			break;
+			if (!d->earlyrtp) {
+				break;
+			}
 		}
-		return -1;
+		return -1; /* Tell asterisk to provide inband signalling */
 	case AST_CONTROL_PROGRESS:
 		if ((ast->_state != AST_STATE_UP) && !sub->progress && !sub->outgoing) {
-			transmit_tone(s, SKINNY_ALERT, l->instance, sub->callid);
+			if (!d->earlyrtp) {
+				transmit_tone(s, SKINNY_ALERT, l->instance, sub->callid);
+			}
 			transmit_callstate(s, l->instance, SKINNY_PROGRESS, sub->callid);
 			transmit_displaypromptstatus(s, "Call Progress", 0, l->instance, sub->callid);
 			transmit_callinfo(s, ast->cid.cid_name, ast->cid.cid_num, exten, exten, l->instance, sub->callid, 2); /* 2 = outgoing from phone */
 			sub->progress = 1;
-			break;
+			if (!d->earlyrtp) {
+				break;
+			}
 		}
-		return -1;
-	case -1:
+		return -1; /* Tell asterisk to provide inband signalling */
+	case -1:  /* STOP_TONE */
 		transmit_tone(s, SKINNY_SILENCE, l->instance, sub->callid);
 		break;
 	case AST_CONTROL_HOLD:
@@ -2796,11 +2863,13 @@ static int skinny_indicate(struct ast_channel *ast, int ind, const void *data, s
 	case AST_CONTROL_PROCEEDING:
 		break;
 	case AST_CONTROL_SRCUPDATE:
-		ast_rtp_new_source(sub->rtp);
+		if (sub->rtp) {
+			ast_rtp_new_source(sub->rtp);
+		}
 		break;
 	default:
 		ast_log(LOG_WARNING, "Don't know how to indicate condition %d\n", ind);
-		return -1;
+		return -1; /* Tell asterisk to provide inband signalling */
 	}
 	return 0;
 }

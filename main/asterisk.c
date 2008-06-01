@@ -80,6 +80,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <grp.h>
 #include <pwd.h>
 #include <sys/stat.h>
+
+#ifdef HAVE_ZAPTEL
+#include <sys/ioctl.h>
+#include <zaptel/zaptel.h>
+#endif
+
 #ifdef linux
 #include <sys/prctl.h>
 #ifdef HAVE_CAP
@@ -686,9 +692,16 @@ void ast_unregister_atexit(void (*func)(void))
 		free(ae);
 }
 
-static int fdprint(int fd, const char *s)
+/* Sending commands from consoles back to the daemon requires a terminating NULL */
+static int fdsend(int fd, const char *s)
 {
 	return write(fd, s, strlen(s) + 1);
+}
+
+/* Sending messages from the daemon back to the display requires _excluding_ the terminating NULL */
+static int fdprint(int fd, const char *s)
+{
+	return write(fd, s, strlen(s));
 }
 
 /*! \brief NULL handler so we can collect the child exit status */
@@ -1314,6 +1327,12 @@ static void __quit_handler(int num)
 static const char *fix_header(char *outbuf, int maxout, const char *s, char *cmp)
 {
 	const char *c;
+
+	/* Check for verboser preamble */
+	if (*s == 127) {
+		s++;
+	}
+
 	if (!strncmp(s, cmp, strlen(cmp))) {
 		c = s + strlen(cmp);
 		term_color(outbuf, cmp, COLOR_GRAY, 0, maxout);
@@ -1333,8 +1352,12 @@ static void console_verboser(const char *s)
 	    (c = fix_header(tmp, sizeof(tmp), s, VERBOSE_PREFIX_1))) {
 		fputs(tmp, stdout);
 		fputs(c, stdout);
-	} else
+	} else {
+		if (*s == 127) {
+			s++;
+		}
 		fputs(s, stdout);
+	}
 
 	fflush(stdout);
 	
@@ -1713,6 +1736,7 @@ static int ast_el_read_char(EditLine *el, char *cp)
 				return (num_read);
 		}
 		if (fds[0].revents) {
+			char *tmp;
 			res = read(ast_consock, buf, sizeof(buf) - 1);
 			/* if the remote side disappears exit */
 			if (res < 1) {
@@ -1729,7 +1753,7 @@ static int ast_el_read_char(EditLine *el, char *cp)
 							printf(term_quit());
 							WELCOME_MESSAGE;
 							if (!ast_opt_mute)
-								fdprint(ast_consock, "logger mute silent");
+								fdsend(ast_consock, "logger mute silent");
 							else 
 								printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 							break;
@@ -1745,6 +1769,15 @@ static int ast_el_read_char(EditLine *el, char *cp)
 
 			buf[res] = '\0';
 
+			/* Strip preamble from asynchronous events, too */
+			for (tmp = buf; *tmp; tmp++) {
+				if (*tmp == 127) {
+					memmove(tmp, tmp + 1, strlen(tmp));
+					tmp--;
+				}
+			}
+
+			/* Write over the CLI prompt */
 			if (!ast_opt_exec && !lastpos)
 				write(STDOUT_FILENO, "\r", 1);
 			write(STDOUT_FILENO, buf, res);
@@ -2022,7 +2055,7 @@ static char *cli_complete(EditLine *el, int ch)
 
 	if (ast_opt_remote) {
 		snprintf(buf, sizeof(buf),"_COMMAND NUMMATCHES \"%s\" \"%s\"", lf->buffer, ptr); 
-		fdprint(ast_consock, buf);
+		fdsend(ast_consock, buf);
 		res = read(ast_consock, buf, sizeof(buf));
 		buf[res] = '\0';
 		nummatches = atoi(buf);
@@ -2034,7 +2067,7 @@ static char *cli_complete(EditLine *el, int ch)
 			if (!(mbuf = ast_malloc(maxmbuf)))
 				return (char *)(CC_ERROR);
 			snprintf(buf, sizeof(buf),"_COMMAND MATCHESARRAY \"%s\" \"%s\"", lf->buffer, ptr); 
-			fdprint(ast_consock, buf);
+			fdsend(ast_consock, buf);
 			res = 0;
 			mbuf[0] = '\0';
 			while (!strstr(mbuf, AST_CLI_COMPLETE_EOF) && res != -1) {
@@ -2219,11 +2252,11 @@ static void ast_remotecontrol(char * data)
 		pid = -1;
 	if (!data) {
 		snprintf(tmp, sizeof(tmp), "core set verbose atleast %d", option_verbose);
-		fdprint(ast_consock, tmp);
+		fdsend(ast_consock, tmp);
 		snprintf(tmp, sizeof(tmp), "core set debug atleast %d", option_debug);
-		fdprint(ast_consock, tmp);
+		fdsend(ast_consock, tmp);
 		if (!ast_opt_mute)
-			fdprint(ast_consock, "logger mute silent");
+			fdsend(ast_consock, "logger mute silent");
 		else 
 			printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 	}
@@ -2240,13 +2273,38 @@ static void ast_remotecontrol(char * data)
 		ast_el_read_history(filename);
 
 	if (ast_opt_exec && data) {  /* hack to print output then exit if asterisk -rx is used */
-		char tempchar;
 		struct pollfd fds;
 		fds.fd = ast_consock;
 		fds.events = POLLIN;
 		fds.revents = 0;
-		while (poll(&fds, 1, 100) > 0)
-			ast_el_read_char(el, &tempchar);
+		while (poll(&fds, 1, 500) > 0) {
+			char buf[512] = "", *curline = buf, *nextline;
+			int not_written = 1;
+
+			if (read(ast_consock, buf, sizeof(buf) - 1) <= 0) {
+				break;
+			}
+
+			do {
+				if ((nextline = strchr(curline, '\n'))) {
+					nextline++;
+				} else {
+					nextline = strchr(curline, '\0');
+				}
+
+				/* Skip verbose lines */
+				if (*curline != 127) {
+					not_written = 0;
+					write(STDOUT_FILENO, curline, nextline - curline);
+				}
+				curline = nextline;
+			} while (!ast_strlen_zero(curline));
+
+			/* No non-verbose output in 500ms */
+			if (not_written) {
+				break;
+			}
+		}
 		return;
 	}
 	for (;;) {
@@ -2259,6 +2317,14 @@ static void ast_remotecontrol(char * data)
 			if (ebuf[strlen(ebuf)-1] == '\n')
 				ebuf[strlen(ebuf)-1] = '\0';
 			if (!remoteconsolehandler(ebuf)) {
+				/* Strip preamble from output */
+				char *tmp;
+				for (tmp = ebuf; *tmp; tmp++) {
+					if (*tmp == 127) {
+						memmove(tmp, tmp + 1, strlen(tmp));
+						tmp--;
+					}
+				}
 				res = write(ast_consock, ebuf, strlen(ebuf) + 1);
 				if (res < 1) {
 					ast_log(LOG_WARNING, "Unable to write: %s\n", strerror(errno));
@@ -2853,6 +2919,34 @@ int main(int argc, char *argv[])
 		printf(term_quit());
 		exit(1);
 	}
+#ifdef HAVE_ZAPTEL
+	{
+		int fd;
+		int x = 160;
+		fd = open("/dev/zap/timer", O_RDWR);
+		if (fd >= 0) {
+			if (ioctl(fd, ZT_TIMERCONFIG, &x)) {
+				ast_log(LOG_ERROR, "You have Zaptel built and drivers loaded, but the Zaptel timer test failed to set ZT_TIMERCONFIG to %d.\n", x);
+				exit(1);
+			}
+			if ((x = ast_wait_for_input(fd, 300)) < 0) {
+				ast_log(LOG_ERROR, "You have Zaptel built and drivers loaded, but the Zaptel timer could not be polled during the Zaptel timer test.\n");
+				exit(1);
+			}
+			if (!x) {
+				const char zaptel_timer_error[] = {
+					"Asterisk has detected a problem with your Zaptel configuration and will shutdown for your protection.  You have options:"
+					"\n\t1. You only have to compile Zaptel support into Asterisk if you need it.  One option is to recompile without Zaptel support."
+					"\n\t2. You only have to load Zaptel drivers if you want to take advantage of Zaptel services.  One option is to unload zaptel modules if you don't need them."
+					"\n\t3. If you need Zaptel services, you must correctly configure Zaptel."
+				};
+				ast_log(LOG_ERROR, "%s\n", zaptel_timer_error);
+				exit(1);
+			}
+			close(fd);
+		}
+	}
+#endif
 	threadstorage_init();
 
 	astobj2_init();

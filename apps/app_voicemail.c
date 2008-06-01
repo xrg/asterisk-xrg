@@ -468,6 +468,7 @@ static char *descrip_vm =
 "    b    - Play the 'busy' greeting to the calling party.\n"
 "    g(#) - Use the specified amount of gain when recording the voicemail\n"
 "           message. The units are whole-number decibels (dB).\n"
+"           Only works on supported technologies, which is Zap only.\n"
 "    s    - Skip the playback of instructions for leaving a message to the\n"
 "           calling party.\n"
 "    u    - Play the 'unavailable' greeting.\n"
@@ -5719,7 +5720,7 @@ static int vm_intro_ru(struct ast_channel *chan,struct vm_state *vms)
 			res = say_and_wait(chan, dcnum, chan->language);
 		if (!res && lastnum) {
 			if (lastnum == 1) 
-				res = ast_play_and_wait(chan, "digits/ru/odno");
+				res = ast_play_and_wait(chan, "digits/odno");
 			else
 				res = say_and_wait(chan, lastnum, chan->language);
 		}
@@ -5738,7 +5739,7 @@ static int vm_intro_ru(struct ast_channel *chan,struct vm_state *vms)
 			res = say_and_wait(chan, dcnum, chan->language);
 		if (!res && lastnum) {
 			if (lastnum == 1) 
-				res = ast_play_and_wait(chan, "digits/ru/odno");
+				res = ast_play_and_wait(chan, "digits/odno");
 			else
 				res = say_and_wait(chan, lastnum, chan->language);
 		}
@@ -6130,6 +6131,7 @@ static int vm_options(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 			cmd = 't';
 			break;
 		default: 
+			cmd = 0;
 			snprintf(prefile, sizeof(prefile), "%s%s/%s/temp", VM_SPOOL_DIR, vmu->context, vms->username);
 			if (ast_fileexists(prefile, NULL, NULL))
 				cmd = ast_play_and_wait(chan, "vm-tmpexists");
@@ -7932,8 +7934,13 @@ static int load_module(void)
 	char *adsi_loaded = ast_module_helper("", "res_adsi.so", 0, 0, 0, 0);
 	free(adsi_loaded);
 	if (!adsi_loaded) {
-		ast_log(LOG_ERROR, "app_voicemail.so depends upon res_adsi.so\n");
-		return AST_MODULE_LOAD_DECLINE;
+		/* If embedded, res_adsi may be known as "res_adsi" not "res_adsi.so" */
+		adsi_loaded = ast_module_helper("", "res_adsi", 0, 0, 0, 0);
+		ast_free(adsi_loaded);
+		if (!adsi_loaded) {
+			ast_log(LOG_ERROR, "app_voicemail.so depends upon res_adsi.so\n");
+			return AST_MODULE_LOAD_DECLINE;
+		}
 	}
 
 	my_umask = umask(0);

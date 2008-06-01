@@ -346,6 +346,8 @@ static enum agi_result launch_script(char *script, char *argv[], int *fds, int *
 		execv(script, argv);
 		/* Can't use ast_log since FD's are closed */
 		fprintf(stdout, "verbose \"Failed to execute '%s': %s\" 2\n", script, strerror(errno));
+		/* Special case to set status of AGI to failure */
+		fprintf(stdout, "failure\n");
 		fflush(stdout);
 		_exit(1);
 	}
@@ -1910,6 +1912,12 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				break;
 			}
 
+			/* Special case for inability to execute child process */
+			if (*buf && strncasecmp(buf, "failure", 7) == 0) {
+				returnstatus = AGI_RESULT_FAILURE;
+				break;
+			}
+
 			/* get rid of trailing newline, if any */
 			if (*buf && buf[strlen(buf) - 1] == '\n')
 				buf[strlen(buf) - 1] = 0;
@@ -1933,9 +1941,13 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	if (pid > -1) {
 		const char *sighup = pbx_builtin_getvar_helper(chan, "AGISIGHUP");
 		if (ast_strlen_zero(sighup) || !ast_false(sighup)) {
-			if (kill(pid, SIGHUP))
+			if (kill(pid, SIGHUP)) {
 				ast_log(LOG_WARNING, "unable to send SIGHUP to AGI process %d: %s\n", pid, strerror(errno));
+			} else { /* Give the process a chance to die */
+				usleep(1);
+			}
 		}
+		waitpid(pid, status, WNOHANG);
 	}
 	fclose(readf);
 	return returnstatus;
@@ -2054,6 +2066,7 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 		}
 	}
 #endif
+	ast_replace_sigchld();
 	res = launch_script(argv[0], argv, fds, enhanced ? &efd : NULL, &pid);
 	if (res == AGI_RESULT_SUCCESS || res == AGI_RESULT_SUCCESS_FAST) {
 		int status = 0;
@@ -2069,8 +2082,8 @@ static int agi_exec_full(struct ast_channel *chan, void *data, int enhanced, int
 			close(fds[1]);
 		if (efd > -1)
 			close(efd);
-		ast_unreplace_sigchld();
 	}
+	ast_unreplace_sigchld();
 	ast_module_user_remove(u);
 
 	switch (res) {
