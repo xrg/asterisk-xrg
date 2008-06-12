@@ -27,7 +27,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 46200 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -49,7 +49,7 @@ static char *synopsis = "Get ADSI CPE ID";
 
 static char *descrip =
 "  GetCPEID: Obtains and displays ADSI CPE ID and other information in order\n"
-"to properly setup zapata.conf for on-hook operations.\n";
+"to properly setup chan_dahdi.conf for on-hook operations.\n";
 
 
 static int cpeid_setstatus(struct ast_channel *chan, char *stuff[], int voice)
