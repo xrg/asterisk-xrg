@@ -131,6 +131,18 @@ static const char *ftype2mtype(const char *ftype, char *wkspace, int wkspacelen)
 	return wkspace;
 }
 
+static uint32_t manid_from_vars(struct ast_variable *sid) {
+	uint32_t mngid;
+
+	while (sid && strcmp(sid->name, "mansession_id"))
+		sid = sid->next;
+	
+	if (!sid || sscanf(sid->value, "%x", &mngid) != 1)
+		return 0;
+	
+	return mngid;
+}
+
 static struct ast_str *static_callback(struct ast_tcptls_session_instance *ser, const struct ast_http_uri *urih, const char *uri, enum ast_http_method method, struct ast_variable *vars, struct ast_variable *headers, int *status, char **title, int *contentlength)
 {
 	char *path;
@@ -178,9 +190,13 @@ static struct ast_str *static_callback(struct ast_tcptls_session_instance *ser, 
 
 	if (S_ISDIR(st.st_mode)) {
 		goto out404;
-	}
+	}	
 
 	if ((fd = open(path, O_RDONLY)) < 0) {
+		goto out403;
+	}
+
+	if (strstr(path, "/private/") && !astman_is_authed(manid_from_vars(vars))) {
 		goto out403;
 	}
 
@@ -370,6 +386,20 @@ void ast_http_uri_unlink_all_with_key(const char *key)
 	AST_RWLIST_TRAVERSE_SAFE_END
 }
 
+/*
+ * Decode special characters in http uri.
+ * We have ast_uri_decode to handle %XX sequences, but spaces
+ * are encoded as a '+' so we need to replace them beforehand.
+ */
+static void http_decode(char *s)
+{
+	for (;*s; s++) {
+		if (*s == '+')
+			*s = ' ';
+	}
+	ast_uri_decode(s);
+}
+
 static struct ast_str *handle_uri(struct ast_tcptls_session_instance *ser, char *uri, enum ast_http_method method,
 				  int *status, char **title, int *contentlength, struct ast_variable **cookies, struct ast_variable *headers, 
 				  unsigned int *static_content)
@@ -387,18 +417,22 @@ static struct ast_str *handle_uri(struct ast_tcptls_session_instance *ser, char 
 	if (method == AST_HTTP_GET) {
 		strsep(&params, "?");
 		
-		/* Extract arguments from the request and store them in variables. */
+		/* Extract arguments from the request and store them in variables.
+		 * Note that a request can have multiple arguments with the same
+		 * name, and we store them all in the list of variables.
+		 * It is up to the application to handle multiple values.
+		 */
 		if (params) {
 			char *var, *val;
 			
 			while ((val = strsep(&params, "&"))) {
 				var = strsep(&val, "=");
 				if (val) {
-					ast_uri_decode(val);
+					http_decode(val);
 				} else {
 					val = "";
 				}
-				ast_uri_decode(var);
+				http_decode(var);
 				if ((v = ast_variable_new(var, val, ""))) {
 					if (vars) {
 						prev->next = v;
@@ -412,9 +446,11 @@ static struct ast_str *handle_uri(struct ast_tcptls_session_instance *ser, char 
 	}
 
 	/*
-	 * Append the cookies to the variables (the only reason to have them
-	 * at the end is to avoid another pass of the cookies list to find
-	 * the tail).
+	 * Append the cookies to the list of variables.
+	 * This saves a pass in the cookies list, but has the side effect
+	 * that a variable might mask a cookie with the same name if the
+	 * application stops at the first match.
+	 * Note that this is the same behaviour as $_REQUEST variables in PHP.
 	 */
 	if (prev) {
 		prev->next = *cookies;
@@ -423,7 +459,7 @@ static struct ast_str *handle_uri(struct ast_tcptls_session_instance *ser, char 
 	}
 	*cookies = NULL;
 
-	ast_uri_decode(uri);
+	http_decode(uri);
 
 	AST_RWLIST_RDLOCK(&uri_redirects);
 	AST_RWLIST_TRAVERSE(&uri_redirects, redirect, entry) {
@@ -451,6 +487,7 @@ static struct ast_str *handle_uri(struct ast_tcptls_session_instance *ser, char 
 		/* scan registered uris to see if we match one. */
 		AST_RWLIST_RDLOCK(&uris);
 		AST_RWLIST_TRAVERSE(&uris, urih, entry) {
+			ast_debug(2, "match request [%s] with handler [%s] len %d\n", uri, urih->uri, l);
 			if (!saw_method) {
 				switch (method) {
 				case AST_HTTP_GET:
@@ -493,7 +530,11 @@ static struct ast_str *handle_uri(struct ast_tcptls_session_instance *ser, char 
 		}
 	}
 
-	if (urih) {
+	if (method == AST_HTTP_POST && !astman_is_authed(manid_from_vars(vars))) {
+		out = ast_http_error((*status = 403),
+			      (*title = ast_strdup("Access Denied")),
+			      NULL, "Sorry, I cannot let you do that, Dave.");
+	} else if (urih) {
 		*static_content = urih->static_content;
 		out = urih->callback(ser, urih, uri, method, vars, headers, status, title, contentlength);
 		AST_RWLIST_UNLOCK(&uris);
@@ -632,33 +673,9 @@ static void *httpd_helper_thread(void *data)
 		if (ast_strlen_zero(cookie)) {
 			break;
 		}
-		if (strncasecmp(cookie, "Cookie: ", 8)) {
-			char *name, *value;
-			struct ast_variable *var;
-
-			value = ast_strdupa(cookie);
-			name = strsep(&value, ":");
-			if (!value) {
-				continue;
-			}
-			value = ast_skip_blanks(value);
-			if (ast_strlen_zero(value)) {
-				continue;
-			}
-			var = ast_variable_new(name, value, "");
-			if (!var) { 
-				continue;
-			}
-			var->next = headers;
-			headers = var;
-
-			continue;
+		if (!strncasecmp(cookie, "Cookie: ", 8)) {
+			vars = parse_cookies(cookie);
 		}
-
-		if (vars) {
-			ast_variables_destroy(vars);
-		}
-		vars = parse_cookies(cookie);
 	}
 
 	if (!*uri) {

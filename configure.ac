@@ -207,6 +207,7 @@ AST_EXT_LIB_SETUP([CAP], [POSIX 1.e capabilities], [cap])
 AST_EXT_LIB_SETUP([CURL], [cURL], [curl])
 AST_EXT_LIB_SETUP([CURSES], [curses], [curses])
 AST_EXT_LIB_SETUP([CRYPTO], [OpenSSL Cryptography support], [crypto])
+AST_EXT_LIB_SETUP([DAHDI], [DAHDI], [dahdi])
 AST_EXT_LIB_SETUP([FFMPEG], [Ffmpeg and avcodec library], [avcodec])
 AST_EXT_LIB_SETUP([GSM], [External GSM library], [gsm], [, use 'internal' GSM otherwise])
 AST_EXT_LIB_SETUP([GTK], [gtk libraries], [gtk])
@@ -233,12 +234,15 @@ AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
+AST_EXT_LIB_SETUP([SPANDSP], [SPANDSP], [spandsp])
 AST_EXT_LIB_SETUP([SS7], [ISDN SS7], [ss7])
 AST_EXT_LIB_SETUP([PWLIB], [PWlib], [pwlib])
 AST_EXT_LIB_SETUP([OPENH323], [OpenH323], [h323])
 AST_EXT_LIB_SETUP([RADIUS], [Radius Client], [radius])
 AST_EXT_LIB_SETUP([SDL], [Sdl], [sdl])
 AST_EXT_LIB_SETUP([SDL_IMAGE], [Sdl Image library], [SDL_image])
+AST_EXT_LIB_SETUP([SACLM], [SAForum AIS CLM], [SaClm])
+AST_EXT_LIB_SETUP([SAEVT], [SAForum AIS EVT], [SaEvt])
 AST_EXT_LIB_SETUP([SPEEX], [Speex], [speex])
 AST_EXT_LIB_SETUP([SPEEXDSP], [Speexdsp], [speexdsp])
 AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
@@ -254,7 +258,6 @@ AST_EXT_LIB_SETUP([VORBIS], [Vorbis], [vorbis])
 AST_EXT_LIB_SETUP([VPB], [Voicetronix API], [vpb])
 AST_EXT_LIB_SETUP([X11], [X11 support], [x11])
 AST_EXT_LIB_SETUP([ZLIB], [zlib], [z])
-AST_EXT_LIB_SETUP([ZAPTEL], [Zaptel], [zaptel])
 
 # check for basic system features and functionality before
 # checking for package libraries
@@ -548,6 +551,8 @@ AST_EXT_LIB_CHECK([CURSES], [curses], [initscr], [curses.h])
 if test "x${host_os}" = "xlinux-gnu" ; then
   AST_EXT_LIB_CHECK([CAP], [cap], [cap_from_text], [sys/capability.h])
 fi
+
+AST_C_DEFINE_CHECK([DAHDI], [DAHDI_CODE], [dahdi/user.h])
 
 # BSD might not have exp2, and/or log2
 AST_EXT_LIB_CHECK([EXP2L], [m], [exp2l])
@@ -1290,6 +1295,19 @@ AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_get_version], [libpri.h])
 
+AST_C_COMPILE_CHECK([SPANDSP], [
+		#if SPANDSP_RELEASE_DATE < 20080516
+		#error "spandsp 0.0.5 or greater is required"
+		#endif
+	], [spandsp/version.h])
+
+if test "x${PBX_SPANDSP}" = "x1" ; then
+	# We found the correct version in the header, now let's make sure it links
+	# properly, and that libtiff is available
+	PBX_SPANDSP=0
+	AST_EXT_LIB_CHECK([SPANDSP], [spandsp], [span_set_message_handler], [spandsp.h], [-ltiff])
+fi
+
 AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_pollflags], [libss7.h])
 
 if test "${USE_PWLIB}" != "no"; then
@@ -1333,6 +1351,9 @@ LUA_LIB="-llua5.1"
 AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h]) 
 
 AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
+
+AST_EXT_LIB_CHECK([SACLM], [SaClm], [saClmInitialize], [openais/saClm.h])
+AST_EXT_LIB_CHECK([SAEVT], [SaEvt], [saEvtInitialize], [openais/saEvt.h])
 
 AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 
@@ -1405,9 +1426,7 @@ if test "${host_os}" != "linux-gnu" ; then
 fi
 
 # new tonezone, version 1.4.0
-AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/tonezone.h], [${tonezone_extra}], [], [140])
-# other case, old tonezone (0.80)
-AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel/zaptel.h], [${tonezone_extra}], [], [80])
+AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [dahdi/tonezone.h], [${tonezone_extra}])
 
 AST_EXT_LIB_CHECK([USB], [usb], [usb_init], [usb.h], [])
 
@@ -1458,47 +1477,6 @@ fi
 AC_LANG_POP
 
 AST_EXT_LIB_CHECK([ZLIB], [z], [compress], [zlib.h])
-
-# Check for various zaptel features and locations.
-# The version number, which goes into HAVE_ZAPTEL_VERSION,
-# will be used in the system headers to determine the location
-# of the zaptel.h header.
-
-AST_C_DEFINE_CHECK([ZAPTEL], [ZT_TONE_DTMF_BASE], [zaptel/zaptel.h], [140])
-AST_C_DEFINE_CHECK([ZAPTEL], [ZT_DIAL_OP_CANCEL], [zaptel/zaptel.h], [90])
-
-# Check for VLDTMF support
-AST_C_DEFINE_CHECK([ZAPTEL_VLDTMF], [ZT_EVENT_REMOVED], [zaptel/zaptel.h])
-
-# Check for echo canceler parameters support
-AST_C_DEFINE_CHECK([ZAPTEL_ECHOCANPARAMS], [ZT_ECHOCANCEL_PARAMS], [zaptel/zaptel.h])
-
-# Check for transcoder support
-AST_C_DEFINE_CHECK([ZAPTEL_TRANSCODE], [ZT_TCOP_ALLOCATE], [zaptel/zaptel.h])
-
-# Check for hwgain support
-AST_C_DEFINE_CHECK([ZAPTEL_HWGAIN], [ZT_SET_HWGAIN], [zaptel/zaptel.h])
-
-# Check for neon mwi support
-AST_C_DEFINE_CHECK([ZAPTEL_NEONMWI], [ZT_EVENT_NEONMWI_ACTIVE], [zaptel/zaptel.h])
-
-# Check for channel alarm support
-AST_C_COMPILE_CHECK([ZAPTEL_CHANALARMS], [size_t foo = sizeof(struct zt_params_v1)], [zaptel/zaptel.h])
-
-# Check for ZT_SIG_MTP2
-AST_C_DEFINE_CHECK([ZAPTEL_SIG_MTP2], [ZT_SIG_MTP2], [zaptel/zaptel.h])
-
-# On FreeBSD, try old zaptel (0.80 or so) and pretend we have vldtmf
-case "${host_os}" in
-    freebsd*)
-	AST_EXT_LIB_CHECK([ZAPTEL], [zaptel],, [zaptel.h],,, [80])
-	AST_EXT_LIB_CHECK([ZAPTEL_VLDTMF], [zaptel],, [zaptel/zaptel.h],,, [90])
-	AST_EXT_LIB_CHECK([ZAPTEL_VLDTMF], [zaptel],, [zaptel.h],,, [80])
-
-	# other case, old tonezone (0.80)
-	AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [zaptel.h], [${tonezone_extra}],, [80])
-	;;
-esac
 
 EDITLINE_LIB=""
 if test "x$TERMCAP_LIB" != "x" ; then

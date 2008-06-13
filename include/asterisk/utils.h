@@ -26,6 +26,7 @@
 #include "asterisk/network.h"
 
 #include <time.h>	/* we want to override localtime_r */
+#include <unistd.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/time.h"
@@ -553,21 +554,8 @@ char * attribute_malloc _ast_strndup(const char *str, size_t len, const char *fi
 #define ast_asprintf(ret, fmt, ...) \
 	_ast_asprintf((ret), __FILE__, __LINE__, __PRETTY_FUNCTION__, fmt, __VA_ARGS__)
 
-AST_INLINE_API(
-__attribute__((format (printf, 5, 6)))
-int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...),
-{
-	int res;
-	va_list ap;
-
-	va_start(ap, fmt);
-	if ((res = vasprintf(ret, fmt, ap)) == -1)
-		MALLOC_FAILURE_MSG;
-	va_end(ap);
-
-	return res;
-}
-)
+int __attribute__((format (printf, 5, 6)))
+	_ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...);
 
 /*!
  * \brief A wrapper for vasprintf()
@@ -654,6 +642,75 @@ int ast_mkdir(const char *path, int mode);
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof(a[0]))
 
+#ifdef AST_DEVMODE
+#define ast_assert(a) _ast_assert(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+static void force_inline _ast_assert(int condition, const char *condition_str, 
+	const char *file, int line, const char *function)
+{
+	if (__builtin_expect(!condition, 1)) {
+		/* Attempt to put it into the logger, but hope that at least someone saw the
+		 * message on stderr ... */
+		ast_log(__LOG_ERROR, file, line, function, "FRACK!, Failed assertion %s (%d)\n",
+			condition_str, condition);
+		fprintf(stderr, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
+			condition_str, condition, line, function, file);
+		/* Give the logger a chance to get the message out, just in case we abort(), or
+		 * Asterisk crashes due to whatever problem just happened after we exit ast_assert(). */
+		usleep(1);
+#ifdef DO_CRASH
+		abort();
+		/* Just in case abort() doesn't work or something else super silly,
+		 * and for Qwell's amusement. */
+		*((int*)0)=0;
+#endif
+	}
+}
+#else
+#define ast_assert(a)
+#endif
+
 #include "asterisk/strings.h"
+
+/*!
+ * \brief An Entity ID is essentially a MAC address, brief and unique 
+ */
+struct ast_eid {
+	unsigned char eid[6];
+} __attribute__ ((__packed__));
+
+/*!
+ * \brief Global EID
+ *
+ * This is set in asterisk.conf, or determined automatically by taking the mac
+ * address of an Ethernet interface on the system.
+ */
+extern struct ast_eid g_eid;
+
+/*!
+ * \brief Fill in an ast_eid with the default eid of this machine
+ */
+void ast_set_default_eid(struct ast_eid *eid);
+
+/*!
+ * /brief Convert an EID to a string
+ */
+char *ast_eid_to_str(char *s, int maxlen, struct ast_eid *eid);
+
+/*!
+ * \brief Convert a string into an EID
+ *
+ * This function expects an EID in the format:
+ *    00:11:22:33:44:55
+ *
+ * \return 0 success, non-zero failure
+ */
+int ast_str_to_eid(struct ast_eid *eid, const char *s);
+
+/*!
+ * \brief Compare two EIDs
+ *
+ * \return 0 if the two are the same, non-zero otherwise
+ */
+int ast_eid_cmp(const struct ast_eid *eid1, const struct ast_eid *eid2);
 
 #endif /* _ASTERISK_UTILS_H */

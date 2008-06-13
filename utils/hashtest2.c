@@ -359,7 +359,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	va_end(vars);
 }
 
-void ast_verbose(const char *fmt, ...)
+void __ast_verbose(const char *file, int line, const char *func, const char *fmt, ...)
 {
         va_list vars;
         va_start(vars,fmt);
@@ -378,3 +378,20 @@ void ast_register_thread(char *name)
 void ast_unregister_thread(void *id)
 {
 }
+
+#ifdef HAVE_BKTR
+struct ast_bt* ast_bt_create(void)
+{
+	return NULL;
+}
+
+int ast_bt_get_addresses(struct ast_bt *bt)
+{
+	return -1;
+}
+
+void *ast_bt_destroy(struct ast_bt *bt)
+{
+	return NULL;
+}
+#endif

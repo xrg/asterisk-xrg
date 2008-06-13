@@ -171,8 +171,8 @@ static char *descrip =
 "    o    - Specify that the CallerID that was present on the *calling* channel\n"
 "           be set as the CallerID on the *called* channel. This was the\n"
 "           behavior of Asterisk 1.0 and earlier.\n"
-"    O([x]) - \"Operator Services\" mode (Zaptel channel to Zaptel channel\n"
-"             only, if specified on non-Zaptel interface, it will be ignored).\n"
+"    O([x]) - \"Operator Services\" mode (DAHDI channel to DAHDI channel\n"
+"             only, if specified on non-DAHDI interface, it will be ignored).\n"
 "             When the destination answers (presumably an operator services\n"
 "             station), the originator no longer has control of their line.\n"
 "             They may hang up, but the switch will not release their line\n"
@@ -225,7 +225,7 @@ static char *rdescrip =
 "  RetryDial(announce,sleep,retries,dialargs): This application will attempt to\n"
 "place a call using the normal Dial application. If no channel can be reached,\n"
 "the 'announce' file will be played. Then, it will wait 'sleep' number of\n"
-"seconds before retying the call. After 'retires' number of attempts, the\n"
+"seconds before retrying the call. After 'retries' number of attempts, the\n"
 "calling channel will continue at the next priority in the dialplan. If the\n"
 "'retries' setting is set to 0, this application will retry endlessly.\n"
 "  While waiting to retry a call, a 1 digit extension may be dialed. If that\n"
@@ -765,7 +765,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 						}
 						break;
 					case AST_FRAME_HTML:
-						if (!ast_test_flag64(outgoing, DIAL_NOFORWARDHTML) && ast_channel_sendhtml(in, f->subclass, f->data, f->datalen) == -1) {
+						if (!ast_test_flag64(outgoing, DIAL_NOFORWARDHTML) && ast_channel_sendhtml(in, f->subclass, f->data.ptr, f->datalen) == -1) {
 							ast_log(LOG_WARNING, "Unable to send URL\n");
 						}
 						break;
@@ -789,8 +789,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				strcpy(pa->status, "CANCEL");
 				ast_cdr_noanswer(in->cdr);
 				if (f) {
-					if (f->seqno)
-						in->hangupcause = f->seqno;
+					if (f->data.uint32) {
+						in->hangupcause = f->data.uint32;
+					}
 					ast_frfree(f);
 				}
 				return NULL;
@@ -824,7 +825,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 
 			/* Forward HTML stuff */
 			if (single && (f->frametype == AST_FRAME_HTML) && !ast_test_flag64(outgoing, DIAL_NOFORWARDHTML))
-				if (ast_channel_sendhtml(outgoing->chan, f->subclass, f->data, f->datalen) == -1)
+				if (ast_channel_sendhtml(outgoing->chan, f->subclass, f->data.ptr, f->datalen) == -1)
 					ast_log(LOG_WARNING, "Unable to send URL\n");
 
 			if (single && ((f->frametype == AST_FRAME_VOICE) || (f->frametype == AST_FRAME_DTMF_BEGIN) || (f->frametype == AST_FRAME_DTMF_END)))  {
@@ -837,7 +838,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				(f->subclass == AST_CONTROL_VIDUPDATE) ||
 				 (f->subclass == AST_CONTROL_SRCUPDATE))) {
 				ast_verb(3, "%s requested special control %d, passing it to %s\n", in->name, f->subclass, outgoing->chan->name);
-				ast_indicate_data(outgoing->chan, f->subclass, f->data, f->datalen);
+				ast_indicate_data(outgoing->chan, f->subclass, f->data.ptr, f->datalen);
 			}
 			ast_frfree(f);
 		}
@@ -1775,13 +1776,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				ast_copy_string(peer->exten, "s", sizeof(peer->exten));
 				peer->priority = 0;
 
-				gosub_argstart = strchr(opt_args[OPT_ARG_CALLEE_GOSUB], '|');
+				gosub_argstart = strchr(opt_args[OPT_ARG_CALLEE_GOSUB], ',');
 				if (gosub_argstart) {
 					*gosub_argstart = 0;
-					asprintf(&gosub_args, "%s|s|1(%s)", opt_args[OPT_ARG_CALLEE_GOSUB], gosub_argstart + 1);
-					*gosub_argstart = '|';
+					asprintf(&gosub_args, "%s,s,1(%s)", opt_args[OPT_ARG_CALLEE_GOSUB], gosub_argstart + 1);
+					*gosub_argstart = ',';
 				} else {
-					asprintf(&gosub_args, "%s|s|1", opt_args[OPT_ARG_CALLEE_GOSUB]);
+					asprintf(&gosub_args, "%s,s,1", opt_args[OPT_ARG_CALLEE_GOSUB]);
 				}
 
 				if (gosub_args) {
@@ -1894,9 +1895,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				res = -1;
 				goto done;
 			}
-			if (opermode && !strncmp(chan->name, "Zap", 3) && !strncmp(peer->name, "Zap", 3)) {
-				/* what's this special handling for Zap <-> Zap ?
-				 * A: Zap to Zap calls are natively bridged at the kernel driver
+			if (opermode && !strncmp(chan->tech->type, "DAHDI", 3) && !strncmp(peer->name, "DAHDI", 3)) {
+				/* what's this special handling for dahdi <-> dahdi ?
+				 * A: dahdi to dahdi calls are natively bridged at the kernel driver
 				 * level, so we need to ensure that this mode gets propagated
 				 * all the way down. */
 				struct oprmode oprmode;

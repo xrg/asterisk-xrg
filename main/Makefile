@@ -30,7 +30,7 @@ OBJS= tcptls.o io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o \
 	strcompat.o threadstorage.o dial.o event.o adsistub.o audiohook.o \
 	astobj2.o hashtab.o global_datastores.o $(RESAMPLE_OBJS) version.o \
-	features.o taskprocessor.o
+	features.o taskprocessor.o timing.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -52,7 +52,7 @@ ifeq ($(wildcard /usr/include/dlfcn.h),)
   OBJS+=dlfcn.o
 endif
 
-ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc ),)
+ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi ),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
   AST_LIBS+=-ldl
   endif

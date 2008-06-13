@@ -133,9 +133,9 @@ struct logmsg {
 	enum logmsgtypes type;
 	char date[256];
 	int level;
-	const char *file;
+	char file[80];
 	int line;
-	const char *function;
+	char function[80];
 	AST_LIST_ENTRY(logmsg) list;
 	char str[0];
 };
@@ -317,15 +317,15 @@ static struct logchannel *make_logchannel(const char *channel, const char *compo
 	return chan;
 }
 
-static void init_logger_chain(int reload, int locked)
+static void init_logger_chain(int locked)
 {
 	struct logchannel *chan;
 	struct ast_config *cfg;
 	struct ast_variable *var;
 	const char *s;
-	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+	struct ast_flags config_flags = { 0 };
 
-	if ((cfg = ast_config_load2("logger.conf", "logger", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+	if (!(cfg = ast_config_load2("logger.conf", "logger", config_flags)))
 		return;
 
 	/* delete our list of log channels */
@@ -641,7 +641,7 @@ static int reload_logger(int rotate)
 
 	filesize_reload_needed = 0;
 
-	init_logger_chain(rotate ? 0 : 1 /* reload */, 1 /* locked */);
+	init_logger_chain(1 /* locked */);
 
 	if (logfiles.event_log) {
 		snprintf(old, sizeof(old), "%s/%s", ast_config_AST_LOG_DIR, EVENTLOG);
@@ -728,6 +728,44 @@ static char *handle_logger_rotate(struct ast_cli_entry *e, int cmd, struct ast_c
 	return CLI_SUCCESS;
 }
 
+static char *handle_logger_set_level(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int x;
+	int state;
+	int level = -1;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "logger set level";
+		e->usage = 
+			"Usage: logger set level\n"
+			"       Set a specific log level to enabled/disabled for this console.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc < 5)
+		return CLI_SHOWUSAGE;
+
+	for (x = 0; x <= NUMLOGLEVELS; x++) {
+		if (!strcasecmp(a->argv[3], levels[x])) {
+			level = x;
+			break;
+		}
+	}
+
+	state = ast_true(a->argv[4]) ? 1 : 0;
+
+	if (level != -1) {
+		ast_console_toggle_loglevel(a->fd, level, state);
+		ast_cli(a->fd, "Logger status for '%s' has been set to '%s'.\n", levels[level], state ? "on" : "off");
+	} else
+		return CLI_SHOWUSAGE;
+
+	return CLI_SUCCESS;
+}
+
 /*! \brief CLI command to show logging system configuration */
 static char *handle_logger_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
@@ -784,7 +822,8 @@ static AST_RWLIST_HEAD_STATIC(verbosers, verb);
 static struct ast_cli_entry cli_logger[] = {
 	AST_CLI_DEFINE(handle_logger_show_channels, "List configured log channels"),
 	AST_CLI_DEFINE(handle_logger_reload, "Reopens the log files"),
-	AST_CLI_DEFINE(handle_logger_rotate, "Rotates and reopens the log files")
+	AST_CLI_DEFINE(handle_logger_rotate, "Rotates and reopens the log files"),
+	AST_CLI_DEFINE(handle_logger_set_level, "Enables/Disables a specific logging level for this console")
 };
 
 static int handle_SIGXFSZ(int sig) 
@@ -863,7 +902,7 @@ static void logger_print_normal(struct logmsg *logmsg)
 					 term_color(tmp4, logmsg->function, COLOR_BRWHITE, 0, sizeof(tmp4)),
 					 logmsg->str);
 				/* Print out */
-				ast_console_puts_mutable(buf);
+				ast_console_puts_mutable(buf, logmsg->level);
 			/* File channels */
 			} else if (chan->type == LOGTYPE_FILE && (chan->logmask & (1 << logmsg->level))) {
 				int res = 0;
@@ -976,7 +1015,7 @@ int init_logger(void)
 	ast_mkdir(ast_config_AST_LOG_DIR, 0777);
   
 	/* create log channels */
-	init_logger_chain(0 /* reload */, 0 /* locked */);
+	init_logger_chain(0 /* locked */);
 
 	/* create the eventlog */
 	if (logfiles.event_log) {
@@ -1096,7 +1135,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	/* Create a new logging message */
 	if (!(logmsg = ast_calloc(1, sizeof(*logmsg) + res + 1)))
 		return;
-	
+
 	/* Copy string over */
 	strcpy(logmsg->str, buf->str);
 
@@ -1109,9 +1148,9 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 
 	/* Copy over data */
 	logmsg->level = level;
-	logmsg->file = file;
 	logmsg->line = line;
-	logmsg->function = function;
+	ast_copy_string(logmsg->file, file, sizeof(logmsg->file));
+	ast_copy_string(logmsg->function, function, sizeof(logmsg->function));
 
 	/* If the logger thread is active, append it to the tail end of the list - otherwise skip that step */
 	if (logthread != AST_PTHREADT_NULL) {
@@ -1127,36 +1166,73 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	return;
 }
 
+#ifdef HAVE_BKTR
+
+struct ast_bt *ast_bt_create(void) 
+{
+	struct ast_bt *bt = ast_calloc(1, sizeof(*bt));
+	if (!bt) {
+		ast_log(LOG_ERROR, "Unable to allocate memory for backtrace structure!\n");
+		return NULL;
+	}
+
+	bt->alloced = 1;
+
+	ast_bt_get_addresses(bt);
+
+	return bt;
+}
+
+int ast_bt_get_addresses(struct ast_bt *bt)
+{
+	bt->num_frames = backtrace(bt->addresses, AST_MAX_BT_FRAMES);
+
+	return 0;
+}
+
+void *ast_bt_destroy(struct ast_bt *bt)
+{
+	if (bt->alloced) {
+		ast_free(bt);
+	}
+
+	return NULL;
+}
+
+#endif /* HAVE_BKTR */
+
 void ast_backtrace(void)
 {
 #ifdef HAVE_BKTR
-	int count = 0, i = 0;
-	void **addresses;
+	struct ast_bt *backtrace;
+	int i = 0;
 	char **strings;
 
-	if ((addresses = ast_calloc(MAX_BACKTRACE_FRAMES, sizeof(*addresses)))) {
-		count = backtrace(addresses, MAX_BACKTRACE_FRAMES);
-		if ((strings = backtrace_symbols(addresses, count))) {
-			ast_debug(1, "Got %d backtrace record%c\n", count, count != 1 ? 's' : ' ');
-			for (i = 0; i < count; i++) {
-#if __WORDSIZE == 32
-				ast_log(LOG_DEBUG, "#%d: [%08X] %s\n", i, (unsigned int)addresses[i], strings[i]);
-#elif __WORDSIZE == 64
-				ast_log(LOG_DEBUG, "#%d: [%016lX] %s\n", i, (unsigned long)addresses[i], strings[i]);
-#endif
-			}
-			free(strings);
-		} else {
-			ast_debug(1, "Could not allocate memory for backtrace\n");
-		}
-		ast_free(addresses);
+	if (!(backtrace = ast_bt_create())) {
+		ast_log(LOG_WARNING, "Unable to allocate space for backtrace structure\n");
+		return;
 	}
+
+	if ((strings = backtrace_symbols(backtrace->addresses, backtrace->num_frames))) {
+		ast_debug(1, "Got %d backtrace record%c\n", backtrace->num_frames, backtrace->num_frames != 1 ? 's' : ' ');
+		for (i = 0; i < backtrace->num_frames; i++) {
+#if __WORDSIZE == 32
+			ast_log(LOG_DEBUG, "#%d: [%08X] %s\n", i, (unsigned int)backtrace->addresses[i], strings[i]);
+#elif __WORDSIZE == 64
+			ast_log(LOG_DEBUG, "#%d: [%016lX] %s\n", i, (unsigned long)backtrace->addresses[i], strings[i]);
+#endif
+		}
+		free(strings);
+	} else {
+		ast_debug(1, "Could not allocate memory for backtrace\n");
+	}
+	ast_bt_destroy(backtrace);
 #else
 	ast_log(LOG_WARNING, "Must run configure with '--with-execinfo' for stack backtraces.\n");
 #endif
 }
 
-void ast_verbose(const char *fmt, ...)
+void __ast_verbose(const char *file, int line, const char *func, const char *fmt, ...)
 {
 	struct logmsg *logmsg = NULL;
 	struct ast_str *buf = NULL;
@@ -1198,7 +1274,7 @@ void ast_verbose(const char *fmt, ...)
 
 	strcpy(logmsg->str, buf->str);
 
-	ast_log(LOG_VERBOSE, "%s", logmsg->str + 1);
+	ast_log(__LOG_VERBOSE, file, line, func, "%s", logmsg->str + 1);
 
 	/* Set type */
 	logmsg->type = LOGMSG_VERBOSE;

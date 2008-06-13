@@ -33,8 +33,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/time.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <math.h> 
 
 #include "asterisk/rtp.h"
+#include "asterisk/pbx.h"
 #include "asterisk/frame.h"
 #include "asterisk/channel.h"
 #include "asterisk/acl.h"
@@ -177,6 +179,25 @@ struct ast_rtp {
 	struct sockaddr_in strict_rtp_address;  /*!< Remote address information for strict RTP purposes */
 
 	int set_marker_bit:1;           /*!< Whether to set the marker bit or not */
+	struct rtp_red *red;
+};
+
+static struct ast_frame *red_t140_to_red(struct rtp_red *red);
+static int red_write(const void *data);
+ 
+struct rtp_red {
+	struct ast_frame t140;  /*!< Primary data  */
+	struct ast_frame t140red;   /*!< Redundant t140*/
+	unsigned char pt[RED_MAX_GENERATION];  /*!< Payload types for redundancy data */
+	unsigned char ts[RED_MAX_GENERATION]; /*!< Time stamps */
+	unsigned char len[RED_MAX_GENERATION]; /*!< length of each generation */
+	int num_gen; /*!< Number of generations */
+	int schedid; /*!< Timer id */
+	int ti; /*!< How long to buffer data before send */
+	unsigned char t140red_data[64000];  
+	unsigned char buf_data[64000]; /*!< buffered primary data */
+	int hdrlen; 
+	long int prev_ts;
 };
 
 /* Forward declarations */
@@ -210,6 +231,7 @@ int ast_rtp_senddigit_end(struct ast_rtp *rtp, char digit);
  * 
  */
 struct ast_rtcp {
+	int rtcp_info;
 	int s;				/*!< Socket */
 	struct sockaddr_in us;		/*!< Socket representation of the local endpoint. */
 	struct sockaddr_in them;	/*!< Socket representation of the remote endpoint. */
@@ -229,10 +251,38 @@ struct ast_rtcp {
 	unsigned int reported_jitter;	/*!< The contents of their last jitter entry in the RR */
 	unsigned int reported_lost;	/*!< Reported lost packets in their RR */
 	char quality[AST_MAX_USER_FIELD];
+	char quality_jitter[AST_MAX_USER_FIELD];
+	char quality_loss[AST_MAX_USER_FIELD];
+	char quality_rtt[AST_MAX_USER_FIELD];
+
+	double reported_maxjitter;
+	double reported_minjitter;
+	double reported_normdev_jitter;
+	double reported_stdev_jitter;
+	unsigned int reported_jitter_count;
+
+	double reported_maxlost;
+	double reported_minlost;
+	double reported_normdev_lost;
+	double reported_stdev_lost;
+
+	double rxlost;
+	double maxrxlost;
+	double minrxlost;
+	double normdev_rxlost;
+	double stdev_rxlost;
+	unsigned int rxlost_count;
+
 	double maxrxjitter;
 	double minrxjitter;
+	double normdev_rxjitter;
+	double stdev_rxjitter;
+	unsigned int rxjitter_count;
 	double maxrtt;
 	double minrtt;
+	double normdevrtt;
+	double stdevrtt;
+	unsigned int rtt_count;
 	int sendfur;
 };
 
@@ -786,6 +836,35 @@ static void rtp_bridge_unlock(struct ast_rtp *rtp)
 	return;
 }
 
+/*! \brief Calculate normal deviation */
+static double normdev_compute(double normdev, double sample, unsigned int sample_count)
+{
+	normdev = normdev * sample_count + sample;
+	sample_count++;
+
+	return normdev / sample_count;
+}
+
+static double stddev_compute(double stddev, double sample, double normdev, double normdev_curent, unsigned int sample_count)
+{
+/*
+		for the formula check http://www.cs.umd.edu/~austinjp/constSD.pdf
+		return sqrt( (sample_count*pow(stddev,2) + sample_count*pow((sample-normdev)/(sample_count+1),2) + pow(sample-normdev_curent,2)) / (sample_count+1));
+		we can compute the sigma^2 and that way we would have to do the sqrt only 1 time at the end and would save another pow 2 compute
+		optimized formula
+*/
+#define SQUARE(x) ((x) * (x))
+
+	stddev = sample_count * stddev;
+	sample_count++;
+
+	return stddev + 
+	       ( sample_count * SQUARE( (sample - normdev) / sample_count ) ) + 
+	       ( SQUARE(sample - normdev_curent) / sample_count );
+
+#undef SQUARE
+}
+
 static struct ast_frame *send_dtmf(struct ast_rtp *rtp, enum ast_frame_type type)
 {
 	if (((ast_test_flag(rtp, FLAG_DTMF_COMPENSATE) && type == AST_FRAME_DTMF_END) ||
@@ -1016,12 +1095,12 @@ static struct ast_frame *process_rfc3389(struct ast_rtp *rtp, unsigned char *dat
 	if (!len)
 		return NULL;
 	if (len < 24) {
-		rtp->f.data = rtp->rawdata + AST_FRIENDLY_OFFSET;
+		rtp->f.data.ptr = rtp->rawdata + AST_FRIENDLY_OFFSET;
 		rtp->f.datalen = len - 1;
 		rtp->f.offset = AST_FRIENDLY_OFFSET;
-		memcpy(rtp->f.data, data + 1, len - 1);
+		memcpy(rtp->f.data.ptr, data + 1, len - 1);
 	} else {
-		rtp->f.data = NULL;
+		rtp->f.data.ptr = NULL;
 		rtp->f.offset = 0;
 		rtp->f.datalen = 0;
 	}
@@ -1067,6 +1146,12 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 	unsigned int comp;
 	struct ast_frame *f = &ast_null_frame;
 	
+	double reported_jitter;
+	double reported_normdev_jitter_current;
+	double normdevrtt_current;
+	double reported_lost;
+	double reported_normdev_lost_current;
+
 	if (!rtp || !rtp->rtcp)
 		return &ast_null_frame;
 
@@ -1077,8 +1162,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 	rtcpheader = (unsigned int *)(rtcpdata + AST_FRIENDLY_OFFSET);
 	
 	if (res < 0) {
-		if (errno == EBADF)
-			CRASH;
+		ast_assert(errno != EBADF);
 		if (errno != EAGAIN) {
 			ast_log(LOG_WARNING, "RTCP Read error: %s.  Hanging up.\n", strerror(errno));
 			return NULL;
@@ -1163,14 +1247,27 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 				}
 				rtt = rtt / 1000.;
 				rttsec = rtt / 1000.;
+				rtp->rtcp->rtt = rttsec;
 
 				if (comp - dlsr >= lsr) {
 					rtp->rtcp->accumulated_transit += rttsec;
-					rtp->rtcp->rtt = rttsec;
+
+					if (rtp->rtcp->rtt_count == 0) 
+						rtp->rtcp->minrtt = rttsec;
+
 					if (rtp->rtcp->maxrtt<rttsec)
 						rtp->rtcp->maxrtt = rttsec;
+
 					if (rtp->rtcp->minrtt>rttsec)
 						rtp->rtcp->minrtt = rttsec;
+
+					normdevrtt_current = normdev_compute(rtp->rtcp->normdevrtt, rttsec, rtp->rtcp->rtt_count);
+
+					rtp->rtcp->stdevrtt = stddev_compute(rtp->rtcp->stdevrtt, rttsec, rtp->rtcp->normdevrtt, normdevrtt_current, rtp->rtcp->rtt_count);
+
+					rtp->rtcp->normdevrtt = normdevrtt_current;
+
+					rtp->rtcp->rtt_count++;
 				} else if (rtcp_debug_test_addr(&sin)) {
 					ast_verbose("Internal RTCP NTP clock skew detected: "
 							   "lsr=%u, now=%u, dlsr=%u (%d:%03dms), "
@@ -1182,7 +1279,45 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 			}
 
 			rtp->rtcp->reported_jitter = ntohl(rtcpheader[i + 3]);
+			reported_jitter = (double) rtp->rtcp->reported_jitter;
+
+			if (rtp->rtcp->reported_jitter_count == 0) 
+				rtp->rtcp->reported_minjitter = reported_jitter;
+
+			if (reported_jitter < rtp->rtcp->reported_minjitter) 
+				rtp->rtcp->reported_minjitter = reported_jitter;
+
+			if (reported_jitter > rtp->rtcp->reported_maxjitter) 
+				rtp->rtcp->reported_maxjitter = reported_jitter;
+
+			reported_normdev_jitter_current = normdev_compute(rtp->rtcp->reported_normdev_jitter, reported_jitter, rtp->rtcp->reported_jitter_count);
+
+			rtp->rtcp->reported_stdev_jitter = stddev_compute(rtp->rtcp->reported_stdev_jitter, reported_jitter, rtp->rtcp->reported_normdev_jitter, reported_normdev_jitter_current, rtp->rtcp->reported_jitter_count);
+
+			rtp->rtcp->reported_normdev_jitter = reported_normdev_jitter_current;
+
 			rtp->rtcp->reported_lost = ntohl(rtcpheader[i + 1]) & 0xffffff;
+
+			reported_lost = (double) rtp->rtcp->reported_lost;
+
+			/* using same counter as for jitter */
+			if (rtp->rtcp->reported_jitter_count == 0)
+				rtp->rtcp->reported_minlost = reported_lost;
+
+			if (reported_lost < rtp->rtcp->reported_minlost)
+				rtp->rtcp->reported_minlost = reported_lost;
+
+			if (reported_lost > rtp->rtcp->reported_maxlost) 
+				rtp->rtcp->reported_maxlost = reported_lost;
+
+			reported_normdev_lost_current = normdev_compute(rtp->rtcp->reported_normdev_lost, reported_lost, rtp->rtcp->reported_jitter_count);
+
+			rtp->rtcp->reported_stdev_lost = stddev_compute(rtp->rtcp->reported_stdev_lost, reported_lost, rtp->rtcp->reported_normdev_lost, reported_normdev_lost_current, rtp->rtcp->reported_jitter_count);
+
+			rtp->rtcp->reported_normdev_lost = reported_normdev_lost_current;
+
+			rtp->rtcp->reported_jitter_count++;
+
 			if (rtcp_debug_test_addr(&sin)) {
 				ast_verbose("  Fraction lost: %ld\n", (((long) ntohl(rtcpheader[i + 1]) & 0xff000000) >> 24));
 				ast_verbose("  Packets lost so far: %d\n", rtp->rtcp->reported_lost);
@@ -1194,6 +1329,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 				if (rtt)
 					ast_verbose("  RTT: %lu(sec)\n", (unsigned long) rtt);
 			}
+
 			if (rtt) {
 				manager_event(EVENT_FLAG_REPORTING, "RTCPReceived", "From %s:%d\r\n"
 								    "PT: %d(%s)\r\n"
@@ -1270,7 +1406,7 @@ struct ast_frame *ast_rtcp_read(struct ast_rtp *rtp)
 		}
 		position += (length + 1);
 	}
-			
+	rtp->rtcp->rtcp_info = 1;	
 	return f;
 }
 
@@ -1283,6 +1419,7 @@ static void calc_rxstamp(struct timeval *tv, struct ast_rtp *rtp, unsigned int t
 	double dtv;
 	double prog;
 	
+	double normdev_rxjitter_current;
 	if ((!rtp->rxcore.tv_sec && !rtp->rxcore.tv_usec) || mark) {
 		gettimeofday(&rtp->rxcore, NULL);
 		rtp->drxcore = (double) rtp->rxcore.tv_sec + (double) rtp->rxcore.tv_usec / 1000000;
@@ -1318,8 +1455,16 @@ static void calc_rxstamp(struct timeval *tv, struct ast_rtp *rtp, unsigned int t
 	rtp->rxjitter += (1./16.) * (d - rtp->rxjitter);
 	if (rtp->rtcp && rtp->rxjitter > rtp->rtcp->maxrxjitter)
 		rtp->rtcp->maxrxjitter = rtp->rxjitter;
+	if (rtp->rtcp->rxjitter_count == 1) 
+		rtp->rtcp->minrxjitter = rtp->rxjitter;
 	if (rtp->rtcp && rtp->rxjitter < rtp->rtcp->minrxjitter)
 		rtp->rtcp->minrxjitter = rtp->rxjitter;
+		
+	normdev_rxjitter_current = normdev_compute(rtp->rtcp->normdev_rxjitter,rtp->rxjitter,rtp->rtcp->rxjitter_count);
+	rtp->rtcp->stdev_rxjitter = stddev_compute(rtp->rtcp->stdev_rxjitter,rtp->rxjitter,rtp->rtcp->normdev_rxjitter,normdev_rxjitter_current,rtp->rtcp->rxjitter_count);
+
+	rtp->rtcp->normdev_rxjitter = normdev_rxjitter_current;
+	rtp->rtcp->rxjitter_count++;
 }
 
 /*! \brief Perform a Packet2Packet RTP write */
@@ -1394,6 +1539,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	unsigned int *rtpheader;
 	struct rtpPayloadType rtpPT;
 	struct ast_rtp *bridged = NULL;
+	int prev_seqno;
 	
 	/* If time is up, kill it */
 	if (rtp->sending_digit)
@@ -1422,8 +1568,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 
 	rtpheader = (unsigned int *)(rtp->rawdata + AST_FRIENDLY_OFFSET);
 	if (res < 0) {
-		if (errno == EBADF)
-			CRASH;
+		ast_assert(errno != EBADF);
 		if (errno != EAGAIN) {
 			ast_log(LOG_WARNING, "RTP Read error: %s.  Hanging up.\n", strerror(errno));
 			return NULL;
@@ -1541,8 +1686,10 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		/* Schedule transmission of Receiver Report */
 		rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, rtp);
 	}
-	if ( (int)rtp->lastrxseqno - (int)seqno  > 100) /* if so it would indicate that the sender cycled; allow for misordering */
+	if ((int)rtp->lastrxseqno - (int)seqno  > 100) /* if so it would indicate that the sender cycled; allow for misordering */
 		rtp->cycles += RTP_SEQ_MOD;
+	
+	prev_seqno = rtp->lastrxseqno;
 
 	rtp->lastrxseqno = seqno;
 	
@@ -1603,9 +1750,64 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 
 	rtp->f.mallocd = 0;
 	rtp->f.datalen = res - hdrlen;
-	rtp->f.data = rtp->rawdata + hdrlen + AST_FRIENDLY_OFFSET;
+	rtp->f.data.ptr = rtp->rawdata + hdrlen + AST_FRIENDLY_OFFSET;
 	rtp->f.offset = hdrlen + AST_FRIENDLY_OFFSET;
 	rtp->f.seqno = seqno;
+
+	if (rtp->f.subclass == AST_FORMAT_T140 && (int)seqno - (prev_seqno+1) > 0 && (int)seqno - (prev_seqno+1) < 10) {
+		  unsigned char *data = rtp->f.data.ptr;
+		  
+		  memmove(rtp->f.data.ptr+3, rtp->f.data.ptr, rtp->f.datalen);
+		  rtp->f.datalen +=3;
+		  *data++ = 0xEF;
+		  *data++ = 0xBF;
+		  *data = 0xBD;
+	}
+ 
+	if (rtp->f.subclass == AST_FORMAT_T140RED) {
+		unsigned char *data = rtp->f.data.ptr;
+		unsigned char *header_end;
+		int num_generations;
+		int header_length;
+		int len;
+		int diff =(int)seqno - (prev_seqno+1); /* if diff = 0, no drop*/
+		int x;
+
+		rtp->f.subclass = AST_FORMAT_T140;
+		header_end = memchr(data, ((*data) & 0x7f), rtp->f.datalen);
+		header_end++;
+		
+		header_length = header_end - data;
+		num_generations = header_length / 4;
+		len = header_length;
+
+		if (!diff) {
+			for (x = 0; x < num_generations; x++)
+				len += data[x * 4 + 3];
+			
+			if (!(rtp->f.datalen - len))
+				return &ast_null_frame;
+			
+			rtp->f.data.ptr += len;
+			rtp->f.datalen -= len;
+		} else if (diff > num_generations && diff < 10) {
+			len -= 3;
+			rtp->f.data.ptr += len;
+			rtp->f.datalen -= len;
+			
+			data = rtp->f.data.ptr;
+			*data++ = 0xEF;
+			*data++ = 0xBF;
+			*data = 0xBD;
+		} else 	{
+			for ( x = 0; x < num_generations - diff; x++) 
+				len += data[x * 4 + 3];
+			
+			rtp->f.data.ptr += len;
+			rtp->f.datalen -= len;
+		}
+	}
+
 	if (rtp->f.subclass & AST_FORMAT_AUDIO_MASK) {
 		rtp->f.samples = ast_codec_get_samples(&rtp->f);
 		if (rtp->f.subclass == AST_FORMAT_SLINEAR) 
@@ -1615,7 +1817,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		ast_set_flag(&rtp->f, AST_FRFLAG_HAS_TIMING_INFO);
 		rtp->f.ts = timestamp / 8;
 		rtp->f.len = rtp->f.samples / ( (ast_format_rate(rtp->f.subclass) == 16000) ? 16 : 8 );
-	} else if(rtp->f.subclass & AST_FORMAT_VIDEO_MASK) {
+	} else if (rtp->f.subclass & AST_FORMAT_VIDEO_MASK) {
 		/* Video -- samples is # of samples vs. 90000 */
 		if (!rtp->lastividtimestamp)
 			rtp->lastividtimestamp = timestamp;
@@ -1676,6 +1878,7 @@ static struct {
 	{{1, AST_FORMAT_H263_PLUS}, "video", "h263-1998"},
 	{{1, AST_FORMAT_H264}, "video", "H264"},
 	{{1, AST_FORMAT_MP4_VIDEO}, "video", "MP4V-ES"},
+	{{1, AST_FORMAT_T140RED}, "text", "RED"},
 	{{1, AST_FORMAT_T140}, "text", "T140"},
 };
 
@@ -1715,9 +1918,10 @@ static struct rtpPayloadType static_RTP_PT[MAX_RTP_PT] = {
 	[98] = {1, AST_FORMAT_H263_PLUS},
 	[99] = {1, AST_FORMAT_H264},
 	[101] = {0, AST_RTP_DTMF},
-	[102] = {1, AST_FORMAT_T140},	/* Real time text chat */
 	[103] = {1, AST_FORMAT_H263_PLUS},
 	[104] = {1, AST_FORMAT_MP4_VIDEO},
+	[105] = {1, AST_FORMAT_T140RED},	/* Real time text chat (with redundancy encoding) */
+	[106] = {1, AST_FORMAT_T140},	/* Real time text chat */
 	[110] = {1, AST_FORMAT_SPEEX},
 	[111] = {1, AST_FORMAT_G726},
 	[112] = {1, AST_FORMAT_G726_AAL2},
@@ -2384,6 +2588,11 @@ struct ast_rtp *ast_rtp_get_bridged(struct ast_rtp *rtp)
 void ast_rtp_stop(struct ast_rtp *rtp)
 {
 	AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+	if (rtp->red) {
+		AST_SCHED_DEL(rtp->sched, rtp->red->schedid);
+		free(rtp->red);
+		rtp->red = NULL;
+	}
 
 	memset(&rtp->them.sin_addr, 0, sizeof(rtp->them.sin_addr));
 	memset(&rtp->them.sin_port, 0, sizeof(rtp->them.sin_port));
@@ -2417,7 +2626,89 @@ void ast_rtp_reset(struct ast_rtp *rtp)
 	rtp->rxseqno = 0;
 }
 
-char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
+static double __ast_rtp_get_qos(struct ast_rtp *rtp, const char *qos, int *found)
+{
+	*found = 1;
+
+	if (!strcasecmp(qos, "remote_maxjitter"))
+		return rtp->rtcp->reported_maxjitter * 1000.0;
+	if (!strcasecmp(qos, "remote_minjitter"))
+		return rtp->rtcp->reported_minjitter * 1000.0;
+	if (!strcasecmp(qos, "remote_normdevjitter"))
+		return rtp->rtcp->reported_normdev_jitter * 1000.0;
+	if (!strcasecmp(qos, "remote_stdevjitter"))
+		return sqrt(rtp->rtcp->reported_stdev_jitter) * 1000.0;
+
+	if (!strcasecmp(qos, "local_maxjitter"))
+		return rtp->rtcp->maxrxjitter * 1000.0;
+	if (!strcasecmp(qos, "local_minjitter"))
+		return rtp->rtcp->minrxjitter * 1000.0;
+	if (!strcasecmp(qos, "local_normdevjitter"))
+		return rtp->rtcp->normdev_rxjitter * 1000.0;
+	if (!strcasecmp(qos, "local_stdevjitter"))
+		return sqrt(rtp->rtcp->stdev_rxjitter) * 1000.0;
+
+	if (!strcasecmp(qos, "maxrtt"))
+		return rtp->rtcp->maxrtt * 1000.0;
+	if (!strcasecmp(qos, "minrtt"))
+		return rtp->rtcp->minrtt * 1000.0;
+	if (!strcasecmp(qos, "normdevrtt"))
+		return rtp->rtcp->normdevrtt * 1000.0;
+	if (!strcasecmp(qos, "stdevrtt"))
+		return sqrt(rtp->rtcp->stdevrtt) * 1000.0;
+
+	*found = 0;
+
+	return 0.0;
+}
+
+int ast_rtp_get_qos(struct ast_rtp *rtp, const char *qos, char *buf, unsigned int buflen)
+{
+	double value;
+	int found;
+
+	value = __ast_rtp_get_qos(rtp, qos, &found);
+
+	if (!found)
+		return -1;
+
+	snprintf(buf, buflen, "%.0lf", value);
+
+	return 0;
+}
+
+void ast_rtp_set_vars(struct ast_channel *chan, struct ast_rtp *rtp) {
+	char *audioqos;
+	char *audioqos_jitter;
+	char *audioqos_loss;
+	char *audioqos_rtt;
+	struct ast_channel *bridge;
+
+	if (!rtp || !chan)
+		return;
+
+	bridge = ast_bridged_channel(chan);
+
+	audioqos        = ast_rtp_get_quality(rtp, NULL, RTPQOS_SUMMARY);
+	audioqos_jitter = ast_rtp_get_quality(rtp, NULL, RTPQOS_JITTER);
+	audioqos_loss   = ast_rtp_get_quality(rtp, NULL, RTPQOS_LOSS);
+	audioqos_rtt    = ast_rtp_get_quality(rtp, NULL, RTPQOS_RTT);
+
+	pbx_builtin_setvar_helper(chan, "RTPAUDIOQOS", audioqos);
+	pbx_builtin_setvar_helper(chan, "RTPAUDIOQOSJITTER", audioqos_jitter);
+	pbx_builtin_setvar_helper(chan, "RTPAUDIOQOSLOSS", audioqos_loss);
+	pbx_builtin_setvar_helper(chan, "RTPAUDIOQOSRTT", audioqos_rtt);
+
+	if (!bridge)
+		return;
+
+	pbx_builtin_setvar_helper(bridge, "RTPAUDIOQOSBRIDGED", audioqos);
+	pbx_builtin_setvar_helper(bridge, "RTPAUDIOQOSJITTERBRIDGED", audioqos_jitter);
+	pbx_builtin_setvar_helper(bridge, "RTPAUDIOQOSLOSSBRIDGED", audioqos_loss);
+	pbx_builtin_setvar_helper(bridge, "RTPAUDIOQOSRTTBRIDGED", audioqos_rtt);
+}
+
+static char *__ast_rtp_get_quality_jitter(struct ast_rtp *rtp)
 {
 	/*
 	*ssrc          our ssrc
@@ -2430,21 +2721,129 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 	*rlp           remote lost packets
 	*rtt           round trip time
 	*/
+#define RTCP_JITTER_FORMAT1 \
+	"minrxjitter=%f;" \
+	"maxrxjitter=%f;" \
+	"avgrxjitter=%f;" \
+	"stdevrxjitter=%f;" \
+	"reported_minjitter=%f;" \
+	"reported_maxjitter=%f;" \
+	"reported_avgjitter=%f;" \
+	"reported_stdevjitter=%f;"
 
-	if (qual && rtp) {
-		qual->local_ssrc = rtp->ssrc;
-		qual->local_jitter = rtp->rxjitter;
-		qual->local_count = rtp->rxcount;
-		qual->remote_ssrc = rtp->themssrc;
-		qual->remote_count = rtp->txcount;
-		if (rtp->rtcp) {
-			qual->local_lostpackets = rtp->rtcp->expected_prior - rtp->rtcp->received_prior;
-			qual->remote_lostpackets = rtp->rtcp->reported_lost;
-			qual->remote_jitter = rtp->rtcp->reported_jitter / 65536.0;
-			qual->rtt = rtp->rtcp->rtt;
-		}
+#define RTCP_JITTER_FORMAT2 \
+	"rxjitter=%f;"
+
+	if (rtp->rtcp && rtp->rtcp->rtcp_info) {
+		snprintf(rtp->rtcp->quality_jitter, sizeof(rtp->rtcp->quality_jitter), RTCP_JITTER_FORMAT1,
+			rtp->rtcp->minrxjitter,
+			rtp->rtcp->maxrxjitter,
+			rtp->rtcp->normdev_rxjitter,
+			sqrt(rtp->rtcp->stdev_rxjitter),
+			rtp->rtcp->reported_minjitter,
+			rtp->rtcp->reported_maxjitter,
+			rtp->rtcp->reported_normdev_jitter,
+			sqrt(rtp->rtcp->reported_stdev_jitter)
+		);
+	} else {
+		snprintf(rtp->rtcp->quality_jitter, sizeof(rtp->rtcp->quality_jitter), RTCP_JITTER_FORMAT2,
+			rtp->rxjitter
+		);
 	}
-	if (rtp->rtcp) {
+
+	return rtp->rtcp->quality_jitter;
+
+#undef RTCP_JITTER_FORMAT1
+#undef RTCP_JITTER_FORMAT2
+}
+
+static char *__ast_rtp_get_quality_loss(struct ast_rtp *rtp)
+{
+	unsigned int lost;
+	unsigned int extended;
+	unsigned int expected;
+	int fraction;
+
+#define RTCP_LOSS_FORMAT1 \
+	"minrxlost=%f;" \
+	"maxrxlost=%f;" \
+	"avgrxlostr=%f;" \
+	"stdevrxlost=%f;" \
+	"reported_minlost=%f;" \
+	"reported_maxlost=%f;" \
+	"reported_avglost=%f;" \
+	"reported_stdevlost=%f;"
+
+#define RTCP_LOSS_FORMAT2 \
+	"lost=%d;" \
+	"expected=%d;"
+	
+	if (rtp->rtcp && rtp->rtcp->rtcp_info && rtp->rtcp->maxrxlost > 0) {
+		snprintf(rtp->rtcp->quality_loss, sizeof(rtp->rtcp->quality_loss), RTCP_LOSS_FORMAT1,
+			rtp->rtcp->minrxlost,
+			rtp->rtcp->maxrxlost,
+			rtp->rtcp->normdev_rxlost,
+			sqrt(rtp->rtcp->stdev_rxlost),
+			rtp->rtcp->reported_minlost,
+			rtp->rtcp->reported_maxlost,
+			rtp->rtcp->reported_normdev_lost,
+			sqrt(rtp->rtcp->reported_stdev_lost)
+		);
+	} else {
+		extended = rtp->cycles + rtp->lastrxseqno;
+		expected = extended - rtp->seedrxseqno + 1;
+		if (rtp->rxcount > expected) 
+			expected += rtp->rxcount - expected;
+		lost = expected - rtp->rxcount;
+
+		if (!expected || lost <= 0)
+			fraction = 0;
+		else
+			fraction = (lost << 8) / expected;
+
+		snprintf(rtp->rtcp->quality_loss, sizeof(rtp->rtcp->quality_loss), RTCP_LOSS_FORMAT2,
+			lost,
+			expected
+		);
+	}
+
+	return rtp->rtcp->quality_loss;
+
+#undef RTCP_LOSS_FORMAT1
+#undef RTCP_LOSS_FORMAT2
+}
+
+static char *__ast_rtp_get_quality_rtt(struct ast_rtp *rtp)
+{
+	if (rtp->rtcp && rtp->rtcp->rtcp_info) {
+		snprintf(rtp->rtcp->quality_rtt, sizeof(rtp->rtcp->quality_rtt), "minrtt=%f;maxrtt=%f;avgrtt=%f;stdevrtt=%f;",
+			rtp->rtcp->minrtt,
+			rtp->rtcp->maxrtt,
+			rtp->rtcp->normdevrtt,
+			sqrt(rtp->rtcp->stdevrtt)
+		);
+	} else {
+		snprintf(rtp->rtcp->quality_rtt, sizeof(rtp->rtcp->quality_rtt), "Not available");
+	}
+
+	return rtp->rtcp->quality_rtt;
+}
+
+static char *__ast_rtp_get_quality(struct ast_rtp *rtp)
+{
+	/*
+	*ssrc          our ssrc
+	*themssrc      their ssrc
+	*lp            lost packets
+	*rxjitter      our calculated jitter(rx)
+	*rxcount       no. received packets
+	*txjitter      reported jitter of the other end
+	*txcount       transmitted packets
+	*rlp           remote lost packets
+	*rtt           round trip time
+	*/	
+
+	if (rtp->rtcp && rtp->rtcp->rtcp_info) {
 		snprintf(rtp->rtcp->quality, sizeof(rtp->rtcp->quality),
 			"ssrc=%u;themssrc=%u;lp=%u;rxjitter=%f;rxcount=%u;txjitter=%f;txcount=%u;rlp=%u;rtt=%f",
 			rtp->ssrc,
@@ -2455,10 +2854,50 @@ char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
 			(double)rtp->rtcp->reported_jitter / 65536.0,
 			rtp->txcount,
 			rtp->rtcp->reported_lost,
-			rtp->rtcp->rtt);
-		return rtp->rtcp->quality;
-	} else
-		return "<Unknown> - RTP/RTCP has already been destroyed";
+			rtp->rtcp->rtt
+		);
+	} else {
+		snprintf(rtp->rtcp->quality, sizeof(rtp->rtcp->quality), "ssrc=%u;themssrc=%u;rxjitter=%f;rxcount=%u;txcount=%u;",
+			rtp->ssrc,
+			rtp->themssrc,
+			rtp->rxjitter,
+			rtp->rxcount,
+			rtp->txcount
+		);
+	}
+
+	return rtp->rtcp->quality;
+}
+
+char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual, enum ast_rtp_quality_type qtype) 
+{
+	if (qual && rtp) {
+		qual->local_ssrc   = rtp->ssrc;
+		qual->local_jitter = rtp->rxjitter;
+		qual->local_count  = rtp->rxcount;
+		qual->remote_ssrc  = rtp->themssrc;
+		qual->remote_count = rtp->txcount;
+
+		if (rtp->rtcp) {
+			qual->local_lostpackets  = rtp->rtcp->expected_prior - rtp->rtcp->received_prior;
+			qual->remote_lostpackets = rtp->rtcp->reported_lost;
+			qual->remote_jitter      = rtp->rtcp->reported_jitter / 65536.0;
+			qual->rtt                = rtp->rtcp->rtt;
+		}
+	}
+
+	switch (qtype) {
+	case RTPQOS_SUMMARY:
+		return __ast_rtp_get_quality(rtp);
+	case RTPQOS_JITTER:
+		return __ast_rtp_get_quality_jitter(rtp);
+	case RTPQOS_LOSS:
+		return __ast_rtp_get_quality_loss(rtp);
+	case RTPQOS_RTT:
+		return __ast_rtp_get_quality_rtt(rtp);
+	}
+
+	return NULL;
 }
 
 void ast_rtp_destroy(struct ast_rtp *rtp)
@@ -2864,6 +3303,8 @@ static int ast_rtcp_write_rr(const void *data)
 	struct timeval dlsr;
 	int fraction;
 
+	double rxlost_current;
+	
 	if (!rtp || !rtp->rtcp || (&rtp->rtcp->them.sin_addr == 0))
 		return 0;
 	  
@@ -2881,6 +3322,22 @@ static int ast_rtcp_write_rr(const void *data)
 	received_interval = rtp->rxcount - rtp->rtcp->received_prior;
 	rtp->rtcp->received_prior = rtp->rxcount;
 	lost_interval = expected_interval - received_interval;
+
+	if (lost_interval <= 0)
+		rtp->rtcp->rxlost = 0;
+	else rtp->rtcp->rxlost = rtp->rtcp->rxlost;
+	if (rtp->rtcp->rxlost_count == 0)
+		rtp->rtcp->minrxlost = rtp->rtcp->rxlost;
+	if (lost_interval < rtp->rtcp->minrxlost) 
+		rtp->rtcp->minrxlost = rtp->rtcp->rxlost;
+	if (lost_interval > rtp->rtcp->maxrxlost) 
+		rtp->rtcp->maxrxlost = rtp->rtcp->rxlost;
+
+	rxlost_current = normdev_compute(rtp->rtcp->normdev_rxlost, rtp->rtcp->rxlost, rtp->rtcp->rxlost_count);
+	rtp->rtcp->stdev_rxlost = stddev_compute(rtp->rtcp->stdev_rxlost, rtp->rtcp->rxlost, rtp->rtcp->normdev_rxlost, rxlost_current, rtp->rtcp->rxlost_count);
+	rtp->rtcp->normdev_rxlost = rxlost_current;
+	rtp->rtcp->rxlost_count++;
+
 	if (expected_interval == 0 || lost_interval <= 0)
 		fraction = 0;
 	else
@@ -3067,7 +3524,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 		rtp->lastts = f->ts * 8;
 
 	/* Get a pointer to the header */
-	rtpheader = (unsigned char *)(f->data - hdrlen);
+	rtpheader = (unsigned char *)(f->data.ptr - hdrlen);
 
 	put_unaligned_uint32(rtpheader, htonl((2 << 30) | (codec << 16) | (rtp->seqno) | (mark << 23)));
 	put_unaligned_uint32(rtpheader + 4, htonl(rtp->lastts));
@@ -3143,13 +3600,20 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 		return 0;
 
 	/* If there is no data length, return immediately */
-	if (!_f->datalen) 
+	if (!_f->datalen && !rtp->red)
 		return 0;
 	
 	/* Make sure we have enough space for RTP header */
 	if ((_f->frametype != AST_FRAME_VOICE) && (_f->frametype != AST_FRAME_VIDEO) && (_f->frametype != AST_FRAME_TEXT)) {
 		ast_log(LOG_WARNING, "RTP can only send voice, video and text\n");
 		return -1;
+	}
+
+	if (rtp->red) {
+		/* return 0; */
+		/* no primary data or generations to send */
+		if ((_f = red_t140_to_red(rtp->red)) == NULL) 
+			return 0;
 	}
 
 	/* The bottom bit of a video subclass contains the marker bit */
@@ -3191,7 +3655,7 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 			ast_smoother_feed(rtp->smoother, _f);
 		}
 
-		while ((f = ast_smoother_read(rtp->smoother)) && (f->data)) {
+		while ((f = ast_smoother_read(rtp->smoother)) && (f->data.ptr)) {
 			if (f->subclass == AST_FORMAT_G722) {
 				/* G.722 is silllllllllllllly */
 				f->samples /= 2;
@@ -3205,7 +3669,7 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 			f = ast_frdup(_f);	/*! \bug XXX this might never be free'd. Why do we do this? */
 		else
 			f = _f;
-		if (f->data)
+		if (f->data.ptr)
 			ast_rtp_raw_write(rtp, f, codec);
 		if (f != _f)
 			ast_frfree(f);
@@ -3412,7 +3876,7 @@ static enum ast_bridge_result bridge_native_loop(struct ast_channel *c0, struct 
 					oldcodec0 = codec0 = pr0->get_codec(c0);
 				if (pr1->get_codec && c1->tech_pvt)
 					oldcodec1 = codec1 = pr1->get_codec(c1);
-				ast_indicate_data(other, fr->subclass, fr->data, fr->datalen);
+				ast_indicate_data(other, fr->subclass, fr->data.ptr, fr->datalen);
 				ast_frfree(fr);
 			} else {
 				*fo = fr;
@@ -3646,7 +4110,7 @@ static enum ast_bridge_result bridge_p2p_loop(struct ast_channel *c0, struct ast
 					p0_callback = p2p_callback_enable(c0, p0, &p0_iod[0]);
 					p1_callback = p2p_callback_enable(c1, p1, &p1_iod[0]);
 				}
-				ast_indicate_data(other, fr->subclass, fr->data, fr->datalen);
+				ast_indicate_data(other, fr->subclass, fr->data.ptr, fr->datalen);
 				ast_frfree(fr);
 			} else {
 				*fo = fr;
@@ -3816,8 +4280,8 @@ enum ast_bridge_result ast_rtp_bridge(struct ast_channel *c0, struct ast_channel
 	 * we can still do packet-to-packet bridging, because passing through the 
 	 * core will handle DTMF mode translation.
 	 */
-	if ( (ast_test_flag(p0, FLAG_HAS_DTMF) != ast_test_flag(p1, FLAG_HAS_DTMF)) ||
-		 (!c0->tech->send_digit_begin != !c1->tech->send_digit_begin)) {
+	if ((ast_test_flag(p0, FLAG_HAS_DTMF) != ast_test_flag(p1, FLAG_HAS_DTMF)) ||
+		(!c0->tech->send_digit_begin != !c1->tech->send_digit_begin)) {
 		if (!ast_test_flag(p0, FLAG_P2P_NEED_DTMF) || !ast_test_flag(p1, FLAG_P2P_NEED_DTMF)) {
 			ast_channel_unlock(c0);
 			ast_channel_unlock(c1);
@@ -4267,5 +4731,113 @@ void ast_rtp_init(void)
 {
 	ast_cli_register_multiple(cli_rtp, sizeof(cli_rtp) / sizeof(struct ast_cli_entry));
 	__ast_rtp_reload(0);
+}
+
+/*! \brief Write t140 redundacy frame 
+ * \param data primary data to be buffered
+ */
+static int red_write(const void *data)
+{
+	struct ast_rtp *rtp = (struct ast_rtp*) data;
+	
+	ast_rtp_write(rtp, &rtp->red->t140); 
+
+	return 1;  	
+}
+
+/*! \brief Construct a redundant frame 
+ * \param red redundant data structure
+ */
+static struct ast_frame *red_t140_to_red(struct rtp_red *red) {
+	unsigned char *data = red->t140red.data.ptr;
+	int len = 0;
+	int i;
+
+	/* replace most aged generation */
+	if (red->len[0]) {
+		for (i = 1; i < red->num_gen+1; i++)
+			len += red->len[i];
+
+		memmove(&data[red->hdrlen], &data[red->hdrlen+red->len[0]], len); 
+	}
+	
+	/* Store length of each generation and primary data length*/
+	for (i = 0; i < red->num_gen; i++)
+		red->len[i] = red->len[i+1];
+	red->len[i] = red->t140.datalen;
+	
+	/* write each generation length in red header */
+	len = red->hdrlen;
+	for (i = 0; i < red->num_gen; i++)
+		len += data[i*4+3] = red->len[i];
+	
+	/* add primary data to buffer */
+	memcpy(&data[len], red->t140.data.ptr, red->t140.datalen); 
+	red->t140red.datalen = len + red->t140.datalen;
+	
+	/* no primary data and no generations to send */
+	if (len == red->hdrlen && !red->t140.datalen)
+		return NULL;
+
+	/* reset t.140 buffer */
+	red->t140.datalen = 0; 
+	
+	return &red->t140red;
+}
+
+/*! \brief Initialize t140 redundancy 
+ * \param rtp
+ * \param ti buffer t140 for ti (msecs) before sending redundant frame
+ * \param red_data_pt Payloadtypes for primary- and generation-data
+ * \param num_gen numbers of generations (primary generation not encounted)
+ *
+*/
+int rtp_red_init(struct ast_rtp *rtp, int ti, int *red_data_pt, int num_gen)
+{
+	struct rtp_red *r;
+	int x;
+	
+	if (!(r = ast_calloc(1, sizeof(struct rtp_red))))
+		return -1;
+
+	r->t140.frametype = AST_FRAME_TEXT;
+	r->t140.subclass = AST_FORMAT_T140RED;
+	r->t140.data.ptr = &r->buf_data; 
+
+	r->t140.ts = 0;
+	r->t140red = r->t140;
+	r->t140red.data.ptr = &r->t140red_data;
+	r->t140red.datalen = 0;
+	r->ti = ti;
+	r->num_gen = num_gen;
+	r->hdrlen = num_gen * 4 + 1;
+	r->prev_ts = 0;
+
+	for (x = 0; x < num_gen; x++) {
+		r->pt[x] = red_data_pt[x];
+		r->pt[x] |= 1 << 7; /* mark redundant generations pt */ 
+		r->t140red_data[x*4] = r->pt[x];
+	}
+	r->t140red_data[x*4] = r->pt[x] = red_data_pt[x]; /* primary pt */
+	r->schedid = ast_sched_add(rtp->sched, ti, red_write, rtp);
+	rtp->red = r;
+
+	r->t140.datalen = 0;
+	
+	return 0;
+}
+
+/*! \brief Buffer t140 from chan_sip
+ * \param rtp
+ * \param f frame
+ */
+void red_buffer_t140(struct ast_rtp *rtp, struct ast_frame *f)
+{
+	if (f->datalen > -1) {
+		struct rtp_red *red = rtp->red;
+		memcpy(&red->buf_data[red->t140.datalen], f->data.ptr, f->datalen); 
+		red->t140.datalen += f->datalen;
+		red->t140.ts = f->ts;
+	}
 }
 

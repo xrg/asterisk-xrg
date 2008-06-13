@@ -522,6 +522,7 @@ static char *descrip_vm =
 	"             the greeting.  Context defaults to the current context.\n"
 	"    g(#) - Use the specified amount of gain when recording the voicemail\n"
 	"           message. The units are whole-number decibels (dB).\n"
+	"           Only works on supported technologies, which is DAHDI only.\n"
 	"    s    - Skip the playback of instructions for leaving a message to the\n"
 	"           calling party.\n"
 	"    u    - Play the 'unavailable' greeting.\n"
@@ -927,6 +928,9 @@ static int change_password_realtime(struct ast_vm_user *vmu, const char *passwor
 {
 	int res;
 	if (!ast_strlen_zero(vmu->uniqueid)) {
+		if (strlen(password) > 10) {
+			ast_realtime_require_field("voicemail", "password", RQ_CHAR, strlen(password), NULL);
+		}
 		res = ast_update_realtime("voicemail", "uniqueid", vmu->uniqueid, "password", password, NULL);
 		if (res > 0) {
 			ast_copy_string(vmu->password, password, sizeof(vmu->password));
@@ -3177,6 +3181,7 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 	struct vm_state *vms_p;
 	int ret = 0;
 	int fold = folder_int(folder);
+	int urgent = 0;
 	
 	if (ast_strlen_zero(mailbox))
 		return 0;
@@ -3225,6 +3230,12 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		vms_p = get_vm_state_by_mailbox(mailbox,0);
 	}
 
+	/* If URGENT, then look at INBOX */
+	if (fold == 11) {
+		fold = NEW_FOLDER;
+		urgent = 1;
+	}
+
 	if (!vms_p) {
 		ast_debug(3,"Adding new vmstate for %s\n",vmu->imapuser);
 		if (!(vms_p = ast_calloc(1, sizeof(*vms_p)))) {
@@ -3235,7 +3246,6 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		vms_p->mailstream = NIL; /* save for access from interactive entry point */
 		ast_debug(3, "Copied %s to %s\n",vmu->imapuser,vms_p->imapuser);
 		vms_p->updated = 1;
-		/* set mailbox to INBOX! */
 		ast_copy_string(vms_p->curbox, mbox(fold), sizeof(vms_p->curbox));
 		init_vm_state(vms_p);
 		vmstate_insert(vms_p);
@@ -3261,7 +3271,7 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 			pgm->seen = 1;
 		}
 		/* look for urgent messages */
-		if (fold == 11) {
+		if (urgent == 1) {
                 	pgm->flagged = 1;
                 	pgm->unflagged = 0;
 		}
@@ -3270,11 +3280,11 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 
 		vms_p->vmArrayIndex = 0;
 		mail_search_full (vms_p->mailstream, NULL, pgm, NIL);
-		if (fold == 0)
+		if (fold == 0 && urgent == 0)
 			vms_p->newmessages = vms_p->vmArrayIndex;
 		if (fold == 1)
 			vms_p->oldmessages = vms_p->vmArrayIndex;
-		if(fold == 11)
+		if (fold == 0 && urgent == 1)
 			vms_p->urgentmessages = vms_p->vmArrayIndex;
 		/*Freeing the searchpgm also frees the searchhdr*/
 		mail_free_searchpgm(&pgm);
@@ -3450,7 +3460,7 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 
 	ast_log(AST_LOG_NOTICE, "Copying message from %s@%s to %s@%s\n", vmu->mailbox, vmu->context, recip->mailbox, recip->context);
 
-	if (!strcmp(flag, "Urgent")) { /* If urgent, copy to Urgent folder */
+	if (!ast_strlen_zero(flag) && !strcmp(flag, "Urgent")) { /* If urgent, copy to Urgent folder */
 		create_dirpath(todir, sizeof(todir), recip->context, recip->mailbox, "Urgent");
 	} else {
 		create_dirpath(todir, sizeof(todir), recip->context, recip->mailbox, "INBOX");
@@ -3648,7 +3658,7 @@ static void run_externnotify(char *context, char *extension, const char *flag)
 		if (inboxcount(ext_context, &urgentvoicemails, &newvoicemails, &oldvoicemails)) {
 			ast_log(AST_LOG_ERROR, "Problem in calculating number of voicemail messages available for extension %s\n", extension);
 		} else {
-			snprintf(arguments, sizeof(arguments), "%s %s %s %d %s&", externnotify, context, extension, newvoicemails, S_OR(flag,""));
+			snprintf(arguments, sizeof(arguments), "%s %s %s %d %d&", externnotify, context, extension, newvoicemails, urgentvoicemails);
 			ast_debug(1, "Executing %s\n", arguments);
 			ast_safe_system(arguments);
 		}
@@ -3865,7 +3875,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 		ast_stopstream(chan);
 	/* Check for a '*' here in case the caller wants to escape from voicemail to something
 	 other than the operator -- an automated attendant or mailbox login for example */
-	if (!ast_strlen_zero(vmu->exit) && (res == '*')) {
+	if (res == '*') {
 		chan->exten[0] = 'a';
 		chan->exten[1] = '\0';
 		if (!ast_strlen_zero(vmu->exit)) {
@@ -4121,7 +4131,7 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 						}
 					}
 #ifndef IMAP_STORAGE
-					if (!strcmp(flag, "Urgent")) { /* If this is an Urgent message */
+					if (!ast_strlen_zero(flag) && !strcmp(flag, "Urgent")) { /* If this is an Urgent message */
 						/* Move the message from INBOX to Urgent folder if this is urgent! */
 						char sfn[PATH_MAX];
 						char dfn[PATH_MAX];
@@ -9160,6 +9170,8 @@ static int handle_subscribe(void *datap)
 	AST_RWLIST_WRLOCK(&mwi_subs);
 	AST_RWLIST_INSERT_TAIL(&mwi_subs, mwi_sub, entry);
 	AST_RWLIST_UNLOCK(&mwi_subs);
+	ast_free((void *) p->mailbox);
+	ast_free((void *) p->context);
 	ast_free(p);	
 	return 0;
 }
@@ -9194,8 +9206,8 @@ static void mwi_sub_event_cb(const struct ast_event *event, void *userdata)
 		ast_log(LOG_ERROR, "could not allocate a mwi_sub_task\n");
 		return;
 	}
-	mwist->mailbox = ast_event_get_ie_str(event, AST_EVENT_IE_MAILBOX);
-	mwist->context = ast_event_get_ie_str(event, AST_EVENT_IE_CONTEXT);
+	mwist->mailbox = ast_strdup(ast_event_get_ie_str(event, AST_EVENT_IE_MAILBOX));
+	mwist->context = ast_strdup(ast_event_get_ie_str(event, AST_EVENT_IE_CONTEXT));
 	mwist->uniqueid = ast_event_get_ie_uint(event, AST_EVENT_IE_UNIQUEID);
 	
 	if (ast_taskprocessor_push(mwi_subscription_tps, handle_subscribe, mwist) < 0) {
@@ -9357,6 +9369,9 @@ static int load_config(int reload)
 	int x;
 	int tmpadsi[4];
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+
+	ast_unload_realtime("voicemail");
+	ast_unload_realtime("voicemail_data");
 
 	if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
 		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
@@ -10041,6 +10056,8 @@ static int unload_module(void)
 		stop_poll_thread();
 
 	mwi_subscription_tps = ast_taskprocessor_unreference(mwi_subscription_tps);
+	ast_unload_realtime("voicemail");
+	ast_unload_realtime("voicemail_data");
 	return res;
 }
 
@@ -10072,6 +10089,8 @@ static int load_module(void)
 	ast_cli_register_multiple(cli_voicemail, sizeof(cli_voicemail) / sizeof(struct ast_cli_entry));
 
 	ast_install_vm_functions(has_voicemail, inboxcount, messagecount, sayname);
+	ast_realtime_require_field("voicemail", "uniqueid", RQ_UINTEGER3, 11, "password", RQ_CHAR, 10, NULL);
+	ast_realtime_require_field("voicemail_data", "filename", RQ_CHAR, 30, "duration", RQ_UINTEGER3, 5, NULL);
 
 	return res;
 }
@@ -10502,7 +10521,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 		case '4':
 			if (outsidecaller) {  /* only mark vm messages */
 				/* Mark Urgent */
-				if (strcmp(flag, "Urgent")) {
+				if (!ast_strlen_zero(flag) && strcmp(flag, "Urgent")) {
 					ast_verbose(VERBOSE_PREFIX_3 "marking message as Urgent\n");
 					ast_debug(1000, "This message is too urgent!\n");
 					res = ast_play_and_wait(chan, "vm-marked-urgent");
@@ -10573,7 +10592,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 			if (message_exists) {
 				cmd = ast_play_and_wait(chan, "vm-review");
 				if (!cmd && outsidecaller) {
-					if (strcmp(flag, "Urgent")) {
+					if (!ast_strlen_zero(flag) && strcmp(flag, "Urgent")) {
 						cmd = ast_play_and_wait(chan, "vm-review-urgent");
 					} else {
 						cmd = ast_play_and_wait(chan, "vm-review-unurgent");

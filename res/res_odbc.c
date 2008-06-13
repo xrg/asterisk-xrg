@@ -59,15 +59,17 @@ struct odbc_class
 	char *sanitysql;
 	SQLHENV env;
 	unsigned int haspool:1;              /* Boolean - TDS databases need this */
-	unsigned int limit:10;               /* Gives a limit of 1023 maximum */
-	unsigned int count:10;               /* Running count of pooled connections */
 	unsigned int delme:1;                /* Purge the class */
 	unsigned int backslash_is_escape:1;  /* On this database, the backslash is a native escape sequence */
+	unsigned int limit;                  /* 1023 wasn't enough for some people */
+	unsigned int count;                  /* Running count of pooled connections */
 	unsigned int idlecheck;              /* Recheck the connection if it is idle for this long */
 	struct ao2_container *obj_container;
 };
 
 struct ao2_container *class_container;
+
+static AST_RWLIST_HEAD_STATIC(odbc_tables, odbc_cache_tables);
 
 static odbc_status odbc_obj_connect(struct odbc_obj *obj);
 static odbc_status odbc_obj_disconnect(struct odbc_obj *obj);
@@ -100,6 +102,165 @@ static void odbc_obj_destructor(void *data)
 	odbc_obj_disconnect(obj);
 	ast_mutex_destroy(&obj->lock);
 	ao2_ref(obj->parent, -1);
+}
+
+static void destroy_table_cache(struct odbc_cache_tables *table) {
+	struct odbc_cache_columns *col;
+	ast_debug(1, "Destroying table cache for %s\n", table->table);
+	AST_RWLIST_WRLOCK(&table->columns);
+	while ((col = AST_RWLIST_REMOVE_HEAD(&table->columns, list))) {
+		ast_free(col);
+	}
+	AST_RWLIST_UNLOCK(&table->columns);
+	AST_RWLIST_HEAD_DESTROY(&table->columns);
+	ast_free(table);
+}
+
+/*!
+ * \brief Find or create an entry describing the table specified.
+ * \param obj An active ODBC handle on which to query the table
+ * \param table Tablename to describe
+ * \retval A structure describing the table layout, or NULL, if the table is not found or another error occurs.
+ * When a structure is returned, the contained columns list will be
+ * rdlock'ed, to ensure that it will be retained in memory.
+ */
+struct odbc_cache_tables *ast_odbc_find_table(const char *database, const char *tablename)
+{
+	struct odbc_cache_tables *tableptr;
+	struct odbc_cache_columns *entry;
+	char columnname[80];
+	SQLLEN sqlptr;
+	SQLHSTMT stmt = NULL;
+	int res = 0, error = 0, try = 0;
+	struct odbc_obj *obj = ast_odbc_request_obj(database, 0);
+
+	AST_RWLIST_RDLOCK(&odbc_tables);
+	AST_RWLIST_TRAVERSE(&odbc_tables, tableptr, list) {
+		if (strcmp(tableptr->connection, database) == 0 && strcmp(tableptr->table, tablename) == 0) {
+			break;
+		}
+	}
+	if (tableptr) {
+		AST_RWLIST_RDLOCK(&tableptr->columns);
+		AST_RWLIST_UNLOCK(&odbc_tables);
+		return tableptr;
+	}
+
+	if (!obj) {
+		ast_log(LOG_WARNING, "Unable to retrieve database handle for table description '%s@%s'\n", tablename, database);
+		return NULL;
+	}
+
+	/* Table structure not already cached; build it now. */
+	do {
+retry:
+		res = SQLAllocHandle(SQL_HANDLE_STMT, obj->con, &stmt);
+		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+			if (try == 0) {
+				try = 1;
+				ast_odbc_sanity_check(obj);
+				goto retry;
+			}
+			ast_log(LOG_WARNING, "SQL Alloc Handle failed on connection '%s'!\n", database);
+			break;
+		}
+
+		res = SQLColumns(stmt, NULL, 0, NULL, 0, (unsigned char *)tablename, SQL_NTS, (unsigned char *)"%", SQL_NTS);
+		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+			if (try == 0) {
+				try = 1;
+				SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+				ast_odbc_sanity_check(obj);
+				goto retry;
+			}
+			ast_log(LOG_ERROR, "Unable to query database columns on connection '%s'.\n", database);
+			break;
+		}
+
+		if (!(tableptr = ast_calloc(sizeof(char), sizeof(*tableptr) + strlen(database) + 1 + strlen(tablename) + 1))) {
+			ast_log(LOG_ERROR, "Out of memory creating entry for table '%s' on connection '%s'\n", tablename, database);
+			break;
+		}
+
+		tableptr->connection = (char *)tableptr + sizeof(*tableptr);
+		tableptr->table = (char *)tableptr + sizeof(*tableptr) + strlen(database) + 1;
+		strcpy(tableptr->connection, database); /* SAFE */
+		strcpy(tableptr->table, tablename); /* SAFE */
+		AST_RWLIST_HEAD_INIT(&(tableptr->columns));
+
+		while ((res = SQLFetch(stmt)) != SQL_NO_DATA && res != SQL_ERROR) {
+			SQLGetData(stmt,  4, SQL_C_CHAR, columnname, sizeof(columnname), &sqlptr);
+
+			if (!(entry = ast_calloc(sizeof(char), sizeof(*entry) + strlen(columnname) + 1))) {
+				ast_log(LOG_ERROR, "Out of memory creating entry for column '%s' in table '%s' on connection '%s'\n", columnname, tablename, database);
+				error = 1;
+				break;
+			}
+			entry->name = (char *)entry + sizeof(*entry);
+			strcpy(entry->name, columnname);
+
+			SQLGetData(stmt,  5, SQL_C_SHORT, &entry->type, sizeof(entry->type), NULL);
+			SQLGetData(stmt,  7, SQL_C_LONG, &entry->size, sizeof(entry->size), NULL);
+			SQLGetData(stmt,  9, SQL_C_SHORT, &entry->decimals, sizeof(entry->decimals), NULL);
+			SQLGetData(stmt, 10, SQL_C_SHORT, &entry->radix, sizeof(entry->radix), NULL);
+			SQLGetData(stmt, 11, SQL_C_SHORT, &entry->nullable, sizeof(entry->nullable), NULL);
+			SQLGetData(stmt, 16, SQL_C_LONG, &entry->octetlen, sizeof(entry->octetlen), NULL);
+
+			/* Specification states that the octenlen should be the maximum number of bytes
+			 * returned in a char or binary column, but it seems that some drivers just set
+			 * it to NULL. (Bad Postgres! No biscuit!) */
+			if (entry->octetlen == 0) {
+				entry->octetlen = entry->size;
+			}
+
+			ast_verb(10, "Found %s column with type %hd with len %ld, octetlen %ld, and numlen (%hd,%hd)\n", entry->name, entry->type, (long) entry->size, (long) entry->octetlen, entry->decimals, entry->radix);
+			/* Insert column info into column list */
+			AST_LIST_INSERT_TAIL(&(tableptr->columns), entry, list);
+		}
+		SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+
+		AST_RWLIST_INSERT_TAIL(&odbc_tables, tableptr, list);
+		AST_RWLIST_RDLOCK(&(tableptr->columns));
+	} while (0);
+
+	AST_RWLIST_UNLOCK(&odbc_tables);
+
+	if (error) {
+		destroy_table_cache(tableptr);
+		tableptr = NULL;
+	}
+	if (obj) {
+		ast_odbc_release_obj(obj);
+	}
+	return tableptr;
+}
+
+struct odbc_cache_columns *ast_odbc_find_column(struct odbc_cache_tables *table, const char *colname)
+{
+	struct odbc_cache_columns *col;
+	AST_RWLIST_TRAVERSE(&table->columns, col, list) {
+		if (strcasecmp(col->name, colname) == 0) {
+			return col;
+		}
+	}
+	return NULL;
+}
+
+int ast_odbc_clear_cache(const char *database, const char *tablename)
+{
+	struct odbc_cache_tables *tableptr;
+
+	AST_RWLIST_WRLOCK(&odbc_tables);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&odbc_tables, tableptr, list) {
+		if (strcmp(tableptr->connection, database) == 0 && strcmp(tableptr->table, tablename) == 0) {
+			AST_LIST_REMOVE_CURRENT(list);
+			destroy_table_cache(tableptr);
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_UNLOCK(&odbc_tables);
+	return tableptr ? 0 : -1;
 }
 
 SQLHSTMT ast_odbc_direct_execute(struct odbc_obj *obj, SQLHSTMT (*exec_cb)(struct odbc_obj *obj, void *data), void *data)
@@ -417,9 +578,11 @@ static char *handle_cli_odbc_show(struct ast_cli_entry *e, int cmd, struct ast_c
 				ast_cli(a->fd, "  Pooled: Yes\n  Limit:  %d\n  Connections in use: %d\n", class->limit, class->count);
 
 				while ((current = ao2_iterator_next(&aoi2))) {
+					ast_mutex_lock(&current->lock);
 					ast_cli(a->fd, "    - Connection %d: %s\n", ++count,
 						current->used ? "in use" :
 						current->up && ast_odbc_sanity_check(current) ? "connected" : "disconnected");
+					ast_mutex_unlock(&current->lock);
 					ao2_ref(current, -1);
 				}
 			} else {
@@ -483,8 +646,9 @@ struct odbc_obj *ast_odbc_request_obj(const char *name, int check)
 	struct ao2_iterator aoi = ao2_iterator_init(class_container, 0);
 
 	while ((class = ao2_iterator_next(&aoi))) {
-		if (!strcmp(class->name, name))
+		if (!strcmp(class->name, name) && !class->delme) {
 			break;
+		}
 		ao2_ref(class, -1);
 	}
 
@@ -496,7 +660,9 @@ struct odbc_obj *ast_odbc_request_obj(const char *name, int check)
 		aoi = ao2_iterator_init(class->obj_container, 0);
 		while ((obj = ao2_iterator_next(&aoi))) {
 			if (! obj->used) {
+				ast_mutex_lock(&obj->lock);
 				obj->used = 1;
+				ast_mutex_unlock(&obj->lock);
 				break;
 			}
 			ao2_ref(obj, -1);
@@ -514,7 +680,6 @@ struct odbc_obj *ast_odbc_request_obj(const char *name, int check)
 			obj->parent = class;
 			if (odbc_obj_connect(obj) == ODBC_FAIL) {
 				ast_log(LOG_WARNING, "Failed to connect to %s\n", name);
-				ast_mutex_destroy(&obj->lock);
 				ao2_ref(obj, -1);
 				obj = NULL;
 				class->count--;
@@ -543,7 +708,6 @@ struct odbc_obj *ast_odbc_request_obj(const char *name, int check)
 			obj->parent = class;
 			if (odbc_obj_connect(obj) == ODBC_FAIL) {
 				ast_log(LOG_WARNING, "Failed to connect to %s\n", name);
-				ast_mutex_destroy(&obj->lock);
 				ao2_ref(obj, -1);
 				obj = NULL;
 			} else {
@@ -633,6 +797,7 @@ static odbc_status odbc_obj_connect(struct odbc_obj *obj)
 
 static int reload(void)
 {
+	struct odbc_cache_tables *table;
 	struct odbc_class *class;
 	struct odbc_obj *current;
 	struct ao2_iterator aoi = ao2_iterator_init(class_container, 0);
@@ -646,17 +811,57 @@ static int reload(void)
 	load_odbc_config();
 
 	/* Purge remaining classes */
-	aoi = ao2_iterator_init(class_container, OBJ_UNLINK);
-	while ((class = ao2_iterator_next(&aoi))) {
+
+	/* Note on how this works; this is a case of circular references, so we
+	 * explicitly do NOT want to use a callback here (or we wind up in
+	 * recursive hell).
+	 *
+	 * 1. Iterate through all the classes.  Note that the classes will currently
+	 * contain two classes of the same name, one of which is marked delme and
+	 * will be purged when all remaining objects of the class are released, and
+	 * the other, which was created above when we re-parsed the config file.
+	 * 2. On each class, there is a reference held by the master container and
+	 * a reference held by each connection object.  There are two cases for
+	 * destruction of the class, noted below.  However, in all cases, all O-refs
+	 * (references to objects) will first be freed, which will cause the C-refs
+	 * (references to classes) to be decremented (but never to 0, because the
+	 * class container still has a reference).
+	 *    a) If the class has outstanding objects, the C-ref by the class
+	 *    container will then be freed, which leaves only C-refs by any
+	 *    outstanding objects.  When the final outstanding object is released
+	 *    (O-refs held by applications and dialplan functions), it will in turn
+	 *    free the final C-ref, causing class destruction.
+	 *    b) If the class has no outstanding objects, when the class container
+	 *    removes the final C-ref, the class will be destroyed.
+	 */
+	aoi = ao2_iterator_init(class_container, 0);
+	while ((class = ao2_iterator_next(&aoi))) { /* C-ref++ (by iterator) */
 		if (class->delme) {
-			struct ao2_iterator aoi2 = ao2_iterator_init(class->obj_container, OBJ_UNLINK);
-			while ((current = ao2_iterator_next(&aoi2))) {
-				ao2_ref(current, -2);
+			struct ao2_iterator aoi2 = ao2_iterator_init(class->obj_container, 0);
+			while ((current = ao2_iterator_next(&aoi2))) { /* O-ref++ (by iterator) */
+				ao2_unlink(class->obj_container, current); /* unlink O-ref from class (reference handled implicitly) */
+				ao2_ref(current, -1); /* O-ref-- (by iterator) */
+				/* At this point, either
+				 * a) there's an outstanding O-ref, or
+				 * b) the object has already been destroyed.
+				 */
 			}
-			ao2_ref(class, -1);
+			ao2_unlink(class_container, class); /* unlink C-ref from container (reference handled implicitly) */
+			/* At this point, either
+			 * a) there's an outstanding O-ref, which holds an outstanding C-ref, or
+			 * b) the last remaining C-ref is held by the iterator, which will be
+			 * destroyed in the next step.
+			 */
 		}
-		ao2_ref(class, -1);
+		ao2_ref(class, -1); /* C-ref-- (by iterator) */
 	}
+
+	/* Empty the cache; it will get rebuilt the next time the tables are needed. */
+	AST_RWLIST_WRLOCK(&odbc_tables);
+	while ((table = AST_RWLIST_REMOVE_HEAD(&odbc_tables, list))) {
+		destroy_table_cache(table);
+	}
+	AST_RWLIST_UNLOCK(&odbc_tables);
 
 	return 0;
 }

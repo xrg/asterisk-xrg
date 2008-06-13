@@ -357,7 +357,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 					s->f[ifp_no].mallocd = 0;
 					s->f[ifp_no].seqno = seq_no - i;
 					s->f[ifp_no].datalen = lengths[i - 1];
-					s->f[ifp_no].data = (uint8_t *) bufs[i - 1];
+					s->f[ifp_no].data.ptr = (uint8_t *) bufs[i - 1];
 					s->f[ifp_no].offset = 0;
 					s->f[ifp_no].src = "UDPTL";
 					if (ifp_no > 0)
@@ -459,7 +459,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 				s->f[ifp_no].mallocd = 0;
 				s->f[ifp_no].seqno = j;
 				s->f[ifp_no].datalen = s->rx[l].buf_len;
-				s->f[ifp_no].data = s->rx[l].buf;
+				s->f[ifp_no].data.ptr = s->rx[l].buf;
 				s->f[ifp_no].offset = 0;
 				s->f[ifp_no].src = "UDPTL";
 				if (ifp_no > 0)
@@ -480,7 +480,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, int len)
 		s->f[ifp_no].mallocd = 0;
 		s->f[ifp_no].seqno = seq_no;
 		s->f[ifp_no].datalen = ifp_len;
-		s->f[ifp_no].data = (uint8_t *) ifp;
+		s->f[ifp_no].data.ptr = (uint8_t *) ifp;
 		s->f[ifp_no].offset = 0;
 		s->f[ifp_no].src = "UDPTL";
 		if (ifp_no > 0)
@@ -659,8 +659,7 @@ struct ast_frame *ast_udptl_read(struct ast_udptl *udptl)
 	if (res < 0) {
 		if (errno != EAGAIN)
 			ast_log(LOG_WARNING, "UDPTL read error: %s\n", strerror(errno));
-		if (errno == EBADF)
-			CRASH;
+		ast_assert(errno != EBADF);
 		return &ast_null_frame;
 	}
 
@@ -910,7 +909,7 @@ int ast_udptl_write(struct ast_udptl *s, struct ast_frame *f)
 	seq = s->tx_seq_no & 0xFFFF;
 
 	/* Cook up the UDPTL packet, with the relevant EC info. */
-	len = udptl_build_packet(s, buf, f->data, f->datalen);
+	len = udptl_build_packet(s, buf, f->data.ptr, f->datalen);
 
 	if (len > 0 && s->them.sin_port && s->them.sin_addr.s_addr) {
 		if ((res = sendto(s->fd, buf, len, 0, (struct sockaddr *) &s->them, sizeof(s->them))) < 0)

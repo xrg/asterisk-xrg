@@ -23,16 +23,19 @@
  */
 
 #include "asterisk.h"
+
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
+#include <signal.h>
+#include <sys/time.h>
+
 #include "asterisk/_private.h"
 #include "asterisk/module.h"
 #include "asterisk/time.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/cli.h"
 #include "asterisk/taskprocessor.h"
-#include "signal.h"
-#include "sys/time.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 /*! \brief tps_task structure is queued to a taskprocessor
  *
@@ -83,8 +86,9 @@ static struct ao2_container *tps_singletons;
 
 /*! \brief CLI 'taskprocessor ping <blah>' operation requires a ping condition */
 static ast_cond_t cli_ping_cond;
+
 /*! \brief CLI 'taskprocessor ping <blah>' operation requires a ping condition lock */
-static ast_mutex_t cli_ping_cond_lock;
+AST_MUTEX_DEFINE_STATIC(cli_ping_cond_lock);
 
 /*! \brief The astobj2 hash callback for taskprocessors */
 static int tps_hash_cb(const void *obj, const int flags);
@@ -121,6 +125,9 @@ int ast_tps_init(void)
 		ast_log(LOG_ERROR, "taskprocessor container failed to initialize!\n");
 		return -1;
 	}
+
+	ast_cond_init(&cli_ping_cond, NULL);
+
 	ast_cli_register_multiple(taskprocessor_clis, ARRAY_LEN(taskprocessor_clis));
 	return 0;
 }
@@ -220,7 +227,7 @@ static char *cli_tps_ping(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 	ast_mutex_unlock(&cli_ping_cond_lock);
 	end = ast_tvnow();
 	delta = ast_tvsub(end, begin);
-	ast_cli(a->fd, "\n\t%24s ping time: %.1ld.%.6ld sec\n\n", name, delta.tv_sec, (long int)delta.tv_usec);
+	ast_cli(a->fd, "\n\t%24s ping time: %.1ld.%.6ld sec\n\n", name, (long)delta.tv_sec, (long int)delta.tv_usec);
 	ao2_ref(tps, -1);
 	return CLI_SUCCESS;	
 }
@@ -353,6 +360,8 @@ static void tps_taskprocessor_destroy(void *tps)
 	ast_mutex_unlock(&t->taskprocessor_lock);
 	pthread_join(t->poll_thread, NULL);
 	t->poll_thread = AST_PTHREADT_NULL;
+	ast_mutex_destroy(&t->taskprocessor_lock);
+	ast_cond_destroy(&t->poll_cond);
 	/* free it */
 	if (t->stats) {
 		ast_free(t->stats);
@@ -423,6 +432,10 @@ struct ast_taskprocessor *ast_taskprocessor_get(char *name, enum ast_tps_options
 		ast_log(LOG_WARNING, "failed to create taskprocessor '%s'\n", name);
 		return NULL;
 	}
+
+	ast_cond_init(&p->poll_cond, NULL);
+	ast_mutex_init(&p->taskprocessor_lock);
+
 	if (!(p->stats = ast_calloc(1, sizeof(*p->stats)))) {
 		ao2_unlock(tps_singletons);
 		ast_log(LOG_WARNING, "failed to create taskprocessor stats for '%s'\n", name);
@@ -435,7 +448,6 @@ struct ast_taskprocessor *ast_taskprocessor_get(char *name, enum ast_tps_options
 		return NULL;
 	}
 	p->poll_thread_run = 1;
-	ast_cond_init(&p->poll_cond, NULL);
 	p->poll_thread = AST_PTHREADT_NULL;
 	if (ast_pthread_create(&p->poll_thread, NULL, tps_processing_function, p) < 0) {
 		ao2_unlock(tps_singletons);

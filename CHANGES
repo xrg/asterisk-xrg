@@ -2,6 +2,17 @@
 --- Functionality changes from Asterisk 1.6.0 to Asterisk 1.6.1  -------------
 ------------------------------------------------------------------------------
 
+Device State Handling
+---------------------
+ * The event infrastructure in Asterisk got another big update to help support
+    distributed events.  It currently supports distributed device state and
+    distributed Voicemail MWI (Message Waiting Indication).  A new module has
+    been merged, res_ais, which facilitates communicating events between servers.
+    It uses the SAForum AIS (Service Availability Forum Application Interface
+    Specification) CLM (Cluster Management) and EVT (Event) services to maintain
+    a cluster of Asterisk servers, and to share events between them.  For more
+    information on setting this up, see doc/distributed_devstate.txt.
+
 Dialplan Functions
 ------------------
  * Added a new dialplan function, AST_CONFIG(), which allows you to access
@@ -14,11 +25,21 @@ Dialplan Functions
    based on other parameters.  The default is still to search based on the
    forwarding station ID.  However, there are new options that allow you to search
    based on the message desk terminal ID, or the message desk number.
+ * TIMEOUT() has been modified to be accurate down to the millisecond.
+ * ENUM*() functions now include the following new options:
+     - 'u' returns the full URI and does not strip off the URI-scheme.
+     - 's' triggers ISN specific rewriting
+     - 'i' looks for branches into an Infrastructure ENUM tree
+     - 'd' for a direct DNS lookup without any flipping of digits.
+ * TXCIDNAME() has a new zone-suffix parameter (which defaults to 'e164.arpa')
+ * CHANNEL() now has options for the maximum, minimum, and standard or normal
+   deviation of jitter, rtt, and loss for a call using chan_sip.
 
 Zaptel channel driver (chan_zap) Changes
 ----------------------------------------
  * Channels can now be configured using named sections in zapata.conf, just
    like other channel drivers, including the use of templates.
+ * The default for pridialplan has changed from 'national' to 'unknown'.
 
 PBX Changes
 -----------
@@ -59,6 +80,25 @@ Application Changes
    to be spoken instead of the channel name or number. For more information on the
    use of this option, issue the command "core show application ChanSpy" from the 
    Asterisk CLI.
+ * Chanspy has a new option, 'd', which allows the spy to use DTMF to swap between
+   spy modes. Use of this feature overrides the typical use of numeric DTMF. In other
+   words, if using the 'd' option, it is not possible to enter a number to append to
+   the first argument to Chanspy(). Pressing 4 will change to spy mode, pressing 5 will
+   change to whisper mode, and pressing 6 will change to barge mode.
+ * ExternalIVR now takes several options that affect the way it performs, as
+   well as having several new commands.  Please see doc/externalivr.txt for the
+   complete documentation.
+ * ChanIsAvail has a new option, 'a', which will return all available channels instead
+   of just the first one if you give the function more then one channel to check.
+ * PrivacyManager now takes an option where you can specify a context where the 
+   given number will be matched. This way you have more control over who is allowed
+   and it stops the people who blindly enter 10 digits.
+ * ForkCDR has new options: 'a' updates the answer time on the new CDR; 'A' locks
+   answer times, disposition, on orig CDR against updates; 'D' Copies the disposition
+   from the orig CDR to the new CDR after reset; 'e' sets the 'end' time on the
+   original CDR; 'R' prevents the new CDR from being reset; 's(var=val)' adds/changes
+   the 'var' variable on the original CDR; 'T' forces ast_cdr_end(), ast_cdr_answer(),
+   obey the LOCKED flag on cdr's in the chain, and also the ast_cdr_setvar() func.
 
 SIP Changes
 -----------
@@ -77,6 +117,10 @@ SIP Changes
    testing and problem reporting!
  * Added ability to specify registration expiry time on a per registration basis in
    the register line.
+ * Added support for T140 RED - redundancy in T.140 to prevent text loss due to
+   lost packets.
+ * Added t38pt_usertpsource option. See sip.conf.sample for details.
+ * Added SIPnotify AMI command, for sending arbitrary SIP notify commands.
 
 IAX Changes
 -----------
@@ -89,29 +133,25 @@ CLI Changes
      which shows which configuration files are in use.
   * New CLI commands, "pri show version" and "ss7 show version" that will
      display which version of libpri and libss7 are being used, respectively.
-	 A new API call was added so trunk will now have to be compiled against
-	 a versions of libpri and libss7 that have them or it will not know that
-	 these libraries exist.
+     A new API call was added so trunk will now have to be compiled against
+     a versions of libpri and libss7 that have them or it will not know that
+     these libraries exist.
 
 DNS manager changes
 -------------------
   * Addresses managed by DNS manager now can check to see if there is a DNS
     SRV record for a given domain and will use that hostname/port if present.
 
-Dialplan function changes
--------------------------
- * TIMEOUT() has been modified to be accurate down to the millisecond.
- * ENUM*() functions now include the following new options:
-     - 'u' returns the full URI and does not strip off the URI-scheme.
-	 - 's' triggers ISN specific rewriting
-	 - 'i' looks for branches into an Infrastructure ENUM tree
-	 - 'd' for a direct DNS lookup without any flipping of digits.
- * TXCIDNAME() has a new zone-suffix parameter (which defaults to 'e164.arpa')
-
 AMI - The manager (TCP/TLS/HTTP)
 --------------------------------
   * The Status command now takes an optional list of variables to display
     along with channel status.
+
+ODBC Changes
+------------
+  * res_odbc no longer has a limit of 1023 total possible unshared connections,
+    as some people were running into this limit.  This limit has been increased
+    to 4.2 billion.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.4.X to Asterisk 1.6.0  -------------
@@ -166,6 +206,7 @@ AMI - The manager (TCP/TLS/HTTP)
   * Originate now requires the Originate privilege and, if you want to call out
     to a subshell, it requires the System privilege, as well.  This was done to
     enhance manager security.
+  * Originate now accepts codec settings with "Codecs: alaw, ulaw, h264" 
   * New command: Atxfer. See doc/manager_1_1.txt for more details or 
     manager show command Atxfer from the CLI
 
@@ -419,10 +460,10 @@ Voicemail Changes
      a web interface of some kind).
   * Added the support for marking messages as "urgent." There are two methods to accomplish
      this. One is to pass the 'U' option to VoiceMail(). Another way to mark a message as urgent
-	 is to specify "review=yes" in voicemail.conf. Doing this will cause allow the user to mark
-	 the message as urgent after he has recorded a voicemail by following the voice instructions.
-	When listening to voicemails using VoiceMailMain urgent messages will be presented before other
-	 messages
+     is to specify "review=yes" in voicemail.conf. Doing this will cause allow the user to mark
+     the message as urgent after he has recorded a voicemail by following the voice instructions.
+    When listening to voicemails using VoiceMailMain urgent messages will be presented before other
+     messages
 
 Queue changes
 -------------
@@ -456,13 +497,18 @@ Queue changes
     device state reported.
   * New configuration option: randomperiodicannounce. If a list of periodic announcements is
     specified by the periodic-announce option, then one will be chosen randomly when it is time
-	to play a periodic announcment
+    to play a periodic announcment
   * New configuration options: announce-position now takes two more values in addition to "yes" and
     "no." Two new options, "limit" and "more," are allowed. These are tied to another option,
-	announce-position-limit. By setting announce-position to "limit" callers will only have their
-	position announced if their position is less than what is specified by announce-position-limit.
-	If announce-position is set to "more" then callers beyond the position specified by announce-position-limit
-	will be told that their are more than announce-position-limit callers waiting.
+    announce-position-limit. By setting announce-position to "limit" callers will only have their
+    position announced if their position is less than what is specified by announce-position-limit.
+    If announce-position is set to "more" then callers beyond the position specified by announce-position-limit
+    will be told that their are more than announce-position-limit callers waiting.
+  * Two new queue log events have been added. An ADDMEMBER event will be logged
+    when a realtime queue member is added and a REMOVEMEMBER event will be logged
+    when a realtime queue member is removed. Since there is no calling channel associated
+    with these events, the string "REALTIME" is placed where the channel's unique id
+    is typically placed.
 
 MeetMe Changes
 --------------
@@ -605,6 +651,9 @@ AGI Changes
 -----------
   * Added SPEECH commands for speech recognition. A complete listing can be found
      using agi show.
+  * If app_stack is loaded, GOSUB is a native AGI command that may be used to
+    invoke subroutines in the dialplan.  Note that calling EXEC with Gosub
+    does not behave as expected; the native command needs to be used, instead.
 
 Logger changes
 --------------
@@ -727,3 +776,9 @@ Miscellaneous
      turned on, via the CHANNEL(trace) dialplan function.  Could be useful for
      dialplan debugging.
   * iLBC source code no longer included (see UPGRADE.txt for details)
+  * If compiled with DETECT_DEADLOCKS enabled and if you have glibc, then if 
+     deadlock is detected, a backtrace of the stack which led to the lock calls
+     will be output to the CLI.
+  * If compiled with DEBUG_THREADS enabled and if you have glibc, then issuing
+     the "core show locks" CLI command will give lock information output as well
+     as a backtrace of the stack which led to the lock calls.

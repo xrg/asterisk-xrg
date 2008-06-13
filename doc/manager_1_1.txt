@@ -99,14 +99,14 @@ Changes to manager version 1.1:
 
 - The MeetmeJoin now has caller ID name and Caller ID number fields (like MeetMeLeave)
 
-- Action ZapShowChannels
+- Action DAHDIShowChannels
 	Header changes
-	- Channel:	-> ZapChannel
+	- Channel:	-> DAHDIChannel
 	For active channels, the Channel: and Uniqueid: headers are added
-	You can now add a "ZapChannel: " argument to zapshowchannels actions
+	You can now add a "DAHDIChannel: " argument to DAHDIshowchannels actions
 	to only get information about one channel.
 
-- Event ZapShowChannelsComplete
+- Event DAHDIShowChannelsComplete
 	New header
 	- (new)		-> Items: 	Reports number of channels reported
 
@@ -294,7 +294,18 @@ Changes to manager version 1.1:
 		HoldTime: 47
 	If an actionID was specified for the QueueSummary action, it will be appended as the
 	last line of the QueueSummary event.
-		
+
+- Event: AgentRingNoAnswer
+	Modules: app_queue
+	Purpose: Reports when a queue member was rung but there was no answer.
+	Example:
+		Event: AgentRingNoAnswer
+		Queue: Support
+		Uniqueid: 1177530895.2
+		Channel: SIP/1000-53aee458
+		Member: SIP/1000
+		MemberName: Thaddeus McClintock
+		Ringtime: 10
 
 * TODO
 ------

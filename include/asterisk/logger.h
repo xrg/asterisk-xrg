@@ -75,8 +75,10 @@ void ast_queue_log(const char *queuename, const char *callid, const char *agent,
  	Note the abscence of a comma after the VERBOSE_PREFIX_3.  This is important.
  	VERBOSE_PREFIX_1 through VERBOSE_PREFIX_3 are defined.
  */
-void ast_verbose(const char *fmt, ...)
-	__attribute__ ((format (printf, 1, 2)));
+void __ast_verbose(const char *file, int line, const char *func, const char *fmt, ...)
+	__attribute__ ((format (printf, 4, 5)));
+
+#define ast_verbose(...) __ast_verbose(__FILE__, __LINE__, __PRETTY_FUNCTION__,  __VA_ARGS__)
 
 void ast_child_verbose(int level, const char *fmt, ...)
 	__attribute__ ((format (printf, 2, 3)));
@@ -86,8 +88,9 @@ int ast_unregister_verbose(void (*verboser)(const char *string)) __attribute__((
 
 void ast_console_puts(const char *string);
 
-void ast_console_puts_mutable(const char *string);
+void ast_console_puts_mutable(const char *string, int level);
 void ast_console_toggle_mute(int fd, int silent);
+void ast_console_toggle_loglevel(int fd, int leve, int state);
 
 /* Note: The AST_LOG_* macros below are the same as
  * the LOG_* macros and are intended to eventually replace
@@ -176,6 +179,8 @@ void ast_console_toggle_mute(int fd, int silent);
 #endif
 #define AST_LOG_DTMF    __LOG_DTMF, _A_
 
+#define NUMLOGLEVELS 6
+
 /*!
  * \brief Get the debug level for a file
  * \arg file the filename
@@ -216,6 +221,50 @@ unsigned int ast_verbose_get_by_file(const char *file);
 			ast_verbose(__VA_ARGS__); \
 	} \
 } while (0)
+
+#ifndef _LOGGER_BACKTRACE_H
+#define _LOGGER_BACKTRACE_H
+#ifdef HAVE_BKTR
+#define AST_MAX_BT_FRAMES 32
+/* \brief
+ *
+ * A structure to hold backtrace information. This structure provides an easy means to 
+ * store backtrace information or pass backtraces to other functions.
+ */
+struct ast_bt {
+	/*! The addresses of the stack frames. This is filled in by calling the glibc backtrace() function */
+	void *addresses[AST_MAX_BT_FRAMES];
+	/*! The number of stack frames in the backtrace */
+	int num_frames;
+	/*! Tells if the ast_bt structure was dynamically allocated */
+	unsigned int alloced:1;
+};
+
+/* \brief
+ * Allocates memory for an ast_bt and stores addresses and symbols.
+ *
+ * \return Returns NULL on failure, or the allocated ast_bt on success
+ */
+struct ast_bt *ast_bt_create(void);
+
+/* \brief
+ * Fill an allocated ast_bt with addresses
+ *
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_bt_get_addresses(struct ast_bt *bt);
+
+/* \brief
+ * 
+ * Free dynamically allocated portions of an ast_bt
+ *
+ * \retval NULL.
+ */
+void *ast_bt_destroy(struct ast_bt *bt);
+
+#endif /* HAVE_BKTR */
+#endif /* _LOGGER_BACKTRACE_H */
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

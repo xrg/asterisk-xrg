@@ -51,6 +51,9 @@ extern "C" {
 /*! Maxmum number of payload defintions for a RTP session */
 #define MAX_RTP_PT			256
 
+/*! T.140 Redundancy Maxium number of generations */
+#define RED_MAX_GENERATION 5
+
 #define FLAG_3389_WARNING		(1 << 0)
 
 enum ast_rtp_options {
@@ -67,6 +70,8 @@ enum ast_rtp_get_result {
 };
 
 struct ast_rtp;
+/*! T.140 Redundancy structure*/
+struct rtp_red;
 
 /*! \brief This is the structure that binds a channel (SIP/Jingle/H.323) to the RTP subsystem 
 */
@@ -82,6 +87,13 @@ struct ast_rtp_protocol {
 	int (* const get_codec)(struct ast_channel *chan);
 	const char * const type;
 	AST_LIST_ENTRY(ast_rtp_protocol) list;
+};
+
+enum ast_rtp_quality_type {
+	RTPQOS_SUMMARY = 0,
+	RTPQOS_JITTER,
+	RTPQOS_LOSS,
+	RTPQOS_RTT
 };
 
 /*! \brief RTCP quality report storage */
@@ -254,9 +266,32 @@ int ast_rtp_make_compatible(struct ast_channel *dest, struct ast_channel *src, i
            having to send a re-invite later */
 int ast_rtp_early_bridge(struct ast_channel *c0, struct ast_channel *c1);
 
-/*! \brief Return RTCP quality string */
-char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual);
+/*! \brief Get QOS stats on a RTP channel */
+int ast_rtp_get_qos(struct ast_rtp *rtp, const char *qos, char *buf, unsigned int buflen);
+/*! \brief Set RTPAUDIOQOS(...) variables on a channel when it is being hung up */
+void ast_rtp_set_vars(struct ast_channel *chan, struct ast_rtp *rtp);
 
+/*! \brief Return RTCP quality string 
+ *
+ *  \param rtp An rtp structure to get qos information about.
+ *
+ *  \param qual An (optional) rtp quality structure that will be 
+ *              filled with the quality information described in 
+ *              the ast_rtp_quality structure. This structure is
+ *              not dependent on any qtype, so a call for any
+ *              type of information would yield the same results
+ *              because ast_rtp_quality is not a data type 
+ *              specific to any qos type.
+ *
+ *  \param qtype The quality type you'd like, default should be
+ *               RTPQOS_SUMMARY which returns basic information
+ *               about the call. The return from RTPQOS_SUMMARY
+ *               is basically ast_rtp_quality in a string. The
+ *               other types are RTPQOS_JITTER, RTPQOS_LOSS and
+ *               RTPQOS_RTT which will return more specific 
+ *               statistics.
+ */
+char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual, enum ast_rtp_quality_type qtype);
 /*! \brief Send an H.261 fast update request. Some devices need this rather than the XML message  in SIP */
 int ast_rtcp_send_h261fur(void *data);
 
@@ -287,6 +322,22 @@ int ast_rtp_get_rtpholdtimeout(struct ast_rtp *rtp);
 int ast_rtp_get_rtptimeout(struct ast_rtp *rtp);
 /* \brief Put RTP timeout timers on hold during another transaction, like T.38 */
 void ast_rtp_set_rtptimers_onhold(struct ast_rtp *rtp);
+
+/*! \brief Initalize t.140 redudancy 
+ * \param ti time between each t140red frame is sent
+ * \param red_pt payloadtype for RTP packet
+ * \param pt payloadtype numbers for each generation including primary data
+ * \param num_gen number of redundant generations, primary data excluded
+ */
+int rtp_red_init(struct ast_rtp *rtp, int ti, int *pt, int num_gen);
+
+void red_init(struct rtp_red *red, const struct ast_frame *f);
+
+
+/*! \brief Buffer t.140 data */
+void red_buffer_t140(struct ast_rtp *rtp, struct ast_frame *f);
+
+
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

@@ -47,6 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/translate.h"
 #include "asterisk/module.h"
 #include "asterisk/lock.h"
+#include "asterisk/options.h"
 
 #define AST_NAME_STRLEN 256
 #define NUM_SPYGROUPS 128
@@ -64,7 +65,8 @@ static const char *desc_chan =
 "    - Dialing a series of digits followed by # builds a channel name to append\n"
 "      to 'chanprefix'. For example, executing ChanSpy(Agent) and then dialing\n"
 "      the digits '1234#' while spying will begin spying on the channel\n"
-"      'Agent/1234'.\n"
+"      'Agent/1234'. Note that this feature will be overriden if the 'd' option\n"
+"       is used\n"
 "  Note: The X option supersedes the three features above in that if a valid\n"
 "        single digit extension exists in the correct context ChanSpy will\n"
 "        exit to it. This also disables choosing a channel based on 'chanprefix'\n"
@@ -73,6 +75,11 @@ static const char *desc_chan =
 "    b                      - Only spy on channels involved in a bridged call.\n"
 "    B                      - Instead of whispering on a single channel barge in on both\n"
 "                             channels involved in the call.\n"
+"    d                      - Override the typical numeric DTMF functionality and instead\n"
+"                             use DTMF to switch between spy modes.\n"
+"                                     4 = spy mode\n"
+"                                     5 = whisper mode\n"
+"                                     6 = barge mode\n"
 "    g(grp)                 - Only spy on channels in which one or more of the groups \n"
 "                             listed in 'grp' matches one or more groups from the\n"
 "                             SPYGROUP variable set on the channel to be spied upon.\n"
@@ -126,6 +133,13 @@ static const char *desc_ext =
 "        exit to it.\n"
 "  Options:\n"
 "    b                      - Only spy on channels involved in a bridged call.\n"
+"    B                      - Instead of whispering on a single channel barge in on both\n"
+"                             channels involved in the call.\n"
+"    d                      - Override the typical numeric DTMF functionality and instead\n"
+"                             use DTMF to switch between spy modes.\n"
+"                                     4 = spy mode\n"
+"                                     5 = whisper mode\n"
+"                                     6 = barge mode\n"
 "    g(grp)                 - Only spy on channels in which one or more of the groups \n"
 "                             listed in 'grp' matches one or more groups from the\n"
 "                             SPYGROUP variable set on the channel to be spied upon.\n"
@@ -162,19 +176,20 @@ static const char *desc_ext =
 ;
 
 enum {
-	OPTION_QUIET     = (1 << 0),    /* Quiet, no announcement */
-	OPTION_BRIDGED   = (1 << 1),    /* Only look at bridged calls */
-	OPTION_VOLUME    = (1 << 2),    /* Specify initial volume */
-	OPTION_GROUP     = (1 << 3),    /* Only look at channels in group */
-	OPTION_RECORD    = (1 << 4),
-	OPTION_WHISPER   = (1 << 5),
-	OPTION_PRIVATE   = (1 << 6),    /* Private Whisper mode */
-	OPTION_READONLY  = (1 << 7),    /* Don't mix the two channels */
-	OPTION_EXIT      = (1 << 8),    /* Exit to a valid single digit extension */
-	OPTION_ENFORCED  = (1 << 9),    /* Enforced mode */
-	OPTION_NOTECH    = (1 << 10),   /* Skip technology name playback */
-	OPTION_BARGE     = (1 << 11),   /* Barge mode (whisper to both channels) */
-	OPTION_NAME      = (1 << 12),   /* Say the name of the person on whom we will spy */
+	OPTION_QUIET             = (1 << 0),    /* Quiet, no announcement */
+	OPTION_BRIDGED           = (1 << 1),    /* Only look at bridged calls */
+	OPTION_VOLUME            = (1 << 2),    /* Specify initial volume */
+	OPTION_GROUP             = (1 << 3),    /* Only look at channels in group */
+	OPTION_RECORD            = (1 << 4),
+	OPTION_WHISPER           = (1 << 5),
+	OPTION_PRIVATE           = (1 << 6),    /* Private Whisper mode */
+	OPTION_READONLY          = (1 << 7),    /* Don't mix the two channels */
+	OPTION_EXIT              = (1 << 8),    /* Exit to a valid single digit extension */
+	OPTION_ENFORCED          = (1 << 9),    /* Enforced mode */
+	OPTION_NOTECH            = (1 << 10),   /* Skip technology name playback */
+	OPTION_BARGE             = (1 << 11),   /* Barge mode (whisper to both channels) */
+	OPTION_NAME              = (1 << 12),   /* Say the name of the person on whom we will spy */
+	OPTION_DTMF_SWITCH_MODES = (1 << 13),   /*Allow numeric DTMF to switch between chanspy modes */
 } chanspy_opt_flags;
 
 enum {
@@ -200,8 +215,10 @@ AST_APP_OPTIONS(spy_opts, {
 	AST_APP_OPTION('X', OPTION_EXIT),
 	AST_APP_OPTION('s', OPTION_NOTECH),
 	AST_APP_OPTION_ARG('n', OPTION_NAME, OPT_ARG_NAME),
+	AST_APP_OPTION('d', OPTION_DTMF_SWITCH_MODES),
 });
 
+int next_unique_id_to_use = 0;
 
 struct chanspy_translation_helper {
 	/* spy data */
@@ -248,7 +265,7 @@ static int spy_generate(struct ast_channel *chan, void *data, int len, int sampl
 	}
 
 	if (csth->fd)
-		write(csth->fd, f->data, f->datalen);
+		write(csth->fd, f->data.ptr, f->datalen);
 
 	ast_frfree(f);
 
@@ -278,11 +295,26 @@ static int start_spying(struct ast_channel *chan, const char *spychan_name, stru
 
 struct chanspy_ds {
 	struct ast_channel *chan;
+	char unique_id[20];
 	ast_mutex_t lock;
 };
 
+static void change_spy_mode(const char digit, struct ast_flags *flags)
+{
+	if (digit == '4') {
+		ast_clear_flag(flags, OPTION_WHISPER);
+		ast_clear_flag(flags, OPTION_BARGE);
+	} else if (digit == '5') {
+		ast_clear_flag(flags, OPTION_BARGE);
+		ast_set_flag(flags, OPTION_WHISPER);
+	} else if (digit == '6') {
+		ast_clear_flag(flags, OPTION_WHISPER);
+		ast_set_flag(flags, OPTION_BARGE);
+	}
+}
+
 static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chanspy_ds, 
-	int *volfactor, int fd, const struct ast_flags *flags, char *exitcontext) 
+	int *volfactor, int fd, struct ast_flags *flags, char *exitcontext) 
 {
 	struct chanspy_translation_helper csth;
 	int running = 0, res, x = 0;
@@ -327,15 +359,14 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 		return 0;
 	}
 
-	if (ast_test_flag(flags, OPTION_BARGE)) {
-  		ast_audiohook_init(&csth.whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "ChanSpy");
-		ast_audiohook_init(&csth.bridge_whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "Chanspy");
-  		start_spying(spyee, spyer_name, &csth.whisper_audiohook); /* Unlocks spyee */
-		start_spying(ast_bridged_channel(spyee), spyer_name, &csth.bridge_whisper_audiohook);
-	} else if (ast_test_flag(flags, OPTION_WHISPER)) {
-		ast_audiohook_init(&csth.whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "ChanSpy");
-		start_spying(spyee, spyer_name, &csth.whisper_audiohook); /* Unlocks spyee */
-  	}
+	ast_channel_lock(chan);
+	ast_set_flag(chan, AST_FLAG_END_DTMF_ONLY);
+	ast_channel_unlock(chan);
+
+ 	ast_audiohook_init(&csth.whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "ChanSpy");
+	ast_audiohook_init(&csth.bridge_whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "Chanspy");
+  	start_spying(spyee, spyer_name, &csth.whisper_audiohook); /* Unlocks spyee */
+	start_spying(ast_bridged_channel(spyee), spyer_name, &csth.bridge_whisper_audiohook);
 
 	ast_channel_unlock(spyee);
 	spyee = NULL;
@@ -417,7 +448,11 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 				ast_debug(2, "Exit by single digit did not work in chanspy. Extension %s does not exist in context %s\n", tmp, exitcontext);
 			}
 		} else if (res >= '0' && res <= '9') {
-			inp[x++] = res;
+			if (ast_test_flag(flags, OPTION_DTMF_SWITCH_MODES)) {
+				change_spy_mode(res, flags);
+			} else {
+				inp[x++] = res;
+			}
 		}
 
 		if (res == '*') {
@@ -445,21 +480,18 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	else
 		ast_deactivate_generator(chan);
 
-	if (ast_test_flag(flags, OPTION_BARGE)) {
-		ast_audiohook_lock(&csth.whisper_audiohook);
-		ast_audiohook_detach(&csth.whisper_audiohook);
-		ast_audiohook_unlock(&csth.whisper_audiohook);
-		ast_audiohook_destroy(&csth.whisper_audiohook);
-		ast_audiohook_lock(&csth.bridge_whisper_audiohook);
-		ast_audiohook_detach(&csth.bridge_whisper_audiohook);
-		ast_audiohook_unlock(&csth.bridge_whisper_audiohook);
-		ast_audiohook_destroy(&csth.bridge_whisper_audiohook);
-	} else if (ast_test_flag(flags, OPTION_WHISPER)) {
-		ast_audiohook_lock(&csth.whisper_audiohook);
-		ast_audiohook_detach(&csth.whisper_audiohook);
-		ast_audiohook_unlock(&csth.whisper_audiohook);
-		ast_audiohook_destroy(&csth.whisper_audiohook);
-	}
+	ast_channel_lock(chan);
+	ast_clear_flag(chan, AST_FLAG_END_DTMF_ONLY);
+	ast_channel_unlock(chan);
+
+	ast_audiohook_lock(&csth.whisper_audiohook);
+	ast_audiohook_detach(&csth.whisper_audiohook);
+	ast_audiohook_unlock(&csth.whisper_audiohook);
+	ast_audiohook_destroy(&csth.whisper_audiohook);
+	ast_audiohook_lock(&csth.bridge_whisper_audiohook);
+	ast_audiohook_detach(&csth.bridge_whisper_audiohook);
+	ast_audiohook_unlock(&csth.bridge_whisper_audiohook);
+	ast_audiohook_destroy(&csth.bridge_whisper_audiohook);
 
 	ast_audiohook_lock(&csth.spy_audiohook);
 	ast_audiohook_detach(&csth.spy_audiohook);
@@ -516,7 +548,7 @@ static struct chanspy_ds *chanspy_ds_free(struct chanspy_ds *chanspy_ds)
 		chan = chanspy_ds->chan;
 
 		ast_channel_lock(chan);
-		if ((datastore = ast_channel_datastore_find(chan, &chanspy_ds_info, NULL))) {
+		if ((datastore = ast_channel_datastore_find(chan, &chanspy_ds_info, chanspy_ds->unique_id))) {
 			ast_channel_datastore_remove(chan, datastore);
 			/* chanspy_ds->chan is NULL after this call */
 			chanspy_ds_destroy(datastore->data);
@@ -537,7 +569,7 @@ static struct chanspy_ds *setup_chanspy_ds(struct ast_channel *chan, struct chan
 
 	ast_mutex_lock(&chanspy_ds->lock);
 
-	if (!(datastore = ast_channel_datastore_alloc(&chanspy_ds_info, NULL))) {
+	if (!(datastore = ast_channel_datastore_alloc(&chanspy_ds_info, chanspy_ds->unique_id))) {
 		ast_mutex_unlock(&chanspy_ds->lock);
 		chanspy_ds = chanspy_ds_free(chanspy_ds);
 		ast_channel_unlock(chan);
@@ -556,6 +588,7 @@ static struct chanspy_ds *next_channel(struct ast_channel *chan,
 	const char *exten, const char *context, struct chanspy_ds *chanspy_ds)
 {
 	struct ast_channel *next;
+	char channel_name[AST_CHANNEL_NAME];
 
 redo:
 	if (!ast_strlen_zero(spec))
@@ -568,7 +601,8 @@ redo:
 	if (!next)
 		return NULL;
 
-	if (!strncmp(next->name, "Zap/pseudo", 10)) {
+	snprintf(channel_name, AST_CHANNEL_NAME, "%s/pseudo", dahdi_chan_name);
+	if (!strncmp(next->name, channel_name, 10)) {
 		ast_channel_unlock(next);
 		goto redo;
 	} else if (next == chan) {
@@ -580,7 +614,7 @@ redo:
 	return setup_chanspy_ds(next, chanspy_ds);
 }
 
-static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
+static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 	int volfactor, const int fd, const char *mygroup, const char *myenforced,
 	const char *spec, const char *exten, const char *context, const char *mailbox,
 	const char *name_context)
@@ -610,6 +644,8 @@ static int common_exec(struct ast_channel *chan, const struct ast_flags *flags,
 	}
 
 	ast_mutex_init(&chanspy_ds.lock);
+
+	snprintf(chanspy_ds.unique_id, sizeof(chanspy_ds.unique_id), "%d", ast_atomic_fetchadd_int(&next_unique_id_to_use, +1));
 
 	if (chan->_state != AST_STATE_UP)
 		ast_answer(chan);

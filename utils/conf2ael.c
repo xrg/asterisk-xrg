@@ -705,7 +705,22 @@ unsigned int ast_hashtab_hash_contexts(const void *obj)
 void ast_mark_lock_acquired(void *lock_addr)
 {
 }
+#ifdef HAVE_BKTR
+void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt)
+{
+}
 
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr, struct ast_bt *bt)
+{
+}
+
+int ast_bt_get_addresses(struct ast_bt *bt)
+{
+	return 0;
+}
+
+#else
 void ast_remove_lock_info(void *lock_addr)
 {
 }
@@ -714,5 +729,6 @@ void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 	int line_num, const char *func, const char *lock_name, void *lock_addr)
 {
 }
-#endif
-#endif
+#endif /* HAVE_BKTR */
+#endif /* !defined(LOW_MEMORY) */
+#endif /* DEBUG_THREADS */

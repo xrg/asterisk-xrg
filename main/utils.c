@@ -59,6 +59,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define AST_API_MODULE
 #include "asterisk/threadstorage.h"
 
+#define AST_API_MODULE
+#include "asterisk/config.h"
+
 static char base64[64];
 static char b2a[256];
 
@@ -540,6 +543,9 @@ struct thr_lock_info {
 		enum ast_lock_type type;
 		/*! This thread is waiting on this lock */
 		int pending:2;
+#ifdef HAVE_BKTR
+		struct ast_bt *backtrace;
+#endif
 	} locks[AST_MAX_LOCKS];
 	/*! This is the number of locks currently held by this thread.
 	 *  The index (num_locks - 1) has the info on the last one in the
@@ -583,9 +589,13 @@ static void lock_info_destroy(void *data)
  * \brief The thread storage key for per-thread lock info
  */
 AST_THREADSTORAGE_CUSTOM(thread_lock_info, NULL, lock_info_destroy);
-
+#ifdef HAVE_BKTR
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr, struct ast_bt *bt)
+#else
 void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 	int line_num, const char *func, const char *lock_name, void *lock_addr)
+#endif
 {
 	struct thr_lock_info *lock_info;
 	int i;
@@ -598,6 +608,9 @@ void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 	for (i = 0; i < lock_info->num_locks; i++) {
 		if (lock_info->locks[i].lock_addr == lock_addr) {
 			lock_info->locks[i].times_locked++;
+#ifdef HAVE_BKTR
+			lock_info->locks[i].backtrace = bt;
+#endif
 			pthread_mutex_unlock(&lock_info->lock);
 			return;
 		}
@@ -628,6 +641,9 @@ void ast_store_lock_info(enum ast_lock_type type, const char *filename,
 	lock_info->locks[i].times_locked = 1;
 	lock_info->locks[i].type = type;
 	lock_info->locks[i].pending = 1;
+#ifdef HAVE_BKTR
+	lock_info->locks[i].backtrace = bt;
+#endif
 	lock_info->num_locks++;
 
 	pthread_mutex_unlock(&lock_info->lock);
@@ -662,7 +678,39 @@ void ast_mark_lock_failed(void *lock_addr)
 	pthread_mutex_unlock(&lock_info->lock);
 }
 
+int ast_find_lock_info(void *lock_addr, const char **filename, int *lineno, const char **func, const char **mutex_name)
+{
+	struct thr_lock_info *lock_info;
+	int i = 0;
+
+	if (!(lock_info = ast_threadstorage_get(&thread_lock_info, sizeof(*lock_info))))
+		return -1;
+
+	pthread_mutex_lock(&lock_info->lock);
+
+	for (i = lock_info->num_locks - 1; i >= 0; i--) {
+		if (lock_info->locks[i].lock_addr == lock_addr)
+			break;
+	}
+
+	if (i == -1) {
+		/* Lock not found :( */
+		pthread_mutex_unlock(&lock_info->lock);
+		return -1;
+	}
+
+	*filename = lock_info->locks[i].file;
+	*lineno = lock_info->locks[i].line_num;
+	*func = lock_info->locks[i].func;
+	*mutex_name = lock_info->locks[i].lock_name;
+	return 0;
+}
+
+#ifdef HAVE_BKTR
+void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt)
+#else
 void ast_remove_lock_info(void *lock_addr)
+#endif
 {
 	struct thr_lock_info *lock_info;
 	int i = 0;
@@ -685,6 +733,9 @@ void ast_remove_lock_info(void *lock_addr)
 
 	if (lock_info->locks[i].times_locked > 1) {
 		lock_info->locks[i].times_locked--;
+#ifdef HAVE_BKTR
+		lock_info->locks[i].backtrace = bt;
+#endif
 		pthread_mutex_unlock(&lock_info->lock);
 		return;
 	}
@@ -714,10 +765,35 @@ static const char *locktype2str(enum ast_lock_type type)
 	return "UNKNOWN";
 }
 
+#ifdef HAVE_BKTR
+static void append_backtrace_information(struct ast_str **str, struct ast_bt *bt)
+{
+	char **symbols;
+
+	if (!bt) {
+		ast_str_append(str, 0, "\tNo backtrace to print\n");
+		return;
+	}
+
+	if ((symbols = backtrace_symbols(bt->addresses, bt->num_frames))) {
+		int frame_iterator;
+		
+		for (frame_iterator = 0; frame_iterator < bt->num_frames; ++frame_iterator) {
+			ast_str_append(str, 0, "\t%s\n", symbols[frame_iterator]);
+		}
+
+		free(symbols);
+	} else {
+		ast_str_append(str, 0, "\tCouldn't retrieve backtrace symbols\n");
+	}
+}
+#endif
+
 static void append_lock_information(struct ast_str **str, struct thr_lock_info *lock_info, int i)
 {
 	int j;
 	ast_mutex_t *lock;
+	struct ast_lock_track *lt;
 	
 	ast_str_append(str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d)\n", 
 				   lock_info->locks[i].pending > 0 ? "Waiting for " : 
@@ -728,6 +804,9 @@ static void append_lock_information(struct ast_str **str, struct thr_lock_info *
 				   lock_info->locks[i].func, lock_info->locks[i].lock_name,
 				   lock_info->locks[i].lock_addr, 
 				   lock_info->locks[i].times_locked);
+#ifdef HAVE_BKTR
+	append_backtrace_information(str, lock_info->locks[i].backtrace);
+#endif
 	
 	if (!lock_info->locks[i].pending || lock_info->locks[i].pending == -1)
 		return;
@@ -737,13 +816,13 @@ static void append_lock_information(struct ast_str **str, struct thr_lock_info *
 		return;
 	
 	lock = lock_info->locks[i].lock_addr;
-	
-	ast_reentrancy_lock(lock);
-	for (j = 0; *str && j < lock->reentrancy; j++) {
+	lt = &lock->track;
+	ast_reentrancy_lock(lt);
+	for (j = 0; *str && j < lt->reentrancy; j++) {
 		ast_str_append(str, 0, "=== --- ---> Locked Here: %s line %d (%s)\n",
-					   lock->file[j], lock->lineno[j], lock->func[j]);
+					   lt->file[j], lt->lineno[j], lt->func[j]);
 	}
-	ast_reentrancy_unlock(lock);	
+	ast_reentrancy_unlock(lt);	
 }
 
 
@@ -832,19 +911,21 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	pthread_mutex_lock(&lock_infos_lock.mutex);
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
 		int i;
-		ast_str_append(&str, 0, "=== Thread ID: %d (%s)\n", (int) lock_info->thread_id,
-			lock_info->thread_name);
-		pthread_mutex_lock(&lock_info->lock);
-		for (i = 0; str && i < lock_info->num_locks; i++) {
-			append_lock_information(&str, lock_info, i);
+		if (lock_info->num_locks) {
+			ast_str_append(&str, 0, "=== Thread ID: %d (%s)\n", (int) lock_info->thread_id,
+				lock_info->thread_name);
+			pthread_mutex_lock(&lock_info->lock);
+			for (i = 0; str && i < lock_info->num_locks; i++) {
+				append_lock_information(&str, lock_info, i);
+			}
+			pthread_mutex_unlock(&lock_info->lock);
+			if (!str)
+				break;
+			ast_str_append(&str, 0, "=== -------------------------------------------------------------------\n"
+			               "===\n");
+			if (!str)
+				break;
 		}
-		pthread_mutex_unlock(&lock_info->lock);
-		if (!str)
-			break;
-		ast_str_append(&str, 0, "=== -------------------------------------------------------------------\n"
-		               "===\n");
-		if (!str)
-			break;
 	}
 	pthread_mutex_unlock(&lock_infos_lock.mutex);
 
@@ -1200,12 +1281,12 @@ static struct timeval tvfix(struct timeval a)
 {
 	if (a.tv_usec >= ONE_MILLION) {
 		ast_log(LOG_WARNING, "warning too large timestamp %ld.%ld\n",
-			a.tv_sec, (long int) a.tv_usec);
+			(long)a.tv_sec, (long int) a.tv_usec);
 		a.tv_sec += a.tv_usec / ONE_MILLION;
 		a.tv_usec %= ONE_MILLION;
 	} else if (a.tv_usec < 0) {
 		ast_log(LOG_WARNING, "warning negative timestamp %ld.%ld\n",
-			a.tv_sec, (long int) a.tv_usec);
+			(long)a.tv_sec, (long int) a.tv_usec);
 		a.tv_usec = 0;
 	}
 	return a;
@@ -1630,3 +1711,19 @@ int ast_utils_init(void)
 #endif
 	return 0;
 }
+
+#ifndef __AST_DEBUG_MALLOC
+int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, const char *fmt, ...)
+{
+	int res;
+	va_list ap;
+
+	va_start(ap, fmt);
+	if ((res = vasprintf(ret, fmt, ap)) == -1) {
+		MALLOC_FAILURE_MSG;
+	}
+	va_end(ap);
+
+	return res;
+}
+#endif

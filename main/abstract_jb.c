@@ -415,7 +415,7 @@ static void jb_get_and_deliver(struct ast_channel *chan)
 			f->samples  = interpolation_len * 8;
 			f->mallocd  = 0;
 			f->src  = "JB interpolation";
-			f->data  = NULL;
+			f->data.ptr  = NULL;
 			f->delivery = ast_tvadd(jb->timebase, ast_samp2tv(jb->next, 1000));
 			f->offset = AST_FRIENDLY_OFFSET;
 			/* deliver the interpolated frame */
@@ -430,7 +430,7 @@ static void jb_get_and_deliver(struct ast_channel *chan)
 			return;
 		default:
 			ast_log(LOG_ERROR, "This should never happen!\n");
-			CRASH;
+			ast_assert("JB type unknown" == NULL);
 			break;
 		}
 		
@@ -484,10 +484,9 @@ static int create_jb(struct ast_channel *chan, struct ast_frame *frr)
 			*tmp = '#';
 		
 		bridged = ast_bridged_channel(chan);
-		if (!bridged) {
-			/* We should always have bridged chan if a jitterbuffer is in use */
-			CRASH;
-		}
+		/* We should always have bridged chan if a jitterbuffer is in use */
+		ast_assert(bridged != NULL);
+
 		snprintf(name1, sizeof(name1), "%s", bridged->name);
 		tmp = strchr(name1, '/');
 		if (tmp)

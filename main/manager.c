@@ -139,9 +139,12 @@ static int manager_debug;	/*!< enable some debugging code in the manager */
  * HTTP sessions have managerid != 0, the value is used as a search key
  * to lookup sessions (using the mansession_id cookie).
  */
-static const char *command_blacklist[] = {
-	"module load",
-	"module unload",
+#define MAX_BLACKLIST_CMD_LEN 2
+static struct {
+	char *words[AST_MAX_CMD_LEN];
+} command_blacklist[] = {
+	{{ "module", "load", NULL }},
+	{{ "module", "unload", NULL }},
 };
 
 struct mansession {
@@ -799,18 +802,47 @@ static void destroy_session(struct mansession *s)
 	AST_LIST_UNLOCK(&sessions);
 }
 
-const char *astman_get_header(const struct message *m, char *var)
+/*
+ * Generic function to return either the first or the last matching header
+ * from a list of variables, possibly skipping empty strings.
+ * At the moment there is only one use of this function in this file,
+ * so we make it static.
+ */
+#define	GET_HEADER_FIRST_MATCH	0
+#define	GET_HEADER_LAST_MATCH	1
+#define	GET_HEADER_SKIP_EMPTY	2
+static const char *__astman_get_header(const struct message *m, char *var, int mode)
 {
 	int x, l = strlen(var);
+	const char *result = "";
 
 	for (x = 0; x < m->hdrcount; x++) {
 		const char *h = m->headers[x];
-		if (!strncasecmp(var, h, l) && h[l] == ':' && h[l+1] == ' ')
-			return h + l + 2;
+		if (!strncasecmp(var, h, l) && h[l] == ':' && h[l+1] == ' ') {
+			const char *x = h + l + 2;
+			/* found a potential candidate */
+			if (mode & GET_HEADER_SKIP_EMPTY && ast_strlen_zero(x))
+				continue;	/* not interesting */
+			if (mode & GET_HEADER_LAST_MATCH)
+				result = x;	/* record the last match so far */
+			else
+				return x;
+		}
 	}
 
 	return "";
 }
+
+/*
+ * Return the first matching variable from an array.
+ * This is the legacy function and is implemented in therms of
+ * __astman_get_header().
+ */
+const char *astman_get_header(const struct message *m, char *var)
+{
+	return __astman_get_header(m, var, GET_HEADER_FIRST_MATCH);
+}
+
 
 struct ast_variable *astman_get_variables(const struct message *m)
 {
@@ -2054,6 +2086,41 @@ static int action_atxfer(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+static int check_blacklist(const char *cmd)
+{
+	char *cmd_copy, *cur_cmd;
+	char *cmd_words[MAX_BLACKLIST_CMD_LEN] = { NULL, };
+	int i;
+
+	cmd_copy = ast_strdupa(cmd);
+	for (i = 0; i < MAX_BLACKLIST_CMD_LEN && (cur_cmd = strsep(&cmd_copy, " ")); i++) {
+		cur_cmd = ast_strip(cur_cmd);
+		if (ast_strlen_zero(cur_cmd)) {
+			i--;
+			continue;
+		}
+
+		cmd_words[i] = cur_cmd;
+	}
+
+	for (i = 0; i < ARRAY_LEN(command_blacklist); i++) {
+		int j, match = 1;
+
+		for (j = 0; command_blacklist[i].words[j]; j++) {
+			if (ast_strlen_zero(cmd_words[j]) || strcasecmp(cmd_words[j], command_blacklist[i].words[j])) {
+				match = 0;
+				break;
+			}
+		}
+
+		if (match) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 static char mandescr_command[] =
 "Description: Run a CLI command.\n"
 "Variables: (Names marked with * are required)\n"
@@ -2067,14 +2134,17 @@ static int action_command(struct mansession *s, const struct message *m)
 	const char *id = astman_get_header(m, "ActionID");
 	char *buf, *final_buf;
 	char template[] = "/tmp/ast-ami-XXXXXX";	/* template for temporary file */
-	int fd = mkstemp(template), i = 0;
+	int fd = mkstemp(template);
 	off_t l;
 
-	for (i = 0; i < sizeof(command_blacklist) / sizeof(command_blacklist[0]); i++) {
-		if (!strncmp(cmd, command_blacklist[i], strlen(command_blacklist[i]))) {
-			astman_send_error(s, m, "Command blacklisted");
-			return 0;
-		}
+	if (ast_strlen_zero(cmd)) {
+		astman_send_error(s, m, "No command provided");
+		return 0;
+	}
+
+	if (check_blacklist(cmd)) {
+		astman_send_error(s, m, "Command blacklisted");
+		return 0;
 	}
 
 	astman_append(s, "Response: Follows\r\nPrivilege: Command\r\n");
@@ -2106,11 +2176,12 @@ static int action_command(struct mansession *s, const struct message *m)
 	return 0;
 }
 
-/* helper function for originate */
+/*! \brief helper function for originate */
 struct fast_originate_helper {
 	char tech[AST_MAX_EXTENSION];
 	char data[AST_MAX_EXTENSION];
 	int timeout;
+	int format;				/*!< Codecs used for a call */
 	char app[AST_MAX_APP];
 	char appdata[AST_MAX_EXTENSION];
 	char cid_name[AST_MAX_EXTENSION];
@@ -2132,12 +2203,12 @@ static void *fast_originate(void *data)
 	char requested_channel[AST_CHANNEL_NAME];
 
 	if (!ast_strlen_zero(in->app)) {
-		res = ast_pbx_outgoing_app(in->tech, AST_FORMAT_SLINEAR, in->data, in->timeout, in->app, in->appdata, &reason, 1,
+		res = ast_pbx_outgoing_app(in->tech, in->format, in->data, in->timeout, in->app, in->appdata, &reason, 1,
 			S_OR(in->cid_num, NULL),
 			S_OR(in->cid_name, NULL),
 			in->vars, in->account, &chan);
 	} else {
-		res = ast_pbx_outgoing_exten(in->tech, AST_FORMAT_SLINEAR, in->data, in->timeout, in->context, in->exten, in->priority, &reason, 1,
+		res = ast_pbx_outgoing_exten(in->tech, in->format, in->data, in->timeout, in->context, in->exten, in->priority, &reason, 1,
 			S_OR(in->cid_num, NULL),
 			S_OR(in->cid_name, NULL),
 			in->vars, in->account, &chan);
@@ -2198,6 +2269,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	const char *appdata = astman_get_header(m, "Data");
 	const char *async = astman_get_header(m, "Async");
 	const char *id = astman_get_header(m, "ActionID");
+	const char *codecs = astman_get_header(m, "Codecs");
 	struct ast_variable *vars = astman_get_variables(m);
 	char *tech, *data;
 	char *l = NULL, *n = NULL;
@@ -2207,6 +2279,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	int reason = 0;
 	char tmp[256];
 	char tmp2[256];
+	int format = AST_FORMAT_SLINEAR;
 
 	pthread_t th;
 	if (!name) {
@@ -2242,6 +2315,10 @@ static int action_originate(struct mansession *s, const struct message *m)
 		if (ast_strlen_zero(l))
 			l = NULL;
 	}
+	if (!ast_strlen_zero(codecs)) {
+		format = 0;
+		ast_parse_allow_disallow(NULL, &format, codecs, 1);
+	}
 	if (ast_true(async)) {
 		struct fast_originate_helper *fast = ast_calloc(1, sizeof(*fast));
 		if (!fast) {
@@ -2261,6 +2338,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 			ast_copy_string(fast->context, context, sizeof(fast->context));
 			ast_copy_string(fast->exten, exten, sizeof(fast->exten));
 			ast_copy_string(fast->account, account, sizeof(fast->account));
+			fast->format = format;
 			fast->timeout = to;
 			fast->priority = pi;
 			if (ast_pthread_create_detached(&th, NULL, fast_originate, fast)) {
@@ -2285,10 +2363,10 @@ static int action_originate(struct mansession *s, const struct message *m)
 			astman_send_error(s, m, "Originate with certain 'Application' arguments requires the additional System privilege, which you do not have.");
 			return 0;
 		}
-		res = ast_pbx_outgoing_app(tech, AST_FORMAT_SLINEAR, data, to, app, appdata, &reason, 1, l, n, vars, account, NULL);
+		res = ast_pbx_outgoing_app(tech, format, data, to, app, appdata, &reason, 1, l, n, vars, account, NULL);
 	} else {
 		if (exten && context && pi)
-			res = ast_pbx_outgoing_exten(tech, AST_FORMAT_SLINEAR, data, to, context, exten, pi, &reason, 1, l, n, vars, account, NULL);
+			res = ast_pbx_outgoing_exten(tech, format, data, to, context, exten, pi, &reason, 1, l, n, vars, account, NULL);
 		else {
 			astman_send_error(s, m, "Originate with 'Exten' requires 'Context' and 'Priority'");
 			return 0;
@@ -2781,7 +2859,7 @@ static int process_message(struct mansession *s, const struct message *m)
 	struct manager_action *tmp;
 	const char *user = astman_get_header(m, "Username");
 
-	ast_copy_string(action, astman_get_header(m, "Action"), sizeof(action));
+	ast_copy_string(action, __astman_get_header(m, "Action", GET_HEADER_SKIP_EMPTY), sizeof(action));
 	ast_debug(1, "Manager received command '%s'\n", action);
 
 	if (ast_strlen_zero(action)) {
@@ -3097,7 +3175,7 @@ int __manager_event(int category, const char *event,
 		now = ast_tvnow();
 		ast_str_append(&buf, 0,
 				"Timestamp: %ld.%06lu\r\n",
-				 now.tv_sec, (unsigned long) now.tv_usec);
+				 (long)now.tv_sec, (unsigned long) now.tv_usec);
 	}
 	if (manager_debug) {
 		static int seq;
@@ -3255,7 +3333,7 @@ static char *contenttype[] = {
  * the value of the mansession_id cookie (0 is not valid and means
  * a session on the AMI socket).
  */
-static struct mansession *find_session(uint32_t ident)
+static struct mansession *find_session(uint32_t ident, int incinuse)
 {
 	struct mansession *s;
 
@@ -3266,7 +3344,7 @@ static struct mansession *find_session(uint32_t ident)
 	AST_LIST_TRAVERSE(&sessions, s, list) {
 		ast_mutex_lock(&s->__lock);
 		if (s->managerid == ident && !s->needdestroy) {
-			ast_atomic_fetchadd_int(&s->inuse, 1);
+			ast_atomic_fetchadd_int(&s->inuse, incinuse ? 1 : 0);
 			break;
 		}
 		ast_mutex_unlock(&s->__lock);
@@ -3274,6 +3352,21 @@ static struct mansession *find_session(uint32_t ident)
 	AST_LIST_UNLOCK(&sessions);
 
 	return s;
+}
+
+int astman_is_authed(uint32_t ident) 
+{
+	int authed;
+	struct mansession *s;
+
+	if (!(s = find_session(ident, 0)))
+		return 0;
+
+	authed = (s->authenticated != 0);
+
+	ast_mutex_unlock(&s->__lock);
+
+	return authed;
 }
 
 int astman_verify_session_readpermissions(uint32_t ident, int perm)
@@ -3566,7 +3659,7 @@ static struct ast_str *generic_http_callback(enum output_format format,
 		}
 	}
 
-	if (!(s = find_session(ident))) {
+	if (!(s = find_session(ident, 1))) {
 		/* Create new session.
 		 * While it is not in the list we don't need any locking
 		 */
@@ -3609,17 +3702,20 @@ static struct ast_str *generic_http_callback(enum output_format format,
 		hdrlen = strlen(v->name) + strlen(v->value) + 3;
 		m.headers[m.hdrcount] = alloca(hdrlen);
 		snprintf((char *) m.headers[m.hdrcount], hdrlen, "%s: %s", v->name, v->value);
+		ast_verb(4, "HTTP Manager add header %s\n", m.headers[m.hdrcount]);
 		m.hdrcount = x + 1;
 	}
 
 	if (process_message(s, &m)) {
 		if (s->authenticated) {
-				if (manager_displayconnects(s))
+			if (manager_displayconnects(s)) {
 				ast_verb(2, "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));
+			}
 			ast_log(LOG_EVENT, "HTTP Manager '%s' logged off from %s\n", s->username, ast_inet_ntoa(s->sin.sin_addr));
 		} else {
-				if (displayconnects)
+			if (displayconnects) {
 				ast_verb(2, "HTTP Connect attempt from '%s' unable to authenticate\n", ast_inet_ntoa(s->sin.sin_addr));
+			}
 			ast_log(LOG_EVENT, "HTTP Failed attempt from %s\n", ast_inet_ntoa(s->sin.sin_addr));
 		}
 		s->needdestroy = 1;
@@ -3636,12 +3732,26 @@ static struct ast_str *generic_http_callback(enum output_format format,
 	if (format == FORMAT_XML) {
 		ast_str_append(&out, 0, "<ajax-response>\n");
 	} else if (format == FORMAT_HTML) {
+		/*
+		 * When handling AMI-over-HTTP in HTML format, we provide a simple form for
+		 * debugging purposes. This HTML code should not be here, we
+		 * should read from some config file...
+		 */
 
 #define ROW_FMT	"<tr><td colspan=\"2\" bgcolor=\"#f1f1ff\">%s</td></tr>\r\n"
 #define TEST_STRING \
-	"<form action=\"manager\">action: <input name=\"action\"> cmd <input name=\"command\"><br> \
-	user <input name=\"username\"> pass <input type=\"password\" name=\"secret\"><br> \
-	<input type=\"submit\"></form>"
+	"<form action=\"manager\">\n\
+	Action: <select name=\"action\">\n\
+		<option value=\"\">-----&gt;</option>\n\
+		<option value=\"login\">login</option>\n\
+		<option value=\"command\">Command</option>\n\
+		<option value=\"waitevent\">waitevent</option>\n\
+		<option value=\"listcommands\">listcommands</option>\n\
+	</select>\n\
+	or <input name=\"action\"><br/>\n\
+	CLI Command <input name=\"command\"><br>\n\
+	user <input name=\"username\"> pass <input type=\"password\" name=\"secret\"><br>\n\
+	<input type=\"submit\">\n</form>\n"
 
 		ast_str_append(&out, 0, "<title>Asterisk&trade; Manager Interface</title>");
 		ast_str_append(&out, 0, "<body bgcolor=\"#ffffff\"><table align=center bgcolor=\"#f1f1f1\" width=\"500\">\r\n");

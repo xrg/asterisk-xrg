@@ -309,7 +309,7 @@ void log_match_char_tree(struct match_char *node, char *prefix); /* for use anyw
 int pbx_builtin_setvar_multiple(struct ast_channel *, void *);
 static int pbx_builtin_importvar(struct ast_channel *, void *);
 static void set_ext_pri(struct ast_channel *c, const char *exten, int pri); 
-static void new_find_extension(const char *str, struct scoreboard *score, struct match_char *tree, int length, int spec, const char *callerid, enum ext_match_t action);
+static void new_find_extension(const char *str, struct scoreboard *score, struct match_char *tree, int length, int spec, const char *callerid, const char *label, enum ext_match_t action);
 static struct match_char *already_in_tree(struct match_char *current, char *pat);
 static struct match_char *add_exten_to_pattern_tree(struct ast_context *con, struct ast_exten *e1, int findonly);
 static struct match_char *add_pattern_node(struct ast_context *con, struct match_char *current, char *pattern, int is_pattern, int already, int specificity, struct match_char **parent);
@@ -1020,9 +1020,10 @@ static char *action2str(enum ext_match_t action)
 
 #endif
 
-static void new_find_extension(const char *str, struct scoreboard *score, struct match_char *tree, int length, int spec, const char *callerid, enum ext_match_t action)
+static void new_find_extension(const char *str, struct scoreboard *score, struct match_char *tree, int length, int spec, const char *label, const char *callerid, enum ext_match_t action)
 {
 	struct match_char *p; /* note minimal stack storage requirements */
+	struct ast_exten pattern = { .label = label };
 #ifdef DEBUG_THIS
 	if (tree)
 		ast_log(LOG_NOTICE,"new_find_extension called with %s on (sub)tree %s action=%s\n", str, tree->x, action2str(action));
@@ -1034,11 +1035,18 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 			if (p->x[1] == 0 && *str >= '2' && *str <= '9' ) {
 #define NEW_MATCHER_CHK_MATCH	       \
 				if (p->exten && !(*(str+1))) { /* if a shorter pattern matches along the way, might as well report it */             \
-					if (action == E_MATCH || action == E_SPAWN) { /* if in CANMATCH/MATCHMORE, don't let matches get in the way */   \
+					if (action == E_MATCH || action == E_SPAWN || action == E_FINDLABEL) { /* if in CANMATCH/MATCHMORE, don't let matches get in the way */   \
 						update_scoreboard(score, length+1, spec+p->specificity, p->exten,0,callerid, p->deleted, p);                 \
 						if (!p->deleted) {                                                                                           \
-							ast_debug(4,"returning an exact match-- first found-- %s\n", p->exten->exten);                           \
-							return; /* the first match, by definition, will be the best, because of the sorted tree */               \
+							if (action == E_FINDLABEL) {                                                                             \
+								if (ast_hashtab_lookup(score->exten->peer_label_table, &pattern)) {                                  \
+									ast_debug(4, "Found label in preferred extension\n");                                            \
+									return;                                                                                          \
+								}                                                                                                    \
+							} else {                                                                                                 \
+								ast_debug(4,"returning an exact match-- first found-- %s\n", p->exten->exten);                       \
+								return; /* the first match, by definition, will be the best, because of the sorted tree */           \
+							}                                                                                                        \
 						}                                                                                                            \
 					}                                                                                                                \
 				}
@@ -1047,13 +1055,13 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 				if (p->next_char && ( *(str+1) || (p->next_char->x[0] == '/' && p->next_char->x[1] == 0)                 \
                                                || p->next_char->x[0] == '!')) {                                          \
 					if (*(str+1) || p->next_char->x[0] == '!') {                                                         \
-						new_find_extension(str+1, score, p->next_char, length+1, spec+p->specificity, callerid, action); \
+						new_find_extension(str+1, score, p->next_char, length+1, spec+p->specificity, callerid, label, action); \
 						if (score->exten)  {                                                                             \
 					        ast_debug(4,"returning an exact match-- %s\n", score->exten->exten);                         \
 							return; /* the first match is all we need */                                                 \
 						}												                                                 \
 					} else {                                                                                             \
-						new_find_extension("/", score, p->next_char, length+1, spec+p->specificity, callerid, action);	 \
+						new_find_extension("/", score, p->next_char, length+1, spec+p->specificity, callerid, label, action);	 \
 						if (score->exten || ((action == E_CANMATCH || action == E_MATCHMORE) && score->canmatch)) {      \
 					        ast_debug(4,"returning a (can/more) match--- %s\n", score->exten ? score->exten->exten :     \
                                        "NULL");                                                                        \
@@ -1098,7 +1106,7 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 				}
 			}
 			if (p->next_char && p->next_char->x[0] == '/' && p->next_char->x[1] == 0) {
-				new_find_extension("/", score, p->next_char, length+i, spec+(p->specificity*i), callerid, action);
+				new_find_extension("/", score, p->next_char, length+i, spec+(p->specificity*i), callerid, label, action);
 				if (score->exten || ((action == E_CANMATCH || action == E_MATCHMORE) && score->canmatch)) {
 					ast_debug(4,"return because scoreboard has exact match OR CANMATCH/MATCHMORE & canmatch set--- %s\n", score->exten ? score->exten->exten : "NULL");
 					return; /* the first match is all we need */
@@ -1120,7 +1128,7 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 				}
 			}
 			if (p->next_char && p->next_char->x[0] == '/' && p->next_char->x[1] == 0) {
-				new_find_extension("/", score, p->next_char, length+i, spec+(p->specificity*i), callerid, action);
+				new_find_extension("/", score, p->next_char, length+i, spec+(p->specificity*i), callerid, label, action);
 				if (score->exten || ((action == E_CANMATCH || action == E_MATCHMORE) && score->canmatch)) {
 					ast_debug(4,"return because scoreboard has exact match OR CANMATCH/MATCHMORE & canmatch set with '/' and '!'--- %s\n", score->exten ? score->exten->exten : "NULL");
 					return; /* the first match is all we need */
@@ -1129,13 +1137,14 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 		} else if (p->x[0] == '/' && p->x[1] == 0) {
 			/* the pattern in the tree includes the cid match! */
 			if (p->next_char && callerid && *callerid) {
-				new_find_extension(callerid, score, p->next_char, length+1, spec, callerid, action);
+				new_find_extension(callerid, score, p->next_char, length+1, spec, callerid, label, action);
 				if (score->exten || ((action == E_CANMATCH || action == E_MATCHMORE) && score->canmatch)) {
 					ast_debug(4,"return because scoreboard has exact match OR CANMATCH/MATCHMORE & canmatch set with '/'--- %s\n", score->exten ? score->exten->exten : "NULL");
 					return; /* the first match is all we need */
 				}
 			}
 		} else if (index(p->x, *str)) {
+			ast_debug(4, "Nothing strange about this match\n");
 			NEW_MATCHER_CHK_MATCH;
 			NEW_MATCHER_RECURSE;
 		}
@@ -1483,7 +1492,7 @@ static int ext_cmp1(const char **p)
 		;	/* ignore some characters */
 
 	/* always return unless we have a set of chars */
-	switch (c) {
+	switch (toupper(c)) {
 	default:	/* ordinary character */
 		return 0x0000 | (c & 0xff);
 
@@ -1843,6 +1852,10 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 #ifdef NEED_DEBUG_HERE
 	ast_log(LOG_NOTICE,"Looking for cont/ext/prio/label/action = %s/%s/%d/%s/%d\n", context, exten, priority, label, (int)action);
 #endif
+
+	if (ast_strlen_zero(exten))
+		return NULL;
+
 	/* Initialize status if appropriate */
 	if (q->stacklen == 0) {
 		q->status = STATUS_NO_CONTEXT;
@@ -1960,7 +1973,7 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 	} while (0);
 
 	if (extenpatternmatchnew) {
-		new_find_extension(exten, &score, tmp->pattern_tree, 0, 0, callerid, action);
+		new_find_extension(exten, &score, tmp->pattern_tree, 0, 0, callerid, label, action);
 		eroot = score.exten;
 		
 		if (score.last_char == '!' && action == E_MATCHMORE) {
@@ -2301,6 +2314,9 @@ void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, c
 			s = workspace;
 		} else if (!strcmp(var, "SYSTEMNAME")) {
 			s = ast_config_AST_SYSTEM_NAME;
+		} else if (!strcmp(var, "ENTITYID")) {
+			ast_eid_to_str(workspace, workspacelen, &g_eid);
+			s = workspace;
 		}
 	}
 	/* if not found, look into chanvars or global vars */
@@ -2782,7 +2798,7 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 					} else
 						ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 				}
-				ast_debug(1, "Function result is '%s'\n", cp4 ? cp4 : "(null)");
+				ast_debug(2, "Function result is '%s'\n", cp4 ? cp4 : "(null)");
 			} else {
 				/* Retrieve variable value */
 				pbx_retrieve_variable(c, vars, &cp4, workspace, VAR_BUF_SIZE, headp);
@@ -3025,82 +3041,41 @@ static int ast_extension_state2(struct ast_exten *e)
 {
 	char hint[AST_MAX_EXTENSION] = "";
 	char *cur, *rest;
-	int allunavailable = 1, allbusy = 1, allfree = 1, allonhold = 1;
-	int busy = 0, inuse = 0, ring = 0;
+	struct ast_devstate_aggregate agg;
+	enum ast_device_state state;
 
 	if (!e)
 		return -1;
 
+	ast_devstate_aggregate_init(&agg);
+
 	ast_copy_string(hint, ast_get_extension_app(e), sizeof(hint));
 
 	rest = hint;	/* One or more devices separated with a & character */
-	while ( (cur = strsep(&rest, "&")) ) {
-		int res = ast_device_state(cur);
-		switch (res) {
-		case AST_DEVICE_NOT_INUSE:
-			allunavailable = 0;
-			allbusy = 0;
-			allonhold = 0;
-			break;
-		case AST_DEVICE_INUSE:
-			inuse = 1;
-			allunavailable = 0;
-			allfree = 0;
-			allonhold = 0;
-			break;
-		case AST_DEVICE_RINGING:
-			ring = 1;
-			allunavailable = 0;
-			allfree = 0;
-			allonhold = 0;
-			break;
-		case AST_DEVICE_RINGINUSE:
-			inuse = 1;
-			ring = 1;
-			allunavailable = 0;
-			allfree = 0;
-			allonhold = 0;
-			break;
-		case AST_DEVICE_ONHOLD:
-			allunavailable = 0;
-			allfree = 0;
-			break;
-		case AST_DEVICE_BUSY:
-			allunavailable = 0;
-			allfree = 0;
-			allonhold = 0;
-			busy = 1;
-			break;
-		case AST_DEVICE_UNAVAILABLE:
-		case AST_DEVICE_INVALID:
-			allbusy = 0;
-			allfree = 0;
-			allonhold = 0;
-			break;
-		default:
-			allunavailable = 0;
-			allbusy = 0;
-			allfree = 0;
-			allonhold = 0;
-		}
-	}
 
-	if (!inuse && ring)
-		return AST_EXTENSION_RINGING;
-	if (inuse && ring)
-		return (AST_EXTENSION_INUSE | AST_EXTENSION_RINGING);
-	if (inuse)
-		return AST_EXTENSION_INUSE;
-	if (allfree)
-		return AST_EXTENSION_NOT_INUSE;
-	if (allonhold)
+	while ( (cur = strsep(&rest, "&")) )
+		ast_devstate_aggregate_add(&agg, ast_device_state(cur));
+
+	state = ast_devstate_aggregate_result(&agg);
+
+	switch (state) {
+	case AST_DEVICE_ONHOLD:
 		return AST_EXTENSION_ONHOLD;
-	if (allbusy)
+	case AST_DEVICE_BUSY:
 		return AST_EXTENSION_BUSY;
-	if (allunavailable)
+	case AST_DEVICE_UNAVAILABLE:
 		return AST_EXTENSION_UNAVAILABLE;
-	if (busy)
+	case AST_DEVICE_RINGINUSE:
+		return (AST_EXTENSION_INUSE | AST_EXTENSION_RINGING);
+	case AST_DEVICE_RINGING:
+		return AST_EXTENSION_RINGING;
+	case AST_DEVICE_INUSE:
 		return AST_EXTENSION_INUSE;
+	case AST_DEVICE_UNKNOWN:
+	case AST_DEVICE_INVALID:
+	case AST_DEVICE_NOT_INUSE:
+		return AST_EXTENSION_NOT_INUSE;
+	}
 
 	return AST_EXTENSION_NOT_INUSE;
 }
@@ -7223,6 +7198,8 @@ void __ast_context_destroy(struct ast_context *list, struct ast_hashtab *context
 				   ready to let it go as soon as we locked it. */
 				ast_unlock_context(tmp);
 				__ast_internal_context_destroy(tmp);
+			} else {
+				ast_unlock_context(tmp);
 			}
 		} else if (con) {
 			ast_verb(3, "Deleting context %s registrar=%s\n", tmp->name, tmp->registrar);
@@ -7850,6 +7827,10 @@ int pbx_builtin_setvar(struct ast_channel *chan, void *data)
 {
 	char *name, *value, *mydata;
 
+	if (ast_compat_app_set) {
+		return pbx_builtin_setvar_multiple(chan, data);
+	}
+
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Set requires one variable name/value pair.\n");
 		return 0;
@@ -7877,7 +7858,7 @@ int pbx_builtin_setvar_multiple(struct ast_channel *chan, void *vdata)
 		AST_APP_ARG(value);
 	);
 
-	if (ast_strlen_zero(vdata) || !chan) {
+	if (ast_strlen_zero(vdata)) {
 		ast_log(LOG_WARNING, "MSet requires at least one variable name/value pair.\n");
 		return 0;
 	}
@@ -7891,6 +7872,8 @@ int pbx_builtin_setvar_multiple(struct ast_channel *chan, void *vdata)
 			pbx_builtin_setvar_helper(chan, pair.name, pair.value);
 			if (strchr(pair.name, ' '))
 				ast_log(LOG_WARNING, "Please avoid unnecessary spaces on variables as it may lead to unexpected results ('%s' set to '%s').\n", pair.name, pair.value);
+		} else if (!chan) {
+			ast_log(LOG_WARNING, "MSet: ignoring entry '%s' with no '='\n", pair.name);
 		} else {
 			ast_log(LOG_WARNING, "MSet: ignoring entry '%s' with no '=' (in %s@%s:%d\n", pair.name, chan->exten, chan->context, chan->priority);
 		}
@@ -7953,12 +7936,14 @@ void pbx_builtin_clear_globals(void)
 
 int pbx_checkcondition(const char *condition)
 {
-	if (ast_strlen_zero(condition))	/* NULL or empty strings are false */
+	int res;
+	if (ast_strlen_zero(condition)) {                /* NULL or empty strings are false */
 		return 0;
-	else if (*condition >= '0' && *condition <= '9')	/* Numbers are evaluated for truth */
-		return atoi(condition);
-	else	/* Strings are true */
+	} else if (sscanf(condition, "%d", &res) == 1) { /* Numbers are evaluated for truth */
+		return res;
+	} else {                                         /* Strings are true */
 		return 1;
+	}
 }
 
 static int pbx_builtin_gotoif(struct ast_channel *chan, void *data)
@@ -8085,7 +8070,7 @@ int load_pbx(void)
 	/* Register manager application */
 	ast_manager_register2("ShowDialPlan", EVENT_FLAG_CONFIG | EVENT_FLAG_REPORTING, manager_show_dialplan, "List dialplan", mandescr_show_dialplan);
 
-	if (!(device_state_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE, device_state_cb, NULL,
+	if (!(device_state_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE_CHANGE, device_state_cb, NULL,
 			AST_EVENT_IE_END))) {
 		return -1;
 	}

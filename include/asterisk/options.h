@@ -29,6 +29,8 @@ extern "C" {
 
 #define AST_CACHE_DIR_LEN 	512
 #define AST_FILENAME_MAX	80
+#define AST_CHANNEL_NAME    80  /*!< Max length of an ast_channel name */
+
 
 /*! \ingroup main_options */
 enum ast_option_flags {
@@ -70,7 +72,7 @@ enum ast_option_flags {
 	AST_OPT_FLAG_DONT_WARN = (1 << 18),
 	/*! End CDRs before the 'h' extension */
 	AST_OPT_FLAG_END_CDR_BEFORE_H_EXTEN = (1 << 19),
-	/*! Use Zaptel Timing for generators if available */
+	/*! Use DAHDI Timing for generators if available */
 	AST_OPT_FLAG_INTERNAL_TIMING = (1 << 20),
 	/*! Always fork, even if verbose or debug settings are non-zero */
 	AST_OPT_FLAG_ALWAYS_FORK = (1 << 21),
@@ -112,6 +114,18 @@ enum ast_option_flags {
 
 extern struct ast_flags ast_options;
 
+enum ast_compat_flags {
+	AST_COMPAT_DELIM_PBX_REALTIME = (1 << 0),
+	AST_COMPAT_DELIM_RES_AGI = (1 << 1),
+	AST_COMPAT_APP_SET = (1 << 2),
+};
+
+#define	ast_compat_pbx_realtime	ast_test_flag(&ast_compat, AST_COMPAT_DELIM_PBX_REALTIME)
+#define ast_compat_res_agi	ast_test_flag(&ast_compat, AST_COMPAT_DELIM_RES_AGI)
+#define	ast_compat_app_set	ast_test_flag(&ast_compat, AST_COMPAT_APP_SET)
+
+extern struct ast_flags ast_compat;
+
 extern int option_verbose;
 extern int option_maxfiles;		/*!< Max number of open file handles (files, sockets) */
 extern int option_debug;		/*!< Debugging */
@@ -127,6 +141,7 @@ extern struct timeval ast_lastreloadtime;
 extern pid_t ast_mainpid;
 
 extern char record_cache_dir[AST_CACHE_DIR_LEN];
+extern char dahdi_chan_name[AST_CHANNEL_NAME];
 
 extern int ast_language_is_prefix;
 

@@ -55,8 +55,14 @@ static int keypad_cfg_read(struct gui_info *gui, const char *val)	{ return 0; }
 #else /* HAVE_SDL, the real rendering code */
 
 #include <SDL/SDL.h>
+#include <SDL/SDL_syswm.h>
 #ifdef HAVE_SDL_IMAGE
 #include <SDL/SDL_image.h>      /* for loading images */
+#endif
+
+#ifdef HAVE_X11
+/* Need to hook into X for SDL_WINDOWID handling */
+#include <X11/Xlib.h>
 #endif
 
 enum kp_type { KP_NONE, KP_RECT, KP_CIRCLE };
@@ -563,9 +569,27 @@ static void eventhandler(struct video_desc *env, const char *caption)
 				ev[i].type,  ev[i].button.x,  ev[i].button.y);
 #endif
 			switch (ev[i].type) {
+			default:
+				ast_log(LOG_WARNING, "------ event %d at %d %d\n",
+					ev[i].type,  ev[i].button.x,  ev[i].button.y);
+				break;
+
+			case SDL_ACTIVEEVENT:
+#if 0 /* do not react, we don't want to die because the window is minimized */
+				if (ev[i].active.gain == 0 && ev[i].active.state & SDL_APPACTIVE) {
+					ast_log(LOG_WARNING, "/* somebody has killed us ? */");
+					ast_cli_command(gui->outfd, "stop now");
+				}
+#endif
+				break;
+
+			case SDL_KEYUP:	/* ignore, for the time being */
+				break;
+
 			case SDL_KEYDOWN:
 				handle_keyboard_input(env, &ev[i].key.keysym);
 				break;
+
 			case SDL_MOUSEMOTION:
 			case SDL_MOUSEBUTTONUP:
 				if (drag->drag_window == DRAG_LOCAL) {
@@ -757,6 +781,21 @@ static void init_board(struct gui_info *gui, struct board **dst, SDL_Rect *r, in
 	}
 }
 
+#ifdef HAVE_X11
+/*
+ * SDL is not very robust on error handling, so we need to trap ourselves
+ * at least the most obvious failure conditions, e.g. a bad SDL_WINDOWID.
+ * As of sdl-1.2.13, SDL_SetVideoMode crashes with bad parameters, so
+ * we need to do the explicit X calls to make sure the window is correct.
+ * And around these calls, we must trap X errors.
+ */
+static int my_x_handler(Display *d, XErrorEvent *e)
+{
+	ast_log(LOG_WARNING, "%s error_code %d\n", __FUNCTION__, e->error_code);
+	return 0;
+}
+#endif /* HAVE_X11 */
+
 /*! \brief [re]set the main sdl window, useful in case of resize.
  * We can tell the first from subsequent calls from the value of
  * env->gui, which is NULL the first time.
@@ -769,6 +808,23 @@ static void sdl_setup(struct video_desc *env)
 	int kp_w = 0, kp_h = 0;	/* keypad width and height */
 	struct gui_info *gui = env->gui;
 
+#ifdef HAVE_X11
+	const char *e = getenv("SDL_WINDOWID");
+
+	if (!ast_strlen_zero(e)) {
+		XWindowAttributes a;
+		int (*old_x_handler)(Display *d, XErrorEvent *e) = XSetErrorHandler(my_x_handler);
+		Display *d = XOpenDisplay(getenv("DISPLAY"));
+		long w = atol(e);
+		int success = w ? XGetWindowAttributes(d, w, &a) : 0;
+
+		XSetErrorHandler(old_x_handler);
+		if (!success) {
+			ast_log(LOG_WARNING, "%s error in window\n", __FUNCTION__);
+			return;
+		}
+	}	
+#endif
 	/*
 	 * initialize the SDL environment. We have one large window
 	 * with local and remote video, and a keypad.
@@ -790,6 +846,11 @@ static void sdl_setup(struct video_desc *env)
 	/* We want at least 16bpp to support YUV overlays.
 	 * E.g with SDL_VIDEODRIVER = aalib the default is 8
 	 */
+	if (!info || !info->vfmt) {
+ 		ast_log(LOG_WARNING, "Bad SDL_GetVideoInfo - %s\n",
+                        SDL_GetError());
+		return;
+	}
 	depth = info->vfmt->BitsPerPixel;
 	if (depth < 16)
 		depth = 16;
@@ -813,12 +874,105 @@ static void sdl_setup(struct video_desc *env)
 	maxh = MAX( MAX(env->rem_dpy.h, env->loc_dpy.h), kp_h);
 	maxw += 4 * BORDER;
 	maxh += 2 * BORDER;
+
 	gui->screen = SDL_SetVideoMode(maxw, maxh, depth, 0);
 	if (!gui->screen) {
 		ast_log(LOG_ERROR, "SDL: could not set video mode - exiting\n");
 		goto no_sdl;
 	}
 
+#ifdef HAVE_X11
+	/*
+	 * Annoying as it may be, if SDL_WINDOWID is set, SDL does
+	 * not grab keyboard/mouse events or expose or other stuff,
+	 * and it does not handle resize either.
+	 * So we need to implement workarounds here.
+	 */
+    do {
+	/* First, handle the event mask */
+	XWindowAttributes attr;
+        long want;
+        SDL_SysWMinfo info;
+	Display *SDL_Display;
+        Window win;
+
+	const char *e = getenv("SDL_WINDOWID");
+	if (ast_strlen_zero(e))	 /* no external window, don't bother doing this */
+		break;
+        SDL_VERSION(&info.version); /* it is important to set the version */
+        if (SDL_GetWMInfo(&info) != 1) {
+                fprintf(stderr, "no wm info\n");
+                break;
+        }
+	SDL_Display = info.info.x11.display;
+	if (SDL_Display == NULL)
+		break;
+        win = info.info.x11.window;
+
+	/*
+	 * A list of events we want.
+	 * Leave ResizeRedirectMask to the parent.
+	 */
+        want = KeyPressMask | KeyReleaseMask | ButtonPressMask |
+                           ButtonReleaseMask | EnterWindowMask |
+                           LeaveWindowMask | PointerMotionMask |
+                           Button1MotionMask |
+                           Button2MotionMask | Button3MotionMask |
+                           Button4MotionMask | Button5MotionMask |
+                           ButtonMotionMask | KeymapStateMask |
+                           ExposureMask | VisibilityChangeMask |
+                           StructureNotifyMask | /* ResizeRedirectMask | */
+                           SubstructureNotifyMask | SubstructureRedirectMask |
+                           FocusChangeMask | PropertyChangeMask |
+                           ColormapChangeMask | OwnerGrabButtonMask;
+
+        bzero(&attr, sizeof(attr));
+	XGetWindowAttributes(SDL_Display, win, &attr);
+
+	/* the following events can be delivered only to one client.
+	 * So check which ones are going to someone else, and drop
+	 * them from our request.
+	 */
+	{
+	/* ev are the events for a single recipient */
+	long ev = ButtonPressMask | ResizeRedirectMask |
+			SubstructureRedirectMask;
+        ev &= (attr.all_event_masks & ~attr.your_event_mask);
+	/* now ev contains 1 for single-recipient events owned by others.
+	 * We must clear those bits in 'want'
+	 * and then add the bits in 'attr.your_event_mask' to 'want'
+	 */
+	want &= ~ev;
+	want |= attr.your_event_mask;
+	}
+	XSelectInput(SDL_Display, win, want);
+
+	/* Second, handle resize.
+	 * We do part of the things that X11Resize does,
+	 * but also generate a ConfigureNotify event so
+	 * the owner of the window has a chance to do something
+	 * with it.
+ 	 */
+	XResizeWindow(SDL_Display, win, maxw, maxh);
+	{
+	XConfigureEvent ce = {
+		.type = ConfigureNotify,
+		.serial = 0,
+		.send_event = 1,	/* TRUE */
+		.display = SDL_Display,
+		.event = win,
+		.window = win,
+		.x = 0,
+		.y = 0,
+		.width = maxw,
+		.height = maxh,
+		.border_width = 0,
+		.above = 0,
+		.override_redirect = 0 };
+	XSendEvent(SDL_Display, win, 1 /* TRUE */, StructureNotifyMask, (XEvent *)&ce);
+	}
+    } while (0);
+#endif /* HAVE_X11 */
 	SDL_WM_SetCaption("Asterisk console Video Output", NULL);
 	if (set_win(gui->screen, &gui->win[WIN_REMOTE], dpy_fmt,
 			env->rem_dpy.w, env->rem_dpy.h, BORDER, BORDER))

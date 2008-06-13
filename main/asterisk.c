@@ -86,7 +86,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include <sys/loadavg.h>
 #endif
 
-#include "asterisk/zapata.h"
+#include "asterisk/dahdi.h"
 
 #ifdef linux
 #include <sys/prctl.h>
@@ -156,6 +156,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 /*! @{ */
 
 struct ast_flags ast_options = { AST_DEFAULT_OPTIONS };
+struct ast_flags ast_compat = { 7 };
 
 int option_verbose;				/*!< Verbosity level */
 int option_debug;				/*!< Debug level */
@@ -165,8 +166,11 @@ int option_maxfiles;				/*!< Max number of open file handles (files, sockets) */
 #if defined(HAVE_SYSINFO)
 long option_minmemfree;				/*!< Minimum amount of free system memory - stop accepting calls if free memory falls below this watermark */
 #endif
+char dahdi_chan_name[AST_CHANNEL_NAME] = "ZAP";
 
 /*! @} */
+
+struct ast_eid g_eid;
 
 /* XXX tmpdir is a subdir of the spool directory, and no way to remap it */
 char record_cache_dir[AST_CACHE_DIR_LEN] = DEFAULT_TMP_DIR;
@@ -179,6 +183,7 @@ struct console {
 	int p[2];			/*!< Pipe */
 	pthread_t t;			/*!< Thread of handler */
 	int mute;			/*!< Is the console muted for logs */
+	int levels[NUMLOGLEVELS];	/*!< Which log levels are enabled for the console */
 };
 
 struct ast_atexit {
@@ -384,6 +389,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 {
 	char buf[BUFSIZ];
 	struct ast_tm tm;
+	char eid_str[128];
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -395,9 +401,12 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 		return NULL;
 	}
 
+	ast_eid_to_str(eid_str, sizeof(eid_str), &g_eid);
+
 	ast_cli(a->fd, "\nPBX Core settings\n");
 	ast_cli(a->fd, "-----------------\n");
 	ast_cli(a->fd, "  Version:                     %s\n", ast_get_version());
+	ast_cli(a->fd, "  Build Options:               %s\n", S_OR(AST_BUILDOPTS, "(none)"));
 	if (option_maxcalls)
 		ast_cli(a->fd, "  Maximum calls:               %d (Current %d)\n", option_maxcalls, ast_active_channels());
 	else
@@ -422,6 +431,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 	}
 	ast_cli(a->fd, "  System:                      %s/%s built by %s on %s %s\n", ast_build_os, ast_build_kernel, ast_build_user, ast_build_machine, ast_build_date);
 	ast_cli(a->fd, "  System name:                 %s\n", ast_config_AST_SYSTEM_NAME);
+	ast_cli(a->fd, "  Entity ID:                   %s\n", eid_str);
 	ast_cli(a->fd, "  Default language:            %s\n", defaultlanguage);
 	ast_cli(a->fd, "  Language prefix:             %s\n", ast_language_is_prefix ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  User name and group:         %s/%s\n", ast_config_AST_RUN_USER, ast_config_AST_RUN_GROUP);
@@ -800,9 +810,16 @@ void ast_unregister_atexit(void (*func)(void))
 		free(ae);
 }
 
-static int fdprint(int fd, const char *s)
+/* Sending commands from consoles back to the daemon requires a terminating NULL */
+static int fdsend(int fd, const char *s)
 {
 	return write(fd, s, strlen(s) + 1);
+}
+
+/* Sending messages from the daemon back to the display requires _excluding_ the terminating NULL */
+static int fdprint(int fd, const char *s)
+{
+	return write(fd, s, strlen(s));
 }
 
 /*! \brief NULL handler so we can collect the child exit status */
@@ -892,6 +909,17 @@ int ast_safe_system(const char *s)
 	return res;
 }
 
+void ast_console_toggle_loglevel(int fd, int level, int state)
+{
+	int x;
+	for (x = 0;x < AST_MAX_CONNECTS; x++) {
+		if (fd == consoles[x].fd) {
+			consoles[x].levels[level] = state;
+			return;
+		}
+	}
+}
+
 /*!
  * \brief mute or unmute a console from logging
  */
@@ -917,14 +945,16 @@ void ast_console_toggle_mute(int fd, int silent) {
 /*!
  * \brief log the string to all attached console clients
  */
-static void ast_network_puts_mutable(const char *string)
+static void ast_network_puts_mutable(const char *string, int level)
 {
 	int x;
 	for (x = 0;x < AST_MAX_CONNECTS; x++) {
 		if (consoles[x].mute)
 			continue;
-		if (consoles[x].fd > -1) 
-			fdprint(consoles[x].p[1], string);
+		if (consoles[x].fd > -1) {
+			if (!consoles[x].levels[level]) 
+				fdprint(consoles[x].p[1], string);
+		}
 	}
 }
 
@@ -932,11 +962,11 @@ static void ast_network_puts_mutable(const char *string)
  * \brief log the string to the console, and all attached
  * console clients
  */
-void ast_console_puts_mutable(const char *string)
+void ast_console_puts_mutable(const char *string, int level)
 {
 	fputs(string, stdout);
 	fflush(stdout);
-	ast_network_puts_mutable(string);
+	ast_network_puts_mutable(string, level);
 }
 
 /*!
@@ -964,7 +994,7 @@ void ast_console_puts(const char *string)
 
 static void network_verboser(const char *s)
 {
-	ast_network_puts_mutable(s);
+	ast_network_puts_mutable(s, __LOG_VERBOSE);
 }
 
 static pthread_t lthread;
@@ -1445,8 +1475,12 @@ static void console_verboser(const char *s)
 	    (c = fix_header(tmp, sizeof(tmp), s, VERBOSE_PREFIX_1))) {
 		fputs(tmp, stdout);
 		fputs(c, stdout);
-	} else
+	} else {
+		if (*s == 127) {
+			s++;
+		}
 		fputs(s, stdout);
+	}
 
 	fflush(stdout);
 	
@@ -1902,6 +1936,7 @@ static int ast_el_read_char(EditLine *el, char *cp)
 				return (num_read);
 		}
 		if (fds[0].revents) {
+			char *tmp;
 			res = read(ast_consock, buf, sizeof(buf) - 1);
 			/* if the remote side disappears exit */
 			if (res < 1) {
@@ -1918,7 +1953,7 @@ static int ast_el_read_char(EditLine *el, char *cp)
 							printf("%s", term_quit());
 							WELCOME_MESSAGE;
 							if (!ast_opt_mute)
-								fdprint(ast_consock, "logger mute silent");
+								fdsend(ast_consock, "logger mute silent");
 							else 
 								printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 							break;
@@ -1933,6 +1968,14 @@ static int ast_el_read_char(EditLine *el, char *cp)
 			}
 
 			buf[res] = '\0';
+
+			/* Strip preamble from asynchronous events, too */
+			for (tmp = buf; *tmp; tmp++) {
+				if (*tmp == 127) {
+					memmove(tmp, tmp + 1, strlen(tmp));
+					tmp--;
+				}
+			}
 
 			/* Write over the CLI prompt */
 			if (!ast_opt_exec && !lastpos)
@@ -2214,7 +2257,7 @@ static char *cli_complete(EditLine *el, int ch)
 
 	if (ast_opt_remote) {
 		snprintf(buf, sizeof(buf), "_COMMAND NUMMATCHES \"%s\" \"%s\"", lf->buffer, ptr); 
-		fdprint(ast_consock, buf);
+		fdsend(ast_consock, buf);
 		res = read(ast_consock, buf, sizeof(buf));
 		buf[res] = '\0';
 		nummatches = atoi(buf);
@@ -2226,7 +2269,7 @@ static char *cli_complete(EditLine *el, int ch)
 			if (!(mbuf = ast_malloc(maxmbuf)))
 				return (char *)(CC_ERROR);
 			snprintf(buf, sizeof(buf), "_COMMAND MATCHESARRAY \"%s\" \"%s\"", lf->buffer, ptr); 
-			fdprint(ast_consock, buf);
+			fdsend(ast_consock, buf);
 			res = 0;
 			mbuf[0] = '\0';
 			while (!strstr(mbuf, AST_CLI_COMPLETE_EOF) && res != -1) {
@@ -2411,11 +2454,11 @@ static void ast_remotecontrol(char * data)
 		pid = -1;
 	if (!data) {
 		snprintf(tmp, sizeof(tmp), "core set verbose atleast %d", option_verbose);
-		fdprint(ast_consock, tmp);
+		fdsend(ast_consock, tmp);
 		snprintf(tmp, sizeof(tmp), "core set debug atleast %d", option_debug);
-		fdprint(ast_consock, tmp);
+		fdsend(ast_consock, tmp);
 		if (!ast_opt_mute)
-			fdprint(ast_consock, "logger mute silent");
+			fdsend(ast_consock, "logger mute silent");
 		else 
 			printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 	}
@@ -2440,7 +2483,7 @@ static void ast_remotecontrol(char * data)
 			char buf[512] = "", *curline = buf, *nextline;
 			int not_written = 1;
 
-			if (read(ast_consock, buf, sizeof(buf) - 1) < 0) {
+			if (read(ast_consock, buf, sizeof(buf) - 1) <= 0) {
 				break;
 			}
 
@@ -2476,6 +2519,14 @@ static void ast_remotecontrol(char * data)
 			if (ebuf[strlen(ebuf)-1] == '\n')
 				ebuf[strlen(ebuf)-1] = '\0';
 			if (!remoteconsolehandler(ebuf)) {
+				/* Strip preamble from output */
+				char *tmp;
+				for (tmp = ebuf; *tmp; tmp++) {
+					if (*tmp == 127) {
+						memmove(tmp, tmp + 1, strlen(tmp));
+						tmp--;
+					}
+				}
 				res = write(ast_consock, ebuf, strlen(ebuf) + 1);
 				if (res < 1) {
 					ast_log(LOG_WARNING, "Unable to write: %s\n", strerror(errno));
@@ -2510,7 +2561,7 @@ static int show_cli_help(void) {
 	printf("   -g              Dump core in case of a crash\n");
 	printf("   -h              This help screen\n");
 	printf("   -i              Initialize crypto keys at startup\n");
-	printf("   -I              Enable internal timing if Zaptel timer is available\n");
+	printf("   -I              Enable internal timing if DAHDI timer is available\n");
 	printf("   -L <load>       Limit the maximum load average before rejecting new calls\n");
 	printf("   -M <value>      Limit the maximum number of calls to the specified value\n");
 	printf("   -m              Mute debugging and console output on the console\n");
@@ -2563,6 +2614,8 @@ static void ast_readconfig(void)
 	ast_copy_string(cfg_paths.pid_path, DEFAULT_PID, sizeof(cfg_paths.pid_path));
 	ast_copy_string(cfg_paths.socket_path, DEFAULT_SOCKET, sizeof(cfg_paths.socket_path));
 	ast_copy_string(cfg_paths.run_dir, DEFAULT_RUN_DIR, sizeof(cfg_paths.run_dir));
+
+	ast_set_default_eid(&g_eid);
 
 	/* no asterisk.conf? no problem, use buildtime config! */
 	if (!cfg) {
@@ -2729,6 +2782,31 @@ static void ast_readconfig(void)
 				option_minmemfree = 0;
 			}
 #endif
+		} else if (!strcasecmp(v->name, "dahdichanname")) {
+			if (!strcasecmp(v->value, "yes")) {
+				ast_copy_string(dahdi_chan_name, "DAHDI", sizeof(dahdi_chan_name));
+			}
+		} else if (!strcasecmp(v->name, "entityid")) {
+			struct ast_eid tmp_eid;
+			if (!ast_str_to_eid(&tmp_eid, v->value)) {
+				ast_verbose("Successfully set global EID to '%s'\n", v->value);
+				g_eid = tmp_eid;
+			} else
+				ast_verbose("Invalid Entity ID '%s' provided\n", v->value);
+		}
+	}
+	for (v = ast_variable_browse(cfg, "compat"); v; v = v->next) {
+		float version;
+		if (sscanf(v->value, "%f", &version) != 1) {
+			ast_log(LOG_WARNING, "Compatibility version for option '%s' is not a number: '%s'\n", v->name, v->value);
+			continue;
+		}
+		if (!strcasecmp(v->name, "app_set")) {
+			ast_set2_flag(&ast_compat, version < 1.5 ? 1 : 0, AST_COMPAT_APP_SET);
+		} else if (!strcasecmp(v->name, "res_agi")) {
+			ast_set2_flag(&ast_compat, version < 1.5 ? 1 : 0, AST_COMPAT_DELIM_RES_AGI);
+		} else if (!strcasecmp(v->name, "pbx_realtime")) {
+			ast_set2_flag(&ast_compat, version < 1.5 ? 1 : 0, AST_COMPAT_DELIM_PBX_REALTIME);
 		}
 	}
 	ast_config_destroy(cfg);
@@ -3221,28 +3299,28 @@ int main(int argc, char *argv[])
 		printf("%s", term_quit());
 		exit(1);
 	}
-#ifdef HAVE_ZAPTEL
+#ifdef HAVE_DAHDI
 	{
 		int fd;
 		int x = 160;
-		fd = open("/dev/zap/timer", O_RDWR);
+		fd = open("/dev/dahdi/timer", O_RDWR);
 		if (fd >= 0) {
-			if (ioctl(fd, ZT_TIMERCONFIG, &x)) {
-				ast_log(LOG_ERROR, "You have Zaptel built and drivers loaded, but the Zaptel timer test failed to set ZT_TIMERCONFIG to %d.\n", x);
+			if (ioctl(fd, DAHDI_TIMERCONFIG, &x)) {
+				ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer test failed to set DAHDI_TIMERCONFIG to %d.\n", x);
 				exit(1);
 			}
 			if ((x = ast_wait_for_input(fd, 300)) < 0) {
-				ast_log(LOG_ERROR, "You have Zaptel built and drivers loaded, but the Zaptel timer could not be polled during the Zaptel timer test.\n");
+				ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer could not be polled during the DAHDI timer test.\n");
 				exit(1);
 			}
 			if (!x) {
-				const char zaptel_timer_error[] = {
-					"Asterisk has detected a problem with your Zaptel configuration and will shutdown for your protection.  You have options:"
-					"\n\t1. You only have to compile Zaptel support into Asterisk if you need it.  One option is to recompile without Zaptel support."
-					"\n\t2. You only have to load Zaptel drivers if you want to take advantage of Zaptel services.  One option is to unload zaptel modules if you don't need them."
-					"\n\t3. If you need Zaptel services, you must correctly configure Zaptel."
+				const char dahdi_timer_error[] = {
+					"Asterisk has detected a problem with your DAHDI configuration and will shutdown for your protection.  You have options:"
+					"\n\t1. You only have to compile DAHDI support into Asterisk if you need it.  One option is to recompile without DAHDI support."
+					"\n\t2. You only have to load DAHDI drivers if you want to take advantage of DAHDI services.  One option is to unload DAHDI modules if you don't need them."
+					"\n\t3. If you need DAHDI services, you must correctly configure DAHDI."
 				};
-				ast_log(LOG_ERROR, "%s\n", zaptel_timer_error);
+				ast_log(LOG_ERROR, "%s\n", dahdi_timer_error);
 				usleep(100);
 				exit(1);
 			}

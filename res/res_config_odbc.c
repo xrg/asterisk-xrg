@@ -51,11 +51,12 @@ struct custom_prepare_struct {
 	const char *sql;
 	const char *extra;
 	va_list ap;
+	unsigned long long skip;
 };
 
 static SQLHSTMT custom_prepare(struct odbc_obj *obj, void *data)
 {
-	int res, x = 1;
+	int res, x = 1, count = 0;
 	struct custom_prepare_struct *cps = data;
 	const char *newparam, *newval;
 	SQLHSTMT stmt;
@@ -78,6 +79,9 @@ static SQLHSTMT custom_prepare(struct odbc_obj *obj, void *data)
 
 	while ((newparam = va_arg(ap, const char *))) {
 		newval = va_arg(ap, const char *);
+		if ((1 << count) & cps->skip) {
+			continue;
+		}
 		SQLBindParameter(stmt, x++, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(newval), 0, (void *)newval, 0, NULL);
 	}
 	va_end(ap);
@@ -398,33 +402,51 @@ static int update_odbc(const char *database, const char *table, const char *keyf
 	char sql[256];
 	SQLLEN rowcount=0;
 	const char *newparam, *newval;
-	int res;
+	int res, count = 0;
 	va_list aq;
 	struct custom_prepare_struct cps = { .sql = sql, .extra = lookup };
+	struct odbc_cache_tables *tableptr = ast_odbc_find_table(database, table);
+	struct odbc_cache_columns *column;
 
 	va_copy(cps.ap, ap);
 	va_copy(aq, ap);
 	
-	if (!table)
+	if (!table) {
+		ast_odbc_release_table(tableptr);
 		return -1;
+	}
 
 	obj = ast_odbc_request_obj(database, 0);
-	if (!obj)
+	if (!obj) {
+		ast_odbc_release_table(tableptr);
 		return -1;
+	}
 
 	newparam = va_arg(aq, const char *);
 	if (!newparam)  {
 		ast_odbc_release_obj(obj);
+		ast_odbc_release_table(tableptr);
 		return -1;
 	}
 	newval = va_arg(aq, const char *);
+
+	if (tableptr && !(column = ast_odbc_find_column(tableptr, newparam))) {
+		ast_log(LOG_WARNING, "Key field '%s' does not exist in table '%s@%s'.  Update will fail\n", newparam, table, database);
+	}
+
 	snprintf(sql, sizeof(sql), "UPDATE %s SET %s=?", table, newparam);
 	while((newparam = va_arg(aq, const char *))) {
-		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), ", %s=?", newparam);
-		newval = va_arg(aq, const char *);
+		if ((tableptr && (column = ast_odbc_find_column(tableptr, newparam))) || count > 63) {
+			snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), ", %s=?", newparam);
+			newval = va_arg(aq, const char *);
+		} else { /* the column does not exist in the table OR we've exceeded the space in our flag field */
+			cps.skip |= (((long long)1) << count);
+		}
+		count++;
 	}
 	va_end(aq);
 	snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " WHERE %s=?", keyfield);
+	ast_odbc_release_table(tableptr);
 
 	stmt = ast_odbc_prepare_and_execute(obj, custom_prepare, &cps);
 
@@ -709,6 +731,162 @@ static struct ast_config *config_odbc(const char *database, const char *table, c
 	return cfg;
 }
 
+#define warn_length(col, size)	ast_log(LOG_WARNING, "Realtime table %s@%s: column '%s' is not long enough to contain realtime data (needs %d)\n", table, database, col->name, size)
+#define warn_type(col, type)	ast_log(LOG_WARNING, "Realtime table %s@%s: column '%s' is of the incorrect type (%d) to contain the required realtime data\n", table, database, col->name, col->type)
+
+static int require_odbc(const char *database, const char *table, va_list ap)
+{
+	struct odbc_cache_tables *tableptr = ast_odbc_find_table(database, table);
+	struct odbc_cache_columns *col;
+	char *elm;
+	int type, size;
+
+	if (!tableptr) {
+		return -1;
+	}
+
+	while ((elm = va_arg(ap, char *))) {
+		type = va_arg(ap, require_type);
+		size = va_arg(ap, int);
+		/* Check if the field matches the criteria */
+		AST_RWLIST_TRAVERSE(&tableptr->columns, col, list) {
+			if (strcmp(col->name, elm) == 0) {
+				/* Type check, first.  Some fields are more particular than others */
+				switch (col->type) {
+				case SQL_CHAR:
+				case SQL_VARCHAR:
+				case SQL_LONGVARCHAR:
+				case SQL_BINARY:
+				case SQL_VARBINARY:
+				case SQL_LONGVARBINARY:
+				case SQL_GUID:
+#define CHECK_SIZE(n) \
+						if (col->size < n) {      \
+							warn_length(col, n);  \
+						}                         \
+						break;
+					switch (type) {
+					case RQ_UINTEGER1: CHECK_SIZE(3)  /*         255 */
+					case RQ_INTEGER1:  CHECK_SIZE(4)  /*        -128 */
+					case RQ_UINTEGER2: CHECK_SIZE(5)  /*       65535 */
+					case RQ_INTEGER2:  CHECK_SIZE(6)  /*      -32768 */
+					case RQ_UINTEGER3:                /*    16777215 */
+					case RQ_INTEGER3:  CHECK_SIZE(8)  /*    -8388608 */
+					case RQ_DATE:                     /*  2008-06-09 */
+					case RQ_UINTEGER4: CHECK_SIZE(10) /*  4200000000 */
+					case RQ_INTEGER4:  CHECK_SIZE(11) /* -2100000000 */
+					case RQ_DATETIME:                 /* 2008-06-09 16:03:47 */
+					case RQ_UINTEGER8: CHECK_SIZE(19) /* trust me    */
+					case RQ_INTEGER8:  CHECK_SIZE(20) /* ditto       */
+					case RQ_FLOAT:
+					case RQ_CHAR:      CHECK_SIZE(size)
+					}
+#undef CHECK_SIZE
+					break;
+				case SQL_TYPE_DATE:
+					if (type != RQ_DATE) {
+						warn_type(col, type);
+					}
+					break;
+				case SQL_TYPE_TIMESTAMP:
+				case SQL_TIMESTAMP:
+					if (type != RQ_DATE && type != RQ_DATETIME) {
+						warn_type(col, type);
+					}
+					break;
+				case SQL_BIT:
+					warn_length(col, size);
+					break;
+#define WARN_TYPE_OR_LENGTH(n)	\
+						if (!ast_rq_is_int(type)) {  \
+							warn_type(col, type);    \
+						} else {                     \
+							warn_length(col, n);  \
+						}
+				case SQL_TINYINT:
+					if (type != RQ_UINTEGER1) {
+						WARN_TYPE_OR_LENGTH(size)
+					}
+					break;
+				case SQL_C_STINYINT:
+					if (type != RQ_INTEGER1) {
+						WARN_TYPE_OR_LENGTH(size)
+					}
+					break;
+				case SQL_C_USHORT:
+					if (type != RQ_UINTEGER1 && type != RQ_INTEGER1 && type != RQ_UINTEGER2) {
+						WARN_TYPE_OR_LENGTH(size)
+					}
+					break;
+				case SQL_SMALLINT:
+				case SQL_C_SSHORT:
+					if (type != RQ_UINTEGER1 && type != RQ_INTEGER1 && type != RQ_INTEGER2) {
+						WARN_TYPE_OR_LENGTH(size)
+					}
+					break;
+				case SQL_C_ULONG:
+					if (type != RQ_UINTEGER1 && type != RQ_INTEGER1 &&
+						type != RQ_UINTEGER2 && type != RQ_INTEGER2 &&
+						type != RQ_UINTEGER3 && type != RQ_INTEGER3 &&
+						type != RQ_INTEGER4) {
+						WARN_TYPE_OR_LENGTH(size)
+					}
+					break;
+				case SQL_INTEGER:
+				case SQL_C_SLONG:
+					if (type != RQ_UINTEGER1 && type != RQ_INTEGER1 &&
+						type != RQ_UINTEGER2 && type != RQ_INTEGER2 &&
+						type != RQ_UINTEGER3 && type != RQ_INTEGER3 &&
+						type != RQ_UINTEGER4) {
+						WARN_TYPE_OR_LENGTH(size)
+					}
+					break;
+				case SQL_C_UBIGINT:
+					if (type != RQ_UINTEGER1 && type != RQ_INTEGER1 &&
+						type != RQ_UINTEGER2 && type != RQ_INTEGER2 &&
+						type != RQ_UINTEGER3 && type != RQ_INTEGER3 &&
+						type != RQ_UINTEGER4 && type != RQ_INTEGER4 &&
+						type != RQ_INTEGER8) {
+						WARN_TYPE_OR_LENGTH(size)
+					}
+					break;
+				case SQL_BIGINT:
+				case SQL_C_SBIGINT:
+					if (type != RQ_UINTEGER1 && type != RQ_INTEGER1 &&
+						type != RQ_UINTEGER2 && type != RQ_INTEGER2 &&
+						type != RQ_UINTEGER3 && type != RQ_INTEGER3 &&
+						type != RQ_UINTEGER4 && type != RQ_INTEGER4 &&
+						type != RQ_UINTEGER8) {
+						WARN_TYPE_OR_LENGTH(size)
+					}
+					break;
+#undef WARN_TYPE_OR_LENGTH
+				case SQL_NUMERIC:
+				case SQL_DECIMAL:
+				case SQL_FLOAT:
+				case SQL_REAL:
+				case SQL_DOUBLE:
+					if (!ast_rq_is_int(type) && type != RQ_FLOAT) {
+						warn_type(col, type);
+					}
+					break;
+				default:
+					ast_log(LOG_WARNING, "Realtime table %s@%s: column type (%d) unrecognized for column '%s'\n", table, database, col->type, elm);
+				}
+				break;
+			}
+		}
+		if (!col) {
+			ast_log(LOG_WARNING, "Realtime table %s@%s requires column '%s', but that column does not exist!\n", table, database, elm);
+		}
+	}
+	va_end(ap);
+	AST_RWLIST_UNLOCK(&tableptr->columns);
+	return 0;
+}
+#undef warn_length
+#undef warn_type
+
 static struct ast_config_engine odbc_engine = {
 	.name = "odbc",
 	.load_func = config_odbc,
@@ -716,12 +894,15 @@ static struct ast_config_engine odbc_engine = {
 	.realtime_multi_func = realtime_multi_odbc,
 	.store_func = store_odbc,
 	.destroy_func = destroy_odbc,
-	.update_func = update_odbc
+	.update_func = update_odbc,
+	.require_func = require_odbc,
+	.unload_func = ast_odbc_clear_cache,
 };
 
 static int unload_module (void)
 {
 	ast_config_engine_deregister(&odbc_engine);
+
 	ast_verb(1, "res_config_odbc unloaded.\n");
 	return 0;
 }
@@ -733,7 +914,13 @@ static int load_module (void)
 	return 0;
 }
 
+static int reload_module(void)
+{
+	return 0;
+}
+
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Realtime ODBC configuration",
 		.load = load_module,
 		.unload = unload_module,
+		.reload = reload_module,
 		);

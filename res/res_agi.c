@@ -811,15 +811,13 @@ static int handle_recvchar(struct ast_channel *chan, AGI *agi, int argc, char *a
 	if (res == 0) {
 		ast_agi_fdprintf(chan, agi->fd, "200 result=%d (timeout)\n", res);
 		return RESULT_SUCCESS;
-	}
+	} 
 	if (res > 0) {
 		ast_agi_fdprintf(chan, agi->fd, "200 result=%d\n", res);
 		return RESULT_SUCCESS;
 	}
-	else {
-		ast_agi_fdprintf(chan, agi->fd, "200 result=%d (hangup)\n", res);
-		return RESULT_FAILURE;
-	}
+	ast_agi_fdprintf(chan, agi->fd, "200 result=%d (hangup)\n", res);
+	return RESULT_FAILURE;
 }
 
 static int handle_recvtext(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
@@ -829,7 +827,7 @@ static int handle_recvtext(struct ast_channel *chan, AGI *agi, int argc, char *a
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 
-	buf = ast_recvtext(chan,atoi(argv[2]));
+	buf = ast_recvtext(chan, atoi(argv[2]));
 	if (buf) {
 		ast_agi_fdprintf(chan, agi->fd, "200 result=1 (%s)\n", buf);
 		ast_free(buf);
@@ -846,19 +844,23 @@ static int handle_tddmode(struct ast_channel *chan, AGI *agi, int argc, char *ar
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 
-	if (!strncasecmp(argv[2],"on",2)) 
+	if (!strncasecmp(argv[2],"on",2)) {
 		x = 1; 
-	else 
+	} else  {
 		x = 0;
-	if (!strncasecmp(argv[2],"mate",4)) 
+	}
+	if (!strncasecmp(argv[2],"mate",4))  {
 		x = 2;
-	if (!strncasecmp(argv[2],"tdd",3))
+	}
+	if (!strncasecmp(argv[2],"tdd",3)) {
 		x = 1;
+	}
 	res = ast_channel_setoption(chan, AST_OPTION_TDD, &x, sizeof(char), 0);
-	if (res != RESULT_SUCCESS)
+	if (res != RESULT_SUCCESS) {
 		ast_agi_fdprintf(chan, agi->fd, "200 result=0\n");
-	else
+	} else {
 		ast_agi_fdprintf(chan, agi->fd, "200 result=1\n");
+	}
 	return RESULT_SUCCESS;
 }
 
@@ -866,12 +868,14 @@ static int handle_sendimage(struct ast_channel *chan, AGI *agi, int argc, char *
 {
 	int res;
 
-	if (argc != 3)
+	if (argc != 3) {
 		return RESULT_SHOWUSAGE;
+	}
 
 	res = ast_send_image(chan, argv[2]);
-	if (!ast_check_hangup(chan))
+	if (!ast_check_hangup(chan)) {
 		res = 0;
+	}
 	ast_agi_fdprintf(chan, agi->fd, "200 result=%d\n", res);
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
@@ -879,33 +883,31 @@ static int handle_sendimage(struct ast_channel *chan, AGI *agi, int argc, char *
 static int handle_controlstreamfile(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
 {
 	int res = 0, skipms = 3000;
-	char *fwd = NULL, *rev = NULL, *pause = NULL, *stop = NULL;
+	char *fwd = "#", *rev = "*", *pause = NULL, *stop = NULL;	/* Default values */
 
-	if (argc < 5 || argc > 9)
+	if (argc < 5 || argc > 9) {
 		return RESULT_SHOWUSAGE;
+	}
 
-	if (!ast_strlen_zero(argv[4]))
+	if (!ast_strlen_zero(argv[4])) {
 		stop = argv[4];
-	else
-		stop = NULL;
+	}
 	
-	if ((argc > 5) && (sscanf(argv[5], "%d", &skipms) != 1))
+	if ((argc > 5) && (sscanf(argv[5], "%d", &skipms) != 1)) {
 		return RESULT_SHOWUSAGE;
+	}
 
-	if (argc > 6 && !ast_strlen_zero(argv[6]))
+	if (argc > 6 && !ast_strlen_zero(argv[6])) {
 		fwd = argv[6];
-	else
-		fwd = "#";
+	} 
 
-	if (argc > 7 && !ast_strlen_zero(argv[7]))
+	if (argc > 7 && !ast_strlen_zero(argv[7])) {
 		rev = argv[7];
-	else
-		rev = "*";
+	}
 	
-	if (argc > 8 && !ast_strlen_zero(argv[8]))
+	if (argc > 8 && !ast_strlen_zero(argv[8])) {
 		pause = argv[8];
-	else
-		pause = NULL;
+	} 
 	
 	res = ast_control_streamfile(chan, argv[3], fwd, rev, stop, pause, NULL, skipms, NULL);
 	
@@ -1454,7 +1456,23 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 	ast_verb(3, "AGI Script Executing Application: (%s) Options: (%s)\n", argv[1], argv[2]);
 
 	if ((app = pbx_findapp(argv[1]))) {
-		res = pbx_exec(chan, app, argv[2]);
+		if (ast_compat_res_agi && !ast_strlen_zero(argv[2])) {
+			char *compat = alloca(strlen(argv[2]) * 2 + 1), *cptr, *vptr;
+			for (cptr = compat, vptr = argv[2]; *vptr; vptr++) {
+				if (*vptr == ',') {
+					*cptr++ = '\\';
+					*cptr++ = ',';
+				} else if (*vptr == '|') {
+					*cptr++ = ',';
+				} else {
+					*cptr++ = *vptr;
+				}
+			}
+			*cptr = '\0';
+			res = pbx_exec(chan, app, compat);
+		} else {
+			res = pbx_exec(chan, app, argv[2]);
+		}
 	} else {
 		ast_log(LOG_WARNING, "Could not find application (%s)\n", argv[1]);
 		res = -2;
@@ -1908,7 +1926,7 @@ static int handle_speechrecognize(struct ast_channel *chan, AGI *agi, int argc, 
 			}
 			/* Write audio frame data into speech engine if possible */
 			if (fr && fr->frametype == AST_FRAME_VOICE)
-				ast_speech_write(speech, fr->data, fr->datalen);
+				ast_speech_write(speech, fr->data.ptr, fr->datalen);
 			break;
 		case AST_SPEECH_STATE_WAIT:
 			/* Cue waiting sound if not already playing */
@@ -2611,7 +2629,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				/* If it's voice, write it to the audio pipe */
 				if ((agi->audio > -1) && (f->frametype == AST_FRAME_VOICE)) {
 					/* Write, ignoring errors */
-					write(agi->audio, f->data, f->datalen);
+					write(agi->audio, f->data.ptr, f->datalen);
 				}
 				ast_frfree(f);
 			}
@@ -2679,9 +2697,13 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	if (pid > -1) {
 		const char *sighup = pbx_builtin_getvar_helper(chan, "AGISIGHUP");
 		if (ast_strlen_zero(sighup) || !ast_false(sighup)) {
-			if (kill(pid, SIGHUP))
+			if (kill(pid, SIGHUP)) {
 				ast_log(LOG_WARNING, "unable to send SIGHUP to AGI process %d: %s\n", pid, strerror(errno));
+			} else { /* Give the process a chance to die */
+				usleep(1);
+			}
 		}
+		waitpid(pid, status, WNOHANG);
 	}
 	fclose(readf);
 	return returnstatus;
@@ -2700,7 +2722,6 @@ static char *handle_cli_agi_show(struct ast_cli_entry *e, int cmd, struct ast_cl
 			"       When called with a topic as an argument, displays usage\n"
 			"       information on the given command.  If called without a\n"
 			"       topic, it provides a list of AGI commands.\n";
-		break;
 	case CLI_GENERATE:
 		return NULL;
 	}

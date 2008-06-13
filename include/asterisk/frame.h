@@ -156,7 +156,7 @@ struct ast_frame {
 	/*! Optional source of frame for debugging */
 	const char *src;				
 	/*! Pointer to actual data */
-	void *data;		
+	union { void *ptr; uint32_t uint32; char pad[8]; } data;
 	/*! Global delivery time */		
 	struct timeval delivery;
 	/*! For placing in a linked list */
@@ -181,7 +181,7 @@ struct ast_frame {
  */
 #define	AST_FRAME_SET_BUFFER(fr, _base, _ofs, _datalen)	\
 	{					\
-	(fr)->data = (char *)_base + (_ofs);	\
+	(fr)->data.ptr = (char *)_base + (_ofs);	\
 	(fr)->offset = (_ofs);			\
 	(fr)->datalen = (_datalen);		\
 	}
@@ -274,8 +274,12 @@ extern struct ast_frame ast_null_frame;
 /*! MPEG4 Video */
 #define AST_FORMAT_MP4_VIDEO	(1 << 22)
 #define AST_FORMAT_VIDEO_MASK   (((1 << 25)-1) & ~(AST_FORMAT_AUDIO_MASK))
-/*! T.140 Text format - ITU T.140, RFC 4351*/
-#define AST_FORMAT_T140		(1 << 25)
+/*! T.140 RED Text format RFC 4103 */
+#define AST_FORMAT_T140RED      (1 << 26)
+/*! T.140 Text format - ITU T.140, RFC 4103 */
+#define AST_FORMAT_T140		(1 << 27)
+/*! Maximum text mask */
+#define AST_FORMAT_MAX_TEXT	(1 << 28))
 #define AST_FORMAT_TEXT_MASK   (((1 << 30)-1) & ~(AST_FORMAT_AUDIO_MASK) & ~(AST_FORMAT_VIDEO_MASK))
 
 enum ast_control_frame_type {
@@ -442,9 +446,9 @@ void ast_swapcopy_samples(void *dst, const void *src, int samples);
    little-endian and big-endian. */
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define ast_frame_byteswap_le(fr) do { ; } while(0)
-#define ast_frame_byteswap_be(fr) do { struct ast_frame *__f = (fr); ast_swapcopy_samples(__f->data, __f->data, __f->samples); } while(0)
+#define ast_frame_byteswap_be(fr) do { struct ast_frame *__f = (fr); ast_swapcopy_samples(__f->data.ptr, __f->data.ptr, __f->samples); } while(0)
 #else
-#define ast_frame_byteswap_le(fr) do { struct ast_frame *__f = (fr); ast_swapcopy_samples(__f->data, __f->data, __f->samples); } while(0)
+#define ast_frame_byteswap_le(fr) do { struct ast_frame *__f = (fr); ast_swapcopy_samples(__f->data.ptr, __f->data.ptr, __f->samples); } while(0)
 #define ast_frame_byteswap_be(fr) do { ; } while(0)
 #endif
 

@@ -111,7 +111,9 @@ struct jingle_pvt {
 	char cid_name[80];               /*!< Caller ID name */
 	char exten[80];                  /*!< Called extension */
 	struct ast_channel *owner;       /*!< Master Channel */
+	char audio_content_name[100];    /*!< name attribute of content tag */
 	struct ast_rtp *rtp;             /*!< RTP audio session */
+	char video_content_name[100];    /*!< name attribute of content tag */
 	struct ast_rtp *vrtp;            /*!< RTP video session */
 	int jointcapability;             /*!< Supported capability at both ends (codecs ) */
 	int peercapability;
@@ -246,15 +248,12 @@ static struct jingle *find_jingle(char *name, char *connection)
 	if (!jingle && strchr(name, '@'))
 		jingle = ASTOBJ_CONTAINER_FIND_FULL(&jingle_list, name, user,,, strcasecmp);
 
-	if (!jingle) {				/* guest call */
+	if (!jingle) {				
+		/* guest call */
 		ASTOBJ_CONTAINER_TRAVERSE(&jingle_list, 1, {
 			ASTOBJ_RDLOCK(iterator);
 			if (!strcasecmp(iterator->name, "guest")) {
-				if (!strcasecmp(iterator->connection->jid->partial, connection)) {
-					jingle = iterator;
-				} else if (!strcasecmp(iterator->connection->name, connection)) {
-					jingle = iterator;
-				}
+				jingle = iterator;
 			}
 			ASTOBJ_UNLOCK(iterator);
 
@@ -573,7 +572,7 @@ static int jingle_hangup_farend(struct jingle *client, ikspak *pak)
 	if (tmp) {
 		tmp->alreadygone = 1;
 		if (tmp->owner)
-			ast_queue_hangup(tmp->owner, -1);
+			ast_queue_hangup(tmp->owner);
 	} else
 		ast_log(LOG_NOTICE, "Whoa, didn't find call!\n");
 	jingle_response(client, pak, NULL, NULL);
@@ -956,9 +955,14 @@ static int jingle_newcall(struct jingle *client, ikspak *pak)
 	struct jingle_pvt *p, *tmp = client->p;
 	struct ast_channel *chan;
 	int res;
-	iks *payload_type;
+	iks *codec, *content, *description;
+	char *from = NULL;
 
 	/* Make sure our new call doesn't exist yet */
+	from = iks_find_attrib(pak->x,"to");
+	if(!from)
+		from = client->connection->jid->full;
+
 	while (tmp) {
 		if (iks_find_with_attrib(pak->x, JINGLE_NODE, JINGLE_SID, tmp->sid)) {
 			ast_log(LOG_NOTICE, "Ignoring duplicate call setup on SID %s\n", tmp->sid);
@@ -968,51 +972,90 @@ static int jingle_newcall(struct jingle *client, ikspak *pak)
 		tmp = tmp->next;
 	}
 
+ 	if (!strcasecmp(client->name, "guest")){
+ 		/* the guest account is not tied to any configured XMPP client,
+ 		   let's set it now */
+ 		client->connection = ast_aji_get_client(from);
+ 		if (!client->connection) {
+ 			ast_log(LOG_ERROR, "No XMPP client to talk to, us (partial JID) : %s\n", from);
+ 			return -1;
+ 		}
+ 	}
+
 	p = jingle_alloc(client, pak->from->partial, iks_find_attrib(pak->query, JINGLE_SID));
 	if (!p) {
 		ast_log(LOG_WARNING, "Unable to allocate jingle structure!\n");
 		return -1;
 	}
 	chan = jingle_new(client, p, AST_STATE_DOWN, pak->from->user);
-	if (chan) {
-		ast_mutex_lock(&p->lock);
-		ast_copy_string(p->them, pak->from->full, sizeof(p->them));
-		if (iks_find_attrib(pak->query, JINGLE_SID)) {
-			ast_copy_string(p->sid, iks_find_attrib(pak->query, JINGLE_SID),
-							sizeof(p->sid));
-		}
-
-		payload_type = iks_child(iks_child(iks_child(iks_child(pak->x))));
-		while (payload_type) {
-			ast_rtp_set_m_type(p->rtp, atoi(iks_find_attrib(payload_type, "id")));
-			ast_rtp_set_rtpmap_type(p->rtp, atoi(iks_find_attrib(payload_type, "id")), "audio", iks_find_attrib(payload_type, "name"), 0);
-			payload_type = iks_next(payload_type);
-		}
-
-		ast_mutex_unlock(&p->lock);
-		ast_setstate(chan, AST_STATE_RING);
-		res = ast_pbx_start(chan);
-
-		switch (res) {
-		case AST_PBX_FAILED:
-			ast_log(LOG_WARNING, "Failed to start PBX :(\n");
-			jingle_response(client, pak, "service-unavailable", NULL);
-			break;
-		case AST_PBX_CALL_LIMIT:
-			ast_log(LOG_WARNING, "Failed to start PBX (call limit reached) \n");
-			jingle_response(client, pak, "service-unavailable", NULL);
-			break;
-		case AST_PBX_SUCCESS:
-			jingle_response(client, pak, NULL, NULL);
-			jingle_create_candidates(client, p,
-						 iks_find_attrib(pak->query, JINGLE_SID),
-						 iks_find_attrib(pak->x, "from"));
-			/* nothing to do */
-			break;
-		}
-	} else {
+	if (!chan) {
 		jingle_free_pvt(client, p);
+		return -1;
 	}
+	ast_mutex_lock(&p->lock);
+	ast_copy_string(p->them, pak->from->full, sizeof(p->them));
+	if (iks_find_attrib(pak->query, JINGLE_SID)) {
+		ast_copy_string(p->sid, iks_find_attrib(pak->query, JINGLE_SID),
+				sizeof(p->sid));
+	}
+	
+	/* content points to the first <content/> tag */	
+	content = iks_child(iks_child(pak->x));
+	while (content) {
+		description = iks_find_with_attrib(content, "description", "xmlns", JINGLE_AUDIO_RTP_NS);
+		if (description) {
+			/* audio content found */
+			codec = iks_child(iks_child(content));
+		        ast_copy_string(p->audio_content_name, iks_find_attrib(content, "name"), sizeof(p->audio_content_name));
+
+			while (codec) {
+				ast_rtp_set_m_type(p->rtp, atoi(iks_find_attrib(codec, "id")));
+				ast_rtp_set_rtpmap_type(p->rtp, atoi(iks_find_attrib(codec, "id")), "audio", iks_find_attrib(codec, "name"), 0);
+				codec = iks_next(codec);
+			}
+		}
+		
+		description = NULL;
+		codec = NULL;
+
+		description = iks_find_with_attrib(content, "description", "xmlns", JINGLE_VIDEO_RTP_NS);
+		if (description) {
+			/* video content found */
+			codec = iks_child(iks_child(content));
+		        ast_copy_string(p->video_content_name, iks_find_attrib(content, "name"), sizeof(p->video_content_name));
+
+			while (codec) {
+				ast_rtp_set_m_type(p->rtp, atoi(iks_find_attrib(codec, "id")));
+				ast_rtp_set_rtpmap_type(p->rtp, atoi(iks_find_attrib(codec, "id")), "audio", iks_find_attrib(codec, "name"), 0);
+				codec = iks_next(codec);
+			}
+		}
+		
+		content = iks_next(content);
+	}
+
+	ast_mutex_unlock(&p->lock);
+	ast_setstate(chan, AST_STATE_RING);
+	res = ast_pbx_start(chan);
+	
+	switch (res) {
+	case AST_PBX_FAILED:
+		ast_log(LOG_WARNING, "Failed to start PBX :(\n");
+		jingle_response(client, pak, "service-unavailable", NULL);
+		break;
+	case AST_PBX_CALL_LIMIT:
+		ast_log(LOG_WARNING, "Failed to start PBX (call limit reached) \n");
+		jingle_response(client, pak, "service-unavailable", NULL);
+		break;
+	case AST_PBX_SUCCESS:
+		jingle_response(client, pak, NULL, NULL);
+		jingle_create_candidates(client, p,
+					 iks_find_attrib(pak->query, JINGLE_SID),
+					 iks_find_attrib(pak->x, "from"));
+		/* nothing to do */
+		break;
+	}
+
 	return 1;
 }
 
@@ -1316,6 +1359,8 @@ static int jingle_transmit_invite(struct jingle_pvt *p)
 	payload_pcmu = iks_new("payload-type");
 	payload_eg711u = iks_new("payload-type");
 
+	ast_copy_string(p->audio_content_name, "asterisk-audio-content", sizeof(p->audio_content_name));
+
 	iks_insert_attrib(iq, "type", "set");
 	iks_insert_attrib(iq, "to", p->them);
 	iks_insert_attrib(iq, "from", client->jid->full);
@@ -1325,8 +1370,10 @@ static int jingle_transmit_invite(struct jingle_pvt *p)
 	iks_insert_attrib(jingle, JINGLE_SID, p->sid);
 	iks_insert_attrib(jingle, "initiator", client->jid->full);
 	iks_insert_attrib(jingle, "xmlns", JINGLE_NS);
+
+	/* For now, we only send one audio based content */
 	iks_insert_attrib(content, "creator", "initiator");
-	iks_insert_attrib(content, "name", "asterisk-audio-content");
+	iks_insert_attrib(content, "name", p->audio_content_name);
 	iks_insert_attrib(content, "profile", "RTP/AVP");
 	iks_insert_attrib(description, "xmlns", JINGLE_AUDIO_RTP_NS);
 	iks_insert_attrib(transport, "xmlns", JINGLE_ICE_UDP_NS);
@@ -1334,7 +1381,6 @@ static int jingle_transmit_invite(struct jingle_pvt *p)
 	iks_insert_attrib(payload_pcmu, "name", "PCMU");
 	iks_insert_attrib(payload_eg711u, "id", "100");
 	iks_insert_attrib(payload_eg711u, "name", "EG711U");
-
 	iks_insert_node(description, payload_pcmu);
 	iks_insert_node(description, payload_eg711u);
 	iks_insert_node(content, description);
@@ -1437,11 +1483,22 @@ static struct ast_channel *jingle_request(const char *type, int format, void *da
 			}
 		}
 	}
+
 	client = find_jingle(to, sender);
 	if (!client) {
 		ast_log(LOG_WARNING, "Could not find recipient.\n");
 		return NULL;
 	}
+	if (!strcasecmp(client->name, "guest")){
+		/* the guest account is not tied to any configured XMPP client,
+		   let's set it now */
+		client->connection = ast_aji_get_client(sender);
+		if (!client->connection) {
+			ast_log(LOG_ERROR, "No XMPP client to talk to, us (partial JID) : %s\n", sender);
+			return NULL;
+		}
+	}
+       
 	ASTOBJ_WRLOCK(client);
 	p = jingle_alloc(client, to, NULL);
 	if (p)
@@ -1763,13 +1820,13 @@ static int jingle_load_config(void)
 					ASTOBJ_CONTAINER_TRAVERSE(clients, 1, {
 						ASTOBJ_WRLOCK(iterator);
 						ASTOBJ_WRLOCK(member);
-						member->connection = iterator;
+						member->connection = NULL;
 						iks_filter_add_rule(iterator->f, jingle_parser, member, IKS_RULE_TYPE, IKS_PAK_IQ, IKS_RULE_NS,	JINGLE_NS, IKS_RULE_DONE);
 						iks_filter_add_rule(iterator->f, jingle_parser, member, IKS_RULE_TYPE, IKS_PAK_IQ, IKS_RULE_NS,	JINGLE_DTMF_NS, IKS_RULE_DONE);
 						ASTOBJ_UNLOCK(member);
-						ASTOBJ_CONTAINER_LINK(&jingle_list, member);
 						ASTOBJ_UNLOCK(iterator);
 					});
+					ASTOBJ_CONTAINER_LINK(&jingle_list, member);
 				} else {
 					ASTOBJ_UNLOCK(member);
 					ASTOBJ_UNREF(member, jingle_member_destroy);

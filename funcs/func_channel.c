@@ -16,9 +16,10 @@
 
 /*! \file
  *
- * \brief Channel info dialplan function
+ * \brief Channel info dialplan functions
  *
  * \author Kevin P. Fleming <kpfleming@digium.com>
+ * \author Ben Winslow
  * 
  * \ingroup functions
  */
@@ -26,6 +27,8 @@
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
+#include <regex.h>
 
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
@@ -197,12 +200,24 @@ static struct ast_custom_function channel_function = {
 		"    local_ssrc            Local SSRC (stream ID)\n"
 		"    local_lostpackets     Local lost packets\n"
 		"    local_jitter          Local calculated jitter\n"
+		"    local_maxjitter       Local calculated jitter (maximum)\n"
+		"    local_minjitter       Local calculated jitter (minimum)\n"
+		"    local_normdevjitter   Local calculated jitter (normal deviation)\n"
+		"    local_stdevjitter     Local calculated jitter (standard deviation)\n"
 		"    local_count           Number of received packets\n"
 		"    remote_ssrc           Remote SSRC (stream ID)\n"
 		"    remote_lostpackets    Remote lost packets\n"
 		"    remote_jitter         Remote reported jitter\n"
+		"    remote_maxjitter      Remote calculated jitter (maximum)\n"
+		"    remote_minjitter      Remote calculated jitter (minimum)\n"
+		"    remote_normdevjitter  Remote calculated jitter (normal deviation)\n"
+		"    remote_stdevjitter    Remote calculated jitter (standard deviation)\n"
 		"    remote_count          Number of transmitted packets\n"
 		"    rtt                   Round trip time\n"
+		"    maxrtt                Round trip time (maximum)\n"
+		"    minrtt                Round trip time (minimum)\n"
+		"    normdevrtt            Round trip time (normal deviation)\n"
+		"    stdevrtt              Round trip time (standard deviation)\n"
 		"    all                   All statistics (in a form suited to logging, but not for parsing)\n"
 		"R/O    rtpdest            Get remote RTP destination information\n"
 		"       This option takes one additional argument:\n"
@@ -222,14 +237,76 @@ static struct ast_custom_function channel_function = {
 	.write = func_channel_write,
 };
 
+static int func_channels_read(struct ast_channel *chan, const char *function, char *data, char *buf, size_t maxlen)
+{
+	struct ast_channel *c = NULL;
+	regex_t re;
+	int res;
+	size_t buflen = 0;
+	
+	buf[0] = '\0';
+
+	if (!ast_strlen_zero(data)) {
+		if ((res = regcomp(&re, data, REG_EXTENDED | REG_ICASE | REG_NOSUB))) {
+			regerror(res, &re, buf, maxlen);
+			ast_log(LOG_WARNING, "Error compiling regular expression for %s(%s): %s\n", function, data, buf);
+			return -1;
+		}
+	}
+
+	for (c = ast_channel_walk_locked(NULL); c; ast_channel_unlock(c), c = ast_channel_walk_locked(c)) {
+		if (ast_strlen_zero(data) || regexec(&re, c->name, 0, NULL, 0) == 0) {
+			size_t namelen = strlen(c->name);
+			if (buflen + namelen + (ast_strlen_zero(buf) ? 0 : 1) + 1 < maxlen) {
+				if (!ast_strlen_zero(buf)) {
+					strcat(buf, " ");
+					buflen++;
+				}
+				strcat(buf, c->name);
+				buflen += namelen;
+			} else {
+				ast_log(LOG_WARNING, "Number of channels exceeds the available buffer space.  Output will be truncated!\n");
+			}
+		}
+	}
+
+	if (!ast_strlen_zero(data)) {
+		regfree(&re);
+	}
+
+	return 0;
+}
+
+static struct ast_custom_function channels_function = {
+	.name = "CHANNELS",
+	.synopsis = "Gets the list of channels, optionally filtering by a regular expression.",
+	.syntax = "CHANNEL([regular expression])",
+	.desc =
+"Gets the list of channels, optionally filtering by a regular expression.  If\n"
+"no argument is provided, all known channels are returned.  The regular\n"
+"expression must correspond to the POSIX.2 specification, as shown in\n"
+"regex(7).  The list returned will be space-delimited.\n",
+	.read = func_channels_read,
+};
+
 static int unload_module(void)
 {
-	return ast_custom_function_unregister(&channel_function);
+	int res = 0;
+	
+	res |= ast_custom_function_unregister(&channel_function);
+	res |= ast_custom_function_unregister(&channels_function);
+	
+	return res;
 }
 
 static int load_module(void)
 {
-	return ast_custom_function_register(&channel_function);
+	int res = 0;
+	
+	res |= ast_custom_function_register(&channel_function);
+	res |= ast_custom_function_register(&channels_function);
+	
+	return res;
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Channel information dialplan function");
+AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Channel information dialplan functions");

@@ -195,8 +195,8 @@ static int disa_exec(struct ast_channel *chan, void *data)
 		}
 
 		if ((f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_HANGUP)) {
-			if (f->seqno)
-				chan->hangupcause = f->seqno;
+			if (f->data.uint32)
+				chan->hangupcause = f->data.uint32;
 			ast_frfree(f);
 			ast_clear_flag(chan, AST_FLAG_END_DTMF_ONLY);
 			return -1;
@@ -363,7 +363,8 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	return ast_register_application(app, disa_exec, synopsis, descrip);
+	return ast_register_application(app, disa_exec, synopsis, descrip) ?
+		AST_MODULE_LOAD_DECLINE : AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "DISA (Direct Inward System Access) Application");

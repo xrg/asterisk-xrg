@@ -864,7 +864,7 @@ static void config_cache_attribute(const char *configfile, enum config_cache_att
 	/* Find our cached entry for this configuration file */
 	AST_LIST_LOCK(&cfmtime_head);
 	AST_LIST_TRAVERSE(&cfmtime_head, cfmtime, list) {
-		if (!strcmp(cfmtime->filename, configfile))
+		if (!strcmp(cfmtime->filename, configfile) && !strcmp(cfmtime->who_asked, who_asked))
 			break;
 	}
 	if (!cfmtime) {
@@ -1128,7 +1128,11 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 static struct ast_config *config_text_file_load(const char *database, const char *table, const char *filename, struct ast_config *cfg, struct ast_flags flags, const char *suggested_include_file, const char *who_asked)
 {
 	char fn[256];
+#if defined(LOW_MEMORY)
+	char buf[512];
+#else
 	char buf[8192];
+#endif
 	char *new_buf, *comment_p, *process_buf;
 	FILE *f;
 	int lineno=0;
@@ -2095,6 +2099,38 @@ int ast_check_realtime(const char *family)
 int ast_realtime_enabled()
 {
 	return config_maps ? 1 : 0;
+}
+
+int ast_realtime_require_field(const char *family, ...)
+{
+	struct ast_config_engine *eng;
+	char db[256] = "";
+	char table[256] = "";
+	va_list ap;
+	int res = -1;
+
+	va_start(ap, family);
+	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
+	if (eng && eng->require_func) {
+		res = eng->require_func(db, table, ap);
+	}
+	va_end(ap);
+
+	return res;
+}
+
+int ast_unload_realtime(const char *family)
+{
+	struct ast_config_engine *eng;
+	char db[256] = "";
+	char table[256] = "";
+	int res = -1;
+
+	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
+	if (eng && eng->unload_func) {
+		res = eng->unload_func(db, table);
+	}
+	return res;
 }
 
 struct ast_config *ast_load_realtime_multientry(const char *family, ...)

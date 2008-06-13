@@ -62,7 +62,7 @@ static char *config = "cdr.conf";
 
   "accountcode", 	accountcode is the account name of detail records, Master.csv contains all records *
   			Detail records are configured on a channel basis, IAX and SIP are determined by user *
-			Zap is determined by channel in zaptel.conf 
+			DAHDI is determined by channel in dahdi.conf 
   "source",
   "destination",
   "destination context", 
@@ -104,7 +104,7 @@ static int load_config(int reload)
 		ast_log(LOG_WARNING, "unable to load config: %s\n", config);
 		return 0;
 	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
-		return 0;
+		return 1;
 
 	if (!(var = ast_variable_browse(cfg, "csv"))) {
 		ast_config_destroy(cfg);

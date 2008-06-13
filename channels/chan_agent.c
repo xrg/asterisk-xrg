@@ -434,7 +434,17 @@ static struct ast_frame *agent_read(struct ast_channel *ast)
 			if (!ast_strlen_zero(p->loginchan)) {
 				if (p->chan)
 					ast_debug(1, "Bridge on '%s' being cleared (2)\n", p->chan->name);
-
+				if (p->owner->_state != AST_STATE_UP) {
+					int howlong = time(NULL) - p->start;
+					if (p->autologoff && howlong > p->autologoff) {
+						long logintime = time(NULL) - p->loginstart;
+						p->loginstart = 0;
+							ast_log(LOG_NOTICE, "Agent '%s' didn't answer/confirm within %d seconds (waited %d)\n", p->name, p->autologoff, howlong);
+						agent_logoff_maintenance(p, p->loginchan, logintime, ast->uniqueid, "Autologoff");
+						if (persistent_agents)
+							dump_agents();
+					}
+				}
 				status = pbx_builtin_getvar_helper(p->chan, "CHANLOCALSTATUS");
 				if (autologoffunavail && status && !strcasecmp(status, "CHANUNAVAIL")) {
 					long logintime = time(NULL) - p->loginstart;
@@ -1008,7 +1018,7 @@ static struct ast_channel *agent_new(struct agent_pvt *p, int state)
 	if (p->chan) {
 		if (ast_test_flag(p->chan, AST_FLAG_BLOCKING)) {
 			ast_log( LOG_ERROR, "A blocker exists after agent channel ownership acquired\n" );
-			CRASH;
+			ast_assert(ast_test_flag(p->chan, AST_FLAG_BLOCKING) == 0);
 		}
 	}
 	return tmp;
@@ -1520,9 +1530,7 @@ static int agent_logoff(const char *agent, int soft)
 					ast_mutex_lock(&p->lock);
 
 					while (p->owner && ast_channel_trylock(p->owner)) {
-						ast_mutex_unlock(&p->lock);
-						usleep(1);
-						ast_mutex_lock(&p->lock);
+						DEADLOCK_AVOIDANCE(&p->lock);
 					}
 					if (p->owner) {
 						ast_softhangup(p->owner, AST_SOFTHANGUP_EXPLICIT);
@@ -1530,9 +1538,7 @@ static int agent_logoff(const char *agent, int soft)
 					}
 
 					while (p->chan && ast_channel_trylock(p->chan)) {
-						ast_mutex_unlock(&p->lock);
-						usleep(1);
-						ast_mutex_lock(&p->lock);
+						DEADLOCK_AVOIDANCE(&p->lock);
 					}
 					if (p->chan) {
 						ast_softhangup(p->chan, AST_SOFTHANGUP_EXPLICIT);
@@ -2430,7 +2436,6 @@ static int unload_module(void)
 		ast_free(p);
 	}
 	AST_LIST_UNLOCK(&agents);
-	AST_LIST_HEAD_DESTROY(&agents);
 	return 0;
 }
 

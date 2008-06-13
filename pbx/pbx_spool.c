@@ -61,45 +61,33 @@ static char qdonedir[255];
 
 struct outgoing {
 	char fn[256];
-	/*! Current number of retries */
-	int retries;
-	/*! Maximum number of retries permitted */
-	int maxretries;
-	/*! How long to wait between retries (in seconds) */
-	int retrytime;
-	/*! How long to wait for an answer */
-	int waittime;
-	/*! PID which is currently calling */
-	long callingpid;
+	int retries;                              /*!< Current number of retries */
+	int maxretries;                           /*!< Maximum number of retries permitted */
+	int retrytime;                            /*!< How long to wait between retries (in seconds) */
+	int waittime;                             /*!< How long to wait for an answer */
+	long callingpid;                          /*!< PID which is currently calling */
+	int format;                               /*!< Formats (codecs) for this call */
 	
-	/*! What to connect to outgoing */
-	char tech[256];
-	char dest[256];
+	char tech[256];                           /*!< Which channel driver to use for outgoing call */
+	char dest[256];                           /*!< Which device/line to use for outgoing call */
+
+	char app[256];                            /*!< If application: Application name */
+	char data[256];                           /*!< If applicatoin: Application data */
+
+	char exten[AST_MAX_EXTENSION];            /*!< If extension/context/priority: Extension in dialplan */
+	char context[AST_MAX_CONTEXT];            /*!< If extension/context/priority: Dialplan context */
+	int priority;                             /*!< If extension/context/priority: Dialplan priority */
+
+	char cid_num[256];                        /*!< CallerID Information: Number/extension */
+	char cid_name[256];                       /*!< CallerID Information: Name */
+
+	char account[AST_MAX_ACCOUNT_CODE];       /*!< account code */
+
+	struct ast_variable *vars;                /*!< Variables and Functions */
 	
-	/* If application */
-	char app[256];
-	char data[256];
+	int maxlen;                               /*!< Maximum length of call */
 
-	/* If extension/context/priority */
-	char exten[AST_MAX_EXTENSION];
-	char context[AST_MAX_CONTEXT];
-	int priority;
-
-	/* CallerID Information */
-	char cid_num[256];
-	char cid_name[256];
-
-	/*! account code */
-	char account[AST_MAX_ACCOUNT_CODE];
-
-	/*! Variables and Functions */
-	struct ast_variable *vars;
-	
-	/*! Maximum length of call */
-	int maxlen;
-
-	/*! options */
-	struct ast_flags options;
+	struct ast_flags options;                 /*!< options */
 };
 
 static void init_outgoing(struct outgoing *o)
@@ -107,6 +95,7 @@ static void init_outgoing(struct outgoing *o)
 	o->priority = 1;
 	o->retrytime = 300;
 	o->waittime = 45;
+	o->format = AST_FORMAT_SLINEAR;
 	ast_set_flag(&o->options, SPOOL_FLAG_ALWAYS_DELETE);
 }
 
@@ -178,6 +167,8 @@ static int apply_outgoing(struct outgoing *o, char *fn, FILE *f)
 						ast_log(LOG_WARNING, "Invalid max retries at line %d of %s\n", lineno, fn);
 						o->maxretries = 0;
 					}
+				} else if (!strcasecmp(buf, "codecs")) {
+					ast_parse_allow_disallow(NULL, &o->format, c, 1);
 				} else if (!strcasecmp(buf, "context")) {
 					ast_copy_string(o->context, c, sizeof(o->context));
 				} else if (!strcasecmp(buf, "extension")) {
@@ -323,10 +314,10 @@ static void *attempt_thread(void *data)
 	int res, reason;
 	if (!ast_strlen_zero(o->app)) {
 		ast_verb(3, "Attempting call on %s/%s for application %s(%s) (Retry %d)\n", o->tech, o->dest, o->app, o->data, o->retries);
-		res = ast_pbx_outgoing_app(o->tech, AST_FORMAT_SLINEAR, o->dest, o->waittime * 1000, o->app, o->data, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
+		res = ast_pbx_outgoing_app(o->tech, o->format, o->dest, o->waittime * 1000, o->app, o->data, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
 	} else {
 		ast_verb(3, "Attempting call on %s/%s for %s@%s:%d (Retry %d)\n", o->tech, o->dest, o->exten, o->context,o->priority, o->retries);
-		res = ast_pbx_outgoing_exten(o->tech, AST_FORMAT_SLINEAR, o->dest, o->waittime * 1000, o->context, o->exten, o->priority, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
+		res = ast_pbx_outgoing_exten(o->tech, o->format, o->dest, o->waittime * 1000, o->context, o->exten, o->priority, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
 	}
 	if (res) {
 		ast_log(LOG_NOTICE, "Call failed to go through, reason (%d) %s\n", reason, ast_channel_reason2str(reason));

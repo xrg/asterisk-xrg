@@ -2320,13 +2320,13 @@ static int misdn_answer(struct ast_channel *ast)
 	
 	if (!p) {
 		ast_log(LOG_WARNING, " --> Channel not connected ??\n");
-		ast_queue_hangup(ast, AST_CAUSE_NETWORK_OUT_OF_ORDER);
+		ast_queue_hangup_with_cause(ast, AST_CAUSE_NETWORK_OUT_OF_ORDER);
 	}
 
 	if (!p->bc) {
 		chan_misdn_log(1, 0, " --> Got Answer, but theres no bc obj ??\n");
 
-		ast_queue_hangup(ast, AST_CAUSE_PROTOCOL_ERROR);
+		ast_queue_hangup_with_cause(ast, AST_CAUSE_PROTOCOL_ERROR);
 	}
 
 	tmp = pbx_builtin_getvar_helper(p->ast, "CRYPT_KEY");
@@ -2852,7 +2852,7 @@ static struct ast_frame *misdn_read(struct ast_channel *ast)
 	tmp->frame.offset = 0;
 	tmp->frame.delivery = ast_tv(0,0);
 	tmp->frame.src = NULL;
-	tmp->frame.data = tmp->ast_rd_buf;
+	tmp->frame.data.ptr = tmp->ast_rd_buf;
 
 	if (tmp->faxdetect && !tmp->faxhandled) {
 		if (tmp->faxdetect_timeout) {
@@ -2948,7 +2948,7 @@ static int misdn_write(struct ast_channel *ast, struct ast_frame *frame)
 		ast_debug(1, "write2mISDN %p %d bytes: ", p, frame->samples);
 
 		for (i = 0; i < max ; i++)
-			ast_debug(1, "%2.2x ", ((char*) frame->data)[i]);
+			ast_debug(1, "%2.2x ", ((char*) frame->data.ptr)[i]);
 	}
 #endif
 
@@ -2973,14 +2973,14 @@ static int misdn_write(struct ast_channel *ast, struct ast_frame *frame)
 	chan_misdn_log(9, ch->bc->port, "Sending :%d bytes 2 MISDN\n", frame->samples);
 	if ( !ch->bc->nojitter && misdn_cap_is_speech(ch->bc->capability) ) {
 		/* Buffered Transmit (triggert by read from isdn side)*/
-		if (misdn_jb_fill(ch->jb, frame->data, frame->samples) < 0) {
+		if (misdn_jb_fill(ch->jb, frame->data.ptr, frame->samples) < 0) {
 			if (ch->bc->active)
 				cb_log(0, ch->bc->port, "Misdn Jitterbuffer Overflow.\n");
 		}
 		
 	} else {
 		/*transmit without jitterbuffer*/
-		i=misdn_lib_tx2misdn_frm(ch->bc, frame->data, frame->samples);
+		i=misdn_lib_tx2misdn_frm(ch->bc, frame->data.ptr, frame->samples);
 	}
 
 	return 0;
@@ -3665,7 +3665,7 @@ static void hangup_chan(struct chan_list *ch)
 		send_cause2ast(ch->ast, ch->bc, ch);
 
 		if (ch->ast)
-			ast_queue_hangup(ch->ast, ch->bc->cause);
+			ast_queue_hangup_with_cause(ch->ast, ch->bc->cause);
 		cb_log(2, port, " --> queue_hangup\n");
 	} else {
 		cb_log(1, port, "Cannot hangup chan, no ast\n");
@@ -3801,7 +3801,7 @@ static void do_immediate_setup(struct misdn_bchannel *bc, struct chan_list *ch, 
 		fr.frametype = AST_FRAME_DTMF;
 		fr.subclass = *predial;
 		fr.src = NULL;
-		fr.data = NULL;
+		fr.data.ptr = NULL;
 		fr.datalen = 0;
 		fr.samples = 0;
 		fr.mallocd = 0;
@@ -4086,7 +4086,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		fr.frametype = AST_FRAME_DTMF;
 		fr.subclass = bc->dtmf ;
 		fr.src = NULL;
-		fr.data = NULL;
+		fr.data.ptr = NULL;
 		fr.datalen = 0;
 		fr.samples = 0;
 		fr.mallocd = 0;
@@ -4183,7 +4183,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			fr.frametype = AST_FRAME_DTMF;
 			fr.subclass = bc->info_dad[0] ;
 			fr.src = NULL;
-			fr.data = NULL;
+			fr.data.ptr = NULL;
 			fr.datalen = 0;
 			fr.samples = 0;
 			fr.mallocd = 0;
@@ -4756,7 +4756,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			frame.offset = 0;
 			frame.delivery = ast_tv(0,0);
 			frame.src = NULL;
-			frame.data = bc->bframe;
+			frame.data.ptr = bc->bframe;
 
 			if (ch->ast) 
 				ast_queue_frame(ch->ast, &frame);

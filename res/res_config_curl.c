@@ -406,6 +406,51 @@ static int destroy_curl(const char *url, const char *unused, const char *keyfiel
 	return -1;
 }
 
+static int require_curl(const char *url, const char *unused, va_list ap)
+{
+	struct ast_str *query;
+	char *elm, field[256], buffer[128];
+	int type, size;
+	const int EncodeSpecialChars = 1;
+
+	if (!ast_custom_function_find("CURL")) {
+		ast_log(LOG_ERROR, "func_curl.so must be loaded in order to use res_config_curl.so!!\n");
+		return -1;
+	}
+
+	if (!(query = ast_str_create(100))) {
+		return -1;
+	}
+
+	ast_str_set(&query, 0, "${CURL(%s/require,", url);
+
+	while ((elm = va_arg(ap, char *))) {
+		type = va_arg(ap, require_type);
+		size = va_arg(ap, int);
+		ast_uri_encode(elm, field, sizeof(field), EncodeSpecialChars);
+		ast_str_append(&query, 0, "%s=%s%%3A%d", field,
+			type == RQ_CHAR ? "char" :
+			type == RQ_INTEGER1 ? "integer1" :
+			type == RQ_UINTEGER1 ? "uinteger1" :
+			type == RQ_INTEGER2 ? "integer2" :
+			type == RQ_UINTEGER2 ? "uinteger2" :
+			type == RQ_INTEGER3 ? "integer3" :
+			type == RQ_UINTEGER3 ? "uinteger3" :
+			type == RQ_INTEGER4 ? "integer4" :
+			type == RQ_UINTEGER4 ? "uinteger4" :
+			type == RQ_INTEGER8 ? "integer8" :
+			type == RQ_UINTEGER8 ? "uinteger8" :
+			type == RQ_DATE ? "date" :
+			type == RQ_DATETIME ? "datetime" :
+			type == RQ_FLOAT ? "float" :
+			"unknown", size);
+	}
+	va_end(ap);
+
+	ast_str_append(&query, 0, ")}");
+	pbx_substitute_variables_helper(NULL, query->str, buffer, sizeof(buffer));
+	return atoi(buffer);
+}
 
 static struct ast_config *config_curl(const char *url, const char *unused, const char *file, struct ast_config *cfg, struct ast_flags flags, const char *sugg_incl, const char *who_asked)
 {
@@ -489,7 +534,8 @@ static struct ast_config_engine curl_engine = {
 	.realtime_multi_func = realtime_multi_curl,
 	.store_func = store_curl,
 	.destroy_func = destroy_curl,
-	.update_func = update_curl
+	.update_func = update_curl,
+	.require_func = require_curl,
 };
 
 static int unload_module (void)

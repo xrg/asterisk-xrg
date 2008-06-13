@@ -53,7 +53,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define EXT_DATA_SIZE 256
 
-
 /* Realtime switch looks up extensions in the supplied realtime table.
 
 	[context@][realtimetable][/options]
@@ -176,8 +175,33 @@ static int realtime_exec(struct ast_channel *chan, const char *context, const ch
 		for (v = var; v ; v = v->next) {
 			if (!strcasecmp(v->name, "app"))
 				app = ast_strdupa(v->value);
-			else if (!strcasecmp(v->name, "appdata"))
-				tmp = ast_strdupa(v->value);
+			else if (!strcasecmp(v->name, "appdata")) {
+				if (ast_compat_pbx_realtime) {
+					char *ptr;
+					int in = 0;
+					tmp = alloca(strlen(v->value) * 2 + 1);
+					for (ptr = tmp; *v->value; v->value++) {
+						if (*v->value == ',') {
+							*ptr++ = '\\';
+							*ptr++ = ',';
+						} else if (*v->value == '|' && !in) {
+							*ptr++ = ',';
+						} else {
+							*ptr++ = *v->value;
+						}
+
+						/* Don't escape '|', meaning 'or', inside expressions ($[ ]) */
+						if (v->value[0] == '[' && v->value[-1] == '$') {
+							in++;
+						} else if (v->value[0] == ']' && in) {
+							in--;
+						}
+					}
+					*ptr = '\0';
+				} else {
+					tmp = ast_strdupa(v->value);
+				}
+			}
 		}
 		ast_variables_destroy(var);
 		if (!ast_strlen_zero(app)) {

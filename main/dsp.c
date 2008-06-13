@@ -556,7 +556,6 @@ static int tone_detect(struct ast_dsp *dsp, tone_detect_state_t *s, int16_t *amp
 		ast_debug(10, "tone %d, Ew=%.2E, Et=%.2E, s/n=%10.2f\n", s->freq, tone_energy, s->energy, tone_energy / (s->energy - tone_energy));
 		hit = 0;
 		if (tone_energy > s->energy * s->threshold) {
-
 			ast_debug(10, "Hit! count=%d\n", s->hit_count);
 			hit = 1;
 		}
@@ -1075,7 +1074,7 @@ int ast_dsp_call_progress(struct ast_dsp *dsp, struct ast_frame *inf)
 		ast_log(LOG_WARNING, "Can only check call progress in signed-linear frames\n");
 		return 0;
 	}
-	return __ast_dsp_call_progress(dsp, inf->data, inf->datalen / 2);
+	return __ast_dsp_call_progress(dsp, inf->data.ptr, inf->datalen / 2);
 }
 
 static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *totalsilence, int *totalnoise)
@@ -1236,7 +1235,7 @@ int ast_dsp_silence(struct ast_dsp *dsp, struct ast_frame *f, int *totalsilence)
 		ast_log(LOG_WARNING, "Can only calculate silence on signed-linear frames :(\n");
 		return 0;
 	}
-	s = f->data;
+	s = f->data.ptr;
 	len = f->datalen/2;
 	return __ast_dsp_silence_noise(dsp, s, len, totalsilence, NULL);
 }
@@ -1254,7 +1253,7 @@ int ast_dsp_noise(struct ast_dsp *dsp, struct ast_frame *f, int *totalnoise)
                ast_log(LOG_WARNING, "Can only calculate noise on signed-linear frames :(\n");
                return 0;
        }
-       s = f->data;
+       s = f->data.ptr;
        len = f->datalen/2;
        return __ast_dsp_silence_noise(dsp, s, len, NULL, totalnoise);
 }
@@ -1276,12 +1275,12 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 	if (af->frametype != AST_FRAME_VOICE)
 		return af;
 
-	odata = af->data;
+	odata = af->data.ptr;
 	len = af->datalen;
 	/* Make sure we have short data */
 	switch (af->subclass) {
 	case AST_FORMAT_SLINEAR:
-		shortdata = af->data;
+		shortdata = af->data.ptr;
 		len = af->datalen / 2;
 		break;
 	case AST_FORMAT_ULAW:
