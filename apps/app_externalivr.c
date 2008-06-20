@@ -118,7 +118,7 @@ static void send_eivr_event(FILE *handle, const char event, const char *data,
 
 	ast_str_append(&tmp, 0, "%c,%10d", event, (int)time(NULL));
 	if (data) {
-		ast_str_append(&tmp, 0, "%s", data);
+		ast_str_append(&tmp, 0, ",%s", data);
 	}
 
 	fprintf(handle, "%s\n", tmp->str);
@@ -373,7 +373,7 @@ static int app_exec(struct ast_channel *chan, void *data)
 		/* Put the application + the arguments in a | delimited list */
 		ast_str_reset(pipe_delim_args);
 		for (j = 0; application_args.cmd[j] != NULL; j++) {
-			ast_str_append(&pipe_delim_args, 0, "%s%s", j == 0 ? "" : "|", application_args.cmd[j]);
+			ast_str_append(&pipe_delim_args, 0, "%s%s", j == 0 ? "" : ",", application_args.cmd[j]);
 		}
 
 		/* Parse the ExternalIVR() arguments */
@@ -515,8 +515,7 @@ static int app_exec(struct ast_channel *chan, void *data)
 	if (child_stderr[1])
 		close(child_stderr[1]);
 	if (ser) {
-		fclose(ser->f);
-		ast_tcptls_session_instance_destroy(ser);
+		ao2_ref(ser, -1);
 	}
 	while ((entry = AST_LIST_REMOVE_HEAD(&u->playlist, list)))
 		ast_free(entry);

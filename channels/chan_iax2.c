@@ -31,7 +31,6 @@
  */
 
 /*** MODULEINFO
-	<use>dahdi</use>
 	<use>crypto</use>
  ***/
 
@@ -55,7 +54,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/stat.h>
 #include <regex.h>
 
-#include "asterisk/dahdi.h"
 #include "asterisk/paths.h"	/* need ast_config_AST_DATA_DIR for firmware */
 
 #include "asterisk/lock.h"
@@ -89,6 +87,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/event.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/timing.h"
 
 #include "iax2.h"
 #include "iax2-parser.h"
@@ -3086,13 +3085,13 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 	int dynamic=0;
 
 	if (peername) {
-		var = ast_load_realtime("iaxpeers", "name", peername, "host", "dynamic", NULL);
+		var = ast_load_realtime("iaxpeers", "name", peername, "host", "dynamic", SENTINEL);
 		if (!var && sin)
-			var = ast_load_realtime("iaxpeers", "name", peername, "host", ast_inet_ntoa(sin->sin_addr), NULL);
+			var = ast_load_realtime("iaxpeers", "name", peername, "host", ast_inet_ntoa(sin->sin_addr), SENTINEL);
 	} else if (sin) {
 		char porta[25];
 		sprintf(porta, "%d", ntohs(sin->sin_port));
-		var = ast_load_realtime("iaxpeers", "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, NULL);
+		var = ast_load_realtime("iaxpeers", "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, SENTINEL);
 		if (var) {
 			/* We'll need the peer name in order to build the structure! */
 			for (tmp = var; tmp; tmp = tmp->next) {
@@ -3102,7 +3101,7 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 		}
 	}
 	if (!var && peername) { /* Last ditch effort */
-		var = ast_load_realtime("iaxpeers", "name", peername, NULL);
+		var = ast_load_realtime("iaxpeers", "name", peername, SENTINEL);
 		/*!\note
 		 * If this one loaded something, then we need to ensure that the host
 		 * field matched.  The only reason why we can't have this as a criteria
@@ -3203,18 +3202,18 @@ static struct iax2_user *realtime_user(const char *username, struct sockaddr_in 
 	struct ast_variable *tmp;
 	struct iax2_user *user=NULL;
 
-	var = ast_load_realtime("iaxusers", "name", username, "host", "dynamic", NULL);
+	var = ast_load_realtime("iaxusers", "name", username, "host", "dynamic", SENTINEL);
 	if (!var)
-		var = ast_load_realtime("iaxusers", "name", username, "host", ast_inet_ntoa(sin->sin_addr), NULL);
+		var = ast_load_realtime("iaxusers", "name", username, "host", ast_inet_ntoa(sin->sin_addr), SENTINEL);
 	if (!var && sin) {
 		char porta[6];
 		snprintf(porta, sizeof(porta), "%d", ntohs(sin->sin_port));
-		var = ast_load_realtime("iaxusers", "name", username, "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, NULL);
+		var = ast_load_realtime("iaxusers", "name", username, "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, SENTINEL);
 		if (!var)
-			var = ast_load_realtime("iaxusers", "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, NULL);
+			var = ast_load_realtime("iaxusers", "ipaddr", ast_inet_ntoa(sin->sin_addr), "port", porta, SENTINEL);
 	}
 	if (!var) { /* Last ditch effort */
-		var = ast_load_realtime("iaxusers", "name", username, NULL);
+		var = ast_load_realtime("iaxusers", "name", username, SENTINEL);
 		/*!\note
 		 * If this one loaded something, then we need to ensure that the host
 		 * field matched.  The only reason why we can't have this as a criteria
@@ -3277,7 +3276,7 @@ static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, 
 	snprintf(port, sizeof(port), "%d", ntohs(sin->sin_port));
 	ast_update_realtime("iaxpeers", "name", peername, 
 		"ipaddr", ast_inet_ntoa(sin->sin_addr), "port", port, 
-		"regseconds", regseconds, NULL);
+		"regseconds", regseconds, SENTINEL);
 }
 
 struct create_addr_info {
@@ -7260,32 +7259,17 @@ static inline int iax2_trunk_expired(struct iax2_trunk_peer *tpeer, struct timev
 
 static int timing_read(int *id, int fd, short events, void *cbdata)
 {
-	char buf[1024];
 	int res, processed = 0, totalcalls = 0;
 	struct iax2_trunk_peer *tpeer = NULL, *drop = NULL;
-#ifdef DAHDI_TIMERACK
-	int x = 1;
-#endif
 	struct timeval now = ast_tvnow();
+
 	if (iaxtrunkdebug)
 		ast_verbose("Beginning trunk processing. Trunk queue ceiling is %d bytes per host\n", trunkmaxsize);
-	if (events & AST_IO_PRI) {
-#ifdef DAHDI_TIMERACK
-		/* Great, this is a timing interface, just call the ioctl */
-		if (ioctl(fd, DAHDI_TIMERACK, &x)) {
-			ast_log(LOG_WARNING, "Unable to acknowledge DAHDI timer. IAX trunking will fail!\n");
-			usleep(1);
-			return -1;
-		}
-#endif		
-	} else {
-		/* Read and ignore from the pseudo channel for timing */
-		res = read(fd, buf, sizeof(buf));
-		if (res < 1) {
-			ast_log(LOG_WARNING, "Unable to read from timing fd\n");
-			return 1;
-		}
+
+	if (timingfd > -1) { 
+		ast_timer_ack(timingfd, 1);
 	}
+
 	/* For each peer that supports trunking... */
 	AST_LIST_LOCK(&tpeers);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&tpeers, tpeer, list) {
@@ -9695,9 +9679,10 @@ static int iax2_do_register(struct iax2_registry *reg)
 	 * call has the pointer to IP and must be updated to the new one
 	 */
 	if (reg->dnsmgr && ast_dnsmgr_changed(reg->dnsmgr) && (reg->callno > 0)) {
-		ast_mutex_lock(&iaxsl[reg->callno]);
-		iax2_destroy(reg->callno);
-		ast_mutex_unlock(&iaxsl[reg->callno]);
+		int callno = reg->callno;
+		ast_mutex_lock(&iaxsl[callno]);
+		iax2_destroy(callno);
+		ast_mutex_unlock(&iaxsl[callno]);
 		reg->callno = 0;
 	}
 	if (!reg->addr.sin_addr.s_addr) {
@@ -10301,13 +10286,14 @@ static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
 static void peer_destructor(void *obj)
 {
 	struct iax2_peer *peer = obj;
+	int callno = peer->callno;
 
 	ast_free_ha(peer->ha);
 
-	if (peer->callno > 0) {
-		ast_mutex_lock(&iaxsl[peer->callno]);
-		iax2_destroy(peer->callno);
-		ast_mutex_unlock(&iaxsl[peer->callno]);
+	if (callno > 0) {
+		ast_mutex_lock(&iaxsl[callno]);
+		iax2_destroy(callno);
+		ast_mutex_unlock(&iaxsl[callno]);
 	}
 
 	register_peer_exten(peer, 0);
@@ -10386,6 +10372,10 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 				ast_string_field_set(peer, secret, v->value);
 			} else if (!strcasecmp(v->name, "mailbox")) {
 				ast_string_field_set(peer, mailbox, v->value);
+			} else if (!strcasecmp(v->name, "hasvoicemail")) {
+				if (ast_true(v->value) && ast_strlen_zero(peer->mailbox)) {
+					ast_string_field_set(peer, mailbox, name);
+				}
 			} else if (!strcasecmp(v->name, "mohinterpret")) {
 				ast_string_field_set(peer, mohinterpret, v->value);
 			} else if (!strcasecmp(v->name, "mohsuggest")) {
@@ -10812,12 +10802,13 @@ static void delete_users(void)
 	while ((reg = AST_LIST_REMOVE_HEAD(&registrations, entry))) {
 		AST_SCHED_DEL(sched, reg->expire);
 		if (reg->callno) {
-			ast_mutex_lock(&iaxsl[reg->callno]);
-			if (iaxs[reg->callno]) {
-				iaxs[reg->callno]->reg = NULL;
-				iax2_destroy(reg->callno);
+			int callno = reg->callno;
+			ast_mutex_lock(&iaxsl[callno]);
+			if (iaxs[callno]) {
+				iaxs[callno]->reg = NULL;
+				iax2_destroy(callno);
 			}
-			ast_mutex_unlock(&iaxsl[reg->callno]);
+			ast_mutex_unlock(&iaxsl[callno]);
 		}
 		if (reg->dnsmgr)
 			ast_dnsmgr_release(reg->dnsmgr);
@@ -10853,21 +10844,6 @@ static void prune_peers(void)
 			unlink_peer(peer);
 		peer_unref(peer);
 	}
-}
-
-static void set_timing(void)
-{
-#ifdef HAVE_DAHDI
-	int bs = trunkfreq * 8;
-	if (timingfd > -1) {
-		if (
-#ifdef DAHDI_TIMERACK
-			ioctl(timingfd, DAHDI_TIMERCONFIG, &bs) &&
-#endif			
-			ioctl(timingfd, DAHDI_SET_BLOCKSIZE, &bs))
-			ast_log(LOG_WARNING, "Unable to set blocksize on timing source\n");
-	}
-#endif
 }
 
 static void set_config_destroy(void)
@@ -11276,7 +11252,6 @@ static int set_config(char *config_file, int reload)
 		cat = ast_category_browse(cfg, cat);
 	}
 	ast_config_destroy(cfg);
-	set_timing();
 	return 1;
 }
 
@@ -11792,10 +11767,15 @@ static int acf_channel_read(struct ast_channel *chan, const char *funcname, char
 		return -1;
 	}
 
-	if (!strcasecmp(args, "osptoken"))
+	if (!strcasecmp(args, "osptoken")) {
 		ast_copy_string(buf, pvt->osptoken, buflen);
-	else
+	} else if (!strcasecmp(args, "peerip")) {
+		ast_copy_string(buf, pvt->addr.sin_addr.s_addr ? ast_inet_ntoa(pvt->addr.sin_addr) : "", buflen);
+	} else if (!strcasecmp(args, "peername")) {
+		ast_copy_string(buf, pvt->username, buflen);
+	} else {
 		res = -1;
+	}
 
 	ast_mutex_unlock(&iaxsl[callno]);
 
@@ -12060,7 +12040,11 @@ static int __unload_module(void)
 	ao2_ref(peers, -1);
 	ao2_ref(users, -1);
 	ao2_ref(iax_peercallno_pvts, -1);
-	
+
+	if (timingfd > -1) {
+		ast_timer_close(timingfd);
+	}
+
 	con = ast_context_find(regcontext);
 	if (con)
 		ast_context_destroy(con, "IAX2");
@@ -12131,16 +12115,6 @@ static int load_module(void)
 	iax_set_output(iax_debug_output);
 	iax_set_error(iax_error_output);
 	jb_setoutput(jb_error_output, jb_warning_output, NULL);
-	
-#ifdef HAVE_DAHDI
-#ifdef DAHDI_TIMERACK
-	timingfd = open("/dev/dahdi/timer", O_RDWR);
-	if (timingfd < 0)
-#endif
-		timingfd = open("/dev/dahdi/pseudo", O_RDWR);
-	if (timingfd < 0) 
-		ast_log(LOG_WARNING, "Unable to open IAX timing interface: %s\n", strerror(errno));
-#endif		
 
 	memset(iaxs, 0, sizeof(iaxs));
 
@@ -12189,6 +12163,11 @@ static int load_module(void)
 	if(set_config(config, 0) == -1)
 		return AST_MODULE_LOAD_DECLINE;
 
+	timingfd = ast_timer_open();
+	if (timingfd > -1) {
+		ast_timer_set_rate(timingfd, trunkfreq);
+	}
+
  	if (ast_channel_register(&iax2_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class %s\n", "IAX2");
 		__unload_module();
@@ -12217,7 +12196,7 @@ static int load_module(void)
 	reload_firmware(0);
 	iax_provision_reload(0);
 
-	ast_realtime_require_field("iaxpeers", "name", RQ_CHAR, 10, "ipaddr", RQ_CHAR, 15, "port", RQ_UINTEGER2, 5, "regseconds", RQ_UINTEGER2, 6, NULL);
+	ast_realtime_require_field("iaxpeers", "name", RQ_CHAR, 10, "ipaddr", RQ_CHAR, 15, "port", RQ_UINTEGER2, 5, "regseconds", RQ_UINTEGER2, 6, SENTINEL);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

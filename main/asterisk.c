@@ -577,7 +577,10 @@ int64_t ast_profile(int i, int64_t delta)
 	return prof_data->e[i].value;
 }
 
-#if defined ( __i386__) && (defined(__FreeBSD__) || defined(linux))
+/* The RDTSC instruction was introduced on the Pentium processor and is not
+ * implemented on certain clones, like the Cyrix 586. Hence, the previous
+ * expectation of __i386__ was in error. */
+#if defined ( __i686__) && (defined(__FreeBSD__) || defined(linux))
 #if defined(__FreeBSD__)
 #include <machine/cpufunc.h>
 #elif defined(linux)
@@ -3299,40 +3302,17 @@ int main(int argc, char *argv[])
 		printf("%s", term_quit());
 		exit(1);
 	}
-#ifdef HAVE_DAHDI
-	{
-		int fd;
-		int x = 160;
-		fd = open("/dev/dahdi/timer", O_RDWR);
-		if (fd >= 0) {
-			if (ioctl(fd, DAHDI_TIMERCONFIG, &x)) {
-				ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer test failed to set DAHDI_TIMERCONFIG to %d.\n", x);
-				exit(1);
-			}
-			if ((x = ast_wait_for_input(fd, 300)) < 0) {
-				ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer could not be polled during the DAHDI timer test.\n");
-				exit(1);
-			}
-			if (!x) {
-				const char dahdi_timer_error[] = {
-					"Asterisk has detected a problem with your DAHDI configuration and will shutdown for your protection.  You have options:"
-					"\n\t1. You only have to compile DAHDI support into Asterisk if you need it.  One option is to recompile without DAHDI support."
-					"\n\t2. You only have to load DAHDI drivers if you want to take advantage of DAHDI services.  One option is to unload DAHDI modules if you don't need them."
-					"\n\t3. If you need DAHDI services, you must correctly configure DAHDI."
-				};
-				ast_log(LOG_ERROR, "%s\n", dahdi_timer_error);
-				usleep(100);
-				exit(1);
-			}
-			close(fd);
-		}
-	}
-#endif
+
 	threadstorage_init();
 
 	astobj2_init();
 
 	ast_autoservice_init();
+
+	if (ast_timing_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
 
 	if (load_modules(1)) {		/* Load modules, pre-load only */
 		printf("%s", term_quit());

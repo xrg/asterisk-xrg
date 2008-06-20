@@ -483,7 +483,7 @@ struct call_queue {
 	int numperiodicannounce;            /*!< The number of periodic announcements configured */
 	int randomperiodicannounce;         /*!< Are periodic announcments randomly chosen */
 	int roundingseconds;                /*!< How many seconds do we round to? */
-	int holdtime;                       /*!< Current avg holdtime, based on recursive boxcar filter */
+	int holdtime;                       /*!< Current avg holdtime, based on an exponential average */
 	int callscompleted;                 /*!< Number of queue calls completed */
 	int callsabandoned;                 /*!< Number of queue calls abandoned */
 	int servicelevel;                   /*!< seconds setting for servicelevel*/
@@ -1578,9 +1578,9 @@ static struct call_queue *load_realtime_queue(const char *queuename)
 		   Thus we might see an empty member list when a queue is
 		   deleted. In practise, this is unlikely to cause a problem. */
 
-		queue_vars = ast_load_realtime("queues", "name", queuename, NULL);
+		queue_vars = ast_load_realtime("queues", "name", queuename, SENTINEL);
 		if (queue_vars) {
-			member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", queuename, NULL);
+			member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", queuename, SENTINEL);
 			if (!member_config) {
 				ast_log(LOG_ERROR, "no queue_members defined in your config (extconfig.conf).\n");
 				ast_variables_destroy(queue_vars);
@@ -1609,7 +1609,7 @@ static int update_realtime_member_field(struct member *mem, const char *queue_na
 	if (ast_strlen_zero(mem->rt_uniqueid))
  		return ret;
 
-	if ((ast_update_realtime("queue_members", "uniqueid", mem->rt_uniqueid, field, value, NULL)) > 0)
+	if ((ast_update_realtime("queue_members", "uniqueid", mem->rt_uniqueid, field, value, SENTINEL)) > 0)
 		ret = 0;
 
 	return ret;
@@ -1623,7 +1623,7 @@ static void update_realtime_members(struct call_queue *q)
 	char *interface = NULL;
 	struct ao2_iterator mem_iter;
 
-	if (!(member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", q->name , NULL))) {
+	if (!(member_config = ast_load_realtime_multientry("queue_members", "interface LIKE", "%", "queue_name", q->name , SENTINEL))) {
 		/*This queue doesn't have realtime members*/
 		ast_debug(3, "Queue %s has no realtime members defined. No need for update\n", q->name);
 		return;
@@ -1946,7 +1946,7 @@ static void recalc_holdtime(struct queue_ent *qe, int newholdtime)
 {
 	int oldvalue;
 
-	/* Calculate holdtime using a recursive boxcar filter */
+	/* Calculate holdtime using an exponential average */
 	/* Thanks to SRT for this contribution */
 	/* 2^2 (4) is the filter coefficient; a higher exponent would give old entries more weight */
 
@@ -2005,7 +2005,7 @@ static void leave_queue(struct queue_ent *qe)
 
 	/*If the queue is a realtime queue, check to see if it's still defined in real time*/
 	if (q->realtime) {
-		if (!ast_load_realtime("queues", "name", q->name, NULL))
+		if (!ast_load_realtime("queues", "name", q->name, SENTINEL))
 			q->dead = 1;
 	}
 
@@ -3104,9 +3104,9 @@ static void queue_transfer_fixup(void *data, struct ast_channel *old_chan, struc
 	int callstart = qtds->starttime;
 	struct ast_datastore *datastore;
 	
-	ast_queue_log(qe->parent->name, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld",
+	ast_queue_log(qe->parent->name, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld|%d",
 				new_chan->exten, new_chan->context, (long) (callstart - qe->start),
-				(long) (time(NULL) - callstart));
+				(long) (time(NULL) - callstart), qe->opos);
 	
 	if (!(datastore = ast_channel_datastore_find(new_chan, &queue_transfer_info, NULL))) {
 		ast_log(LOG_WARNING, "Can't find the queue_transfer datastore.\n");
@@ -3132,7 +3132,7 @@ static int attended_transfer_occurred(struct ast_channel *chan)
 static void setup_transfer_datastore(struct queue_ent *qe, struct member *member, int starttime)
 {
 	struct ast_datastore *ds;
-	struct queue_transfer_ds *qtds = ast_calloc(1, sizeof(qtds));
+	struct queue_transfer_ds *qtds = ast_calloc(1, sizeof(*qtds));
 
 	if (!qtds) {
 		ast_log(LOG_WARNING, "Memory allocation error!\n");
@@ -3802,9 +3802,9 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		 */
 		if (!attended_transfer_occurred(qe->chan)) {
 			if (strcasecmp(oldcontext, qe->chan->context) || strcasecmp(oldexten, qe->chan->exten)) {
-				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld",
+				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld|%d",
 					qe->chan->exten, qe->chan->context, (long) (callstart - qe->start),
-					(long) (time(NULL) - callstart));
+					(long) (time(NULL) - callstart), qe->opos);
 				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), TRANSFER);
 			} else if (ast_check_hangup(qe->chan)) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETECALLER", "%ld|%ld|%d",
@@ -4775,8 +4775,11 @@ stop:
 				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "ABANDON",
 					"%d|%d|%ld", qe.pos, qe.opos,
 					(long) time(NULL) - qe.start);
+				res = -1;
+			} else if (qcontinue) {
+				reason = QUEUE_CONTINUE;
+				res = 0;
 			}
-			res = -1;
 		} else if (qe.valid_digits) {
 			ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHKEY",
 				"%s|%d", qe.digits, qe.pos);
@@ -4973,7 +4976,7 @@ static int queue_function_queuewaitingcount(struct ast_channel *chan, const char
 		count = q->count;
 		ao2_unlock(q);
 		queue_unref(q);
-	} else if ((var = ast_load_realtime("queues", "name", data, NULL))) {
+	} else if ((var = ast_load_realtime("queues", "name", data, SENTINEL))) {
 		/* if the queue is realtime but was not found in memory, this
 		 * means that the queue had been deleted from memory since it was 
 		 * "dead." This means it has a 0 waiting count
@@ -6393,7 +6396,7 @@ static int unload_module(void)
 		ast_event_unsubscribe(device_state_sub);
 
 	if ((con = ast_context_find("app_queue_gosub_virtual_context"))) {
-		ast_context_remove_extension2(con, "s", 1, NULL);
+		ast_context_remove_extension2(con, "s", 1, NULL, 0);
 		ast_context_destroy(con, "app_queue"); /* leave no trace */
 	}
 
@@ -6464,7 +6467,7 @@ static int load_module(void)
 		res = -1;
 	}
 
-	ast_realtime_require_field("queue_members", "paused", RQ_INTEGER1, 1, "uniqueid", RQ_UINTEGER2, 5, NULL);
+	ast_realtime_require_field("queue_members", "paused", RQ_INTEGER1, 1, "uniqueid", RQ_UINTEGER2, 5, SENTINEL);
 
 	return res ? AST_MODULE_LOAD_DECLINE : 0;
 }

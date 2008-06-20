@@ -84,22 +84,32 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static char *name = "mssql";
 static char *config = "cdr_tds.conf";
 
-static char *hostname = NULL, *dbname = NULL, *dbuser = NULL, *password = NULL, *charset = NULL, *language = NULL;
-static char *table = NULL;
+struct cdr_tds_config {
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(hostname);
+		AST_STRING_FIELD(dbname);
+		AST_STRING_FIELD(dbuser);
+		AST_STRING_FIELD(password);
+		AST_STRING_FIELD(table);
+		AST_STRING_FIELD(charset);
+		AST_STRING_FIELD(language);
+	);
+	TDSSOCKET *tds;
+	TDSLOGIN *login;
+	TDSCONTEXT *context;
+	unsigned int connected:1;
+	ast_mutex_t lock;
+};
 
-static int connected = 0;
-
-AST_MUTEX_DEFINE_STATIC(tds_lock);
-
-static TDSSOCKET *tds;
-static TDSLOGIN *login;
-static TDSCONTEXT *context;
+static struct cdr_tds_config *settings;
 
 static char *anti_injection(const char *, int);
 static void get_date(char *, struct timeval);
 
 static int mssql_connect(void);
 static int mssql_disconnect(void);
+
+static void cdr_tds_config_destroy(void);
 
 static int tds_log(struct ast_cdr *cdr)
 {
@@ -111,7 +121,7 @@ static int tds_log(struct ast_cdr *cdr)
 	TDS_INT result_type;
 #endif
 
-	ast_mutex_lock(&tds_lock);
+	ast_mutex_lock(&settings->lock);
 
 	memset(sqlcmd, 0, 2048);
 
@@ -172,7 +182,7 @@ static int tds_log(struct ast_cdr *cdr)
 			"'%s', "	/* amaflags */
 			"'%s'"		/* uniqueid */
 		")",
-		table,
+		settings->table,
 		accountcode,
 		src,
 		dst,
@@ -193,7 +203,7 @@ static int tds_log(struct ast_cdr *cdr)
 	);
 
 	do {
-		if (!connected) {
+		if (!settings->connected) {
 			if (mssql_connect())
 				ast_log(LOG_ERROR, "Failed to reconnect to SQL database.\n");
 			else
@@ -203,16 +213,16 @@ static int tds_log(struct ast_cdr *cdr)
 		}
 
 #ifdef FREETDS_PRE_0_62
-		if (!connected || (tds_submit_query(tds, sqlcmd) != TDS_SUCCEED) || (tds_process_simple_query(tds, &result_type) != TDS_SUCCEED || result_type != TDS_CMD_SUCCEED))
+		if (!settings->connected || (tds_submit_query(settings->tds, sqlcmd) != TDS_SUCCEED) || (tds_process_simple_query(settings->tds, &result_type) != TDS_SUCCEED || result_type != TDS_CMD_SUCCEED))
 #else
-		if (!connected || (tds_submit_query(tds, sqlcmd) != TDS_SUCCEED) || (tds_process_simple_query(tds) != TDS_SUCCEED))
+		if (!settings->connected || (tds_submit_query(settings->tds, sqlcmd) != TDS_SUCCEED) || (tds_process_simple_query(settings->tds) != TDS_SUCCEED))
 #endif
 		{
 			ast_log(LOG_ERROR, "Failed to insert Call Data Record into SQL database.\n");
 
 			mssql_disconnect();	/* this is ok even if we are already disconnected */
 		}
-	} while (!connected && !retried);
+	} while (!settings->connected && !retried);
 
 	ast_free(accountcode);
 	ast_free(src);
@@ -225,7 +235,7 @@ static int tds_log(struct ast_cdr *cdr)
 	ast_free(lastdata);
 	ast_free(uniqueid);
 
-	ast_mutex_unlock(&tds_lock);
+	ast_mutex_unlock(&settings->lock);
 
 	return res;
 }
@@ -233,36 +243,31 @@ static int tds_log(struct ast_cdr *cdr)
 static char *anti_injection(const char *str, int len)
 {
 	/* Reference to http://www.nextgenss.com/papers/advanced_sql_injection.pdf */
-
 	char *buf;
 	char *buf_ptr, *srh_ptr;
 	char *known_bad[] = {"select", "insert", "update", "delete", "drop", ";", "--", "\0"};
 	int idx;
 
-	if ((buf = ast_malloc(len + 1)) == NULL)
-	{
-		ast_log(LOG_ERROR, "cdr_tds:  Out of memory error\n");
+	if (!(buf = ast_calloc(1, len + 1))) {
+		ast_log(LOG_ERROR, "Out of memory\n");
 		return NULL;
 	}
-	memset(buf, 0, len);
 
 	buf_ptr = buf;
 
 	/* Escape single quotes */
-	for (; *str && strlen(buf) < len; str++)
-	{
-		if (*str == '\'')
+	for (; *str && strlen(buf) < len; str++) {
+		if (*str == '\'') {
 			*buf_ptr++ = '\'';
+		}
 		*buf_ptr++ = *str;
 	}
 	*buf_ptr = '\0';
 
 	/* Erase known bad input */
-	for (idx=0; *known_bad[idx]; idx++)
-	{
-		while((srh_ptr = strcasestr(buf, known_bad[idx])))
-		{
-			memmove(srh_ptr, srh_ptr+strlen(known_bad[idx]), strlen(srh_ptr+strlen(known_bad[idx]))+1);
+	for (idx = 0; *known_bad[idx]; idx++) {
+		while ((srh_ptr = strcasestr(buf, known_bad[idx]))) {
+			memmove(srh_ptr, srh_ptr + strlen(known_bad[idx]), strlen(srh_ptr + strlen(known_bad[idx])) + 1);
 		}
 	}
 
@@ -275,36 +280,36 @@ static void get_date(char *dateField, struct timeval tv)
 	char buf[80];
 
 	/* To make sure we have date variable if not insert null to SQL */
-	if (!ast_tvzero(tv))
-	{
+	if (!ast_tvzero(tv)) {
 		ast_localtime(&tv, &tm, NULL);
 		ast_strftime(buf, 80, DATE_FORMAT, &tm);
 		sprintf(dateField, "'%s'", buf);
-	}
-	else
-	{
+	} else {
 		strcpy(dateField, "null");
 	}
 }
 
 static int mssql_disconnect(void)
 {
-	if (tds) {
-		tds_free_socket(tds);
-		tds = NULL;
+	if (!settings)
+		return 0;
+	
+	if (settings->tds) {
+		tds_free_socket(settings->tds);
+		settings->tds = NULL;
 	}
 
-	if (context) {
-		tds_free_context(context);
-		context = NULL;
+	if (settings->context) {
+		tds_free_context(settings->context);
+		settings->context = NULL;
 	}
 
-	if (login) {
-		tds_free_login(login);
-		login = NULL;
+	if (settings->login) {
+		tds_free_login(settings->login);
+		settings->login = NULL;
 	}
 
-	connected = 0;
+	settings->connected = 0;
 
 	return 0;
 }
@@ -319,51 +324,48 @@ static int mssql_connect(void)
 	char query[128];
 
 	/* Connect to M$SQL Server */
-	if (!(login = tds_alloc_login()))
-	{
+	if (!(settings->login = tds_alloc_login())) {
 		ast_log(LOG_ERROR, "tds_alloc_login() failed.\n");
 		return -1;
 	}
-	
-	tds_set_server(login, hostname);
-	tds_set_user(login, dbuser);
-	tds_set_passwd(login, password);
-	tds_set_app(login, "TSQL");
-	tds_set_library(login, "TDS-Library");
+
+	tds_set_server(settings->login, settings->hostname);
+	tds_set_user(settings->login, settings->dbuser);
+	tds_set_passwd(settings->login, settings->password);
+	tds_set_app(settings->login, "TSQL");
+	tds_set_library(settings->login, "TDS-Library");
 #ifndef FREETDS_PRE_0_62
-	tds_set_client_charset(login, charset);
+	tds_set_client_charset(settings->login, settings->charset);
 #endif
-	tds_set_language(login, language);
-	tds_set_packet(login, 512);
-	tds_set_version(login, 7, 0);
+	tds_set_language(settings->login, settings->language);
+	tds_set_packet(settings->login, 512);
+	tds_set_version(settings->login, 7, 0);
 
 #ifdef FREETDS_0_64
-	if (!(context = tds_alloc_context(NULL)))
+	if (!(settings->context = tds_alloc_context(NULL)))
 #else
-	if (!(context = tds_alloc_context()))
+	if (!(settings->context = tds_alloc_context()))
 #endif
 	{
 		ast_log(LOG_ERROR, "tds_alloc_context() failed.\n");
 		goto connect_fail;
 	}
 
-	if (!(tds = tds_alloc_socket(context, 512))) {
+	if (!(settings->tds = tds_alloc_socket(settings->context, 512))) {
 		ast_log(LOG_ERROR, "tds_alloc_socket() failed.\n");
 		goto connect_fail;
 	}
 
-	tds_set_parent(tds, NULL);
-	connection = tds_read_config_info(tds, login, context->locale);
-	if (!connection)
-	{
+	tds_set_parent(settings->tds, NULL);
+	connection = tds_read_config_info(settings->tds, settings->login, settings->context->locale);
+	if (!connection) {
 		ast_log(LOG_ERROR, "tds_read_config() failed.\n");
 		goto connect_fail;
 	}
 
-	if (tds_connect(tds, connection) == TDS_FAIL)
-	{
+	if (tds_connect(settings->tds, connection) == TDS_FAIL) {
 		ast_log(LOG_ERROR, "Failed to connect to MSSQL server.\n");
-		tds = NULL;	/* freed by tds_connect() on error */
+		settings->tds = NULL;	/* freed by tds_connect() on error */
 #if (defined(FREETDS_0_63) || defined(FREETDS_0_64))
 		tds_free_connection(connection);
 #else
@@ -379,23 +381,33 @@ static int mssql_connect(void)
 #endif
 	connection = NULL;
 
-	sprintf(query, "USE %s", dbname);
+	sprintf(query, "USE %s", settings->dbname);
 #ifdef FREETDS_PRE_0_62
-	if ((tds_submit_query(tds, query) != TDS_SUCCEED) || (tds_process_simple_query(tds, &result_type) != TDS_SUCCEED || result_type != TDS_CMD_SUCCEED))
+	if ((tds_submit_query(settings->tds, query) != TDS_SUCCEED) || (tds_process_simple_query(settings->tds, &result_type) != TDS_SUCCEED || result_type != TDS_CMD_SUCCEED))
 #else
-	if ((tds_submit_query(tds, query) != TDS_SUCCEED) || (tds_process_simple_query(tds) != TDS_SUCCEED))
+	if ((tds_submit_query(settings->tds, query) != TDS_SUCCEED) || (tds_process_simple_query(settings->tds) != TDS_SUCCEED))
 #endif
 	{
-		ast_log(LOG_ERROR, "Could not change database (%s)\n", dbname);
+		ast_log(LOG_ERROR, "Could not change database (%s)\n", settings->dbname);
 		goto connect_fail;
 	}
 
-	connected = 1;
+	settings->connected = 1;
 	return 0;
 
 connect_fail:
 	mssql_disconnect();
 	return -1;
+}
+
+static void cdr_tds_config_destroy(void)
+{
+	if (settings)
+	{
+		ast_mutex_destroy(&settings->lock);
+		ast_string_field_free_memory(settings);
+		ast_free(settings);	
+	}
 }
 
 static int tds_unload_module(void)
@@ -404,31 +416,21 @@ static int tds_unload_module(void)
 
 	ast_cdr_unregister(name);
 
-	if (hostname) ast_free(hostname);
-	if (dbname) ast_free(dbname);
-	if (dbuser) ast_free(dbuser);
-	if (password) ast_free(password);
-	if (charset) ast_free(charset);
-	if (language) ast_free(language);
-	if (table) ast_free(table);
+	cdr_tds_config_destroy();
 
 	return 0;
 }
 
 static int tds_load_module(int reload)
 {
-	int res = 0;
 	struct ast_config *cfg;
 	struct ast_variable *var;
 	const char *ptr = NULL;
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
-#ifdef FREETDS_PRE_0_62
-	TDS_INT result_type;
-#endif
 
 	cfg = ast_config_load(config, config_flags);
 	if (!cfg) {
-		ast_log(LOG_NOTICE, "Unable to load config for MSSQL CDR's: %s\n", config);
+		ast_log(LOG_NOTICE, "Unable to load config for MSSQL CDRs: %s\n", config);
 		return 0;
 	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
 		return 0;
@@ -438,72 +440,82 @@ static int tds_load_module(int reload)
 		ast_config_destroy(cfg);
 		return 0;
 	}
-	
+
+	if (reload) {
+		ast_string_field_init(settings, 0);
+	} else {
+		settings = ast_calloc(1, sizeof(*settings));
+
+		if (!settings || ast_string_field_init(settings, 256)) {
+			if (settings) {
+				ast_free(settings);
+				settings = NULL;
+			}
+			ast_config_destroy(cfg);
+			return 0;
+		}
+
+		ast_mutex_init(&settings->lock);
+	}
+
 	ptr = ast_variable_retrieve(cfg, "global", "hostname");
 	if (ptr) {
-		if (hostname)
-			ast_free(hostname);
-		hostname = ast_strdup(ptr);
-	} else
+		ast_string_field_set(settings, hostname, ptr);
+	} else {
 		ast_log(LOG_ERROR, "Database server hostname not specified.\n");
+	}
 
 	ptr = ast_variable_retrieve(cfg, "global", "dbname");
 	if (ptr) {
-		if (dbname)
-			ast_free(dbname);
-		dbname = ast_strdup(ptr);
-	} else
+		ast_string_field_set(settings, dbname, ptr);
+	} else {
 		ast_log(LOG_ERROR, "Database dbname not specified.\n");
+	}
 
 	ptr = ast_variable_retrieve(cfg, "global", "user");
 	if (ptr) {
-		if (dbuser)
-			ast_free(dbuser);
-		dbuser = ast_strdup(ptr);
-	} else
+		ast_string_field_set(settings, dbuser, ptr);
+	} else {
 		ast_log(LOG_ERROR, "Database dbuser not specified.\n");
+	}
 
 	ptr = ast_variable_retrieve(cfg, "global", "password");
 	if (ptr) {
-		if (password)
-			ast_free(password);
-		password = ast_strdup(ptr);
-	} else
-		ast_log(LOG_ERROR,"Database password not specified.\n");
+		ast_string_field_set(settings, password, ptr);
+	} else {
+		ast_log(LOG_ERROR, "Database password not specified.\n");
+	}
 
 	ptr = ast_variable_retrieve(cfg, "global", "charset");
-	if (charset)
-		ast_free(charset);
-	if (ptr)
-		charset = ast_strdup(ptr);
-	else
-		charset = ast_strdup("iso_1");
+	if (ptr) {
+		ast_string_field_set(settings, charset, ptr);
+	} else {
+		ast_string_field_set(settings, charset, "iso_1");
+	}
 
-	if (language)
-		ast_free(language);
 	ptr = ast_variable_retrieve(cfg, "global", "language");
-	if (ptr)
-		language = ast_strdup(ptr);
-	else
-		language = ast_strdup("us_english");
+	if (ptr) {
+		ast_string_field_set(settings, language, ptr);
+	} else {
+		ast_string_field_set(settings, language, "us_english");
+	}
 
 	ptr = ast_variable_retrieve(cfg, "global", "table");
-	if (ptr == NULL) {
-		ast_debug(1, "cdr_tds: table not specified.  Assuming cdr\n");
-		ptr = "cdr";
+	if (ptr) {
+		ast_string_field_set(settings, table, ptr);
+	} else {	
+		ast_debug(1, "Table not specified.  Assuming 'cdr'\n");
+		ast_string_field_set(settings, table, "cdr");
 	}
-	if (table)
-		ast_free(table);
-	table = ast_strdup(ptr);
 
 	ast_config_destroy(cfg);
 
-	ast_mutex_lock(&tds_lock);
+	ast_mutex_lock(&settings->lock);
 	mssql_disconnect();
 	mssql_connect();
-	ast_mutex_unlock(&tds_lock);
+	ast_mutex_unlock(&settings->lock);
 
-	return res;
+	return 1;
 }
 
 static int reload(void)

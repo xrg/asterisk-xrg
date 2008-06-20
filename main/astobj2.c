@@ -808,8 +808,17 @@ static int cd_cb_debug(void *obj, void *arg, int flag)
 static void container_destruct(void *_c)
 {
 	struct ao2_container *c = _c;
+	int i;
 
 	_ao2_callback(c, OBJ_UNLINK, cd_cb, NULL);
+
+	for (i = 0; i < c->n_buckets; i++) {
+		struct bucket_list *cur;
+
+		while ((cur = AST_LIST_REMOVE_HEAD(&c->buckets[i], entry))) {
+			ast_free(cur);
+		}
+	}
 
 #ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_containers, -1);
@@ -819,8 +828,17 @@ static void container_destruct(void *_c)
 static void container_destruct_debug(void *_c)
 {
 	struct ao2_container *c = _c;
+	int i;
 
 	_ao2_callback_debug(c, OBJ_UNLINK, cd_cb_debug, NULL, "container_destruct_debug called", __FILE__, __LINE__, __PRETTY_FUNCTION__);
+
+	for (i = 0; i < c->n_buckets; i++) {
+		struct bucket_list *cur;
+
+		while ((cur = AST_LIST_REMOVE_HEAD(&c->buckets[i], entry))) {
+			ast_free(cur);
+		}
+	}
 
 #ifdef AO2_DEBUG
 	ast_atomic_fetchadd_int(&ao2.total_containers, -1);
@@ -912,6 +930,12 @@ static char *handle_astobj2_test(struct ast_cli_entry *e, int cmd, struct ast_cl
 		ast_cli(a->fd, "object %d allocated as %p\n", i, obj);
 		sprintf(obj, "-- this is obj %d --", i);
 		ao2_link(c1, obj);
+		/* At this point, the refcount on obj is 2 due to the allocation
+		 * and linking. We can go ahead and reduce the refcount by 1
+		 * right here so that when the container is unreffed later, the
+		 * objects will be freed
+		 */
+		ao2_t_ref(obj, -1, "test");
 	}
 	ast_cli(a->fd, "testing callbacks\n");
 	ao2_t_callback(c1, 0, print_cb, &a->fd,"test callback");
