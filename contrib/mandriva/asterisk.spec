@@ -2,9 +2,9 @@
 %define git_repo asterisk
 %define git_head 16xrg
 
-%define version 1.6.0
+%define version 1.6.0beta7
 %define distsuffix xrg
-%define release %mkrel 2
+%define release %git_get_rel
 
 # %git_get_version TODO
 
