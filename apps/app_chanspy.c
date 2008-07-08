@@ -322,7 +322,7 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	char *name;
 	struct ast_frame *f;
 	struct ast_silence_generator *silgen = NULL;
-	struct ast_channel *spyee = NULL;
+	struct ast_channel *spyee = NULL, *spyee_bridge = NULL;
 	const char *spyer_name;
 
 	ast_channel_lock(chan);
@@ -359,17 +359,24 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 		return 0;
 	}
 
+ 	ast_audiohook_init(&csth.whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "ChanSpy");
+	ast_audiohook_init(&csth.bridge_whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "Chanspy");
+  	if (start_spying(spyee, spyer_name, &csth.whisper_audiohook)) {
+		ast_log(LOG_WARNING, "Unable to attach whisper audiohook to spyee %s. Whisper mode disabled!\n", spyee->name);
+	}
+	if ((spyee_bridge = ast_bridged_channel(spyee))) {
+		ast_channel_lock(spyee_bridge);
+		if (start_spying(spyee_bridge, spyer_name, &csth.bridge_whisper_audiohook)) {
+			ast_log(LOG_WARNING, "Unable to attach barge audiohook on spyee %s. Barge mode disabled!\n", spyee->name);
+		}
+		ast_channel_unlock(spyee_bridge);
+	}
+	ast_channel_unlock(spyee);
+	spyee = NULL;
+
 	ast_channel_lock(chan);
 	ast_set_flag(chan, AST_FLAG_END_DTMF_ONLY);
 	ast_channel_unlock(chan);
-
- 	ast_audiohook_init(&csth.whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "ChanSpy");
-	ast_audiohook_init(&csth.bridge_whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "Chanspy");
-  	start_spying(spyee, spyer_name, &csth.whisper_audiohook); /* Unlocks spyee */
-	start_spying(ast_bridged_channel(spyee), spyer_name, &csth.bridge_whisper_audiohook);
-
-	ast_channel_unlock(spyee);
-	spyee = NULL;
 
 	csth.volfactor = *volfactor;
 

@@ -148,7 +148,7 @@ struct board *board_setup(SDL_Surface *screen, SDL_Rect *dest,
 	b->cur_col = 0;		/* current print column */
 	b->cur_line = 0;	/* last line displayed */
 
-	ast_log(LOG_WARNING, "Message board %dx%d@%d,%d successfully initialized\n",
+	if (0) ast_log(LOG_WARNING, "Message board %dx%d@%d,%d successfully initialized\n",
 		b->p_rect->w, b->p_rect->h,
 		b->p_rect->x, b->p_rect->y);
 	return b;
@@ -311,6 +311,23 @@ int print_message(struct board *b, const char *s)
 	/* everything is printed now, must do the rendering */
 	render_board(b);
 	return 1;
+}
+
+/* deletes a board.
+ * we make the free operation on any fields of the board structure allocated
+ * in dynamic memory
+ */
+void delete_board(struct board *b)
+{
+	if (b) {
+		/* deletes the text */
+		if (b->text)
+			ast_free (b->text);
+		/* deallocates the blank surface */
+		SDL_FreeSurface(b->blank);
+		/* deallocates the board */
+		ast_free(b);
+	}
 }
 
 #if 0

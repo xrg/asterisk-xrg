@@ -781,6 +781,10 @@ void ast_cdr_setapp(struct ast_cdr *cdr, char *app, char *data)
 	for (; cdr; cdr = cdr->next) {
 		if (!ast_test_flag(cdr, AST_CDR_FLAG_LOCKED)) {
 			check_post(cdr);
+			if (!app)
+				app = "";
+			if (!data)
+				data = "";
 			ast_copy_string(cdr->lastapp, S_OR(app, ""), sizeof(cdr->lastapp));
 			ast_copy_string(cdr->lastdata, S_OR(data, ""), sizeof(cdr->lastdata));
 		}
@@ -864,7 +868,13 @@ void ast_cdr_end(struct ast_cdr *cdr)
 			cdr->disposition = AST_CDR_FAILED;
 		} else
 			cdr->duration = cdr->end.tv_sec - cdr->start.tv_sec;
-		cdr->billsec = ast_tvzero(cdr->answer) ? 0 : cdr->end.tv_sec - cdr->answer.tv_sec;
+		if (ast_tvzero(cdr->answer)) {
+			if (cdr->disposition == AST_CDR_ANSWERED) {
+				ast_log(LOG_WARNING, "CDR on channel '%s' has no answer time but is 'ANSWERED'\n", S_OR(cdr->channel, "<unknown>"));
+				cdr->disposition = AST_CDR_FAILED;
+			}
+		} else
+			cdr->billsec = cdr->end.tv_sec - cdr->answer.tv_sec;
 	}
 }
 
@@ -1062,6 +1072,27 @@ void ast_cdr_reset(struct ast_cdr *cdr, struct ast_flags *_flags)
 			cdr->disposition = AST_CDR_NULL;
 		}
 	}
+}
+
+void ast_cdr_specialized_reset(struct ast_cdr *cdr, struct ast_flags *_flags)
+{
+	struct ast_flags flags = { 0 };
+
+	if (_flags)
+		ast_copy_flags(&flags, _flags, AST_FLAGS_ALL);
+
+	if (_flags)
+		ast_copy_flags(&flags, _flags, AST_FLAGS_ALL);
+	
+	/* Reset to initial state */
+	ast_clear_flag(cdr, AST_FLAGS_ALL);	
+	memset(&cdr->start, 0, sizeof(cdr->start));
+	memset(&cdr->end, 0, sizeof(cdr->end));
+	memset(&cdr->answer, 0, sizeof(cdr->answer));
+	cdr->billsec = 0;
+	cdr->duration = 0;
+	ast_cdr_start(cdr);
+	cdr->disposition = AST_CDR_NULL;
 }
 
 struct ast_cdr *ast_cdr_append(struct ast_cdr *cdr, struct ast_cdr *newcdr) 
@@ -1269,27 +1300,39 @@ static char *handle_cli_status(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	if (a->argc > 3)
 		return CLI_SHOWUSAGE;
 
-	ast_cli(a->fd, "CDR logging: %s\n", enabled ? "enabled" : "disabled");
-	ast_cli(a->fd, "CDR mode: %s\n", batchmode ? "batch" : "simple");
+	ast_cli(a->fd, "\n");
+	ast_cli(a->fd, "Call Detail Record (CDR) settings\n");
+	ast_cli(a->fd, "----------------------------------\n");
+	ast_cli(a->fd, "  Logging:                    %s\n", enabled ? "Enabled" : "Disabled");
+	ast_cli(a->fd, "  Mode:                       %s\n", batchmode ? "Batch" : "Simple");
 	if (enabled) {
-		ast_cli(a->fd, "CDR output unanswered calls: %s\n", unanswered ? "yes" : "no");
+		ast_cli(a->fd, "  Log unanswered calls:       %s\n\n", unanswered ? "Yes" : "No");
 		if (batchmode) {
+			ast_cli(a->fd, "* Batch Mode Settings\n");
+			ast_cli(a->fd, "  -------------------\n");
 			if (batch)
 				cnt = batch->size;
 			if (cdr_sched > -1)
 				nextbatchtime = ast_sched_when(sched, cdr_sched);
-			ast_cli(a->fd, "CDR safe shut down: %s\n", batchsafeshutdown ? "enabled" : "disabled");
-			ast_cli(a->fd, "CDR batch threading model: %s\n", batchscheduleronly ? "scheduler only" : "scheduler plus separate threads");
-			ast_cli(a->fd, "CDR current batch size: %d record%s\n", cnt, ESS(cnt));
-			ast_cli(a->fd, "CDR maximum batch size: %d record%s\n", batchsize, ESS(batchsize));
-			ast_cli(a->fd, "CDR maximum batch time: %d second%s\n", batchtime, ESS(batchtime));
-			ast_cli(a->fd, "CDR next scheduled batch processing time: %ld second%s\n", nextbatchtime, ESS(nextbatchtime));
+			ast_cli(a->fd, "  Safe shutdown:              %s\n", batchsafeshutdown ? "Enabled" : "Disabled");
+			ast_cli(a->fd, "  Threading model:            %s\n", batchscheduleronly ? "Scheduler only" : "Scheduler plus separate threads");
+			ast_cli(a->fd, "  Current batch size:         %d record%s\n", cnt, ESS(cnt));
+			ast_cli(a->fd, "  Maximum batch size:         %d record%s\n", batchsize, ESS(batchsize));
+			ast_cli(a->fd, "  Maximum batch time:         %d second%s\n", batchtime, ESS(batchtime));
+			ast_cli(a->fd, "  Next batch processing time: %ld second%s\n\n", nextbatchtime, ESS(nextbatchtime));
 		}
+		ast_cli(a->fd, "* Registered Backends\n");
+		ast_cli(a->fd, "  -------------------\n");
 		AST_RWLIST_RDLOCK(&be_list);
-		AST_RWLIST_TRAVERSE(&be_list, beitem, list) {
-			ast_cli(a->fd, "CDR registered backend: %s\n", beitem->name);
+		if (AST_RWLIST_EMPTY(&be_list)) {
+			ast_cli(a->fd, "    (none)\n");
+		} else {
+			AST_RWLIST_TRAVERSE(&be_list, beitem, list) {
+				ast_cli(a->fd, "    %s\n", beitem->name);
+			}
 		}
 		AST_RWLIST_UNLOCK(&be_list);
+		ast_cli(a->fd, "\n");
 	}
 
 	return CLI_SUCCESS;

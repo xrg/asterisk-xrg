@@ -241,8 +241,7 @@ AST_EXT_LIB_SETUP([OPENH323], [OpenH323], [h323])
 AST_EXT_LIB_SETUP([RADIUS], [Radius Client], [radius])
 AST_EXT_LIB_SETUP([SDL], [Sdl], [sdl])
 AST_EXT_LIB_SETUP([SDL_IMAGE], [Sdl Image library], [SDL_image])
-AST_EXT_LIB_SETUP([SACLM], [SAForum AIS CLM], [SaClm])
-AST_EXT_LIB_SETUP([SAEVT], [SAForum AIS EVT], [SaEvt])
+ST_EXT_LIB_SETUP([OPENAIS], [OpenAIS], [openais])
 AST_EXT_LIB_SETUP([SPEEX], [Speex], [speex])
 AST_EXT_LIB_SETUP([SPEEXDSP], [Speexdsp], [speexdsp])
 AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
@@ -1347,14 +1346,35 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 		[${PWLIB_INCLUDE}], [${PWLIB_LIB}])
 fi
 
-LUA_INCLUDE="-I/usr/include/lua5.1"
-LUA_LIB="-llua5.1"
 AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h]) 
 
 AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
 
-AST_EXT_LIB_CHECK([SACLM], [SaClm], [saClmInitialize], [openais/saClm.h])
-AST_EXT_LIB_CHECK([SAEVT], [SaEvt], [saEvtInitialize], [openais/saEvt.h])
+# This is a bit complex... in reality, Asterisk's AIS support is dependent on finding
+# *any* implementation of AIS, not just OpenAIS. However, the configure script needs
+# to know the specifics of each possible implementation, and then represent the one
+# that was found as 'AIS'.
+
+PBX_AIS=0
+
+# OpenAIS installs its libraries into /usr/lib/openais by default, so check there
+
+AST_EXT_LIB_CHECK([OPENAIS], [SaClm], [saClmInitialize], [openais/saClm.h], [-L/usr/lib/openais])
+
+if test "${PBX_OPENAIS}" = 1; then
+   PBX_AIS=1
+   if test -n "${OPENAIS_DIR}"; then
+      AIS_INCLUDE="${OPENAIS_INCLUDE}/openais"
+      AIS_LIB="-lSaEvt ${OPENAIS_LIB}"
+   else
+      AIS_INCLUDE="-I/usr/include/openais"
+      AIS_LIB="-lSaClm -lSaEvt -L/usr/lib/openais"
+   fi
+fi
+
+AC_SUBST(PBX_AIS)
+AC_SUBST(AIS_INCLUDE)
+AC_SUBST(AIS_LIB)
 
 AST_EXT_LIB_CHECK([SPEEX], [speex], [speex_encode], [speex/speex.h], [-lm])
 
@@ -1389,34 +1409,7 @@ fi
 
 AST_EXT_TOOL_CHECK([GMIME], [gmime])
 
-AST_EXT_LIB_CHECK([FREETDS], [tds_mssql], [tds_version], [freetds_mssql/tds.h])
-if test "${PBX_FREETDS}" != "0";
-then
-    if test "${FREETDS_DIR}x" = "x";
-    then
-        for tds_dir in /usr /usr/local;
-        do
-            if test -f "${tds_dir}/include/tdsver.h";
-            then
-                FREETDS_DIR="${tds_dir}"
-            fi
-        done
-    fi
-    case `${GREP} TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/tdsver.h` in
-    *0.64*)
-        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
-	;;
-    *0.63*)
-        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_63"
-	;;
-    *0.62*)
-        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_62"
-	;;
-    *)
-        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_PRE_0_62"
-	;;
-    esac
-fi
+AST_EXT_LIB_CHECK([FREETDS], [sybdb], [dbinit], [sybdb.h])
 
 AST_EXT_LIB_CHECK([TERMCAP], [termcap], [tgetent], [])
 
@@ -1426,8 +1419,7 @@ if test "${host_os}" != "linux-gnu" ; then
   tonezone_extra="-lm"
 fi
 
-# new tonezone, version 1.4.0
-AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [dahdi/tonezone.h], [${tonezone_extra}])
+AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [dahdi/tonezone.h], [${tonezone_extra} ${DAHDI_INCLUDE}])
 
 AST_EXT_LIB_CHECK([USB], [usb], [usb_init], [usb.h], [])
 

@@ -639,7 +639,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 						OPT_CALLEE_PARK | OPT_CALLER_PARK |
 						OPT_CALLEE_MIXMONITOR | OPT_CALLER_MIXMONITOR |
 						DIAL_NOFORWARDHTML);
-					ast_copy_string(c->dialcontext, "", sizeof(c->dialcontext));
+					ast_string_field_set(c, dialcontext, "");
 					ast_copy_string(c->exten, "", sizeof(c->exten));
 				}
 				continue;
@@ -677,7 +677,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 							OPT_CALLEE_PARK | OPT_CALLER_PARK |
 							OPT_CALLEE_MIXMONITOR | OPT_CALLER_MIXMONITOR |
 							DIAL_NOFORWARDHTML);
-						ast_copy_string(c->dialcontext, "", sizeof(c->dialcontext));
+						ast_string_field_set(c, dialcontext, "");
 						ast_copy_string(c->exten, "", sizeof(c->exten));
 						if (CAN_EARLY_BRIDGE(peerflags))
 							/* Setup early bridge if appropriate */
@@ -1496,8 +1496,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		S_REPLACE(tc->cid.cid_ani, ast_strdup(chan->cid.cid_ani));
 		S_REPLACE(tc->cid.cid_rdnis, ast_strdup(chan->cid.cid_rdnis));
 		
-		/* Copy language from incoming to outgoing */
-		ast_string_field_set(tc, language, chan->language);
 		ast_string_field_set(tc, accountcode, chan->accountcode);
 		tc->cdrflags = chan->cdrflags;
 		if (ast_strlen_zero(tc->musicclass))
@@ -1515,10 +1513,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_app_group_set_channel(tc, outbound_group);
 
 		/* Inherit context and extension */
-		if (!ast_strlen_zero(chan->macrocontext))
-			ast_copy_string(tc->dialcontext, chan->macrocontext, sizeof(tc->dialcontext));
-		else
-			ast_copy_string(tc->dialcontext, chan->context, sizeof(tc->dialcontext));
+		ast_string_field_set(tc, dialcontext, ast_strlen_zero(chan->macrocontext) ? chan->context : chan->macrocontext);
 		if (!ast_strlen_zero(chan->macroexten))
 			ast_copy_string(tc->exten, chan->macroexten, sizeof(tc->exten));
 		else

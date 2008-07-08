@@ -71,8 +71,10 @@ static void aji_client_destroy(struct aji_client *obj);
 static int aji_send_exec(struct ast_channel *chan, void *data);
 static int aji_status_exec(struct ast_channel *chan, void *data);
 static int aji_is_secure(struct aji_client *client);
+#ifdef HAVE_OPENSSL
 static int aji_start_tls(struct aji_client *client);
 static int aji_tls_handshake(struct aji_client *client);
+#endif
 static int aji_io_recv(struct aji_client *client, char *buffer, size_t buf_len, int timeout);
 static int aji_recv(struct aji_client *client, int timeout);
 static int aji_send_header(struct aji_client *client, const char *to);
@@ -497,7 +499,7 @@ static int aji_is_secure(struct aji_client *client)
 #endif
 }
 
-
+#ifdef HAVE_OPENSSL
 /*!
  * \brief Starts the TLS procedure
  * \param client the configured XMPP client we use to connect to a XMPP server
@@ -507,15 +509,13 @@ static int aji_is_secure(struct aji_client *client)
 static int aji_start_tls(struct aji_client *client)
 {
 	int ret;
-#ifndef HAVE_OPENSSL
-	return IKS_NET_TLSFAIL;
-#endif	
+
 	/* This is sent not encrypted */
 	ret = iks_send_raw(client->p, "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>");
 	if (ret)
 		return ret;
-	client->stream_flags |= TRY_SECURE;
 
+	client->stream_flags |= TRY_SECURE;
 	return IKS_OK;
 }
 
@@ -528,10 +528,6 @@ static int aji_tls_handshake(struct aji_client *client)
 {
 	int ret;
 	int sock;
-
-#ifndef HAVE_OPENSSL
-	return IKS_NET_TLSFAIL;
-#endif
 	
 	ast_debug(1, "Starting TLS handshake\n"); 
 
@@ -573,6 +569,7 @@ static int aji_tls_handshake(struct aji_client *client)
 
 	return IKS_OK;
 }
+#endif /* HAVE_OPENSSL */
 
 /*! 
  * \brief Secured or unsecured IO socket receiving function
@@ -871,12 +868,17 @@ static int aji_act_hook(void *data, int type, iks *node)
 		switch (type) {
 		case IKS_NODE_START:
 			if (client->usetls && !aji_is_secure(client)) {
+#ifndef HAVE_OPENSSL
+				ast_log(LOG_ERROR, "OpenSSL not installed. You need to install OpenSSL on this system, or disable the TLS option in your configuration file\n");
+				ASTOBJ_UNREF(client, aji_client_destroy);
+				return IKS_HOOK;
+#else
 				if (aji_start_tls(client) == IKS_NET_TLSFAIL) {
-					ast_log(LOG_ERROR, "OpenSSL not installed. You need to install OpenSSL on this system\n");
+					ast_log(LOG_ERROR, "Could not start TLS\n");
 					ASTOBJ_UNREF(client, aji_client_destroy);
 					return IKS_HOOK;		
 				}
-
+#endif
 				break;
 			}
 			if (!client->usesasl) {
@@ -894,12 +896,13 @@ static int aji_act_hook(void *data, int type, iks *node)
 			break;
 
 		case IKS_NODE_NORMAL:
+#ifdef HAVE_OPENSSL
 			if (client->stream_flags & TRY_SECURE) {
 				if (!strcmp("proceed", iks_name(node))) {
 					return aji_tls_handshake(client);
 				}
 			}
-
+#endif
 			if (!strcmp("stream:features", iks_name(node))) {
 				features = iks_stream_features(node);
 				if (client->usesasl) {
@@ -2051,37 +2054,39 @@ static void aji_pruneregister(struct aji_client *client)
 	iks *removequery = iks_new("query");
 	iks *removeitem = iks_new("item");
 	iks *send = iks_make_iq(IKS_TYPE_GET, "http://jabber.org/protocol/disco#items");
-
-	if (client && removeiq && removequery && removeitem && send) {
-		iks_insert_node(removeiq, removequery);
-		iks_insert_node(removequery, removeitem);
-		ASTOBJ_CONTAINER_TRAVERSE(&client->buddies, 1, {
-			ASTOBJ_RDLOCK(iterator);
-			/* For an aji_buddy, both AUTOPRUNE and AUTOREGISTER will never
-			 * be called at the same time */
-			if (ast_test_flag(&iterator->flags, AJI_AUTOPRUNE)) {
-				res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_UNSUBSCRIBE, iterator->name,
-						"GoodBye your status is no longer needed by Asterisk the Open Source PBX"
-						" so I am no longer subscribing to your presence.\n"));
-				res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_UNSUBSCRIBED, iterator->name,
-						"GoodBye you are no longer in the asterisk config file so I am removing"
-						" your access to my presence.\n"));
-				iks_insert_attrib(removeiq, "from", client->jid->full); 
-				iks_insert_attrib(removeiq, "type", "set"); 
-				iks_insert_attrib(removequery, "xmlns", "jabber:iq:roster");
-				iks_insert_attrib(removeitem, "jid", iterator->name);
-				iks_insert_attrib(removeitem, "subscription", "remove");
-				res = ast_aji_send(client, removeiq);
-			} else if (ast_test_flag(&iterator->flags, AJI_AUTOREGISTER)) {
-				res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_SUBSCRIBE, iterator->name, 
-						"Greetings I am the Asterisk Open Source PBX and I want to subscribe to your presence\n"));
-				ast_clear_flag(&iterator->flags, AJI_AUTOREGISTER);
-			}
-			ASTOBJ_UNLOCK(iterator);
-		});
-	} else
+	if (!client || !removeiq || !removequery || !removeitem || !send) {
 		ast_log(LOG_ERROR, "Out of memory.\n");
+		goto safeout;
+	}
 
+	iks_insert_node(removeiq, removequery);
+	iks_insert_node(removequery, removeitem);
+	ASTOBJ_CONTAINER_TRAVERSE(&client->buddies, 1, {
+		ASTOBJ_RDLOCK(iterator);
+		/* For an aji_buddy, both AUTOPRUNE and AUTOREGISTER will never
+		 * be called at the same time */
+		if (ast_test_flag(&iterator->flags, AJI_AUTOPRUNE)) {
+			res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_UNSUBSCRIBE, iterator->name,
+								 "GoodBye your status is no longer needed by Asterisk the Open Source PBX"
+								 " so I am no longer subscribing to your presence.\n"));
+			res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_UNSUBSCRIBED, iterator->name,
+								 "GoodBye you are no longer in the asterisk config file so I am removing"
+								 " your access to my presence.\n"));
+			iks_insert_attrib(removeiq, "from", client->jid->full); 
+			iks_insert_attrib(removeiq, "type", "set"); 
+			iks_insert_attrib(removequery, "xmlns", "jabber:iq:roster");
+			iks_insert_attrib(removeitem, "jid", iterator->name);
+			iks_insert_attrib(removeitem, "subscription", "remove");
+			res = ast_aji_send(client, removeiq);
+		} else if (ast_test_flag(&iterator->flags, AJI_AUTOREGISTER)) {
+			res = ast_aji_send(client, iks_make_s10n(IKS_TYPE_SUBSCRIBE, iterator->name, 
+								 "Greetings I am the Asterisk Open Source PBX and I want to subscribe to your presence\n"));
+			ast_clear_flag(&iterator->flags, AJI_AUTOREGISTER);
+		}
+		ASTOBJ_UNLOCK(iterator);
+	});
+
+ safeout:
 	iks_delete(removeiq);
 	iks_delete(removequery);
 	iks_delete(removeitem);
@@ -2135,26 +2140,33 @@ static int aji_filter_roster(void *data, ikspak *pak)
 				ASTOBJ_UNLOCK(iterator);
 			});
 
-			if (!flag) {
-				buddy = ast_calloc(1, sizeof(*buddy));
-				if (!buddy) {
-					ast_log(LOG_WARNING, "Out of memory\n");
-					return 0;
-				}
-				ASTOBJ_INIT(buddy);
-				ASTOBJ_WRLOCK(buddy);
-				ast_copy_string(buddy->name, iks_find_attrib(x, "jid"), sizeof(buddy->name));
-				ast_clear_flag(&buddy->flags, AST_FLAGS_ALL);
-				if(ast_test_flag(&client->flags, AJI_AUTOPRUNE)) {
-					ast_set_flag(&buddy->flags, AJI_AUTOPRUNE);
-					ASTOBJ_MARK(buddy);
-				} else
-					ast_set_flag(&buddy->flags, AJI_AUTOREGISTER);
-				ASTOBJ_UNLOCK(buddy);
-				if (buddy) {
-					ASTOBJ_CONTAINER_LINK(&client->buddies, buddy);
-					ASTOBJ_UNREF(buddy, aji_buddy_destroy);
-				}
+			if (flag) {
+				/* found buddy, don't create a new one */
+				x = iks_next(x);
+				continue;
+			}
+			
+			buddy = ast_calloc(1, sizeof(*buddy));
+			if (!buddy) {
+				ast_log(LOG_WARNING, "Out of memory\n");
+				return 0;
+			}
+			ASTOBJ_INIT(buddy);
+			ASTOBJ_WRLOCK(buddy);
+			ast_copy_string(buddy->name, iks_find_attrib(x, "jid"), sizeof(buddy->name));
+			ast_clear_flag(&buddy->flags, AST_FLAGS_ALL);
+			if(ast_test_flag(&client->flags, AJI_AUTOPRUNE)) {
+				ast_set_flag(&buddy->flags, AJI_AUTOPRUNE);
+				ASTOBJ_MARK(buddy);
+			} else if (!iks_strcmp(iks_find_attrib(x, "subscription"), "none") || !iks_strcmp(iks_find_attrib(x, "subscription"), "from")) {
+				/* subscribe to buddy's presence only 
+				   if we really need to */
+				ast_set_flag(&buddy->flags, AJI_AUTOREGISTER);
+			}
+			ASTOBJ_UNLOCK(buddy);
+			if (buddy) {
+				ASTOBJ_CONTAINER_LINK(&client->buddies, buddy);
+				ASTOBJ_UNREF(buddy, aji_buddy_destroy);
 			}
 		}
 		x = iks_next(x);
@@ -2243,10 +2255,11 @@ static int aji_client_connect(void *data, ikspak *pak)
 static int aji_initialize(struct aji_client *client)
 {
 	int connected = IKS_NET_NOCONN;
-	
+
+#ifdef HAVE_OPENSSL	
 	/* reset stream flags */
 	client->stream_flags = 0;
-
+#endif
 	/* If it's a component, connect to user, otherwise, connect to server */
 	connected = iks_connect_via(client->p, S_OR(client->serverhost, client->jid->server), client->port, client->component ? client->user : client->jid->server);
 

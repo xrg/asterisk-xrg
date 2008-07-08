@@ -221,13 +221,13 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 	while (other && ast_channel_trylock(other)) {
 		ast_mutex_unlock(&p->lock);
 		if (us && us_locked) {
-			ast_channel_unlock(us);
+			do {
+				CHANNEL_DEADLOCK_AVOIDANCE(us);
+			} while (ast_mutex_trylock(&p->lock));
+		} else {
+			usleep(1);
+			ast_mutex_lock(&p->lock);
 		}
-		usleep(1);
-		if (us && us_locked) {
-			ast_channel_lock(us);
-		}
-		ast_mutex_lock(&p->lock);
 		other = isoutbound ? p->owner : p->chan;
 	}
 
@@ -545,6 +545,7 @@ static int local_hangup(struct ast_channel *ast)
 		return -1;
 
 	ast_mutex_lock(&p->lock);
+
 	if (p->chan && ast_test_flag(ast, AST_FLAG_ANSWERED_ELSEWHERE)) 
 		ast_set_flag(p->chan, AST_FLAG_ANSWERED_ELSEWHERE);
 	isoutbound = IS_OUTBOUND(ast, p);
@@ -574,6 +575,9 @@ static int local_hangup(struct ast_channel *ast)
 	} else {
 		p->owner = NULL;
 		ast_module_user_remove(p->u_owner);
+		if (p->chan) {
+			ast_queue_hangup(p->chan);
+		}
 	}
 	
 	ast->tech_pvt = NULL;

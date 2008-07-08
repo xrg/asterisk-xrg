@@ -334,13 +334,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/io.h>
 #include <sys/vfs.h>
 #include <math.h>
-#ifdef OLD_ASTERISK
-#include <linux/zaptel.h>
-#include <tonezone.h>
-#else
-#include <zaptel/zaptel.h>
-#include <zaptel/tonezone.h>
-#endif
+#include <dahdi/user.h>
+#include <dahdi/tonezone.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -13103,7 +13098,7 @@ char *this,*val;
 			close(fd);
 			ast_free(nodep);
 		}
-		usleep(2000000);
+		sleep(2);
 	}
 	ast_config_destroy(cfg);
 	pthread_exit(NULL);

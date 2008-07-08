@@ -2430,7 +2430,7 @@ static int action_mailboxcount(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Mailbox not specified");
 		return 0;
 	}
-	ast_app_inboxcount(mailbox, &urgentmsgs, &newmsgs, &oldmsgs);
+	ast_app_inboxcount2(mailbox, &urgentmsgs, &newmsgs, &oldmsgs);
 	astman_start_ack(s, m);
 	astman_append(s,   "Message: Mailbox Message Count\r\n"
 			   "Mailbox: %s\r\n"
@@ -2718,9 +2718,13 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 			"AccountCode: %s\r\n"
 			"BridgedChannel: %s\r\n"
 			"BridgedUniqueID: %s\r\n"
-			"\r\n", c->name, c->uniqueid, c->context, c->exten, c->priority, c->_state, ast_state2str(c->_state),
+			"AGIstate: %s\r\n"
+			"\r\n",
+			c->name, c->uniqueid, c->context, c->exten, c->priority, c->_state, ast_state2str(c->_state),
 			c->appl ? c->appl : "", c->data ? S_OR(c->data, ""): "",
-			S_OR(c->cid.cid_num, ""), durbuf, S_OR(c->accountcode, ""), bc ? bc->name : "", bc ? bc->uniqueid : "");
+			S_OR(c->cid.cid_num, ""), durbuf, S_OR(c->accountcode, ""), bc ? bc->name : "", bc ? bc->uniqueid : "",
+			ast_agi_state(c)
+			);
 		ast_channel_unlock(c);
 		numchans++;
 	}

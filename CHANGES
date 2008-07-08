@@ -99,6 +99,9 @@ Application Changes
    original CDR; 'R' prevents the new CDR from being reset; 's(var=val)' adds/changes
    the 'var' variable on the original CDR; 'T' forces ast_cdr_end(), ast_cdr_answer(),
    obey the LOCKED flag on cdr's in the chain, and also the ast_cdr_setvar() func.
+ * The Dial() application no longer copies the language used by the caller to the callee's
+   channel. If you desire for the caller's channel's language to be used for file playback
+   to the callee, then the file specified may be prepended with "${CHANNEL(language)}/" .
 
 SIP Changes
 -----------
@@ -155,6 +158,14 @@ ODBC Changes
   * res_odbc no longer has a limit of 1023 total possible unshared connections,
     as some people were running into this limit.  This limit has been increased
     to 4.2 billion.
+
+Queue changes
+-------------
+  * The TRANSFER queue log entry now includes the the caller's original
+    position in the transferred-from queue.
+  * A new configuration option, "timeoutpriority" has been added. Please see the section labeled
+    "QUEUE TIMING OPTIONS" in configs/queues.conf.sample for a detailed explanation of the option
+    as well as an explanation about timeout options in general
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.4.X to Asterisk 1.6.0  -------------
@@ -370,6 +381,13 @@ Local channel changes
   * A 'b' option has been added which causes chan_local to return the actual channel
      that is behind it when queried. This is useful for transfer scenarios as the
      actual channel will be transferred, not the Local channel.
+
+Agent channel changes
+----------------------
+  * The ackcall and endcall options are now supplemented with options acceptdtmf
+    and enddtmf. These allow for the DTMF keypress to be configurable. The options
+	default to their old hard-coded values ('#' and '*' respectively) so this should
+	not break any existing agent installations.
 
 Zaptel channel driver (chan_zap) Changes
 ----------------------------------------

@@ -880,14 +880,6 @@ SDL_IMAGE_LIB
 SDL_IMAGE_INCLUDE
 SDL_IMAGE_DIR
 PBX_SDL_IMAGE
-SACLM_LIB
-SACLM_INCLUDE
-SACLM_DIR
-PBX_SACLM
-SAEVT_LIB
-SAEVT_INCLUDE
-SAEVT_DIR
-PBX_SAEVT
 SPEEX_LIB
 SPEEX_INCLUDE
 SPEEX_DIR
@@ -975,6 +967,9 @@ OPENH323_INCDIR
 OPENH323_LIBDIR
 OPENH323_SUFFIX
 OPENH323_BUILD
+PBX_AIS
+AIS_INCLUDE
+AIS_LIB
 PBX_SPEEX_PREPROCESS
 CONFIG_GMIME
 EDITLINE_LIB
@@ -1621,8 +1616,6 @@ Optional Packages:
   --with-radius=PATH      use Radius Client files in PATH
   --with-sdl=PATH         use Sdl files in PATH
   --with-SDL_image=PATH   use Sdl Image library files in PATH
-  --with-SaClm=PATH       use SAForum AIS CLM files in PATH
-  --with-SaEvt=PATH       use SAForum AIS EVT files in PATH
   --with-speex=PATH       use Speex files in PATH
   --with-speexdsp=PATH    use Speexdsp files in PATH
   --with-sqlite=PATH      use SQLite files in PATH
@@ -9014,62 +9007,7 @@ fi
 
 
 
-
-    SACLM_DESCRIP="SAForum AIS CLM"
-    SACLM_OPTION="SaClm"
-
-# Check whether --with-SaClm was given.
-if test "${with_SaClm+set}" = set; then
-  withval=$with_SaClm;
-	case ${withval} in
-	n|no)
-	USE_SACLM=no
-	;;
-	y|ye|yes)
-	ac_mandatory_list="${ac_mandatory_list} SACLM"
-	;;
-	*)
-	SACLM_DIR="${withval}"
-	ac_mandatory_list="${ac_mandatory_list} SACLM"
-	;;
-	esac
-
-fi
-
-    PBX_SACLM=0
-
-
-
-
-
-
-    SAEVT_DESCRIP="SAForum AIS EVT"
-    SAEVT_OPTION="SaEvt"
-
-# Check whether --with-SaEvt was given.
-if test "${with_SaEvt+set}" = set; then
-  withval=$with_SaEvt;
-	case ${withval} in
-	n|no)
-	USE_SAEVT=no
-	;;
-	y|ye|yes)
-	ac_mandatory_list="${ac_mandatory_list} SAEVT"
-	;;
-	*)
-	SAEVT_DIR="${withval}"
-	ac_mandatory_list="${ac_mandatory_list} SAEVT"
-	;;
-	esac
-
-fi
-
-    PBX_SAEVT=0
-
-
-
-
-
+ST_EXT_LIB_SETUP(OPENAIS, OpenAIS, openais)
 
     SPEEX_DESCRIP="Speex"
     SPEEX_OPTION="speex"
@@ -18369,7 +18307,7 @@ fi
          ALSA_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ALSA_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ALSA_INCLUDE}"
 	 if test "${ac_cv_header_alsa_asoundlib_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for alsa/asoundlib.h" >&5
 echo $ECHO_N "checking for alsa/asoundlib.h... $ECHO_C" >&6; }
@@ -18631,7 +18569,7 @@ fi
          CURSES_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${CURSES_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${CURSES_INCLUDE}"
 	 if test "${ac_cv_header_curses_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for curses.h" >&5
 echo $ECHO_N "checking for curses.h... $ECHO_C" >&6; }
@@ -18894,7 +18832,7 @@ fi
          CAP_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${CAP_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${CAP_INCLUDE}"
 	 if test "${ac_cv_header_sys_capability_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for sys/capability.h" >&5
 echo $ECHO_N "checking for sys/capability.h... $ECHO_C" >&6; }
@@ -19235,7 +19173,7 @@ fi
          EXP2L_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${EXP2L_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${EXP2L_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -19496,7 +19434,7 @@ fi
          LOG2L_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LOG2L_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LOG2L_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -19757,7 +19695,7 @@ fi
          EXP10L_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${EXP10L_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${EXP10L_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -20018,7 +19956,7 @@ fi
          LOG10L_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LOG10L_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LOG10L_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -20279,7 +20217,7 @@ fi
          SINL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SINL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SINL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -20540,7 +20478,7 @@ fi
          COSL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${COSL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${COSL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -20801,7 +20739,7 @@ fi
          TANL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${TANL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${TANL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -21062,7 +21000,7 @@ fi
          ASINL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ASINL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ASINL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -21323,7 +21261,7 @@ fi
          ACOSL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ACOSL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ACOSL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -21584,7 +21522,7 @@ fi
          ATANL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ATANL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ATANL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -21845,7 +21783,7 @@ fi
          ATAN2L_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ATAN2L_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ATAN2L_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -22106,7 +22044,7 @@ fi
          POWL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${POWL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${POWL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -22367,7 +22305,7 @@ fi
          SQRTL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SQRTL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SQRTL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -22628,7 +22566,7 @@ fi
          RINTL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${RINTL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${RINTL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -22889,7 +22827,7 @@ fi
          EXPL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${EXPL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${EXPL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -23150,7 +23088,7 @@ fi
          LOGL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LOGL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LOGL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -23411,7 +23349,7 @@ fi
          REMAINDERL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${REMAINDERL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${REMAINDERL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -23672,7 +23610,7 @@ fi
          FMODL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${FMODL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${FMODL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -23933,7 +23871,7 @@ fi
          ROUNDL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ROUNDL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ROUNDL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -24194,7 +24132,7 @@ fi
          TRUNCL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${TRUNCL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${TRUNCL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -24455,7 +24393,7 @@ fi
          STRTOLD_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${STRTOLD_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${STRTOLD_INCLUDE}"
 	 if test "${ac_cv_header_stdlib_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for stdlib.h" >&5
 echo $ECHO_N "checking for stdlib.h... $ECHO_C" >&6; }
@@ -24716,7 +24654,7 @@ fi
          FLOORL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${FLOORL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${FLOORL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -24977,7 +24915,7 @@ fi
          CEILL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${CEILL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${CEILL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -25238,7 +25176,7 @@ fi
          EXP2_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${EXP2_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${EXP2_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -25499,7 +25437,7 @@ fi
          LOG2_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LOG2_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LOG2_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -25760,7 +25698,7 @@ fi
          EXP10_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${EXP10_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${EXP10_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -26021,7 +25959,7 @@ fi
          LOG10_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LOG10_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LOG10_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -26282,7 +26220,7 @@ fi
          SIN_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SIN_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SIN_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -26543,7 +26481,7 @@ fi
          COS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${COS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${COS_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -26804,7 +26742,7 @@ fi
          TAN_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${TAN_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${TAN_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -27065,7 +27003,7 @@ fi
          ASIN_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ASIN_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ASIN_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -27326,7 +27264,7 @@ fi
          ACOS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ACOS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ACOS_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -27587,7 +27525,7 @@ fi
          ATAN_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ATAN_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ATAN_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -27848,7 +27786,7 @@ fi
          ATAN2_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ATAN2_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ATAN2_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -28109,7 +28047,7 @@ fi
          POW_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${POW_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${POW_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -28370,7 +28308,7 @@ fi
          SQRT_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SQRT_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SQRT_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -28631,7 +28569,7 @@ fi
          RINT_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${RINT_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${RINT_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -28892,7 +28830,7 @@ fi
          EXP_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${EXP_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${EXP_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -29153,7 +29091,7 @@ fi
          LOG_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LOG_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LOG_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -29414,7 +29352,7 @@ fi
          REMAINDER_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${REMAINDER_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${REMAINDER_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -29675,7 +29613,7 @@ fi
          FMOD_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${FMOD_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${FMOD_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -29936,7 +29874,7 @@ fi
          ROUND_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ROUND_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ROUND_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -30197,7 +30135,7 @@ fi
          TRUNC_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${TRUNC_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${TRUNC_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -30458,7 +30396,7 @@ fi
          STRTOD_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${STRTOD_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${STRTOD_INCLUDE}"
 	 if test "${ac_cv_header_stdlib_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for stdlib.h" >&5
 echo $ECHO_N "checking for stdlib.h... $ECHO_C" >&6; }
@@ -30719,7 +30657,7 @@ fi
          FLOOR_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${FLOOR_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${FLOOR_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -30980,7 +30918,7 @@ fi
          CEIL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${CEIL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${CEIL_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -32013,7 +31951,7 @@ fi
          ICONV_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ICONV_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ICONV_INCLUDE}"
 	 if test "${ac_cv_header_iconv_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for iconv.h" >&5
 echo $ECHO_N "checking for iconv.h... $ECHO_C" >&6; }
@@ -32278,7 +32216,7 @@ fi
          IKSEMEL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${IKSEMEL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${IKSEMEL_INCLUDE}"
 	 if test "${ac_cv_header_iksemel_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for iksemel.h" >&5
 echo $ECHO_N "checking for iksemel.h... $ECHO_C" >&6; }
@@ -33372,7 +33310,7 @@ fi
          JACK_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${JACK_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${JACK_INCLUDE}"
 	 if test "${ac_cv_header_jack_jack_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for jack/jack.h" >&5
 echo $ECHO_N "checking for jack/jack.h... $ECHO_C" >&6; }
@@ -33635,7 +33573,7 @@ fi
          LTDL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LTDL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LTDL_INCLUDE}"
 	 if test "${ac_cv_header_ltdl_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for ltdl.h" >&5
 echo $ECHO_N "checking for ltdl.h... $ECHO_C" >&6; }
@@ -33897,7 +33835,7 @@ fi
          LDAP_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LDAP_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LDAP_INCLUDE}"
 	 if test "${ac_cv_header_ldap_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for ldap.h" >&5
 echo $ECHO_N "checking for ldap.h... $ECHO_C" >&6; }
@@ -34159,7 +34097,7 @@ fi
          MISDN_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${MISDN_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${MISDN_INCLUDE}"
 	 if test "${ac_cv_header_mISDNuser_mISDNlib_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for mISDNuser/mISDNlib.h" >&5
 echo $ECHO_N "checking for mISDNuser/mISDNlib.h... $ECHO_C" >&6; }
@@ -34422,7 +34360,7 @@ fi
          ISDNNET_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ISDNNET_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ISDNNET_INCLUDE}"
 	 if test "${ac_cv_header_mISDNuser_isdn_net_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for mISDNuser/isdn_net.h" >&5
 echo $ECHO_N "checking for mISDNuser/isdn_net.h... $ECHO_C" >&6; }
@@ -34683,7 +34621,7 @@ fi
          SUPPSERV_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SUPPSERV_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SUPPSERV_INCLUDE}"
 	 if test "${ac_cv_header_mISDNuser_suppserv_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for mISDNuser/suppserv.h" >&5
 echo $ECHO_N "checking for mISDNuser/suppserv.h... $ECHO_C" >&6; }
@@ -35237,7 +35175,7 @@ fi
          NBS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${NBS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${NBS_INCLUDE}"
 	 if test "${ac_cv_header_nbs_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for nbs.h" >&5
 echo $ECHO_N "checking for nbs.h... $ECHO_C" >&6; }
@@ -35499,7 +35437,7 @@ fi
          NCURSES_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${NCURSES_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${NCURSES_INCLUDE}"
 	 if test "${ac_cv_header_curses_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for curses.h" >&5
 echo $ECHO_N "checking for curses.h... $ECHO_C" >&6; }
@@ -35944,7 +35882,7 @@ fi
          NEWT_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${NEWT_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${NEWT_INCLUDE}"
 	 if test "${ac_cv_header_newt_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for newt.h" >&5
 echo $ECHO_N "checking for newt.h... $ECHO_C" >&6; }
@@ -36206,7 +36144,7 @@ fi
          UNIXODBC_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${UNIXODBC_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${UNIXODBC_INCLUDE}"
 	 if test "${ac_cv_header_sql_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for sql.h" >&5
 echo $ECHO_N "checking for sql.h... $ECHO_C" >&6; }
@@ -36468,7 +36406,7 @@ fi
          OGG_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${OGG_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${OGG_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -36731,7 +36669,7 @@ fi
          BKTR_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${BKTR_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${BKTR_INCLUDE}"
 	 if test "${ac_cv_header_execinfo_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for execinfo.h" >&5
 echo $ECHO_N "checking for execinfo.h... $ECHO_C" >&6; }
@@ -36993,7 +36931,7 @@ fi
          BKTR_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${BKTR_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${BKTR_INCLUDE}"
 	 if test "${ac_cv_header_execinfo_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for execinfo.h" >&5
 echo $ECHO_N "checking for execinfo.h... $ECHO_C" >&6; }
@@ -37256,7 +37194,7 @@ fi
          OSS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${OSS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${OSS_INCLUDE}"
 	 if test "${ac_cv_header_linux_soundcard_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for linux/soundcard.h" >&5
 echo $ECHO_N "checking for linux/soundcard.h... $ECHO_C" >&6; }
@@ -37517,7 +37455,7 @@ fi
          OSS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${OSS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${OSS_INCLUDE}"
 	 if test "${ac_cv_header_sys_soundcard_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for sys/soundcard.h" >&5
 echo $ECHO_N "checking for sys/soundcard.h... $ECHO_C" >&6; }
@@ -37778,7 +37716,7 @@ fi
          OSS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${OSS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${OSS_INCLUDE}"
 	 if test "${ac_cv_header_soundcard_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for soundcard.h" >&5
 echo $ECHO_N "checking for soundcard.h... $ECHO_C" >&6; }
@@ -38368,7 +38306,7 @@ fi
          POPT_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${POPT_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${POPT_INCLUDE}"
 	 if test "${ac_cv_header_popt_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for popt.h" >&5
 echo $ECHO_N "checking for popt.h... $ECHO_C" >&6; }
@@ -38630,7 +38568,7 @@ fi
          PORTAUDIO_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${PORTAUDIO_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${PORTAUDIO_INCLUDE}"
 	 if test "${ac_cv_header_portaudio_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for portaudio.h" >&5
 echo $ECHO_N "checking for portaudio.h... $ECHO_C" >&6; }
@@ -38892,7 +38830,7 @@ fi
          PRI_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${PRI_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${PRI_INCLUDE}"
 	 if test "${ac_cv_header_libpri_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for libpri.h" >&5
 echo $ECHO_N "checking for libpri.h... $ECHO_C" >&6; }
@@ -39241,7 +39179,7 @@ fi
          SPANDSP_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SPANDSP_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SPANDSP_INCLUDE}"
 	 if test "${ac_cv_header_spandsp_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for spandsp.h" >&5
 echo $ECHO_N "checking for spandsp.h... $ECHO_C" >&6; }
@@ -39504,7 +39442,7 @@ fi
          SS7_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SS7_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SS7_INCLUDE}"
 	 if test "${ac_cv_header_libss7_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for libss7.h" >&5
 echo $ECHO_N "checking for libss7.h... $ECHO_C" >&6; }
@@ -41715,8 +41653,6 @@ _ACEOF
 
 fi
 
-LUA_INCLUDE="-I/usr/include/lua5.1"
-LUA_LIB="-llua5.1"
 
 if test "x${PBX_LUA}" != "x1" -a "${USE_LUA}" != "no"; then
    pbxlibdir=""
@@ -41815,7 +41751,7 @@ fi
          LUA_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${LUA_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${LUA_INCLUDE}"
 	 if test "${ac_cv_header_lua5_1_lua_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for lua5.1/lua.h" >&5
 echo $ECHO_N "checking for lua5.1/lua.h... $ECHO_C" >&6; }
@@ -42077,7 +42013,7 @@ fi
          RADIUS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${RADIUS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${RADIUS_INCLUDE}"
 	 if test "${ac_cv_header_radiusclient_ng_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for radiusclient-ng.h" >&5
 echo $ECHO_N "checking for radiusclient-ng.h... $ECHO_C" >&6; }
@@ -42241,20 +42177,29 @@ _ACEOF
 fi
 
 
+# This is a bit complex... in reality, Asterisk's AIS support is dependent on finding
+# *any* implementation of AIS, not just OpenAIS. However, the configure script needs
+# to know the specifics of each possible implementation, and then represent the one
+# that was found as 'AIS'.
 
-if test "x${PBX_SACLM}" != "x1" -a "${USE_SACLM}" != "no"; then
+PBX_AIS=0
+
+# OpenAIS installs its libraries into /usr/lib/openais by default, so check there
+
+
+if test "x${PBX_OPENAIS}" != "x1" -a "${USE_OPENAIS}" != "no"; then
    pbxlibdir=""
-   # if --with-SACLM=DIR has been specified, use it.
-   if test "x${SACLM_DIR}" != "x"; then
-      if test -d ${SACLM_DIR}/lib; then
-      	 pbxlibdir="-L${SACLM_DIR}/lib"
+   # if --with-OPENAIS=DIR has been specified, use it.
+   if test "x${OPENAIS_DIR}" != "x"; then
+      if test -d ${OPENAIS_DIR}/lib; then
+      	 pbxlibdir="-L${OPENAIS_DIR}/lib"
       else
-      	 pbxlibdir="-L${SACLM_DIR}"
+      	 pbxlibdir="-L${OPENAIS_DIR}"
       fi
    fi
    pbxfuncname="saClmInitialize"
    if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
-      AST_SACLM_FOUND=yes
+      AST_OPENAIS_FOUND=yes
    else
       as_ac_Lib=`echo "ac_cv_lib_SaClm_${pbxfuncname}" | $as_tr_sh`
 { echo "$as_me:$LINENO: checking for ${pbxfuncname} in -lSaClm" >&5
@@ -42263,7 +42208,7 @@ if { as_var=$as_ac_Lib; eval "test \"\${$as_var+set}\" = set"; }; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-lSaClm ${pbxlibdir}  $LIBS"
+LIBS="-lSaClm ${pbxlibdir} -L/usr/lib/openais $LIBS"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
@@ -42320,26 +42265,26 @@ ac_res=`eval echo '${'$as_ac_Lib'}'`
 	       { echo "$as_me:$LINENO: result: $ac_res" >&5
 echo "${ECHO_T}$ac_res" >&6; }
 if test `eval echo '${'$as_ac_Lib'}'` = yes; then
-  AST_SACLM_FOUND=yes
+  AST_OPENAIS_FOUND=yes
 else
-  AST_SACLM_FOUND=no
+  AST_OPENAIS_FOUND=no
 fi
 
    fi
 
    # now check for the header.
-   if test "${AST_SACLM_FOUND}" = "yes"; then
-      SACLM_LIB="${pbxlibdir} -lSaClm "
-      # if --with-SACLM=DIR has been specified, use it.
-      if test "x${SACLM_DIR}" != "x"; then
-	 SACLM_INCLUDE="-I${SACLM_DIR}/include"
+   if test "${AST_OPENAIS_FOUND}" = "yes"; then
+      OPENAIS_LIB="${pbxlibdir} -lSaClm -L/usr/lib/openais"
+      # if --with-OPENAIS=DIR has been specified, use it.
+      if test "x${OPENAIS_DIR}" != "x"; then
+	 OPENAIS_INCLUDE="-I${OPENAIS_DIR}/include"
       fi
-      SACLM_INCLUDE="${SACLM_INCLUDE} "
+      OPENAIS_INCLUDE="${OPENAIS_INCLUDE} "
       if test "xopenais/saClm.h" = "x" ; then	# no header, assume found
-         SACLM_HEADER_FOUND="1"
+         OPENAIS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SACLM_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${OPENAIS_INCLUDE}"
 	 if test "${ac_cv_header_openais_saClm_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for openais/saClm.h" >&5
 echo $ECHO_N "checking for openais/saClm.h... $ECHO_C" >&6; }
@@ -42471,31 +42416,31 @@ echo "${ECHO_T}$ac_cv_header_openais_saClm_h" >&6; }
 
 fi
 if test $ac_cv_header_openais_saClm_h = yes; then
-  SACLM_HEADER_FOUND=1
+  OPENAIS_HEADER_FOUND=1
 else
-  SACLM_HEADER_FOUND=0
+  OPENAIS_HEADER_FOUND=0
 fi
 
 
          CPPFLAGS="${saved_cppflags}"
       fi
-      if test "x${SACLM_HEADER_FOUND}" = "x0" ; then
-         SACLM_LIB=""
-         SACLM_INCLUDE=""
+      if test "x${OPENAIS_HEADER_FOUND}" = "x0" ; then
+         OPENAIS_LIB=""
+         OPENAIS_INCLUDE=""
       else
          if test "x${pbxfuncname}" = "x" ; then		# only checking headers -> no library
-	    SACLM_LIB=""
+	    OPENAIS_LIB=""
 	 fi
-         PBX_SACLM=1
+         PBX_OPENAIS=1
          # XXX don't know how to evaluate the description (third argument) in AC_DEFINE_UNQUOTED
 
 cat >>confdefs.h <<_ACEOF
-#define HAVE_SACLM 1
+#define HAVE_OPENAIS 1
 _ACEOF
 
 
 cat >>confdefs.h <<_ACEOF
-#define HAVE_SACLM_VERSION
+#define HAVE_OPENAIS_VERSION
 _ACEOF
 
       fi
@@ -42503,265 +42448,19 @@ _ACEOF
 fi
 
 
-if test "x${PBX_SAEVT}" != "x1" -a "${USE_SAEVT}" != "no"; then
-   pbxlibdir=""
-   # if --with-SAEVT=DIR has been specified, use it.
-   if test "x${SAEVT_DIR}" != "x"; then
-      if test -d ${SAEVT_DIR}/lib; then
-      	 pbxlibdir="-L${SAEVT_DIR}/lib"
-      else
-      	 pbxlibdir="-L${SAEVT_DIR}"
-      fi
-   fi
-   pbxfuncname="saEvtInitialize"
-   if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
-      AST_SAEVT_FOUND=yes
+if test "${PBX_OPENAIS}" = 1; then
+   PBX_AIS=1
+   if test -n "${OPENAIS_DIR}"; then
+      AIS_INCLUDE="${OPENAIS_INCLUDE}/openais"
+      AIS_LIB="-lSaEvt ${OPENAIS_LIB}"
    else
-      as_ac_Lib=`echo "ac_cv_lib_SaEvt_${pbxfuncname}" | $as_tr_sh`
-{ echo "$as_me:$LINENO: checking for ${pbxfuncname} in -lSaEvt" >&5
-echo $ECHO_N "checking for ${pbxfuncname} in -lSaEvt... $ECHO_C" >&6; }
-if { as_var=$as_ac_Lib; eval "test \"\${$as_var+set}\" = set"; }; then
-  echo $ECHO_N "(cached) $ECHO_C" >&6
-else
-  ac_check_lib_save_LIBS=$LIBS
-LIBS="-lSaEvt ${pbxlibdir}  $LIBS"
-cat >conftest.$ac_ext <<_ACEOF
-/* confdefs.h.  */
-_ACEOF
-cat confdefs.h >>conftest.$ac_ext
-cat >>conftest.$ac_ext <<_ACEOF
-/* end confdefs.h.  */
-
-/* Override any GCC internal prototype to avoid an error.
-   Use char because int might match the return type of a GCC
-   builtin and then its argument prototype would still apply.  */
-#ifdef __cplusplus
-extern "C"
-#endif
-char ${pbxfuncname} ();
-int
-main ()
-{
-return ${pbxfuncname} ();
-  ;
-  return 0;
-}
-_ACEOF
-rm -f conftest.$ac_objext conftest$ac_exeext
-if { (ac_try="$ac_link"
-case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_link") 2>conftest.er1
-  ac_status=$?
-  grep -v '^ *+' conftest.er1 >conftest.err
-  rm -f conftest.er1
-  cat conftest.err >&5
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); } && {
-	 test -z "$ac_c_werror_flag" ||
-	 test ! -s conftest.err
-       } && test -s conftest$ac_exeext &&
-       $as_test_x conftest$ac_exeext; then
-  eval "$as_ac_Lib=yes"
-else
-  echo "$as_me: failed program was:" >&5
-sed 's/^/| /' conftest.$ac_ext >&5
-
-	eval "$as_ac_Lib=no"
-fi
-
-rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
-      conftest$ac_exeext conftest.$ac_ext
-LIBS=$ac_check_lib_save_LIBS
-fi
-ac_res=`eval echo '${'$as_ac_Lib'}'`
-	       { echo "$as_me:$LINENO: result: $ac_res" >&5
-echo "${ECHO_T}$ac_res" >&6; }
-if test `eval echo '${'$as_ac_Lib'}'` = yes; then
-  AST_SAEVT_FOUND=yes
-else
-  AST_SAEVT_FOUND=no
-fi
-
-   fi
-
-   # now check for the header.
-   if test "${AST_SAEVT_FOUND}" = "yes"; then
-      SAEVT_LIB="${pbxlibdir} -lSaEvt "
-      # if --with-SAEVT=DIR has been specified, use it.
-      if test "x${SAEVT_DIR}" != "x"; then
-	 SAEVT_INCLUDE="-I${SAEVT_DIR}/include"
-      fi
-      SAEVT_INCLUDE="${SAEVT_INCLUDE} "
-      if test "xopenais/saEvt.h" = "x" ; then	# no header, assume found
-         SAEVT_HEADER_FOUND="1"
-      else				# check for the header
-         saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SAEVT_INCLUDE} "
-	 if test "${ac_cv_header_openais_saEvt_h+set}" = set; then
-  { echo "$as_me:$LINENO: checking for openais/saEvt.h" >&5
-echo $ECHO_N "checking for openais/saEvt.h... $ECHO_C" >&6; }
-if test "${ac_cv_header_openais_saEvt_h+set}" = set; then
-  echo $ECHO_N "(cached) $ECHO_C" >&6
-fi
-{ echo "$as_me:$LINENO: result: $ac_cv_header_openais_saEvt_h" >&5
-echo "${ECHO_T}$ac_cv_header_openais_saEvt_h" >&6; }
-else
-  # Is the header compilable?
-{ echo "$as_me:$LINENO: checking openais/saEvt.h usability" >&5
-echo $ECHO_N "checking openais/saEvt.h usability... $ECHO_C" >&6; }
-cat >conftest.$ac_ext <<_ACEOF
-/* confdefs.h.  */
-_ACEOF
-cat confdefs.h >>conftest.$ac_ext
-cat >>conftest.$ac_ext <<_ACEOF
-/* end confdefs.h.  */
-$ac_includes_default
-#include <openais/saEvt.h>
-_ACEOF
-rm -f conftest.$ac_objext
-if { (ac_try="$ac_compile"
-case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_compile") 2>conftest.er1
-  ac_status=$?
-  grep -v '^ *+' conftest.er1 >conftest.err
-  rm -f conftest.er1
-  cat conftest.err >&5
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); } && {
-	 test -z "$ac_c_werror_flag" ||
-	 test ! -s conftest.err
-       } && test -s conftest.$ac_objext; then
-  ac_header_compiler=yes
-else
-  echo "$as_me: failed program was:" >&5
-sed 's/^/| /' conftest.$ac_ext >&5
-
-	ac_header_compiler=no
-fi
-
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-{ echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
-echo "${ECHO_T}$ac_header_compiler" >&6; }
-
-# Is the header present?
-{ echo "$as_me:$LINENO: checking openais/saEvt.h presence" >&5
-echo $ECHO_N "checking openais/saEvt.h presence... $ECHO_C" >&6; }
-cat >conftest.$ac_ext <<_ACEOF
-/* confdefs.h.  */
-_ACEOF
-cat confdefs.h >>conftest.$ac_ext
-cat >>conftest.$ac_ext <<_ACEOF
-/* end confdefs.h.  */
-#include <openais/saEvt.h>
-_ACEOF
-if { (ac_try="$ac_cpp conftest.$ac_ext"
-case "(($ac_try" in
-  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
-  *) ac_try_echo=$ac_try;;
-esac
-eval "echo \"\$as_me:$LINENO: $ac_try_echo\"") >&5
-  (eval "$ac_cpp conftest.$ac_ext") 2>conftest.er1
-  ac_status=$?
-  grep -v '^ *+' conftest.er1 >conftest.err
-  rm -f conftest.er1
-  cat conftest.err >&5
-  echo "$as_me:$LINENO: \$? = $ac_status" >&5
-  (exit $ac_status); } >/dev/null && {
-	 test -z "$ac_c_preproc_warn_flag$ac_c_werror_flag" ||
-	 test ! -s conftest.err
-       }; then
-  ac_header_preproc=yes
-else
-  echo "$as_me: failed program was:" >&5
-sed 's/^/| /' conftest.$ac_ext >&5
-
-  ac_header_preproc=no
-fi
-
-rm -f conftest.err conftest.$ac_ext
-{ echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
-echo "${ECHO_T}$ac_header_preproc" >&6; }
-
-# So?  What about this header?
-case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
-  yes:no: )
-    { echo "$as_me:$LINENO: WARNING: openais/saEvt.h: accepted by the compiler, rejected by the preprocessor!" >&5
-echo "$as_me: WARNING: openais/saEvt.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
-    { echo "$as_me:$LINENO: WARNING: openais/saEvt.h: proceeding with the compiler's result" >&5
-echo "$as_me: WARNING: openais/saEvt.h: proceeding with the compiler's result" >&2;}
-    ac_header_preproc=yes
-    ;;
-  no:yes:* )
-    { echo "$as_me:$LINENO: WARNING: openais/saEvt.h: present but cannot be compiled" >&5
-echo "$as_me: WARNING: openais/saEvt.h: present but cannot be compiled" >&2;}
-    { echo "$as_me:$LINENO: WARNING: openais/saEvt.h:     check for missing prerequisite headers?" >&5
-echo "$as_me: WARNING: openais/saEvt.h:     check for missing prerequisite headers?" >&2;}
-    { echo "$as_me:$LINENO: WARNING: openais/saEvt.h: see the Autoconf documentation" >&5
-echo "$as_me: WARNING: openais/saEvt.h: see the Autoconf documentation" >&2;}
-    { echo "$as_me:$LINENO: WARNING: openais/saEvt.h:     section \"Present But Cannot Be Compiled\"" >&5
-echo "$as_me: WARNING: openais/saEvt.h:     section \"Present But Cannot Be Compiled\"" >&2;}
-    { echo "$as_me:$LINENO: WARNING: openais/saEvt.h: proceeding with the preprocessor's result" >&5
-echo "$as_me: WARNING: openais/saEvt.h: proceeding with the preprocessor's result" >&2;}
-    { echo "$as_me:$LINENO: WARNING: openais/saEvt.h: in the future, the compiler will take precedence" >&5
-echo "$as_me: WARNING: openais/saEvt.h: in the future, the compiler will take precedence" >&2;}
-    ( cat <<\_ASBOX
-## ------------------------------- ##
-## Report this to www.asterisk.org ##
-## ------------------------------- ##
-_ASBOX
-     ) | sed "s/^/$as_me: WARNING:     /" >&2
-    ;;
-esac
-{ echo "$as_me:$LINENO: checking for openais/saEvt.h" >&5
-echo $ECHO_N "checking for openais/saEvt.h... $ECHO_C" >&6; }
-if test "${ac_cv_header_openais_saEvt_h+set}" = set; then
-  echo $ECHO_N "(cached) $ECHO_C" >&6
-else
-  ac_cv_header_openais_saEvt_h=$ac_header_preproc
-fi
-{ echo "$as_me:$LINENO: result: $ac_cv_header_openais_saEvt_h" >&5
-echo "${ECHO_T}$ac_cv_header_openais_saEvt_h" >&6; }
-
-fi
-if test $ac_cv_header_openais_saEvt_h = yes; then
-  SAEVT_HEADER_FOUND=1
-else
-  SAEVT_HEADER_FOUND=0
-fi
-
-
-         CPPFLAGS="${saved_cppflags}"
-      fi
-      if test "x${SAEVT_HEADER_FOUND}" = "x0" ; then
-         SAEVT_LIB=""
-         SAEVT_INCLUDE=""
-      else
-         if test "x${pbxfuncname}" = "x" ; then		# only checking headers -> no library
-	    SAEVT_LIB=""
-	 fi
-         PBX_SAEVT=1
-         # XXX don't know how to evaluate the description (third argument) in AC_DEFINE_UNQUOTED
-
-cat >>confdefs.h <<_ACEOF
-#define HAVE_SAEVT 1
-_ACEOF
-
-
-cat >>confdefs.h <<_ACEOF
-#define HAVE_SAEVT_VERSION
-_ACEOF
-
-      fi
+      AIS_INCLUDE="-I/usr/include/openais"
+      AIS_LIB="-lSaClm -lSaEvt -L/usr/lib/openais"
    fi
 fi
+
+
+
 
 
 
@@ -42862,7 +42561,7 @@ fi
          SPEEX_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SPEEX_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SPEEX_INCLUDE}"
 	 if test "${ac_cv_header_speex_speex_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for speex/speex.h" >&5
 echo $ECHO_N "checking for speex/speex.h... $ECHO_C" >&6; }
@@ -43125,7 +42824,7 @@ fi
          SPEEX_PREPROCESS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SPEEX_PREPROCESS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SPEEX_PREPROCESS_INCLUDE}"
 	 if test "${ac_cv_header_speex_speex_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for speex/speex.h" >&5
 echo $ECHO_N "checking for speex/speex.h... $ECHO_C" >&6; }
@@ -43390,7 +43089,7 @@ fi
          SPEEXDSP_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SPEEXDSP_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SPEEXDSP_INCLUDE}"
 	 if test "${ac_cv_header_speex_speex_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for speex/speex.h" >&5
 echo $ECHO_N "checking for speex/speex.h... $ECHO_C" >&6; }
@@ -43657,7 +43356,7 @@ fi
          SQLITE_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SQLITE_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SQLITE_INCLUDE}"
 	 if test "${ac_cv_header_sqlite_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for sqlite.h" >&5
 echo $ECHO_N "checking for sqlite.h... $ECHO_C" >&6; }
@@ -43919,7 +43618,7 @@ fi
          SQLITE3_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SQLITE3_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${SQLITE3_INCLUDE}"
 	 if test "${ac_cv_header_sqlite3_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for sqlite3.h" >&5
 echo $ECHO_N "checking for sqlite3.h... $ECHO_C" >&6; }
@@ -44181,7 +43880,7 @@ fi
          CRYPTO_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${CRYPTO_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${CRYPTO_INCLUDE}"
 	 if test "${ac_cv_header_openssl_aes_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for openssl/aes.h" >&5
 echo $ECHO_N "checking for openssl/aes.h... $ECHO_C" >&6; }
@@ -44445,7 +44144,7 @@ fi
          OPENSSL_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${OPENSSL_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${OPENSSL_INCLUDE}"
 	 if test "${ac_cv_header_openssl_ssl_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for openssl/ssl.h" >&5
 echo $ECHO_N "checking for openssl/ssl.h... $ECHO_C" >&6; }
@@ -44710,7 +44409,7 @@ fi
          OSPTK_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${OSPTK_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${OSPTK_INCLUDE}"
 	 if test "${ac_cv_header_osp_osp_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for osp/osp.h" >&5
 echo $ECHO_N "checking for osp/osp.h... $ECHO_C" >&6; }
@@ -45065,18 +44764,18 @@ if test "x${PBX_FREETDS}" != "x1" -a "${USE_FREETDS}" != "no"; then
       	 pbxlibdir="-L${FREETDS_DIR}"
       fi
    fi
-   pbxfuncname="tds_version"
+   pbxfuncname="dbinit"
    if test "x${pbxfuncname}" = "x" ; then   # empty lib, assume only headers
       AST_FREETDS_FOUND=yes
    else
-      as_ac_Lib=`echo "ac_cv_lib_tds_mssql_${pbxfuncname}" | $as_tr_sh`
-{ echo "$as_me:$LINENO: checking for ${pbxfuncname} in -ltds_mssql" >&5
-echo $ECHO_N "checking for ${pbxfuncname} in -ltds_mssql... $ECHO_C" >&6; }
+      as_ac_Lib=`echo "ac_cv_lib_sybdb_${pbxfuncname}" | $as_tr_sh`
+{ echo "$as_me:$LINENO: checking for ${pbxfuncname} in -lsybdb" >&5
+echo $ECHO_N "checking for ${pbxfuncname} in -lsybdb... $ECHO_C" >&6; }
 if { as_var=$as_ac_Lib; eval "test \"\${$as_var+set}\" = set"; }; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-ltds_mssql ${pbxlibdir}  $LIBS"
+LIBS="-lsybdb ${pbxlibdir}  $LIBS"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
@@ -45142,29 +44841,29 @@ fi
 
    # now check for the header.
    if test "${AST_FREETDS_FOUND}" = "yes"; then
-      FREETDS_LIB="${pbxlibdir} -ltds_mssql "
+      FREETDS_LIB="${pbxlibdir} -lsybdb "
       # if --with-FREETDS=DIR has been specified, use it.
       if test "x${FREETDS_DIR}" != "x"; then
 	 FREETDS_INCLUDE="-I${FREETDS_DIR}/include"
       fi
       FREETDS_INCLUDE="${FREETDS_INCLUDE} "
-      if test "xfreetds_mssql/tds.h" = "x" ; then	# no header, assume found
+      if test "xsybdb.h" = "x" ; then	# no header, assume found
          FREETDS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${FREETDS_INCLUDE} "
-	 if test "${ac_cv_header_freetds_mssql_tds_h+set}" = set; then
-  { echo "$as_me:$LINENO: checking for freetds_mssql/tds.h" >&5
-echo $ECHO_N "checking for freetds_mssql/tds.h... $ECHO_C" >&6; }
-if test "${ac_cv_header_freetds_mssql_tds_h+set}" = set; then
+         CPPFLAGS="${CPPFLAGS} ${FREETDS_INCLUDE}"
+	 if test "${ac_cv_header_sybdb_h+set}" = set; then
+  { echo "$as_me:$LINENO: checking for sybdb.h" >&5
+echo $ECHO_N "checking for sybdb.h... $ECHO_C" >&6; }
+if test "${ac_cv_header_sybdb_h+set}" = set; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 fi
-{ echo "$as_me:$LINENO: result: $ac_cv_header_freetds_mssql_tds_h" >&5
-echo "${ECHO_T}$ac_cv_header_freetds_mssql_tds_h" >&6; }
+{ echo "$as_me:$LINENO: result: $ac_cv_header_sybdb_h" >&5
+echo "${ECHO_T}$ac_cv_header_sybdb_h" >&6; }
 else
   # Is the header compilable?
-{ echo "$as_me:$LINENO: checking freetds_mssql/tds.h usability" >&5
-echo $ECHO_N "checking freetds_mssql/tds.h usability... $ECHO_C" >&6; }
+{ echo "$as_me:$LINENO: checking sybdb.h usability" >&5
+echo $ECHO_N "checking sybdb.h usability... $ECHO_C" >&6; }
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
@@ -45172,7 +44871,7 @@ cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
 $ac_includes_default
-#include <freetds_mssql/tds.h>
+#include <sybdb.h>
 _ACEOF
 rm -f conftest.$ac_objext
 if { (ac_try="$ac_compile"
@@ -45204,15 +44903,15 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 echo "${ECHO_T}$ac_header_compiler" >&6; }
 
 # Is the header present?
-{ echo "$as_me:$LINENO: checking freetds_mssql/tds.h presence" >&5
-echo $ECHO_N "checking freetds_mssql/tds.h presence... $ECHO_C" >&6; }
+{ echo "$as_me:$LINENO: checking sybdb.h presence" >&5
+echo $ECHO_N "checking sybdb.h presence... $ECHO_C" >&6; }
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
 cat confdefs.h >>conftest.$ac_ext
 cat >>conftest.$ac_ext <<_ACEOF
 /* end confdefs.h.  */
-#include <freetds_mssql/tds.h>
+#include <sybdb.h>
 _ACEOF
 if { (ac_try="$ac_cpp conftest.$ac_ext"
 case "(($ac_try" in
@@ -45245,25 +44944,25 @@ echo "${ECHO_T}$ac_header_preproc" >&6; }
 # So?  What about this header?
 case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
   yes:no: )
-    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: accepted by the compiler, rejected by the preprocessor!" >&5
-echo "$as_me: WARNING: freetds_mssql/tds.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
-    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: proceeding with the compiler's result" >&5
-echo "$as_me: WARNING: freetds_mssql/tds.h: proceeding with the compiler's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: sybdb.h: accepted by the compiler, rejected by the preprocessor!" >&5
+echo "$as_me: WARNING: sybdb.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
+    { echo "$as_me:$LINENO: WARNING: sybdb.h: proceeding with the compiler's result" >&5
+echo "$as_me: WARNING: sybdb.h: proceeding with the compiler's result" >&2;}
     ac_header_preproc=yes
     ;;
   no:yes:* )
-    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: present but cannot be compiled" >&5
-echo "$as_me: WARNING: freetds_mssql/tds.h: present but cannot be compiled" >&2;}
-    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h:     check for missing prerequisite headers?" >&5
-echo "$as_me: WARNING: freetds_mssql/tds.h:     check for missing prerequisite headers?" >&2;}
-    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: see the Autoconf documentation" >&5
-echo "$as_me: WARNING: freetds_mssql/tds.h: see the Autoconf documentation" >&2;}
-    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h:     section \"Present But Cannot Be Compiled\"" >&5
-echo "$as_me: WARNING: freetds_mssql/tds.h:     section \"Present But Cannot Be Compiled\"" >&2;}
-    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: proceeding with the preprocessor's result" >&5
-echo "$as_me: WARNING: freetds_mssql/tds.h: proceeding with the preprocessor's result" >&2;}
-    { echo "$as_me:$LINENO: WARNING: freetds_mssql/tds.h: in the future, the compiler will take precedence" >&5
-echo "$as_me: WARNING: freetds_mssql/tds.h: in the future, the compiler will take precedence" >&2;}
+    { echo "$as_me:$LINENO: WARNING: sybdb.h: present but cannot be compiled" >&5
+echo "$as_me: WARNING: sybdb.h: present but cannot be compiled" >&2;}
+    { echo "$as_me:$LINENO: WARNING: sybdb.h:     check for missing prerequisite headers?" >&5
+echo "$as_me: WARNING: sybdb.h:     check for missing prerequisite headers?" >&2;}
+    { echo "$as_me:$LINENO: WARNING: sybdb.h: see the Autoconf documentation" >&5
+echo "$as_me: WARNING: sybdb.h: see the Autoconf documentation" >&2;}
+    { echo "$as_me:$LINENO: WARNING: sybdb.h:     section \"Present But Cannot Be Compiled\"" >&5
+echo "$as_me: WARNING: sybdb.h:     section \"Present But Cannot Be Compiled\"" >&2;}
+    { echo "$as_me:$LINENO: WARNING: sybdb.h: proceeding with the preprocessor's result" >&5
+echo "$as_me: WARNING: sybdb.h: proceeding with the preprocessor's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: sybdb.h: in the future, the compiler will take precedence" >&5
+echo "$as_me: WARNING: sybdb.h: in the future, the compiler will take precedence" >&2;}
     ( cat <<\_ASBOX
 ## ------------------------------- ##
 ## Report this to www.asterisk.org ##
@@ -45272,18 +44971,18 @@ _ASBOX
      ) | sed "s/^/$as_me: WARNING:     /" >&2
     ;;
 esac
-{ echo "$as_me:$LINENO: checking for freetds_mssql/tds.h" >&5
-echo $ECHO_N "checking for freetds_mssql/tds.h... $ECHO_C" >&6; }
-if test "${ac_cv_header_freetds_mssql_tds_h+set}" = set; then
+{ echo "$as_me:$LINENO: checking for sybdb.h" >&5
+echo $ECHO_N "checking for sybdb.h... $ECHO_C" >&6; }
+if test "${ac_cv_header_sybdb_h+set}" = set; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
-  ac_cv_header_freetds_mssql_tds_h=$ac_header_preproc
+  ac_cv_header_sybdb_h=$ac_header_preproc
 fi
-{ echo "$as_me:$LINENO: result: $ac_cv_header_freetds_mssql_tds_h" >&5
-echo "${ECHO_T}$ac_cv_header_freetds_mssql_tds_h" >&6; }
+{ echo "$as_me:$LINENO: result: $ac_cv_header_sybdb_h" >&5
+echo "${ECHO_T}$ac_cv_header_sybdb_h" >&6; }
 
 fi
-if test $ac_cv_header_freetds_mssql_tds_h = yes; then
+if test $ac_cv_header_sybdb_h = yes; then
   FREETDS_HEADER_FOUND=1
 else
   FREETDS_HEADER_FOUND=0
@@ -45315,33 +45014,6 @@ _ACEOF
    fi
 fi
 
-if test "${PBX_FREETDS}" != "0";
-then
-    if test "${FREETDS_DIR}x" = "x";
-    then
-        for tds_dir in /usr /usr/local;
-        do
-            if test -f "${tds_dir}/include/tdsver.h";
-            then
-                FREETDS_DIR="${tds_dir}"
-            fi
-        done
-    fi
-    case `${GREP} TDS_VERSION_NO ${FREETDS_DIR:-/usr}/include/tdsver.h` in
-    *0.64*)
-        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_64"
-	;;
-    *0.63*)
-        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_63"
-	;;
-    *0.62*)
-        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_0_62"
-	;;
-    *)
-        FREETDS_INCLUDE="${FREETDS_INCLUDE} -DFREETDS_PRE_0_62"
-	;;
-    esac
-fi
 
 
 if test "x${PBX_TERMCAP}" != "x1" -a "${USE_TERMCAP}" != "no"; then
@@ -45441,7 +45113,7 @@ fi
          TERMCAP_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${TERMCAP_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${TERMCAP_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -45703,7 +45375,7 @@ fi
          TINFO_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${TINFO_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${TINFO_INCLUDE}"
 	 if test "${ac_cv_header_+set}" = set; then
   { echo "$as_me:$LINENO: checking for " >&5
 echo $ECHO_N "checking for ... $ECHO_C" >&6; }
@@ -45871,7 +45543,6 @@ if test "${host_os}" != "linux-gnu" ; then
   tonezone_extra="-lm"
 fi
 
-# new tonezone, version 1.4.0
 
 if test "x${PBX_TONEZONE}" != "x1" -a "${USE_TONEZONE}" != "no"; then
    pbxlibdir=""
@@ -45894,7 +45565,7 @@ if { as_var=$as_ac_Lib; eval "test \"\${$as_var+set}\" = set"; }; then
   echo $ECHO_N "(cached) $ECHO_C" >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-ltonezone ${pbxlibdir} ${tonezone_extra} $LIBS"
+LIBS="-ltonezone ${pbxlibdir} ${tonezone_extra} ${DAHDI_INCLUDE} $LIBS"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
@@ -45960,7 +45631,7 @@ fi
 
    # now check for the header.
    if test "${AST_TONEZONE_FOUND}" = "yes"; then
-      TONEZONE_LIB="${pbxlibdir} -ltonezone ${tonezone_extra}"
+      TONEZONE_LIB="${pbxlibdir} -ltonezone ${tonezone_extra} ${DAHDI_INCLUDE}"
       # if --with-TONEZONE=DIR has been specified, use it.
       if test "x${TONEZONE_DIR}" != "x"; then
 	 TONEZONE_INCLUDE="-I${TONEZONE_DIR}/include"
@@ -45970,7 +45641,7 @@ fi
          TONEZONE_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${TONEZONE_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${TONEZONE_INCLUDE}"
 	 if test "${ac_cv_header_dahdi_tonezone_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for dahdi/tonezone.h" >&5
 echo $ECHO_N "checking for dahdi/tonezone.h... $ECHO_C" >&6; }
@@ -46232,7 +45903,7 @@ fi
          USB_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${USB_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${USB_INCLUDE}"
 	 if test "${ac_cv_header_usb_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for usb.h" >&5
 echo $ECHO_N "checking for usb.h... $ECHO_C" >&6; }
@@ -46494,7 +46165,7 @@ fi
          VORBIS_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${VORBIS_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${VORBIS_INCLUDE}"
 	 if test "${ac_cv_header_vorbis_codec_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for vorbis/codec.h" >&5
 echo $ECHO_N "checking for vorbis/codec.h... $ECHO_C" >&6; }
@@ -46854,7 +46525,7 @@ fi
          ZLIB_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${ZLIB_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${ZLIB_INCLUDE}"
 	 if test "${ac_cv_header_zlib_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for zlib.h" >&5
 echo $ECHO_N "checking for zlib.h... $ECHO_C" >&6; }
@@ -47647,7 +47318,7 @@ fi
          SDL_IMAGE_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${SDL_IMAGE_INCLUDE} ${SDL_INCLUDE}"
+         CPPFLAGS="${CPPFLAGS} ${SDL_IMAGE_INCLUDE}"
 	 if test "${ac_cv_header_SDL_image_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for SDL_image.h" >&5
 echo $ECHO_N "checking for SDL_image.h... $ECHO_C" >&6; }
@@ -47908,7 +47579,7 @@ fi
          FFMPEG_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${FFMPEG_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${FFMPEG_INCLUDE}"
 	 if test "${ac_cv_header_ffmpeg_avcodec_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for ffmpeg/avcodec.h" >&5
 echo $ECHO_N "checking for ffmpeg/avcodec.h... $ECHO_C" >&6; }
@@ -48312,7 +47983,7 @@ fi
          X11_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${X11_INCLUDE} "
+         CPPFLAGS="${CPPFLAGS} ${X11_INCLUDE}"
 	 if test "${ac_cv_header_X11_Xlib_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for X11/Xlib.h" >&5
 echo $ECHO_N "checking for X11/Xlib.h... $ECHO_C" >&6; }
@@ -48573,7 +48244,7 @@ fi
          X11_HEADER_FOUND="1"
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${X11_INCLUDE} -I/usr/X11R6/include"
+         CPPFLAGS="${CPPFLAGS} ${X11_INCLUDE}"
 	 if test "${ac_cv_header_X11_Xlib_h+set}" = set; then
   { echo "$as_me:$LINENO: checking for X11/Xlib.h" >&5
 echo $ECHO_N "checking for X11/Xlib.h... $ECHO_C" >&6; }
@@ -50224,14 +49895,6 @@ SDL_IMAGE_LIB!$SDL_IMAGE_LIB$ac_delim
 SDL_IMAGE_INCLUDE!$SDL_IMAGE_INCLUDE$ac_delim
 SDL_IMAGE_DIR!$SDL_IMAGE_DIR$ac_delim
 PBX_SDL_IMAGE!$PBX_SDL_IMAGE$ac_delim
-SACLM_LIB!$SACLM_LIB$ac_delim
-SACLM_INCLUDE!$SACLM_INCLUDE$ac_delim
-SACLM_DIR!$SACLM_DIR$ac_delim
-PBX_SACLM!$PBX_SACLM$ac_delim
-SAEVT_LIB!$SAEVT_LIB$ac_delim
-SAEVT_INCLUDE!$SAEVT_INCLUDE$ac_delim
-SAEVT_DIR!$SAEVT_DIR$ac_delim
-PBX_SAEVT!$PBX_SAEVT$ac_delim
 SPEEX_LIB!$SPEEX_LIB$ac_delim
 SPEEX_INCLUDE!$SPEEX_INCLUDE$ac_delim
 SPEEX_DIR!$SPEEX_DIR$ac_delim
@@ -50254,6 +49917,14 @@ SUPPSERV_DIR!$SUPPSERV_DIR$ac_delim
 PBX_SUPPSERV!$PBX_SUPPSERV$ac_delim
 OPENSSL_LIB!$OPENSSL_LIB$ac_delim
 OPENSSL_INCLUDE!$OPENSSL_INCLUDE$ac_delim
+OPENSSL_DIR!$OPENSSL_DIR$ac_delim
+PBX_OPENSSL!$PBX_OPENSSL$ac_delim
+FREETDS_LIB!$FREETDS_LIB$ac_delim
+FREETDS_INCLUDE!$FREETDS_INCLUDE$ac_delim
+FREETDS_DIR!$FREETDS_DIR$ac_delim
+PBX_FREETDS!$PBX_FREETDS$ac_delim
+TERMCAP_LIB!$TERMCAP_LIB$ac_delim
+TERMCAP_INCLUDE!$TERMCAP_INCLUDE$ac_delim
 _ACEOF
 
   if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 97; then
@@ -50295,14 +49966,6 @@ _ACEOF
 ac_delim='%!_!# '
 for ac_last_try in false false false false false :; do
   cat >conf$$subs.sed <<_ACEOF
-OPENSSL_DIR!$OPENSSL_DIR$ac_delim
-PBX_OPENSSL!$PBX_OPENSSL$ac_delim
-FREETDS_LIB!$FREETDS_LIB$ac_delim
-FREETDS_INCLUDE!$FREETDS_INCLUDE$ac_delim
-FREETDS_DIR!$FREETDS_DIR$ac_delim
-PBX_FREETDS!$PBX_FREETDS$ac_delim
-TERMCAP_LIB!$TERMCAP_LIB$ac_delim
-TERMCAP_INCLUDE!$TERMCAP_INCLUDE$ac_delim
 TERMCAP_DIR!$TERMCAP_DIR$ac_delim
 PBX_TERMCAP!$PBX_TERMCAP$ac_delim
 TINFO_LIB!$TINFO_LIB$ac_delim
@@ -50360,6 +50023,9 @@ OPENH323_INCDIR!$OPENH323_INCDIR$ac_delim
 OPENH323_LIBDIR!$OPENH323_LIBDIR$ac_delim
 OPENH323_SUFFIX!$OPENH323_SUFFIX$ac_delim
 OPENH323_BUILD!$OPENH323_BUILD$ac_delim
+PBX_AIS!$PBX_AIS$ac_delim
+AIS_INCLUDE!$AIS_INCLUDE$ac_delim
+AIS_LIB!$AIS_LIB$ac_delim
 PBX_SPEEX_PREPROCESS!$PBX_SPEEX_PREPROCESS$ac_delim
 CONFIG_GMIME!$CONFIG_GMIME$ac_delim
 EDITLINE_LIB!$EDITLINE_LIB$ac_delim
@@ -50372,7 +50038,7 @@ CURL_CONFIG!$CURL_CONFIG$ac_delim
 LTLIBOBJS!$LTLIBOBJS$ac_delim
 _ACEOF
 
-  if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 75; then
+  if test `sed -n "s/.*$ac_delim\$/X/p" conf$$subs.sed | grep -c X` = 70; then
     break
   elif $ac_last_try; then
     { { echo "$as_me:$LINENO: error: could not make $CONFIG_STATUS" >&5

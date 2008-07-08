@@ -588,7 +588,9 @@ int ast_context_remove_switch2(struct ast_context *con, const char *sw,
  * 
  * \param context context to remove extension from
  * \param extension which extension to remove
- * \param priority priority of extension to remove
+ * \param priority priority of extension to remove (0 to remove all)
+ * \param callerid NULL to remove all; non-NULL to match a single record per priority
+ * \param matchcid non-zero to match callerid element (if non-NULL); 0 to match default case
  * \param registrar registrar of the extension
  *
  * This function removes an extension from a given context.
@@ -601,6 +603,13 @@ int ast_context_remove_extension(const char *context, const char *extension, int
 
 int ast_context_remove_extension2(struct ast_context *con, const char *extension,
 	int priority, const char *registrar, int already_locked);
+
+int ast_context_remove_extension_callerid(const char *context, const char *extension,
+	int priority, const char *callerid, int matchcid, const char *registrar);
+
+int ast_context_remove_extension_callerid2(struct ast_context *con, const char *extension,
+	int priority, const char *callerid, int matchcid, const char *registrar,
+	int already_locked);
 
 /*! 
  * \brief Add an ignorepat
@@ -988,6 +997,9 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 									 struct ast_context *bypass, struct pbx_find_info *q,
 									 const char *context, const char *exten, int priority,
 									 const char *label, const char *callerid, enum ext_match_t action);
+
+/*! \brief Function in pbx.c that propably should be somewhere else, but not in res_agi, since it's a loadable module */
+const char *ast_agi_state(struct ast_channel *chan);
 
 
 /* every time a write lock is obtained for contexts,

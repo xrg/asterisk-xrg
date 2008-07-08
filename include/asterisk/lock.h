@@ -250,9 +250,9 @@ void log_show_lock(void *this_lock_addr);
  * be preserved as to what location originally acquired the lock.
  */
 #if !defined(LOW_MEMORY)
-int ast_find_lock_info(void *lock_addr, const char **filename, int *lineno, const char **func, const char **mutex_name);
+int ast_find_lock_info(void *lock_addr, char *filename, size_t filename_size, int *lineno, char *func, size_t func_size, char *mutex_name, size_t mutex_name_size);
 #else
-#define ast_find_lock_info(a,b,c,d,e) -1
+#define ast_find_lock_info(a,b,c,d,e,f,g,h) -1
 #endif
 
 /*!
@@ -261,11 +261,25 @@ int ast_find_lock_info(void *lock_addr, const char **filename, int *lineno, cons
  * used during deadlock avoidance, to preserve the original location where
  * a lock was originally acquired.
  */
+#define CHANNEL_DEADLOCK_AVOIDANCE(chan) \
+	do { \
+		char __filename[80], __func[80], __mutex_name[80]; \
+		int __lineno; \
+		int __res = ast_find_lock_info(&chan->lock_dont_use, __filename, sizeof(__filename), &__lineno, __func, sizeof(__func), __mutex_name, sizeof(__mutex_name)); \
+		ast_channel_unlock(chan); \
+		usleep(1); \
+		if (__res < 0) { /* Shouldn't ever happen, but just in case... */ \
+			ast_channel_lock(chan); \
+		} else { \
+			__ast_pthread_mutex_lock(__filename, __lineno, __func, __mutex_name, &chan->lock_dont_use); \
+		} \
+	} while (0)
+
 #define DEADLOCK_AVOIDANCE(lock) \
 	do { \
-		const char *__filename, *__func, *__mutex_name; \
+		char __filename[80], __func[80], __mutex_name[80]; \
 		int __lineno; \
-		int __res = ast_find_lock_info(lock, &__filename, &__lineno, &__func, &__mutex_name); \
+		int __res = ast_find_lock_info(lock, __filename, sizeof(__filename), &__lineno, __func, sizeof(__func), __mutex_name, sizeof(__mutex_name)); \
 		ast_mutex_unlock(lock); \
 		usleep(1); \
 		if (__res < 0) { /* Shouldn't ever happen, but just in case... */ \
@@ -277,11 +291,50 @@ int ast_find_lock_info(void *lock_addr, const char **filename, int *lineno, cons
 
 #define DEADLOCK_AVOIDANCE2(lock,tmout) \
 	do { \
-		const char *__filename, *__func, *__mutex_name; \
+		char __filename[80], __func[80], __mutex_name[80]; \
 		int __lineno; \
-		int __res = ast_find_lock_info(lock, &__filename, &__lineno, &__func, &__mutex_name); \
+		int __res = ast_find_lock_info(lock, __filename, sizeof(__filename), &__lineno, __func, sizeof(__func), __mutex_name, sizeof(__mutex_name)); \
 		ast_mutex_unlock(lock); \
 		usleep(tmout); \
+		if (__res < 0) { /* Shouldn't ever happen, but just in case... */ \
+			ast_mutex_lock(lock); \
+		} else { \
+			__ast_pthread_mutex_lock(__filename, __lineno, __func, __mutex_name, lock); \
+		} \
+	} while (0)
+
+/*!
+ * \brief Deadlock avoidance unlock
+ *
+ * In certain deadlock avoidance scenarios, there is more than one lock to be
+ * unlocked and relocked.  Therefore, this pair of macros is provided for that
+ * purpose.  Note that every DLA_UNLOCK _MUST_ be paired with a matching
+ * DLA_LOCK.  The intent of this pair of macros is to be used around another
+ * set of deadlock avoidance code, mainly CHANNEL_DEADLOCK_AVOIDANCE, as the
+ * locking order specifies that we may safely lock a channel, followed by its
+ * pvt, with no worries about a deadlock.  In any other scenario, this macro
+ * may not be safe to use.
+ */
+#define DLA_UNLOCK(lock) \
+	do { \
+		char __filename[80], __func[80], __mutex_name[80]; \
+		int __lineno; \
+		int __res = ast_find_lock_info(lock, __filename, sizeof(__filename), &__lineno, __func, sizeof(__func), __mutex_name, sizeof(__mutex_name)); \
+		ast_mutex_unlock(lock);
+
+/*!
+ * \brief Deadlock avoidance lock
+ *
+ * In certain deadlock avoidance scenarios, there is more than one lock to be
+ * unlocked and relocked.  Therefore, this pair of macros is provided for that
+ * purpose.  Note that every DLA_UNLOCK _MUST_ be paired with a matching
+ * DLA_LOCK.  The intent of this pair of macros is to be used around another
+ * set of deadlock avoidance code, mainly CHANNEL_DEADLOCK_AVOIDANCE, as the
+ * locking order specifies that we may safely lock a channel, followed by its
+ * pvt, with no worries about a deadlock.  In any other scenario, this macro
+ * may not be safe to use.
+ */
+#define DLA_LOCK(lock) \
 		if (__res < 0) { /* Shouldn't ever happen, but just in case... */ \
 			ast_mutex_lock(lock); \
 		} else { \
@@ -1033,28 +1086,38 @@ static inline int _ast_rwlock_unlock(ast_rwlock_t *t, const char *name,
 #endif /* AST_MUTEX_INIT_W_CONSTRUCTORS */
 	
 	ast_reentrancy_lock(lt);
-	if (lt->reentrancy && (lt->thread[lt->reentrancy-1] != pthread_self())) {
-		__ast_mutex_logger("%s line %d (%s): attempted unlock rwlock '%s' without owning it!\n",
-					filename, line, func, name);
-		__ast_mutex_logger("%s line %d (%s): '%s' was locked here.\n",
-				lt->file[lt->reentrancy-1], lt->lineno[lt->reentrancy-1], lt->func[lt->reentrancy-1], name);
+	if (lt->reentrancy) {
+		int lock_found = 0;
+		int i;
+		pthread_t self = pthread_self();
+		for (i = lt->reentrancy-1; i >= 0; --i) {
+			if (lt->thread[i] == self) {
+				lock_found = 1;
+				if (i != lt->reentrancy-1) {
+					lt->file[i] = lt->file[lt->reentrancy-1];
+					lt->lineno[i] = lt->lineno[lt->reentrancy-1];
+					lt->func[i] = lt->func[lt->reentrancy-1];
+					lt->thread[i] = lt->thread[lt->reentrancy-1];
+				}
+				break;
+			}
+		}
+		if (!lock_found) {
+			__ast_mutex_logger("%s line %d (%s): attempted unlock rwlock '%s' without owning it!\n",
+						filename, line, func, name);
+			__ast_mutex_logger("%s line %d (%s): '%s' was last locked here.\n",
+					lt->file[lt->reentrancy-1], lt->lineno[lt->reentrancy-1], lt->func[lt->reentrancy-1], name);
 #ifdef HAVE_BKTR
-		__dump_backtrace(&lt->backtrace[lt->reentrancy-1], canlog);
+			__dump_backtrace(&lt->backtrace[lt->reentrancy-1], canlog);
 #endif
-		DO_THREAD_CRASH;
+			DO_THREAD_CRASH;
+		}
 	}
 
 	if (--lt->reentrancy < 0) {
 		__ast_mutex_logger("%s line %d (%s): rwlock '%s' freed more times than we've locked!\n",
 				filename, line, func, name);
 		lt->reentrancy = 0;
-	}
-
-	if (lt->reentrancy < AST_MAX_REENTRANCY) {
-		lt->file[lt->reentrancy] = NULL;
-		lt->lineno[lt->reentrancy] = 0;
-		lt->func[lt->reentrancy] = NULL;
-		lt->thread[lt->reentrancy] = 0;
 	}
 
 #ifdef HAVE_BKTR
@@ -1419,15 +1482,24 @@ static inline int _ast_rwlock_trywrlock(ast_rwlock_t *t, const char *name,
 
 #else /* !DEBUG_THREADS */
 
-#define	DEADLOCK_AVOIDANCE(lock) \
-	ast_mutex_lock(lock); \
+#define	CHANNEL_DEADLOCK_AVOIDANCE(chan) \
+	ast_channel_unlock(chan); \
 	usleep(1); \
-	ast_mutex_unlock(lock);
+	ast_channel_lock(chan);
+
+#define	DEADLOCK_AVOIDANCE(lock) \
+	ast_mutex_unlock(lock); \
+	usleep(1); \
+	ast_mutex_lock(lock);
 
 #define	DEADLOCK_AVOIDANCE2(lock,tmout) \
-	ast_mutex_lock(lock); \
+	ast_mutex_unlock(lock); \
 	usleep(tmout); \
-	ast_mutex_unlock(lock);
+	ast_mutex_lock(lock);
+
+#define DLA_UNLOCK(lock)	ast_mutex_unlock(lock)
+
+#define DLA_LOCK(lock)	ast_mutex_lock(lock)
 
 typedef pthread_mutex_t ast_mutex_t;
 

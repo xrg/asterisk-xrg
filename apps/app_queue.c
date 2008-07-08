@@ -108,7 +108,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * to this order!
  */
 
-
 enum {
 	QUEUE_STRATEGY_RINGALL = 0,
 	QUEUE_STRATEGY_LEASTRECENT,
@@ -316,6 +315,11 @@ const struct {
 	{ QUEUE_CONTINUE, "CONTINUE" },
 };
 
+enum queue_timeout_priority {
+	TIMEOUT_PRIORITY_APP,
+	TIMEOUT_PRIORITY_CONF,
+};
+
 /*! \brief We define a custom "local user" structure because we
  *  use it not only for keeping track of what is in use but
  *  also for keeping track of who we're dialing.
@@ -498,6 +502,7 @@ struct call_queue {
 	int timeout;                        /*!< How long to wait for an answer */
 	int weight;                         /*!< Respective weight */
 	int autopause;                      /*!< Auto pause queue members if they fail to answer */
+	int timeoutpriority;                /*!< Do we allow a fraction of the timeout to occur for a ring? */
 
 	/* Queue strategy things */
 	int rrpos;                          /*!< Round Robin - position */
@@ -907,6 +912,7 @@ static void init_queue(struct call_queue *q)
 	q->periodicannouncefrequency = 0;
 	q->randomperiodicannounce = 0;
 	q->numperiodicannounce = 0;
+	q->timeoutpriority = TIMEOUT_PRIORITY_APP;
 	if (!q->members) {
 		if (q->strategy == QUEUE_STRATEGY_LINEAR)
 			/* linear strategy depends on order, so we have to place all members in a single bucket */
@@ -1295,6 +1301,12 @@ static void queue_set_param(struct call_queue *q, const char *param, const char 
 		q->timeoutrestart = ast_true(val);
 	} else if (!strcasecmp(param, "defaultrule")) {
 		ast_string_field_set(q, defaultrule, val);
+	} else if (!strcasecmp(param, "timeoutpriority")) {
+		if (!strcasecmp(val, "conf")) {
+			q->timeoutpriority = TIMEOUT_PRIORITY_CONF;
+		} else {
+			q->timeoutpriority = TIMEOUT_PRIORITY_APP;
+		}
 	} else if (failunknown) {
 		if (linenum >= 0) {
 			ast_log(LOG_WARNING, "Unknown keyword in queue '%s': %s at line %d of queues.conf\n",
@@ -2228,10 +2240,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 	/* Inherit context and extension */
 	ast_channel_lock(qe->chan);
 	macrocontext = pbx_builtin_getvar_helper(qe->chan, "MACRO_CONTEXT");
-	if (!ast_strlen_zero(macrocontext))
-		ast_copy_string(tmp->chan->dialcontext, macrocontext, sizeof(tmp->chan->dialcontext));
-	else
-		ast_copy_string(tmp->chan->dialcontext, qe->chan->context, sizeof(tmp->chan->dialcontext));
+	ast_string_field_set(tmp->chan, dialcontext, ast_strlen_zero(macrocontext) ? qe->chan->context : macrocontext);
 	macroexten = pbx_builtin_getvar_helper(qe->chan, "MACRO_EXTEN");
 	if (!ast_strlen_zero(macroexten))
 		ast_copy_string(tmp->chan->exten, macroexten, sizeof(tmp->chan->exten));
@@ -3388,7 +3397,8 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			ast_free(tmp);
 		}
 	}
-	if (qe->expire && (!qe->parent->timeout || (qe->expire - now) <= qe->parent->timeout))
+
+	if (qe->expire && (!qe->parent->timeout || (qe->parent->timeoutpriority == TIMEOUT_PRIORITY_APP && (qe->expire - now) <= qe->parent->timeout)))
 		to = (qe->expire - now) * 1000;
 	else
 		to = (qe->parent->timeout) ? qe->parent->timeout * 1000 : -1;
@@ -3562,11 +3572,16 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		/* Begin Monitoring */
 		if (qe->parent->monfmt && *qe->parent->monfmt) {
 			if (!qe->parent->montype) {
+				const char *monexec, *monargs;
 				ast_debug(1, "Starting Monitor as requested.\n");
-				if (pbx_builtin_getvar_helper(qe->chan, "MONITOR_EXEC") || pbx_builtin_getvar_helper(qe->chan, "MONITOR_EXEC_ARGS"))
+				ast_channel_lock(qe->chan);
+				if ((monexec = pbx_builtin_getvar_helper(qe->chan, "MONITOR_EXEC")) || (monargs = pbx_builtin_getvar_helper(qe->chan, "MONITOR_EXEC_ARGS"))) {
 					which = qe->chan;
+					monexec = monexec ? ast_strdupa(monexec) : NULL;
+				}
 				else
 					which = peer;
+				ast_channel_unlock(qe->chan);
 				if (monitorfilename)
 					ast_monitor_start(which, qe->parent->monfmt, monitorfilename, 1, X_REC_IN | X_REC_OUT);
 				else if (qe->chan->cdr)
@@ -3575,6 +3590,9 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 					/* Last ditch effort -- no CDR, make up something */
 					snprintf(tmpid, sizeof(tmpid), "chan-%lx", ast_random());
 					ast_monitor_start(which, qe->parent->monfmt, tmpid, 1, X_REC_IN | X_REC_OUT);
+				}
+				if (!ast_strlen_zero(monexec)) {
+					ast_monitor_setjoinfiles(which, 1);
 				}
 			} else {
 				mixmonapp = pbx_findapp("MixMonitor");
@@ -5465,9 +5483,19 @@ static char *__queues_show(struct mansession *s, int fd, int argc, char **argv)
 	if (argc != 2 && argc != 3)
 		return CLI_SHOWUSAGE;
 
-	/* We only want to load realtime queues when a specific queue is asked for. */
-	if (argc == 3)	/* specific queue */
+	if (argc == 3)	{ /* specific queue */
 		load_realtime_queue(argv[2]);
+	}
+	else if (ast_check_realtime("queues")) {
+		struct ast_config *cfg = ast_load_realtime_multientry("queues", "name LIKE", "%", SENTINEL);
+		char *queuename;
+		if (cfg) {
+			for (queuename = ast_category_browse(cfg, NULL); !ast_strlen_zero(queuename); queuename = ast_category_browse(cfg, queuename)) {
+				load_realtime_queue(queuename);
+			}
+			ast_config_destroy(cfg);
+		}
+	}
 
 	queue_iter = ao2_iterator_init(queues, 0);
 	while ((q = ao2_iterator_next(&queue_iter))) {
@@ -5501,6 +5529,9 @@ static char *__queues_show(struct mansession *s, int fd, int argc, char **argv)
 			mem_iter = ao2_iterator_init(q->members, 0);
 			while ((mem = ao2_iterator_next(&mem_iter))) {
 				ast_str_set(&out, 0, "      %s", mem->membername);
+				if (strcasecmp(mem->membername, mem->interface)) {
+					ast_str_append(&out, 0, " (%s)", mem->interface);
+				}
 				if (mem->penalty)
 					ast_str_append(&out, 0, " with penalty %d", mem->penalty);
 				ast_str_append(&out, 0, "%s%s%s (%s)",
@@ -5533,11 +5564,15 @@ static char *__queues_show(struct mansession *s, int fd, int argc, char **argv)
 		}
 		do_print(s, fd, "");	/* blank line between entries */
 		ao2_unlock(q);
-		if (argc == 3)	{ /* print a specific entry */
+		if (q->realtime || argc == 3) {
+			/* If a queue is realtime, then that means we used load_realtime_queue() above
+			 * to get its information. This means we have an extra reference we need to
+			 * remove at this point. If a specific queue was requested, then it also needs
+			 * to be unreffed here even if it is not a realtime queue.
+			 */
 			queue_unref(q);
-			break;
 		}
-		queue_unref(q);
+		queue_unref(q); /* Unref the iterator's reference */
 	}
 	if (!found) {
 		if (argc == 3)

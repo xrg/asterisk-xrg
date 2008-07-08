@@ -58,7 +58,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/ioctl.h>
 #include <math.h>
 #include <ctype.h>
-#include "asterisk/dahdi.h"
+
+#include <dahdi/user.h>
+#include <dahdi/tonezone.h>
 
 #ifdef HAVE_PRI
 #include <libpri.h>
@@ -123,16 +125,6 @@ static struct ast_jb_conf default_jbconf =
 	.impl = ""
 };
 static struct ast_jb_conf global_jbconf;
-
-#if !defined(DAHDI_SIG_EM_E1) || (defined(HAVE_PRI) && !defined(DAHDI_SIG_HARDHDLC))
-#error "Your DAHDI is too old.  Please update"
-#endif
-
-#ifndef DAHDI_TONEDETECT
-/* Work around older code with no tone detect */
-#define DAHDI_EVENT_DTMFDOWN 0
-#define DAHDI_EVENT_DTMFUP 0
-#endif
 
 /* define this to send PRI user-user information elements */
 #undef SUPPORT_USERUSER
@@ -347,6 +339,8 @@ static int ringt_base = DEFAULT_RINGT;
 
 #define SS7_NAI_DYNAMIC		-1
 
+#define LINKSET_FLAG_EXPLICITACM (1 << 0)
+
 struct dahdi_ss7 {
 	pthread_t master;						/*!< Thread of master */
 	ast_mutex_t lock;
@@ -367,6 +361,7 @@ struct dahdi_ss7 {
 	char unknownprefix[20];						/*!< for unknown dialplans */
 	struct ss7 *ss7;
 	struct dahdi_pvt *pvts[MAX_CHANNELS];				/*!< Member channel pvt structs */
+	int flags;							/*!< Linkset flags */
 };
 
 static struct dahdi_ss7 linksets[NUM_SPANS];
@@ -898,10 +893,7 @@ static inline int ss7_grab(struct dahdi_pvt *pvt, struct dahdi_ss7 *pri)
 	do {
 		res = ast_mutex_trylock(&pri->lock);
 		if (res) {
-			ast_mutex_unlock(&pvt->lock);
-			/* Release the lock and try again */
-			usleep(1);
-			ast_mutex_lock(&pvt->lock);
+			DEADLOCK_AVOIDANCE(&pvt->lock);
 		}
 	} while (res);
 	/* Then break the poll */
@@ -1164,13 +1156,13 @@ static int alloc_sub(struct dahdi_pvt *p, int x)
 		bi.numbufs = numbufs;
 		res = ioctl(p->subs[x].zfd, DAHDI_SET_BUFINFO, &bi);
 		if (res < 0) {
-			ast_log(LOG_WARNING, "Unable to set buffer policy on channel %d\n", x);
+			ast_log(LOG_WARNING, "Unable to set buffer policy on channel %d: %s\n", x, strerror(errno));
 		}
 	} else 
-		ast_log(LOG_WARNING, "Unable to check buffer policy on channel %d\n", x);
+		ast_log(LOG_WARNING, "Unable to check buffer policy on channel %d: %s\n", x, strerror(errno));
 
 	if (ioctl(p->subs[x].zfd, DAHDI_CHANNO, &p->subs[x].chan) == 1) {
-		ast_log(LOG_WARNING, "Unable to get channel number for pseudo channel on FD %d\n", p->subs[x].zfd);
+		ast_log(LOG_WARNING, "Unable to get channel number for pseudo channel on FD %d: %s\n", p->subs[x].zfd, strerror(errno));
 		dahdi_close(p->subs[x].zfd);
 		p->subs[x].zfd = -1;
 		return -1;
@@ -1262,7 +1254,7 @@ static int dahdi_digit_begin(struct ast_channel *chan, char digit)
 		zo.dialstr[1] = digit;
 		zo.dialstr[2] = '\0';
 		if ((res = ioctl(pvt->subs[SUB_REAL].zfd, DAHDI_DIAL, &zo)))
-			ast_log(LOG_WARNING, "Couldn't dial digit %c\n", digit);
+			ast_log(LOG_WARNING, "Couldn't dial digit %c: %s\n", digit, strerror(errno));
 		else
 			pvt->dialing = 1;
 	} else {
@@ -1473,7 +1465,7 @@ static int conf_add(struct dahdi_pvt *p, struct dahdi_subchannel *c, int index, 
 	if (c->zfd < 0)
 		return 0;
 	if (ioctl(c->zfd, DAHDI_SETCONF, &zi)) {
-		ast_log(LOG_WARNING, "Failed to add %d to conference %d/%d\n", c->zfd, zi.confmode, zi.confno);
+		ast_log(LOG_WARNING, "Failed to add %d to conference %d/%d: %s\n", c->zfd, zi.confmode, zi.confno, strerror(errno));
 		return -1;
 	}
 	if (slavechannel < 1) {
@@ -1509,7 +1501,7 @@ static int conf_del(struct dahdi_pvt *p, struct dahdi_subchannel *c, int index)
 	zi.confno = 0;
 	zi.confmode = 0;
 	if (ioctl(c->zfd, DAHDI_SETCONF, &zi)) {
-		ast_log(LOG_WARNING, "Failed to drop %d from conference %d/%d\n", c->zfd, c->curconf.confmode, c->curconf.confno);
+		ast_log(LOG_WARNING, "Failed to drop %d from conference %d/%d: %s\n", c->zfd, c->curconf.confmode, c->curconf.confno, strerror(errno));
 		return -1;
 	}
 	ast_debug(1, "Removed %d from conference %d/%d\n", c->zfd, c->curconf.confmode, c->curconf.confno);
@@ -1569,7 +1561,7 @@ static int reset_conf(struct dahdi_pvt *p)
 	memset(&p->subs[SUB_REAL].curconf, 0, sizeof(p->subs[SUB_REAL].curconf));
 	if (p->subs[SUB_REAL].zfd > -1) {
 		if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_SETCONF, &zi))
-			ast_log(LOG_WARNING, "Failed to reset conferencing on channel %d!\n", p->channel);
+			ast_log(LOG_WARNING, "Failed to reset conferencing on channel %d: %s\n", p->channel, strerror(errno));
 	}
 	return 0;
 }
@@ -1671,7 +1663,7 @@ static void dahdi_train_ec(struct dahdi_pvt *p)
 		x = p->echotraining;
 		res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_ECHOTRAIN, &x);
 		if (res)
-			ast_log(LOG_WARNING, "Unable to request echo training on channel %d\n", p->channel);
+			ast_log(LOG_WARNING, "Unable to request echo training on channel %d: %s\n", p->channel, strerror(errno));
 		else
 			ast_debug(1, "Engaged echo training on channel %d\n", p->channel);
 	} else {
@@ -1689,7 +1681,7 @@ static void dahdi_disable_ec(struct dahdi_pvt *p)
 		res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_ECHOCANCEL_PARAMS, &ecp);
 
 		if (res)
-			ast_log(LOG_WARNING, "Unable to disable echo cancellation on channel %d\n", p->channel);
+			ast_log(LOG_WARNING, "Unable to disable echo cancellation on channel %d: %s\n", p->channel, strerror(errno));
 		else
 			ast_debug(1, "Disabled echo cancellation on channel %d\n", p->channel);
 	}
@@ -1857,7 +1849,7 @@ static inline int dahdi_confmute(struct dahdi_pvt *p, int muted)
 		y = 1;
 		res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_AUDIOMODE, &y);
 		if (res)
-			ast_log(LOG_WARNING, "Unable to set audio mode on '%d'\n", p->channel);
+			ast_log(LOG_WARNING, "Unable to set audio mode on %d: %s\n", p->channel, strerror(errno));
 	}
 	res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_CONFMUTE, &x);
 	if (res < 0)
@@ -2106,7 +2098,7 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 	x = DAHDI_FLUSH_READ | DAHDI_FLUSH_WRITE;
 	res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_FLUSH, &x);
 	if (res)
-		ast_log(LOG_WARNING, "Unable to flush input on channel %d\n", p->channel);
+		ast_log(LOG_WARNING, "Unable to flush input on channel %d: %s\n", p->channel, strerror(errno));
 	p->outgoing = 1;
 
 	set_actual_gain(p->subs[SUB_REAL].zfd, 0, p->rxgain, p->txgain, p->law);
@@ -2140,11 +2132,11 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 			/* Choose proper cadence */
 			if ((p->distinctivering > 0) && (p->distinctivering <= num_cadence)) {
 				if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_SETCADENCE, &cadences[p->distinctivering - 1]))
-					ast_log(LOG_WARNING, "Unable to set distinctive ring cadence %d on '%s'\n", p->distinctivering, ast->name);
+					ast_log(LOG_WARNING, "Unable to set distinctive ring cadence %d on '%s': %s\n", p->distinctivering, ast->name, strerror(errno));
 				p->cidrings = cidrings[p->distinctivering - 1];
 			} else {
 				if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_SETCADENCE, NULL))
-					ast_log(LOG_WARNING, "Unable to reset default ring on '%s'\n", ast->name);
+					ast_log(LOG_WARNING, "Unable to reset default ring on '%s': %s\n", ast->name, strerror(errno));
 				p->cidrings = p->sendcalleridafter;
 			}
 
@@ -2320,9 +2312,11 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 			p->echobreak = 0;
 		if (!res) {
 			if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_DIAL, &p->dop)) {
+				int saveerr = errno;
+
 				x = DAHDI_ONHOOK;
 				ioctl(p->subs[SUB_REAL].zfd, DAHDI_HOOK, &x);
-				ast_log(LOG_WARNING, "Dialing failed on channel %d: %s\n", p->channel, strerror(errno));
+				ast_log(LOG_WARNING, "Dialing failed on channel %d: %s\n", p->channel, strerror(saveerr));
 				ast_mutex_unlock(&p->lock);
 				return -1;
 			}
@@ -3132,7 +3126,7 @@ static int dahdi_hangup(struct ast_channel *ast)
 		law = DAHDI_LAW_DEFAULT;
 		res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_SETLAW, &law);
 		if (res < 0) 
-			ast_log(LOG_WARNING, "Unable to set law on channel %d to default\n", p->channel);
+			ast_log(LOG_WARNING, "Unable to set law on channel %d to default: %s\n", p->channel, strerror(errno));
 		/* Perform low level hangup if no owner left */
 #ifdef HAVE_SS7
 		if (p->ss7) {
@@ -3554,7 +3548,7 @@ static int dahdi_setoption(struct ast_channel *chan, int option, void *data, int
 			x = 1;
 		}
 		if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_AUDIOMODE, &x) == -1)
-			ast_log(LOG_WARNING, "Unable to set audio mode on channel %d to %d\n", p->channel, x);
+			ast_log(LOG_WARNING, "Unable to set audio mode on channel %d to %d: %s\n", p->channel, x, strerror(errno));
 		break;
 	case AST_OPTION_OPRMODE:  /* Operator services mode */
 		oprmode = (struct oprmode *) data;
@@ -3755,9 +3749,7 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 
 	ast_channel_lock(c0);
 	while (ast_channel_trylock(c1)) {
-		ast_channel_unlock(c0);
-		usleep(1);
-		ast_channel_lock(c0);
+		CHANNEL_DEADLOCK_AVOIDANCE(c0);
 	}
 
 	p0 = c0->tech_pvt;
@@ -3927,9 +3919,7 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 		
 		ast_channel_lock(c0);
 		while (ast_channel_trylock(c1)) {
-			ast_channel_unlock(c0);
-			usleep(1);
-			ast_channel_lock(c0);
+			CHANNEL_DEADLOCK_AVOIDANCE(c0);
 		}
 
 		p0 = c0->tech_pvt;
@@ -4093,18 +4083,6 @@ static int attempt_transfer(struct dahdi_pvt *p)
 		if (p->subs[SUB_THREEWAY].owner->_state == AST_STATE_RING) {
 			tone_zone_play_tone(p->subs[SUB_THREEWAY].zfd, DAHDI_TONE_RINGTONE);
 		}
-		if (p->subs[SUB_REAL].owner->cdr) {
-			/* Move CDR from second channel to current one */
-			p->subs[SUB_THREEWAY].owner->cdr =
-				ast_cdr_append(p->subs[SUB_THREEWAY].owner->cdr, p->subs[SUB_REAL].owner->cdr);
-			p->subs[SUB_REAL].owner->cdr = NULL;
-		}
-		if (ast_bridged_channel(p->subs[SUB_REAL].owner)->cdr) {
-			/* Move CDR from second channel's bridge to current one */
-			p->subs[SUB_THREEWAY].owner->cdr =
-				ast_cdr_append(p->subs[SUB_THREEWAY].owner->cdr, ast_bridged_channel(p->subs[SUB_REAL].owner)->cdr);
-			ast_bridged_channel(p->subs[SUB_REAL].owner)->cdr = NULL;
-		}
 		 if (ast_channel_masquerade(p->subs[SUB_THREEWAY].owner, ast_bridged_channel(p->subs[SUB_REAL].owner))) {
 			ast_log(LOG_WARNING, "Unable to masquerade %s as %s\n",
 					ast_bridged_channel(p->subs[SUB_REAL].owner)->name, p->subs[SUB_THREEWAY].owner->name);
@@ -4120,18 +4098,6 @@ static int attempt_transfer(struct dahdi_pvt *p)
 		}
 		if (p->subs[SUB_REAL].owner->_state == AST_STATE_RING) {
 			tone_zone_play_tone(p->subs[SUB_REAL].zfd, DAHDI_TONE_RINGTONE);
-		}
-		if (p->subs[SUB_THREEWAY].owner->cdr) {
-			/* Move CDR from second channel to current one */
-			p->subs[SUB_REAL].owner->cdr = 
-				ast_cdr_append(p->subs[SUB_REAL].owner->cdr, p->subs[SUB_THREEWAY].owner->cdr);
-			p->subs[SUB_THREEWAY].owner->cdr = NULL;
-		}
-		if (ast_bridged_channel(p->subs[SUB_THREEWAY].owner)->cdr) {
-			/* Move CDR from second channel's bridge to current one */
-			p->subs[SUB_REAL].owner->cdr = 
-				ast_cdr_append(p->subs[SUB_REAL].owner->cdr, ast_bridged_channel(p->subs[SUB_THREEWAY].owner)->cdr);
-			ast_bridged_channel(p->subs[SUB_THREEWAY].owner)->cdr = NULL;
 		}
 		if (ast_channel_masquerade(p->subs[SUB_REAL].owner, ast_bridged_channel(p->subs[SUB_THREEWAY].owner))) {
 			ast_log(LOG_WARNING, "Unable to masquerade %s as %s\n",
@@ -4161,7 +4127,7 @@ static int check_for_conference(struct dahdi_pvt *p)
 		return 0;
 	memset(&ci, 0, sizeof(ci));
 	if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_GETCONF, &ci)) {
-		ast_log(LOG_WARNING, "Failed to get conference info on channel %d\n", p->channel);
+		ast_log(LOG_WARNING, "Failed to get conference info on channel %d: %s\n", p->channel, strerror(errno));
 		return 0;
 	}
 	/* If we have no master and don't have a confno, then 
@@ -4187,9 +4153,13 @@ static int get_alarms(struct dahdi_pvt *p)
 
 	memset(&zi, 0, sizeof(zi));
 	zi.spanno = p->span;
+
 	if ((res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_SPANSTAT, &zi)) >= 0) {
 		if (zi.alarms != DAHDI_ALARM_NONE)
 			return zi.alarms;
+	} else {
+		ast_log(LOG_WARNING, "Unable to determine alarm on channel %d: %s\n", p->channel, strerror(errno));
+		return 0;
 	}
 
 	/* No alarms on the span. Check for channel alarms. */
@@ -4332,7 +4302,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 			if (p->inalarm) break;
 			if ((p->radio || (p->oprmode < 0))) break;
 			if (ioctl(p->subs[index].zfd,DAHDI_DIALING,&x) == -1) {
-				ast_debug(1, "DAHDI_DIALING ioctl failed on %s\n",ast->name);
+				ast_log(LOG_DEBUG, "DAHDI_DIALING ioctl failed on %s: %s\n",ast->name, strerror(errno));
 				return NULL;
 			}
 			if (!x) { /* if not still dialing in driver */
@@ -4469,14 +4439,12 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 						   the private structure -- not especially easy or clean */
 						while (p->subs[SUB_THREEWAY].owner && ast_channel_trylock(p->subs[SUB_THREEWAY].owner)) {
 							/* Yuck, didn't get the lock on the 3-way, gotta release everything and re-grab! */
-							ast_mutex_unlock(&p->lock);
-							ast_channel_unlock(ast);
-							usleep(1);
+							DLA_UNLOCK(&p->lock);
+							CHANNEL_DEADLOCK_AVOIDANCE(ast);
 							/* We can grab ast and p in that order, without worry.  We should make sure
 							   nothing seriously bad has happened though like some sort of bizarre double
 							   masquerade! */
-							ast_channel_lock(ast);
-							ast_mutex_lock(&p->lock);
+							DLA_LOCK(&p->lock);
 							if (p->owner != ast) {
 								ast_log(LOG_WARNING, "This isn't good...\n");
 								return NULL;
@@ -4582,9 +4550,11 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 				} else
 					p->echobreak = 0;
 				if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_DIAL, &p->dop)) {
+					int saveerr = errno;
+
 					x = DAHDI_ONHOOK;
 					ioctl(p->subs[SUB_REAL].zfd, DAHDI_HOOK, &x);
-					ast_log(LOG_WARNING, "Dialing failed on channel %d: %s\n", p->channel, strerror(errno));
+					ast_log(LOG_WARNING, "Dialing failed on channel %d: %s\n", p->channel, strerror(saveerr));
 					return NULL;
 					}
 				p->dialing = 1;
@@ -4618,7 +4588,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 						/* nick@dccinc.com 4/3/03 - fxo should be able to do deferred dialing */
 						res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_DIAL, &p->dop);
 						if (res < 0) {
-							ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
+							ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d: %s\n", p->channel, strerror(errno));
 							p->dop.dialstr[0] = '\0';
 							return NULL;
 						} else {
@@ -4864,7 +4834,19 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 							dahdi_enable_ec(p);
 							ast_hangup(chan);
 						} else {
+ 							struct ast_channel *other = ast_bridged_channel(p->subs[SUB_THREEWAY].owner);
+ 							int way3bridge = 0, cdr3way = 0;
+ 							
+ 							if (!other) {
+ 								other = ast_bridged_channel(p->subs[SUB_REAL].owner);
+ 							} else
+ 								way3bridge = 1;
+ 							
+ 							if (p->subs[SUB_THREEWAY].owner->cdr)
+ 								cdr3way = 1;
+ 							
 							ast_verb(3, "Started three way call on channel %d\n", p->channel);
+
 							/* Start music on hold if appropriate */
 							if (ast_bridged_channel(p->subs[SUB_THREEWAY].owner)) {
 								ast_queue_control_data(p->subs[SUB_THREEWAY].owner, AST_CONTROL_HOLD,
@@ -4895,6 +4877,16 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 						if (((ast->pbx) || (ast->_state == AST_STATE_UP)) && 
 						    (p->transfertobusy || (ast->_state != AST_STATE_BUSY))) {
 							int otherindex = SUB_THREEWAY;
+							struct ast_channel *other = ast_bridged_channel(p->subs[SUB_THREEWAY].owner);
+							int way3bridge = 0, cdr3way = 0;
+							
+							if (!other) {
+								other = ast_bridged_channel(p->subs[SUB_REAL].owner);
+							} else
+								way3bridge = 1;
+							
+							if (p->subs[SUB_THREEWAY].owner->cdr)
+								cdr3way = 1;
 
 							ast_verb(3, "Building conference on call on %s and %s\n", p->subs[SUB_THREEWAY].owner->name, p->subs[SUB_REAL].owner->name);
 							/* Put them in the threeway, and flip */
@@ -4971,7 +4963,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 				if (!ast_strlen_zero(p->dop.dialstr)) {
 					res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_DIAL, &p->dop);
 					if (res < 0) {
-						ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
+						ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d: %s\n", p->channel, strerror(errno));
 						p->dop.dialstr[0] = '\0';
 						return NULL;
 					} else 
@@ -5000,7 +4992,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 				if (!ast_strlen_zero(p->dop.dialstr)) {
 					res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_DIAL, &p->dop);
 					if (res < 0) {
-						ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
+						ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d: %s\n", p->channel, strerror(errno));
 						p->dop.dialstr[0] = '\0';
 						return NULL;
 					} else 
@@ -5196,10 +5188,11 @@ static struct ast_frame  *dahdi_read(struct ast_channel *ast)
 	int index;
 	void *readbuf;
 	struct ast_frame *f;
-	
 
-	ast_mutex_lock(&p->lock);
-	
+	while (ast_mutex_trylock(&p->lock)) {
+		CHANNEL_DEADLOCK_AVOIDANCE(ast);
+	}
+
 	index = dahdi_get_index(ast, p, 0);
 	
 	/* Hang up if we don't really exist */
@@ -5856,7 +5849,7 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 	ps.channo = i->channel;
 	res = ioctl(i->subs[SUB_REAL].zfd, DAHDI_GET_PARAMS, &ps);
 	if (res) {
-		ast_log(LOG_WARNING, "Unable to get parameters, assuming MULAW\n");
+		ast_log(LOG_WARNING, "Unable to get parameters, assuming MULAW: %s\n", strerror(errno));
 		ps.curlaw = DAHDI_LAW_MULAW;
 	}
 	if (ps.curlaw == DAHDI_LAW_ALAW)
@@ -7525,7 +7518,7 @@ static void *mwi_send_thread(void *data)
 				/* Send the Ring Pulse Signal Alert */
 				res = ioctl(mtd->pvt->subs[SUB_REAL].zfd, DAHDI_SETCADENCE, &AS_RP_cadence);
 				if (res) {
-					ast_log(LOG_WARNING, "Unable to set RP-AS ring cadence\n");
+					ast_log(LOG_WARNING, "Unable to set RP-AS ring cadence: %s\n", strerror(errno));
 					goto quit;
 				}
 				dahdi_set_hook(mtd->pvt->subs[SUB_REAL].zfd, DAHDI_RING);
@@ -7933,7 +7926,7 @@ static void *do_monitor(void *data)
 #ifdef DAHDI_VMWI
 								res2 = ioctl(last->subs[SUB_REAL].zfd, DAHDI_VMWI, res);
 								if (res2) {
-									ast_log(LOG_DEBUG, "Unable to control message waiting led on channel %d\n", last->channel);
+									ast_log(LOG_DEBUG, "Unable to control message waiting led on channel %d: %s\n", last->channel, strerror(errno));
 								}
 #endif
 								pthread_attr_init(&attr);
@@ -8139,7 +8132,7 @@ static int pri_create_trunkgroup(int trunkgroup, int *channels)
 			return -1;
 		}
 		if (ioctl(fd, DAHDI_SPANSTAT, &si)) {
-			ast_log(LOG_WARNING, "Failed go get span information on channel %d (span %d)\n", channels[y], p.spanno);
+			ast_log(LOG_WARNING, "Failed go get span information on channel %d (span %d): %s\n", channels[y], p.spanno, strerror(errno));
 			dahdi_close(fd);
 			return -1;
 		}
@@ -8290,7 +8283,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 				memset(&p, 0, sizeof(p));
 				res = ioctl(tmp->subs[SUB_REAL].zfd, DAHDI_GET_PARAMS, &p);
 				if (res < 0) {
-					ast_log(LOG_ERROR, "Unable to get parameters\n");
+					ast_log(LOG_ERROR, "Unable to get parameters: %s\n", strerror(errno));
 					destroy_dahdi_pvt(&tmp);
 					return NULL;
 				}
@@ -8540,7 +8533,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		{
 			res = ioctl(tmp->subs[SUB_REAL].zfd, DAHDI_SET_PARAMS, &p);
 			if (res < 0) {
-				ast_log(LOG_ERROR, "Unable to set parameters\n");
+				ast_log(LOG_ERROR, "Unable to set parameters: %s\n", strerror(errno));
 				destroy_dahdi_pvt(&tmp);
 				return NULL;
 			}
@@ -8555,10 +8548,10 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 				bi.numbufs = numbufs;
 				res = ioctl(tmp->subs[SUB_REAL].zfd, DAHDI_SET_BUFINFO, &bi);
 				if (res < 0) {
-					ast_log(LOG_WARNING, "Unable to set buffer policy on channel %d\n", channel);
+					ast_log(LOG_WARNING, "Unable to set buffer policy on channel %d: %s\n", channel, strerror(errno));
 				}
 			} else
-				ast_log(LOG_WARNING, "Unable to check buffer policy on channel %d\n", channel);
+				ast_log(LOG_WARNING, "Unable to check buffer policy on channel %d: %s\n", channel, strerror(errno));
 		}
 #endif
 		tmp->immediate = conf->chan.immediate;
@@ -8837,7 +8830,7 @@ static inline int available(struct dahdi_pvt *p, int channelmatch, ast_group_t g
 				par.rxisoffhook = 0;
 			}
 			if (res) {
-				ast_log(LOG_WARNING, "Unable to check hook state on channel %d\n", p->channel);
+				ast_log(LOG_WARNING, "Unable to check hook state on channel %d: %s\n", p->channel, strerror(errno));
 			} else if ((p->sig == SIG_FXSKS) || (p->sig == SIG_FXSGS)) {
 				/* When "onhook" that means no battery on the line, and thus
 				  it is out of service..., if it's on a TDM card... If it's a channel
@@ -8911,10 +8904,10 @@ static struct dahdi_pvt *chandup(struct dahdi_pvt *src)
 			bi.numbufs = numbufs;
 			res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_SET_BUFINFO, &bi);
 			if (res < 0) {
-				ast_log(LOG_WARNING, "Unable to set buffer policy on dup channel\n");
+				ast_log(LOG_WARNING, "Unable to set buffer policy on dup channel: %s\n", strerror(errno));
 			}
 		} else
-			ast_log(LOG_WARNING, "Unable to check buffer policy on dup channel\n");
+			ast_log(LOG_WARNING, "Unable to check buffer policy on dup channel: %s\n", strerror(errno));
 	}
 	p->destroy = 1;
 	p->next = iflist;
@@ -9285,7 +9278,7 @@ static void dahdi_loopback(struct dahdi_pvt *p, int enable)
 {
 	if (p->loopedback != enable) {
 		if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_LOOPBACK, &enable)) {
-			ast_log(LOG_WARNING, "Unable to set loopback on channel %d\n", p->channel);
+			ast_log(LOG_WARNING, "Unable to set loopback on channel %d: %s\n", p->channel, strerror(errno));
 			return;
 		}
 		p->loopedback = enable;
@@ -9302,7 +9295,7 @@ static void ss7_start_call(struct dahdi_pvt *p, struct dahdi_ss7 *linkset)
 	char tmp[256];
 
 	if (ioctl(p->subs[SUB_REAL].zfd, DAHDI_AUDIOMODE, &law) == -1)
-		ast_log(LOG_WARNING, "Unable to set audio mode on channel %d to %d\n", p->channel, law);
+		ast_log(LOG_WARNING, "Unable to set audio mode on channel %d to %d: %s\n", p->channel, law, strerror(errno));
 	
 	if (linkset->type == SS7_ITU)
 		law = DAHDI_LAW_ALAW;
@@ -9313,8 +9306,10 @@ static void ss7_start_call(struct dahdi_pvt *p, struct dahdi_ss7 *linkset)
 	if (res < 0) 
 		ast_log(LOG_WARNING, "Unable to set law on channel %d\n", p->channel);
 	
-	p->proceeding = 1;
-	isup_acm(ss7, p->ss7call);
+	if (!(linkset->flags & LINKSET_FLAG_EXPLICITACM)) {
+		p->proceeding = 1;
+		isup_acm(ss7, p->ss7call);
+	}
 
 	ast_mutex_unlock(&linkset->lock);
 	c = dahdi_new(p, AST_STATE_RING, 1, SUB_REAL, law, 0);
@@ -9553,7 +9548,10 @@ static void *ss7_linkset(void *data)
 				}
 				break;
 			case MTP2_LINK_UP:
-				ast_debug(1, "MTP2 link up\n");
+				ast_verbose("MTP2 link up (SLC %d)\n", e->gen.data);
+				break;
+			case MTP2_LINK_DOWN:
+				ast_log(LOG_WARNING, "MTP2 link down (SLC %d)\n", e->gen.data);
 				break;
 			case ISUP_EVENT_CPG:
 				chanpos = ss7_find_cic(linkset, e->cpg.cic, e->cpg.opc);
@@ -10804,7 +10802,7 @@ static void *pri_dchannel(void *vpri)
 							/* Set to audio mode at this point */
 							law = 1;
 							if (ioctl(pri->pvts[chanpos]->subs[SUB_REAL].zfd, DAHDI_AUDIOMODE, &law) == -1)
-								ast_log(LOG_WARNING, "Unable to set audio mode on channel %d to %d\n", pri->pvts[chanpos]->channel, law);
+								ast_log(LOG_WARNING, "Unable to set audio mode on channel %d to %d: %s\n", pri->pvts[chanpos]->channel, law, strerror(errno));
 						}
 						if (e->ring.layer1 == PRI_LAYER_1_ALAW)
 							law = DAHDI_LAW_ALAW;
@@ -11119,7 +11117,7 @@ static void *pri_dchannel(void *vpri)
 							/* Send any "w" waited stuff */
 							res = ioctl(pri->pvts[chanpos]->subs[SUB_REAL].zfd, DAHDI_DIAL, &pri->pvts[chanpos]->dop);
 							if (res < 0) {
-								ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", pri->pvts[chanpos]->channel);
+								ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d: %s\n", pri->pvts[chanpos]->channel, strerror(errno));
 								pri->pvts[chanpos]->dop.dialstr[0] = '\0';
 							} else
 								ast_debug(1, "Sent deferred digit string: %s\n", pri->pvts[chanpos]->dop.dialstr);
@@ -11442,7 +11440,7 @@ static int start_pri(struct dahdi_pri *pri)
 		if ((p.sigtype != DAHDI_SIG_HDLCFCS) && (p.sigtype != DAHDI_SIG_HARDHDLC)) {
 			dahdi_close(pri->fds[i]);
 			pri->fds[i] = -1;
-			ast_log(LOG_ERROR, "D-channel %d is not in HDLC/FCS mode.  See /etc/dahdi.conf\n", x);
+			ast_log(LOG_ERROR, "D-channel %d is not in HDLC/FCS mode.\n", x);
 			return -1;
 		}
 		memset(&si, 0, sizeof(si));
@@ -11461,7 +11459,7 @@ static int start_pri(struct dahdi_pri *pri)
 		bi.numbufs = 32;
 		bi.bufsize = 1024;
 		if (ioctl(pri->fds[i], DAHDI_SET_BUFINFO, &bi)) {
-			ast_log(LOG_ERROR, "Unable to set appropriate buffering on channel %d\n", x);
+			ast_log(LOG_ERROR, "Unable to set appropriate buffering on channel %d: %s\n", x, strerror(errno));
 			dahdi_close(pri->fds[i]);
 			pri->fds[i] = -1;
 			return -1;
@@ -12292,7 +12290,7 @@ static char *dahdi_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli
 				}
 #endif
 				if (ioctl(tmp->subs[SUB_REAL].zfd, DAHDI_GET_PARAMS, &ps) < 0) {
-					ast_log(LOG_WARNING, "Failed to get parameters on channel %d\n", tmp->channel);
+					ast_log(LOG_WARNING, "Failed to get parameters on channel %d: %s\n", tmp->channel, strerror(errno));
 				} else {
 					ast_cli(a->fd, "Hookstate (FXS only): %s\n", ps.rxisoffhook ? "Offhook" : "Onhook");
 				}
@@ -12516,7 +12514,7 @@ static char *dahdi_show_version(struct ast_cli_entry *e, int cmd, struct ast_cli
 	strcpy(vi.echo_canceller, "Unknown");
 
 	if (ioctl(pseudo_fd, DAHDI_GETVERSION, &vi))
-		ast_cli(a->fd, "Failed to get version from control file.\n");
+		ast_cli(a->fd, "Failed to get DAHDI version: %s\n", strerror(errno));
 	else
 		ast_cli(a->fd, "DAHDI Version: %s Echo Canceller: %s\n", vi.version, vi.echo_canceller);
 
@@ -12593,7 +12591,7 @@ static char *dahdi_set_hwgain(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 		hwgain.newgain = gain;
 		hwgain.tx = tx;
 		if (ioctl(tmp->subs[SUB_REAL].zfd, DAHDI_SET_HWGAIN, &hwgain) < 0) {
-			ast_cli(a->fd, "Unable to set the hardware gain for channel %d\n", channel);
+			ast_cli(a->fd, "Unable to set the hardware gain for channel %d: %s\n", channel, strerror(errno));
 			ast_mutex_unlock(&iflock);
 			return CLI_FAILURE;
 		}
@@ -13207,7 +13205,7 @@ static int linkset_addsigchan(int sigchan)
 		if ((p.sigtype != DAHDI_SIG_HDLCFCS) && (p.sigtype != DAHDI_SIG_HARDHDLC) && (p.sigtype != DAHDI_SIG_MTP2)) {
 			dahdi_close(link->fds[curfd]);
 			link->fds[curfd] = -1;
-			ast_log(LOG_ERROR, "sigchan %d is not in HDLC/FCS mode.  See /etc/dahdi.conf\n", sigchan);
+			ast_log(LOG_ERROR, "sigchan %d is not in HDLC/FCS mode.\n", sigchan);
 			return -1;
 		}
 
@@ -13217,7 +13215,7 @@ static int linkset_addsigchan(int sigchan)
 		bi.bufsize = 512;
 
 		if (ioctl(link->fds[curfd], DAHDI_SET_BUFINFO, &bi)) {
-			ast_log(LOG_ERROR, "Unable to set appropriate buffering on channel %d\n", sigchan);
+			ast_log(LOG_ERROR, "Unable to set appropriate buffering on channel %d: %s\n", sigchan, strerror(errno));
 			dahdi_close(link->fds[curfd]);
 			link->fds[curfd] = -1;
 			return -1;
@@ -13386,6 +13384,45 @@ static char *handle_ss7_block_cic(struct ast_cli_entry *e, int cmd, struct ast_c
 	return CLI_SUCCESS;
 }
 
+static char *handle_ss7_block_linkset(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int linkset;
+	int i;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "ss7 block linkset";
+		e->usage = 
+			"Usage: ss7 block linkset <linkset number>\n"
+			"       Sends a remote blocking request for all CICs on the given linkset\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	if (a->argc == 4)
+		linkset = atoi(a->argv[3]);
+	else
+		return CLI_SHOWUSAGE;
+
+	if ((linkset < 1) || (linkset > NUM_SPANS)) {
+		ast_cli(a->fd, "Invalid linkset %s.  Should be a number %d to %d\n", a->argv[3], 1, NUM_SPANS);
+		return CLI_SUCCESS;
+	}
+
+	if (!linksets[linkset-1].ss7) {
+		ast_cli(a->fd, "No SS7 running on linkset %d\n", linkset);
+		return CLI_SUCCESS;
+	}
+
+	for (i = 0; i < linksets[linkset-1].numchans; i++) {
+		ast_cli(a->fd, "Sending remote blocking request on CIC %d\n", linksets[linkset-1].pvts[i]->cic);
+		ast_mutex_lock(&linksets[linkset-1].lock);
+		isup_blo(linksets[linkset-1].ss7, linksets[linkset-1].pvts[i]->cic, linksets[linkset-1].pvts[i]->dpc);
+		ast_mutex_unlock(&linksets[linkset-1].lock);
+	}
+
+	return CLI_SUCCESS;
+}
+
 static char *handle_ss7_unblock_cic(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int linkset, cic;
@@ -13436,6 +13473,46 @@ static char *handle_ss7_unblock_cic(struct ast_cli_entry *e, int cmd, struct ast
 
 	if (blocked > 0)
 		ast_cli(a->fd, "Sent unblocking request for linkset %d on CIC %d\n", linkset, cic);
+	return CLI_SUCCESS;
+}
+
+static char *handle_ss7_unblock_linkset(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int linkset;
+	int i;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "ss7 unblock linkset";
+		e->usage = 
+			"Usage: ss7 unblock linkset <linkset number>\n"
+			"       Sends a remote unblocking request for all CICs on the specified linkset\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc == 4)
+		linkset = atoi(a->argv[3]);
+	else
+		return CLI_SHOWUSAGE;
+
+	if ((linkset < 1) || (linkset > NUM_SPANS)) {
+		ast_cli(a->fd, "Invalid linkset %s.  Should be a number %d to %d\n", a->argv[3], 1, NUM_SPANS);
+		return CLI_SUCCESS;
+	}
+
+	if (!linksets[linkset-1].ss7) {
+		ast_cli(a->fd, "No SS7 running on linkset %d\n", linkset);
+		return CLI_SUCCESS;
+	}
+
+	for (i = 0; i < linksets[linkset-1].numchans; i++) {
+		ast_cli(a->fd, "Sending remote unblock request on CIC %d\n", linksets[linkset-1].pvts[i]->cic);
+		ast_mutex_lock(&linksets[linkset-1].lock);
+		isup_ubl(linksets[linkset-1].ss7, linksets[linkset-1].pvts[i]->cic, linksets[linkset-1].pvts[i]->dpc);
+		ast_mutex_unlock(&linksets[linkset-1].lock);
+	}
+
 	return CLI_SUCCESS;
 }
 
@@ -13491,8 +13568,10 @@ static char *handle_ss7_version(struct ast_cli_entry *e, int cmd, struct ast_cli
 static struct ast_cli_entry dahdi_ss7_cli[] = {
 	AST_CLI_DEFINE(handle_ss7_debug, "Enables SS7 debugging on a linkset"), 
 	AST_CLI_DEFINE(handle_ss7_no_debug, "Disables SS7 debugging on a linkset"), 
-	AST_CLI_DEFINE(handle_ss7_block_cic, "Disables SS7 debugging on a linkset"),
-	AST_CLI_DEFINE(handle_ss7_unblock_cic, "Disables SS7 debugging on a linkset"),
+	AST_CLI_DEFINE(handle_ss7_block_cic, "Blocks the given CIC"),
+	AST_CLI_DEFINE(handle_ss7_unblock_cic, "Unblocks the given CIC"),
+	AST_CLI_DEFINE(handle_ss7_block_linkset, "Blocks all CICs on a linkset"),
+	AST_CLI_DEFINE(handle_ss7_unblock_linkset, "Unblocks all CICs on a linkset"),
 	AST_CLI_DEFINE(handle_ss7_show_linkset, "Shows the status of a linkset"),
 	AST_CLI_DEFINE(handle_ss7_version, "Displays libss7 version"),
 };
@@ -14297,6 +14376,17 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 				res = linkset_addsigchan(sigchan);
 				if (res < 0)
 					return -1;
+
+			} else if (!strcasecmp(v->name, "ss7_explicitacm")) {
+				struct dahdi_ss7 *link;
+				link = ss7_resolve_linkset(cur_linkset);
+				if (!link) {
+					ast_log(LOG_ERROR, "Invalid linkset number.  Must be between 1 and %d\n", NUM_SPANS + 1);
+					return -1;
+				}
+				if (ast_true(v->value))
+					link->flags |= LINKSET_FLAG_EXPLICITACM;
+
 #endif /* HAVE_SS7 */
 			} else if (!strcasecmp(v->name, "cadence")) {
 				/* setup to scan our argument */
@@ -14415,7 +14505,7 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 					dps.dtmf_tonelen = dps.mfv1_tonelen = toneduration;
 					res = ioctl(ctlfd, DAHDI_SET_DIALPARAMS, &dps);
 					if (res < 0) {
-						ast_log(LOG_ERROR, "Invalid tone duration: %d ms at line %d.\n", toneduration, v->lineno);
+						ast_log(LOG_ERROR, "Invalid tone duration: %d ms at line %d: %s\n", toneduration, v->lineno, strerror(errno));
 						return -1;
 					}
 				}

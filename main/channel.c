@@ -34,7 +34,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <math.h>
 
 #include "asterisk/paths.h"	/* use ast_config_AST_SYSTEM_NAME */
-#include "asterisk/dahdi.h"
 
 #include "asterisk/pbx.h"
 #include "asterisk/frame.h"
@@ -1583,7 +1582,6 @@ static void free_translation(struct ast_channel *clone)
 int ast_hangup(struct ast_channel *chan)
 {
 	int res = 0;
-	struct ast_cdr *cdr = NULL;
 
 	/* Don't actually hang up a channel that will masquerade as someone else, or
 	   if someone is going to masquerade as us */
@@ -1634,11 +1632,6 @@ int ast_hangup(struct ast_channel *chan)
 			chan->generator->release(chan, chan->generatordata);
 	chan->generatordata = NULL;
 	chan->generator = NULL;
-	if (chan->cdr) {		/* End the CDR if it hasn't already */
-		ast_cdr_end(chan->cdr);
-		cdr = chan->cdr;
-		chan->cdr = NULL;
-	}
 	if (ast_test_flag(chan, AST_FLAG_BLOCKING)) {
 		ast_log(LOG_WARNING, "Hard hangup called by thread %ld on %s, while fd "
 					"is blocked by thread %ld in procedure %s!  Expect a failure\n",
@@ -1668,10 +1661,13 @@ int ast_hangup(struct ast_channel *chan)
 			chan->hangupcause,
 			ast_cause2str(chan->hangupcause)
 			);
-	ast_channel_free(chan);
 
-	if (cdr)
-		ast_cdr_detach(cdr);
+	if (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_BRIDGED) && !ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED) && chan->cdr->disposition != AST_CDR_NULL) {
+		ast_cdr_end(chan->cdr);
+		ast_cdr_detach(chan->cdr);
+	}
+	
+	ast_channel_free(chan);
 
 	return res;
 }
@@ -1697,17 +1693,32 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay)
 	switch (chan->_state) {
 	case AST_STATE_RINGING:
 	case AST_STATE_RING:
-		if (chan->tech->answer)
-			res = chan->tech->answer(chan);
-		ast_setstate(chan, AST_STATE_UP);
-		ast_cdr_answer(chan->cdr);
-		ast_channel_unlock(chan);
-		if (delay)
+		if (delay) {
+			int needanswer = (chan->tech->answer != NULL);
+
+			ast_cdr_answer(chan->cdr);
+			ast_channel_unlock(chan);
 			ast_safe_sleep(chan, delay);
+			/* don't tell the channel it has been answered until *after* the delay,
+			   so that the media path will be in place and usable when it wants to
+			   send media
+			*/
+			if (needanswer) {
+				ast_channel_lock(chan);
+				res = chan->tech->answer(chan);
+				ast_channel_unlock(chan);
+			}
+			ast_setstate(chan, AST_STATE_UP);	
+		} else {
+			if (chan->tech->answer) {
+				res = chan->tech->answer(chan);
+			}
+			ast_setstate(chan, AST_STATE_UP);
+			ast_cdr_answer(chan->cdr);
+			ast_channel_unlock(chan);
+		}
 		return res;
-		break;
 	case AST_STATE_UP:
-		ast_cdr_answer(chan->cdr);
 		break;
 	default:
 		break;
@@ -2175,6 +2186,7 @@ int ast_waitfordigit(struct ast_channel *c, int ms)
 int ast_settimeout(struct ast_channel *c, unsigned int rate, int (*func)(const void *data), void *data)
 {
 	int res;
+	unsigned int real_rate = rate, max_rate;
 
 	if (c->timingfd == -1) {
 		return -1;
@@ -2185,9 +2197,13 @@ int ast_settimeout(struct ast_channel *c, unsigned int rate, int (*func)(const v
 		data = NULL;
 	}
 
-	ast_debug(1, "Scheduling timer at %u timer ticks per second\n", rate);
+	if (rate && rate > (max_rate = ast_timer_get_max_rate(c->timingfd))) {
+		real_rate = max_rate;
+	}
 
-	res = ast_timer_set_rate(c->timingfd, rate);
+	ast_debug(1, "Scheduling timer at (%u requested / %u actual) timer ticks per second\n", rate, real_rate);
+
+	res = ast_timer_set_rate(c->timingfd, real_rate);
 
 	c->timingfunc = func;
 	c->timingdata = data;
@@ -2504,15 +2520,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				} else {
 					/* Answer the CDR */
 					ast_setstate(chan, AST_STATE_UP);
-					if (!chan->cdr) { /* up till now, this insertion hasn't been done. Therefore,
-										 to keep from throwing off the basic order of the universe,
-										 we will try to keep this cdr from getting posted. */
-						chan->cdr = ast_cdr_alloc();
-						ast_cdr_init(chan->cdr, chan);
-						ast_cdr_start(chan->cdr);
-					}
-					
-					ast_cdr_answer(chan->cdr);
+					/* removed a call to ast_cdr_answer(chan->cdr) from here. */
 				}
 			}
 			break;
@@ -2735,9 +2743,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			chan->hangupcause = cause;
 		if (chan->generator)
 			ast_deactivate_generator(chan);
-		/* End the CDR if appropriate */
-		if (chan->cdr)
-			ast_cdr_end(chan->cdr);
+		/* We no longer End the CDR here */
 	}
 
 	/* High bit prints debugging */
@@ -3309,15 +3315,6 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 	}
 	ast_set_callerid(chan, cid_num, cid_name, cid_num);
 
-	
-
-	if (!chan->cdr) { /* up till now, this insertion hasn't been done. Therefore,
-				to keep from throwing off the basic order of the universe,
-				we will try to keep this cdr from getting posted. */
-		chan->cdr = ast_cdr_alloc();
-		ast_cdr_init(chan->cdr, chan);
-		ast_cdr_start(chan->cdr);
-	}
 	if (ast_call(chan, data, 0)) {	/* ast_call failed... */
 		ast_log(LOG_NOTICE, "Unable to call channel %s/%s\n", type, (char *)data);
 	} else {
@@ -4069,8 +4066,6 @@ void ast_set_callerid(struct ast_channel *chan, const char *cid_num, const char 
 			ast_free(chan->cid.cid_ani);
 		chan->cid.cid_ani = ast_strdup(cid_ani);
 	}
-	if (chan->cdr)
-		ast_cdr_setcid(chan->cdr, chan);
 	manager_event(EVENT_FLAG_CALL, "NewCallerid",
 				"Channel: %s\r\n"
 				"CallerIDNum: %s\r\n"

@@ -452,6 +452,7 @@ static AST_LIST_HEAD_STATIC(registrations, iax2_registry);
 static int iaxthreadcount = DEFAULT_THREAD_COUNT;
 static int iaxmaxthreadcount = DEFAULT_MAX_THREAD_COUNT;
 static int iaxdynamicthreadcount = 0;
+static int iaxdynamicthreadnum = 0;
 static int iaxactivethreadcount = 0;
 
 struct iax_rr {
@@ -1066,7 +1067,8 @@ static struct iax2_thread *find_idle_thread(void)
 		return NULL;
 
 	/* Set default values */
-	thread->threadnum = ast_atomic_fetchadd_int(&iaxdynamicthreadcount, 1);
+	ast_atomic_fetchadd_int(&iaxdynamicthreadcount, 1);
+	thread->threadnum = ast_atomic_fetchadd_int(&iaxdynamicthreadnum, 1);
 	thread->type = IAX_THREAD_TYPE_DYNAMIC;
 
 	/* Initialize lock and condition */
@@ -1147,12 +1149,16 @@ static void __send_ping(const void *data)
 
 	ast_mutex_lock(&iaxsl[callno]);
 
-	while (iaxs[callno] && iaxs[callno]->pingid != -1) {
+	if (iaxs[callno]) {
 		if (iaxs[callno]->peercallno) {
 			send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_PING, 0, NULL, 0, -1);
+			iaxs[callno]->pingid = iax2_sched_add(sched, ping_time * 1000, send_ping, data);
+		} else {
+			/* I am the schedule, so I'm allowed to do this */
+			iaxs[callno]->pingid = -1;
 		}
-		iaxs[callno]->pingid = iax2_sched_add(sched, ping_time * 1000, send_ping, data);
-		break;
+	} else if (option_debug > 0) {
+		ast_log(LOG_DEBUG, "I was supposed to send a PING with callno %d, but no such call exists (and I cannot remove pingid, either).\n", callno);
 	}
 
 	ast_mutex_unlock(&iaxsl[callno]);
@@ -1160,14 +1166,6 @@ static void __send_ping(const void *data)
 
 static int send_ping(const void *data)
 {
-	int callno = (long) data;
-
-	ast_mutex_lock(&iaxsl[callno]);
-	if (iaxs[callno]) {
-		iaxs[callno]->pingid = -1;
-	}
-	ast_mutex_unlock(&iaxsl[callno]);
-
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__send_ping, data))
 #endif		
@@ -1196,12 +1194,16 @@ static void __send_lagrq(const void *data)
 
 	ast_mutex_lock(&iaxsl[callno]);
 
-	while (iaxs[callno] && iaxs[callno]->lagid > -1) {
+	if (iaxs[callno]) {
 		if (iaxs[callno]->peercallno) {
 			send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_LAGRQ, 0, NULL, 0, -1);
+			iaxs[callno]->lagid = iax2_sched_add(sched, lagrq_time * 1000, send_lagrq, data);
+		} else {
+			/* I am the schedule, so I'm allowed to do this */
+			iaxs[callno]->lagid = -1;
 		}
-		iaxs[callno]->lagid = iax2_sched_add(sched, lagrq_time * 1000, send_lagrq, data);
-		break;
+	} else if (option_debug > 0) {
+		ast_log(LOG_DEBUG, "I was supposed to send a LAGRQ with callno %d, but no such call exists (and I cannot remove lagid, either).\n", callno);
 	}
 
 	ast_mutex_unlock(&iaxsl[callno]);
@@ -1209,14 +1211,6 @@ static void __send_lagrq(const void *data)
 
 static int send_lagrq(const void *data)
 {
-	int callno = (long) data;
-
-	ast_mutex_lock(&iaxsl[callno]);
-	if (iaxs[callno]) {
-		iaxs[callno]->lagid = -1;
-	}
-	ast_mutex_unlock(&iaxsl[callno]);
-
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__send_lagrq, data))
 #endif		
@@ -1569,13 +1563,19 @@ static int make_trunk(unsigned short callno, int locked)
 	for (x = TRUNK_CALL_START; x < ARRAY_LEN(iaxs) - 1; x++) {
 		ast_mutex_lock(&iaxsl[x]);
 		if (!iaxs[x] && ((now.tv_sec - lastused[x].tv_sec) > MIN_REUSE_TIME)) {
+			/*!
+			 * \note We delete these before switching the slot, because if
+			 * they fire in the meantime, they will generate a warning.
+			 */
+			AST_SCHED_DEL(sched, iaxs[callno]->pingid);
+			AST_SCHED_DEL(sched, iaxs[callno]->lagid);
 			iaxs[x] = iaxs[callno];
 			iaxs[x]->callno = x;
 			iaxs[callno] = NULL;
 			/* Update the two timers that should have been started */
-			iaxs[x]->pingid = iax2_sched_replace(iaxs[x]->pingid, sched, 
+			iaxs[x]->pingid = iax2_sched_add(sched, 
 				ping_time * 1000, send_ping, (void *)(long)x);
-			iaxs[x]->lagid = iax2_sched_replace(iaxs[x]->lagid, sched, 
+			iaxs[x]->lagid = iax2_sched_add(sched, 
 				lagrq_time * 1000, send_lagrq, (void *)(long)x);
 			if (locked)
 				ast_mutex_unlock(&iaxsl[callno]);
@@ -1650,6 +1650,27 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 			}
 		}
 
+		/* This will occur on the first response to a message that we initiated,
+		 * such as a PING. */
+		if (callno && dcallno && iaxs[dcallno] && !iaxs[dcallno]->peercallno && match(sin, callno, dcallno, iaxs[dcallno], check_dcallno)) {
+			iaxs[dcallno]->peercallno = callno;
+			res = dcallno;
+			store_by_peercallno(iaxs[dcallno]);
+			return res;
+		}
+
+#ifdef IAX_OLD_FIND
+		/* If we get here, we SHOULD NOT find a call structure for this
+		   callno; if we do, it means that there is a call structure that
+		   has a peer callno but did NOT get entered into the hash table,
+		   which is bad.
+
+		   If we find a call structure using this old, slow method, output a log
+		   message so we'll know about it. After a few months of leaving this in
+		   place, if we don't hear about people seeing these messages, we can
+		   remove this code for good.
+		*/
+
 		for (x = 1; !res && x < maxnontrunkcall; x++) {
 			ast_mutex_lock(&iaxsl[x]);
 			if (iaxs[x]) {
@@ -1672,6 +1693,7 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 			if (!res || !return_locked)
 				ast_mutex_unlock(&iaxsl[x]);
 		}
+#endif
 	}
 	if (!res && (new >= NEW_ALLOW)) {
 		int start, found = 0;
@@ -2248,9 +2270,7 @@ retry:
 	if (owner) {
 		if (ast_channel_trylock(owner)) {
 			ast_debug(3, "Avoiding IAX destroy deadlock\n");
-			ast_mutex_unlock(&iaxsl[callno]);
-			usleep(1);
-			ast_mutex_lock(&iaxsl[callno]);
+			DEADLOCK_AVOIDANCE(&iaxsl[callno]);
 			goto retry;
 		}
 	}
@@ -4071,11 +4091,13 @@ static struct ast_channel *ast_iax2_new(int callno, int state, int capability)
 	ast_mutex_unlock(&iaxsl[callno]);
 	tmp = ast_channel_alloc(1, state, i->cid_num, i->cid_name, i->accountcode, i->exten, i->context, i->amaflags, "IAX2/%s-%d", i->host, i->callno);
 	ast_mutex_lock(&iaxsl[callno]);
-	if (!iaxs[callno]) {
+	if (i != iaxs[callno]) {
 		if (tmp) {
+			/* unlock and relock iaxsl[callno] to preserve locking order */
+			ast_mutex_unlock(&iaxsl[callno]);
 			ast_channel_free(tmp);
+			ast_mutex_lock(&iaxsl[callno]);
 		}
-		ast_mutex_unlock(&iaxsl[callno]);
 		return NULL;
 	}
 	iax2_ami_channelupdate(i);
@@ -6937,7 +6959,7 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 		iax_ie_append_addr(&ied, IAX_IE_APPARENT_ADDR, &p->addr);
 		if (!ast_strlen_zero(p->mailbox)) {
 			struct ast_event *event;
-			int new, old, urgent;
+			int new, old;
 			char *mailbox, *context;
 
 			context = mailbox = ast_strdupa(p->mailbox);
@@ -6955,15 +6977,16 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 				new = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
 				old = ast_event_get_ie_uint(event, AST_EVENT_IE_OLDMSGS);
 				ast_event_destroy(event);
-			} else /* Fall back on checking the mailbox directly */
-				ast_app_inboxcount(p->mailbox, &urgent, &new, &old);
+			} else { /* Fall back on checking the mailbox directly */
+				ast_app_inboxcount(p->mailbox, &new, &old);
+			}
 
-			if (urgent > 255)
-				urgent = 255;
-			if (new > 255)
+			if (new > 255) {
 				new = 255;
-			if (old > 255)
+			}
+			if (old > 255) {
 				old = 255;
+			}
 			msgcount = (old << 8) | new;
 
 			iax_ie_append_short(&ied, IAX_IE_MSGCOUNT, msgcount);
@@ -7812,7 +7835,7 @@ static int socket_process_meta(int packet_len, struct ast_iax2_meta_hdr *meta, s
 		if (!iaxs[fr->callno]) {
 			/* drop it */
 		} else if (iaxs[fr->callno]->voiceformat == 0) {
-			ast_log(LOG_WARNING, "Received trunked frame before first full voice frame\n ");
+			ast_log(LOG_WARNING, "Received trunked frame before first full voice frame\n");
 			iax2_vnak(fr->callno);
 		} else {
 			f.subclass = iaxs[fr->callno]->voiceformat;
@@ -9437,7 +9460,7 @@ retryowner2:
 		if (iaxs[fr->callno]->videoformat > 0) 
 			f.subclass = iaxs[fr->callno]->videoformat | (ntohs(vh->ts) & 0x8000 ? 1 : 0);
 		else {
-			ast_log(LOG_WARNING, "Received mini frame before first full video frame\n ");
+			ast_log(LOG_WARNING, "Received mini frame before first full video frame\n");
 			iax2_vnak(fr->callno);
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 			return 1;

@@ -36,9 +36,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 #include <fcntl.h>
 #include <math.h>
 
+#include <dahdi/user.h>
+
 #include "asterisk/module.h"
 #include "asterisk/timing.h"
-#include "asterisk/dahdi.h"
 #include "asterisk/utils.h"
 
 static void *timing_funcs_handle;
@@ -50,6 +51,7 @@ static void dahdi_timer_ack(int handle, unsigned int quantity);
 static int dahdi_timer_enable_continuous(int handle);
 static int dahdi_timer_disable_continuous(int handle);
 static enum ast_timing_event dahdi_timer_get_event(int handle);
+static unsigned int dahdi_timer_get_max_rate(int handle);
 
 static struct ast_timing_functions dahdi_timing_functions = {
 	.timer_open = dahdi_timer_open,
@@ -59,6 +61,7 @@ static struct ast_timing_functions dahdi_timing_functions = {
 	.timer_enable_continuous = dahdi_timer_enable_continuous,
 	.timer_disable_continuous = dahdi_timer_disable_continuous,
 	.timer_get_event = dahdi_timer_get_event,
+	.timer_get_max_rate = dahdi_timer_get_max_rate,
 };
 
 static int dahdi_timer_open(void)
@@ -125,6 +128,11 @@ static enum ast_timing_event dahdi_timer_get_event(int handle)
 	default:
 		return AST_TIMING_EVENT_EXPIRED;	
 	}
+}
+
+static unsigned int dahdi_timer_get_max_rate(int handle)
+{
+	return 1000;
 }
 
 static int dahdi_test_timer(void)
