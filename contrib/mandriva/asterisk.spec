@@ -129,6 +129,8 @@ POTS, and IP telephony clients using the Inter-Asterisk eXchange
 protocol (e.g. gnophone or miniphone).  For more information and a
 current list of supported hardware, see www.asterisk.org.
 
+** Temporary version: modules like zaptel (aka. dahdi), mISDN are out.
+
 %if %{build_misdn}
 %package	chan_misdn
 Summary:	This module adds mISDN support to the Asterisk PBX
@@ -358,7 +360,6 @@ echo "%{version}-%{release}" > .version
 export ASTCFLAGS="%{optflags}"
 
 %configure2_5x \
-    --localstatedir=%{_var} \
     --without-kde \
     --without-qt \
     --without-tinfo \
@@ -380,9 +381,12 @@ export ASTCFLAGS="%{optflags}"
     --with-gnutls=%{_prefix} \
     --with-gsm=%{_prefix} \
     --with-iksemel=%{_prefix} \
+%if 0
     --with-isdnnet=%{_prefix} \
 %if %{build_misdn}
     --with-misdn=%{_prefix} \
+%endif
+    --with-suppserv=%{_prefix} \
 %endif
     --with-nbs=%{_prefix} \
     --with-ncurses=%{_prefix} \
@@ -402,16 +406,17 @@ export ASTCFLAGS="%{optflags}"
     --with-radius=%{_prefix} \
     --with-speex=%{_prefix} \
     --with-sqlite=%{_prefix} \
-    --with-suppserv=%{_prefix} \
     --with-ssl=%{_prefix} \
 %if %{build_tds}
     --with-tds_mssql=%{_prefix} \
 %endif
     --with-termcap=%{_prefix} \
-    --with-tonezone=%{_prefix} \
     --with-vorbis=%{_prefix} \
     --with-z=%{_prefix} \
+%if 0
+    --with-tonezone=%{_prefix} \
     --with-zaptel=%{_prefix} \
+%endif
     HTTPDIR="/var/www"
 
 #pushd menuselect
@@ -471,7 +476,8 @@ touch %{name}-devel.filelist
 %endif
 
 # fix ghost files
-touch	%{buildroot}%{_localstatedir}/asterisk/astdb
+#touch	%{buildroot}%{_localstatedir}/asterisk/astdb
+touch	%{buildroot}/var/lib/asterisk/astdb
 touch	%{buildroot}/var/log/asterisk/console
 touch	%{buildroot}/var/log/asterisk/debug
 touch	%{buildroot}/var/log/asterisk/messages
