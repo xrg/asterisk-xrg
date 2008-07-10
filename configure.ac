@@ -13,6 +13,7 @@ AC_INIT(asterisk, 1.6, www.asterisk.org)
 # cross-compile macros
 AC_CANONICAL_BUILD
 AC_CANONICAL_HOST
+AC_USE_SYSTEM_EXTENSIONS
 
 # check existence of the package
 AC_CONFIG_SRCDIR([main/asterisk.c])
@@ -24,7 +25,7 @@ AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
 
 AC_GNU_SOURCE
-AC_USE_SYSTEM_EXTENSIONS	# note- does not work on FreeBSD
+#AC_USE_SYSTEM_EXTENSIONS	# note- does not work on FreeBSD
 
 case "${host_os}" in
      freebsd*)
@@ -241,7 +242,7 @@ AST_EXT_LIB_SETUP([OPENH323], [OpenH323], [h323])
 AST_EXT_LIB_SETUP([RADIUS], [Radius Client], [radius])
 AST_EXT_LIB_SETUP([SDL], [Sdl], [sdl])
 AST_EXT_LIB_SETUP([SDL_IMAGE], [Sdl Image library], [SDL_image])
-ST_EXT_LIB_SETUP([OPENAIS], [OpenAIS], [openais])
+AST_EXT_LIB_SETUP([OPENAIS], [OpenAIS], [openais])
 AST_EXT_LIB_SETUP([SPEEX], [Speex], [speex])
 AST_EXT_LIB_SETUP([SPEEXDSP], [Speexdsp], [speexdsp])
 AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
