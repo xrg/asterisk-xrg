@@ -14,7 +14,7 @@
 %{?_without_h323:	%global build_h323 0}
 %{?_with_h323:		%global build_h323 1}
 
-%define build_misdn	1
+%define build_misdn	0
 %{?_without_misdn:	%global build_misdn 0}
 %{?_with_misdn:		%global build_misdn 1}
 
@@ -43,6 +43,8 @@
 %define build_imap	0
 %{?_without_imap:	%global build_imap 0}
 %{?_with_imap:		%global build_imap 1}
+
+%define	astvardir	/var/lib/asterisk
 
 Summary:	Asterisk PBX
 Name:		asterisk16
@@ -476,8 +478,8 @@ touch %{name}-devel.filelist
 %endif
 
 # fix ghost files
-#touch	%{buildroot}%{_localstatedir}/asterisk/astdb
-touch	%{buildroot}/var/lib/asterisk/astdb
+#touch	%{buildroot}%{astvardir}/astdb
+touch	%{buildroot}%{astvardir}/astdb
 touch	%{buildroot}/var/log/asterisk/console
 touch	%{buildroot}/var/log/asterisk/debug
 touch	%{buildroot}/var/log/asterisk/messages
@@ -496,13 +498,13 @@ perl -pi -e "s|^varrundir=.*|varrundir=/var/run/asterisk|g" %{buildroot}%{_libdi
 #mkdir -p %{buildroot}%{_sysconfdir}/ssl/%{name}
 
 # Remove unpackages files
-rm -rf %{buildroot}%{_localstatedir}/asterisk/moh/.asterisk-moh-freeplay-wav
+rm -rf %{buildroot}%{astvardir}/moh/.asterisk-moh-freeplay-wav
 
 # use the stand alone asterisk-core-sounds package instead
-rm -rf %{buildroot}%{_localstatedir}/asterisk/sounds
+rm -rf %{buildroot}%{astvardir}/sounds
 
 %pre
-%_pre_useradd asterisk %{_localstatedir}/asterisk /bin/sh
+%_pre_useradd asterisk %{astvardir} /bin/sh
 
 %post
 %create_ghostfile /var/log/asterisk/console asterisk asterisk 644
@@ -615,7 +617,7 @@ fi
 #attr(0755,root,root)					%{_libdir}/asterisk/modules/func_uri.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/pbx_*.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/res_*.so
-%exclude		                                %{_libdir}/asterisk/modules/test_dlinklists.so
+# %exclude		                              %{_libdir}/asterisk/modules/test_dlinklists.so
 
 # these are packaged as sub packages below
 %if %{build_misdn}
@@ -639,26 +641,26 @@ fi
 %exclude						%{_libdir}/asterisk/modules/res_snmp.so
 %exclude						%{_libdir}/asterisk/modules/*sql*.so
 
-#attr(0755,asterisk,asterisk)	%dir			%{_localstatedir}/asterisk
-%attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/agi-bin
-%attr(0755,root,root)					%{_localstatedir}/asterisk/agi-bin/*
-%ghost							%{_localstatedir}/asterisk/astdb
-%attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/firmware
-%attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/firmware/iax
-%attr(0755,root,root)					%{_localstatedir}/asterisk/firmware/iax/*.bin
-%attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/images
-%attr(0644,root,root)					%{_localstatedir}/asterisk/images/*.jpg
-%attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/keys
-%attr(0644,root,root)					%{_localstatedir}/asterisk/keys/*.pub
-%attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/moh
+#attr(0755,asterisk,asterisk)	%dir			%{astvardir}
+%attr(0755,root,root)		%dir			%{astvardir}/agi-bin
+%attr(0755,root,root)					%{astvardir}/agi-bin/*
+%ghost							%{astvardir}/astdb
+%attr(0755,root,root)		%dir			%{astvardir}/firmware
+%attr(0755,root,root)		%dir			%{astvardir}/firmware/iax
+%attr(0755,root,root)					%{astvardir}/firmware/iax/*.bin
+%attr(0755,root,root)		%dir			%{astvardir}/images
+%attr(0644,root,root)					%{astvardir}/images/*.jpg
+%attr(0755,root,root)		%dir			%{astvardir}/keys
+%attr(0644,root,root)					%{astvardir}/keys/*.pub
+%attr(0755,root,root)		%dir			%{astvardir}/moh
 %if 0
-%attr(0644,root,root)					%{_localstatedir}/asterisk/moh/*.wav
+%attr(0644,root,root)					%{astvardir}/moh/*.wav
 %endif
-# %doc							%{_localstatedir}/asterisk/moh/LICENSE-asterisk-moh-freeplay-wav
-#attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/mohmp3
-#attr(0644,root,root)					%{_localstatedir}/asterisk/mohmp3/*.mp3
-%attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/static-http
-%attr(0644,root,root)					%{_localstatedir}/asterisk/static-http/*
+# %doc							%{astvardir}/moh/LICENSE-asterisk-moh-freeplay-wav
+#attr(0755,root,root)		%dir			%{astvardir}/mohmp3
+#attr(0644,root,root)					%{astvardir}/mohmp3/*.mp3
+%attr(0755,root,root)		%dir			%{astvardir}/static-http
+%attr(0644,root,root)					%{astvardir}/static-http/*
 
 %attr(0750,asterisk,asterisk)	%dir			/var/log/asterisk
 %attr(0750,asterisk,asterisk)	%dir			/var/log/asterisk/cdr-csv
@@ -689,8 +691,8 @@ fi
 #%attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/busy.gsm
 #%attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/unavail.gsm
 #attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/voicemail
-%attr(0644,root,root)					%{_localstatedir}/asterisk/phoneprov/*.cfg
-%attr(0644,root,root)					%{_localstatedir}/asterisk/phoneprov/*.xml
+%attr(0644,root,root)					%{astvardir}/phoneprov/*.cfg
+%attr(0644,root,root)					%{astvardir}/phoneprov/*.xml
 
 							%{_mandir}/man8/asterisk.8*
 							%{_mandir}/man8/astgenkey.8*
@@ -779,7 +781,7 @@ fi
 %attr(0644,root,root)					/var/www/html/_asterisk/play.gif
 
 %files tests
-%attr(0755,root,root)                                   %{_libdir}/asterisk/modules/test_dlinklists.so
+# %attr(0755,root,root)					%{_libdir}/asterisk/modules/test_dlinklists.so
 %attr(0755,root,root)                                   %{_sbindir}/refcounter
 
 %changelog
