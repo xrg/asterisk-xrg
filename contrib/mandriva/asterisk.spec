@@ -338,11 +338,11 @@ cat %{SOURCE2} > asterisk.sysconfig
 #cat %{SOURCE4} > menuselect.makeopts
 
 # Generate the ilbc code
-pushd codecs/ilbc
-    cat %{SOURCE5} > rfc3951.txt
-    cat %{SOURCE6} > extract-cfile.awk
-    awk -f extract-cfile.awk rfc3951.txt >extract-cfile.log
-popd
+#pushd codecs/ilbc
+#    cat %{SOURCE5} > rfc3951.txt
+#    cat %{SOURCE6} > extract-cfile.awk
+#    awk -f extract-cfile.awk rfc3951.txt >extract-cfile.log
+#popd
 
 # lib64 fix
 find -name "Makefile" | xargs perl -pi -e "s|/usr/lib|%{_libdir}|g"
