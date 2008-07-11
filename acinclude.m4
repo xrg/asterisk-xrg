@@ -258,25 +258,25 @@ AC_DEFUN([AST_EXT_TOOL_CHECK],
 ])
 
 AC_DEFUN(
-[AST_CHECK_GNU_MAKE], [AC_CACHE_CHECK(for GNU make, GNU_MAKE,
-   GNU_MAKE='Not Found' ;
+[AST_CHECK_GNU_MAKE], [AC_CACHE_CHECK(for GNU make, GNU_MAKE_cv_,
+   GNU_MAKE_cv_='Not Found' ;
    GNU_MAKE_VERSION_MAJOR=0 ;
    GNU_MAKE_VERSION_MINOR=0 ;
    for a in make gmake gnumake ; do
       if test -z "$a" ; then continue ; fi ;
       if ( sh -c "$a --version" 2> /dev/null | grep GNU  2>&1 > /dev/null ) ;  then
-         GNU_MAKE=$a ;
+         GNU_MAKE_cv_=$a ;
          GNU_MAKE_VERSION_MAJOR=`$GNU_MAKE --version | grep "GNU Make" | cut -f3 -d' ' | cut -f1 -d'.'`
          GNU_MAKE_VERSION_MINOR=`$GNU_MAKE --version | grep "GNU Make" | cut -f2 -d'.' | cut -c1-2`
          break;
       fi
    done ;
 ) ;
-if test  "x$GNU_MAKE" = "xNot Found"  ; then
+if test  "x$GNU_MAKE_cv_" = "xNot Found"  ; then
    AC_MSG_ERROR( *** Please install GNU make.  It is required to build Asterisk!)
    exit 1
 fi
-AC_SUBST([GNU_MAKE])
+AC_SUBST([GNU_MAKE_cv_])
 ])
 
 
@@ -852,23 +852,27 @@ m4_ifndef([AST_PROG_EGREP], [AC_DEFUN([AST_PROG_EGREP],
 # -----------
 # Check for a fully functional sed program that truncates
 # as few characters as possible.  Prefer GNU sed if found.
+#AC_DEFUN([AST_PROG_SED],
+#[AC_CACHE_CHECK([for a sed that does not truncate output], ac_cv_path_SED,
+#    [dnl ac_script should not contain more than 99 commands (for HP-UX sed),
+#     dnl but more than about 7000 bytes, to catch a limit in Solaris 8 /usr/ucb/sed.
+#     ac_script=s/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/
+#     for ac_i in 1 2 3 4 5 6 7; do
+#       ac_script="$ac_script$as_nl$ac_script"
+#     done
+#     echo "$ac_script" | sed 99q >conftest.sed
+#     $as_unset ac_script || ac_script=
+#     _AC_PATH_PROGS_FEATURE_CHECK(SED, [sed gsed],
+#	[_AC_FEATURE_CHECK_LENGTH([ac_path_SED], [ac_cv_path_SED],
+#		["$ac_path_SED" -f conftest.sed])])])
+# SED="$ac_cv_path_SED"
+# AC_SUBST([SED])dnl
+# rm -f conftest.sed
+#])# AST_PROG_SED
+#
 AC_DEFUN([AST_PROG_SED],
-[AC_CACHE_CHECK([for a sed that does not truncate output], ac_cv_path_SED,
-    [dnl ac_script should not contain more than 99 commands (for HP-UX sed),
-     dnl but more than about 7000 bytes, to catch a limit in Solaris 8 /usr/ucb/sed.
-     ac_script=s/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/
-     for ac_i in 1 2 3 4 5 6 7; do
-       ac_script="$ac_script$as_nl$ac_script"
-     done
-     echo "$ac_script" | sed 99q >conftest.sed
-     $as_unset ac_script || ac_script=
-     _AC_PATH_PROG_FEATURE_CHECK(SED, [sed gsed],
-	[_AC_FEATURE_CHECK_LENGTH([ac_path_SED], [ac_cv_path_SED],
-		["$ac_path_SED" -f conftest.sed])])])
- SED="$ac_cv_path_SED"
- AC_SUBST([SED])dnl
- rm -f conftest.sed
-])# AST_PROG_SED
+	[ SED="$ac_cv_path_SED"
+	AC_SUBST([SED]) ])
 
 dnl @synopsis ACX_PTHREAD([ACTION-IF-FOUND[, ACTION-IF-NOT-FOUND]])
 dnl
