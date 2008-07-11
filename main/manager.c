@@ -345,7 +345,7 @@ static char *authority_to_str(int authority, struct ast_str **res)
 	char *sep = "";
 
 	(*res)->used = 0;
-	for (i = 0; i < (sizeof(perms) / sizeof(perms[0])) - 1; i++) {
+	for (i = 0; i < ARRAY_LEN(perms) - 1; i++) {
 		if (authority & perms[i].num) {
 			ast_str_append(res, 0, "%s%s", sep, perms[i].label);
 			sep = ",";
@@ -387,7 +387,7 @@ static int get_perm(const char *instr)
 	if (!instr)
 		return 0;
 
-	for (x = 0; x < (sizeof(perms) / sizeof(perms[0])); x++) {
+	for (x = 0; x < ARRAY_LEN(perms); x++) {
 		if (ast_instring(instr, perms[x].label, ','))
 			ret |= perms[x].num;
 	}
@@ -415,7 +415,7 @@ static int strings_to_mask(const char *string)
 		return 0;
 	if (ast_true(string)) {	/* all permissions */
 		int x, ret = 0;
-		for (x = 0; x<sizeof(perms) / sizeof(perms[0]); x++)
+		for (x = 0; x < ARRAY_LEN(perms); x++)
 			ret |= perms[x].num;
 		return ret;
 	}
@@ -2718,13 +2718,9 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 			"AccountCode: %s\r\n"
 			"BridgedChannel: %s\r\n"
 			"BridgedUniqueID: %s\r\n"
-			"AGIstate: %s\r\n"
-			"\r\n",
-			c->name, c->uniqueid, c->context, c->exten, c->priority, c->_state, ast_state2str(c->_state),
+			"\r\n", c->name, c->uniqueid, c->context, c->exten, c->priority, c->_state, ast_state2str(c->_state),
 			c->appl ? c->appl : "", c->data ? S_OR(c->data, ""): "",
-			S_OR(c->cid.cid_num, ""), durbuf, S_OR(c->accountcode, ""), bc ? bc->name : "", bc ? bc->uniqueid : "",
-			ast_agi_state(c)
-			);
+			S_OR(c->cid.cid_num, ""), durbuf, S_OR(c->accountcode, ""), bc ? bc->name : "", bc ? bc->uniqueid : "");
 		ast_channel_unlock(c);
 		numchans++;
 	}

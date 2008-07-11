@@ -1496,13 +1496,13 @@ static struct iax_frame *iaxfrdup2(struct iax_frame *fr)
 #define NEW_ALLOW 	1
 #define NEW_FORCE 	2
 
-static int match(struct sockaddr_in *sin, unsigned short callno, unsigned short dcallno, const struct chan_iax2_pvt *cur, int check_dcallno)
+static int match(struct sockaddr_in *sin, unsigned short callno, unsigned short dcallno, const struct chan_iax2_pvt *cur)
 {
 	if ((cur->addr.sin_addr.s_addr == sin->sin_addr.s_addr) &&
 		(cur->addr.sin_port == sin->sin_port)) {
 		/* This is the main host */
 		if ( (cur->peercallno == 0 || cur->peercallno == callno) &&
-			 (check_dcallno ? dcallno == cur->callno : 1) ) {
+				(dcallno == 0 || cur->callno == dcallno) ) {
 			/* That's us.  Be sure we keep track of the peer call number */
 			return 1;
 		}
@@ -1620,7 +1620,7 @@ static void remove_by_peercallno(struct chan_iax2_pvt *pvt)
 /*
  * \note Calling this function while holding another pvt lock can cause a deadlock.
  */
-static int __find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int return_locked, int check_dcallno)
+static int __find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int return_locked)
 {
 	int res = 0;
 	int x;
@@ -1633,8 +1633,6 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 			struct chan_iax2_pvt tmp_pvt = {
 				.callno = dcallno,
 				.peercallno = callno,
-				/* hack!! */
-				.frames_received = check_dcallno,
 			};
 
 			memcpy(&tmp_pvt.addr, sin, sizeof(tmp_pvt.addr));
@@ -1652,7 +1650,7 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 
 		/* This will occur on the first response to a message that we initiated,
 		 * such as a PING. */
-		if (callno && dcallno && iaxs[dcallno] && !iaxs[dcallno]->peercallno && match(sin, callno, dcallno, iaxs[dcallno], check_dcallno)) {
+		if (callno && dcallno && iaxs[dcallno] && !iaxs[dcallno]->peercallno && match(sin, callno, dcallno, iaxs[dcallno])) {
 			iaxs[dcallno]->peercallno = callno;
 			res = dcallno;
 			store_by_peercallno(iaxs[dcallno]);
@@ -1675,7 +1673,7 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 			ast_mutex_lock(&iaxsl[x]);
 			if (iaxs[x]) {
 				/* Look for an exact match */
-				if (match(sin, callno, dcallno, iaxs[x], check_dcallno)) {
+				if (match(sin, callno, dcallno, iaxs[x])) {
 					res = x;
 				}
 			}
@@ -1686,7 +1684,7 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 			ast_mutex_lock(&iaxsl[x]);
 			if (iaxs[x]) {
 				/* Look for an exact match */
-				if (match(sin, callno, dcallno, iaxs[x], check_dcallno)) {
+				if (match(sin, callno, dcallno, iaxs[x])) {
 					res = x;
 				}
 			}
@@ -1770,14 +1768,14 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 	return res;
 }
 
-static int find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int full_frame) {
+static int find_callno(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd) {
 
-	return __find_callno(callno, dcallno, sin, new, sockfd, 0, full_frame);
+	return __find_callno(callno, dcallno, sin, new, sockfd, 0);
 }
 
-static int find_callno_locked(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd, int full_frame) {
+static int find_callno_locked(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int new, int sockfd) {
 
-	return __find_callno(callno, dcallno, sin, new, sockfd, 1, full_frame);
+	return __find_callno(callno, dcallno, sin, new, sockfd, 1);
 }
 
 /*!
@@ -2788,23 +2786,27 @@ static char *handle_cli_iax2_show_cache(struct ast_cli_entry *e, int cmd, struct
 		if (dp->flags & CACHE_FLAG_UNKNOWN)
 			strncat(tmp, "UNKNOWN|", sizeof(tmp) - strlen(tmp) - 1);
 		/* Trim trailing pipe */
-		if (!ast_strlen_zero(tmp))
+		if (!ast_strlen_zero(tmp)) {
 			tmp[strlen(tmp) - 1] = '\0';
-		else
+		} else {
 			ast_copy_string(tmp, "(none)", sizeof(tmp));
+		}
 		y = 0;
 		pc = strchr(dp->peercontext, '@');
-		if (!pc)
+		if (!pc) {
 			pc = dp->peercontext;
-		else
+		} else {
 			pc++;
-		for (x = 0; x < sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++)
+		}
+		for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
 			if (dp->waiters[x] > -1)
 				y++;
-		if (s > 0)
+		}
+		if (s > 0) {
 			ast_cli(a->fd, "%-20.20s %-12.12s %-9d %-8d %s\n", pc, dp->exten, s, y, tmp);
-		else
+		} else {
 			ast_cli(a->fd, "%-20.20s %-12.12s %-9.9s %-8d %s\n", pc, dp->exten, "(expired)", y, tmp);
+		}
 	}
 
 	AST_LIST_LOCK(&dpcache);
@@ -2816,25 +2818,31 @@ static unsigned int calc_rxstamp(struct chan_iax2_pvt *p, unsigned int offset);
 
 static void unwrap_timestamp(struct iax_frame *fr)
 {
-	int x;
+	/* Video mini frames only encode the lower 15 bits of the session
+	 * timestamp, but other frame types (e.g. audio) encode 16 bits. */
+	const int ts_shift = (fr->af.frametype == AST_FRAME_VIDEO) ? 15 : 16;
+	const int lower_mask = (1 << ts_shift) - 1;
+	const int upper_mask = ~lower_mask;
+	const int last_upper = iaxs[fr->callno]->last & upper_mask;
 
-	if ( (fr->ts & 0xFFFF0000) == (iaxs[fr->callno]->last & 0xFFFF0000) ) {
-		x = fr->ts - iaxs[fr->callno]->last;
-		if (x < -50000) {
+	if ( (fr->ts & upper_mask) == last_upper ) {
+		const int x = fr->ts - iaxs[fr->callno]->last;
+		const int threshold = (ts_shift == 15) ? 25000 : 50000;
+
+		if (x < -threshold) {
 			/* Sudden big jump backwards in timestamp:
 			   What likely happened here is that miniframe timestamp has circled but we haven't
 			   gotten the update from the main packet.  We'll just pretend that we did, and
 			   update the timestamp appropriately. */
-			fr->ts = ( (iaxs[fr->callno]->last & 0xFFFF0000) + 0x10000) | (fr->ts & 0xFFFF);
+			fr->ts = (last_upper + (1 << ts_shift)) | (fr->ts & lower_mask);
 			if (iaxdebug)
 				ast_debug(1, "schedule_delivery: pushed forward timestamp\n");
-		}
-		if (x > 50000) {
+		} else if (x > threshold) {
 			/* Sudden apparent big jump forwards in timestamp:
 			   What's likely happened is this is an old miniframe belonging to the previous
-			   top-16-bit timestamp that has turned up out of order.
+			   top 15 or 16-bit timestamp that has turned up out of order.
 			   Adjust the timestamp appropriately. */
-			fr->ts = ( (iaxs[fr->callno]->last & 0xFFFF0000) - 0x10000) | (fr->ts & 0xFFFF);
+			fr->ts = (last_upper - (1 << ts_shift)) | (fr->ts & lower_mask);
 			if (iaxdebug)
 				ast_debug(1, "schedule_delivery: pushed back timestamp\n");
 		}
@@ -6534,9 +6542,10 @@ static int complete_dpreply(struct chan_iax2_pvt *pvt, struct iax_ies *ies)
 			dp->flags |= matchmore;
 		}
 		/* Wake up waiters */
-		for (x=0;x<sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++)
+		for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
 			if (dp->waiters[x] > -1)
 				write(dp->waiters[x], "asdf", 4);
+		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 	AST_LIST_UNLOCK(&dpcache);
@@ -7823,7 +7832,7 @@ static int socket_process_meta(int packet_len, struct ast_iax2_meta_hdr *meta, s
 		/* Stop if we don't have enough data */
 		if (len > packet_len)
 			break;
-		fr->callno = find_callno_locked(callno & ~IAX_FLAG_FULL, 0, sin, NEW_PREVENT, sockfd, 0);
+		fr->callno = find_callno_locked(callno & ~IAX_FLAG_FULL, 0, sin, NEW_PREVENT, sockfd);
 		if (!fr->callno)
 			continue;
 
@@ -8006,7 +8015,7 @@ static int socket_process(struct iax2_thread *thread)
 		}
 
 		/* This is a video frame, get call number */
-		fr->callno = find_callno(ntohs(vh->callno) & ~0x8000, dcallno, &sin, new, fd, 0);
+		fr->callno = find_callno(ntohs(vh->callno) & ~0x8000, dcallno, &sin, new, fd);
 		minivid = 1;
 	} else if ((meta->zeros == 0) && !(ntohs(meta->metacmd) & 0x8000))
 		return socket_process_meta(res, meta, &sin, fd, fr);
@@ -8021,14 +8030,37 @@ static int socket_process(struct iax2_thread *thread)
 			return 1;
 		}
 
-		/* Get the destination call number */
-		dcallno = ntohs(fh->dcallno) & ~IAX_FLAG_RETRANS;
 		/* Retrieve the type and subclass */
 		f.frametype = fh->type;
 		if (f.frametype == AST_FRAME_VIDEO) {
 			f.subclass = uncompress_subclass(fh->csub & ~0x40) | ((fh->csub >> 6) & 0x1);
 		} else {
 			f.subclass = uncompress_subclass(fh->csub);
+		}
+
+		/*
+		 * We enforce accurate destination call numbers for all full frames except
+		 * NEW, LAGRQ, and PING commands. For these, we leave dcallno set to 0 to
+		 * avoid having find_callno() use it when matching against existing calls.
+		 *
+		 * For NEW commands, the destination call is always ignored. See section
+		 * 6.2.2 of the iax2 RFC.
+		 * 
+		 * For LAGRQ and PING commands, this is because older versions of Asterisk
+		 * schedule these commands to get sent very quickly, and they will sometimes
+		 * be sent before they receive the first frame from the other side.  When
+		 * that happens, it doesn't contain the destination call number.  However,
+		 * not checking it for these frames is safe.
+		 *
+		 * Discussed in the following thread:
+		 * http://lists.digium.com/pipermail/asterisk-dev/2008-May/033217.html 
+		 */
+		if (f.frametype != AST_FRAME_IAX ||
+				(f.subclass != IAX_COMMAND_NEW &&
+				 f.subclass != IAX_COMMAND_PING &&
+				 f.subclass != IAX_COMMAND_LAGRQ)) {
+			/* Get the destination call number */
+			dcallno = ntohs(fh->dcallno) & ~IAX_FLAG_RETRANS;
 		}
 		if ((f.frametype == AST_FRAME_IAX) && ((f.subclass == IAX_COMMAND_NEW) || (f.subclass == IAX_COMMAND_REGREQ) ||
 						       (f.subclass == IAX_COMMAND_POKE) || (f.subclass == IAX_COMMAND_FWDOWNL) ||
@@ -8041,25 +8073,7 @@ static int socket_process(struct iax2_thread *thread)
 	}
 
 	if (!fr->callno) {
-		int check_dcallno = 0;
-
-		/*
-		 * We enforce accurate destination call numbers for all full frames except
-		 * LAGRQ and PING commands.  This is because older versions of Asterisk
-		 * schedule these commands to get sent very quickly, and they will sometimes
-		 * be sent before they receive the first frame from the other side.  When
-		 * that happens, it doesn't contain the destination call number.  However,
-		 * not checking it for these frames is safe.
-		 * 
-		 * Discussed in the following thread:
-		 *    http://lists.digium.com/pipermail/asterisk-dev/2008-May/033217.html 
-		 */
-
-		if (ntohs(mh->callno) & IAX_FLAG_FULL) {
-			check_dcallno = f.frametype == AST_FRAME_IAX ? (f.subclass != IAX_COMMAND_PING && f.subclass != IAX_COMMAND_LAGRQ) : 1;
-		}
-
-		fr->callno = find_callno(ntohs(mh->callno) & ~IAX_FLAG_FULL, dcallno, &sin, new, fd, check_dcallno);
+		fr->callno = find_callno(ntohs(mh->callno) & ~IAX_FLAG_FULL, dcallno, &sin, new, fd);
 	}
 
 	if (fr->callno > 0)
@@ -8146,6 +8160,7 @@ static int socket_process(struct iax2_thread *thread)
 			if (
 			 ((f.subclass != IAX_COMMAND_ACK) &&
 			  (f.subclass != IAX_COMMAND_INVAL) &&
+			  (f.subclass != IAX_COMMAND_NEW) &&        /* for duplicate/retrans NEW frames */
 			  (f.subclass != IAX_COMMAND_TXCNT) &&
 			  (f.subclass != IAX_COMMAND_TXREADY) &&		/* for attended transfer */
 			  (f.subclass != IAX_COMMAND_TXREL) &&		/* for attended transfer */
@@ -9719,7 +9734,7 @@ static int iax2_do_register(struct iax2_registry *reg)
 
 	if (!reg->callno) {
 		ast_debug(3, "Allocate call number\n");
-		reg->callno = find_callno_locked(0, 0, &reg->addr, NEW_FORCE, defaultsockfd, 0);
+		reg->callno = find_callno_locked(0, 0, &reg->addr, NEW_FORCE, defaultsockfd);
 		if (reg->callno < 1) {
 			ast_log(LOG_WARNING, "Unable to create call for registration\n");
 			return -1;
@@ -9770,7 +9785,7 @@ static int iax2_provision(struct sockaddr_in *end, int sockfd, char *dest, const
 	memset(&ied, 0, sizeof(ied));
 	iax_ie_append_raw(&ied, IAX_IE_PROVISIONING, provdata.buf, provdata.pos);
 
-	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd, 0);
+	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd);
 	if (!callno)
 		return -1;
 
@@ -9931,7 +9946,7 @@ static int iax2_poke_peer(struct iax2_peer *peer, int heldcall)
 	}
 	if (heldcall)
 		ast_mutex_unlock(&iaxsl[heldcall]);
-	callno = peer->callno = find_callno(0, 0, &peer->addr, NEW_FORCE, peer->sockfd, 0);
+	callno = peer->callno = find_callno(0, 0, &peer->addr, NEW_FORCE, peer->sockfd);
 	if (heldcall)
 		ast_mutex_lock(&iaxsl[heldcall]);
 	if (peer->callno < 1) {
@@ -10014,7 +10029,7 @@ static struct ast_channel *iax2_request(const char *type, int format, void *data
 	if (pds.port)
 		sin.sin_port = htons(atoi(pds.port));
 
-	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd, 0);
+	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd);
 	if (callno < 1) {
 		ast_log(LOG_WARNING, "Unable to create call\n");
 		*cause = AST_CAUSE_CONGESTION;
@@ -11380,7 +11395,7 @@ static int cache_get_callno_locked(const char *data)
 	ast_debug(1, "peer: %s, username: %s, password: %s, context: %s\n",
 		pds.peer, pds.username, pds.password, pds.context);
 
-	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd, 0);
+	callno = find_callno_locked(0, 0, &sin, NEW_FORCE, cai.sockfd);
 	if (callno < 1) {
 		ast_log(LOG_WARNING, "Unable to create call\n");
 		return -1;
@@ -11451,7 +11466,7 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 		/* Expires in 30 mins by default */
 		dp->expiry.tv_sec += iaxdefaultdpcache;
 		dp->flags = CACHE_FLAG_PENDING;
-		for (x=0;x<sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++)
+		for (x = 0; x < ARRAY_LEN(dp->waiters); x++)
 			dp->waiters[x] = -1;
 		/* Insert into the lists */
 		AST_LIST_INSERT_TAIL(&dpcache, dp, cache_list);
@@ -11466,12 +11481,12 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 	if (dp->flags & CACHE_FLAG_PENDING) {
 		/* Okay, here it starts to get nasty.  We need a pipe now to wait
 		   for a reply to come back so long as it's pending */
-		for (x=0;x<sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++) {
+		for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
 			/* Find an empty slot */
 			if (dp->waiters[x] < 0)
 				break;
 		}
-		if (x >= sizeof(dp->waiters) / sizeof(dp->waiters[0])) {
+		if (x >= ARRAY_LEN(dp->waiters)) {
 			ast_log(LOG_WARNING, "No more waiter positions available\n");
 			return NULL;
 		}
@@ -11524,9 +11539,10 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 				/* Expire after only 60 seconds now.  This is designed to help reduce backlog in heavily loaded
 				   systems without leaving it unavailable once the server comes back online */
 				dp->expiry.tv_sec = dp->orig.tv_sec + 60;
-				for (x=0;x<sizeof(dp->waiters) / sizeof(dp->waiters[0]); x++)
+				for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
 					if (dp->waiters[x] > -1)
 						write(dp->waiters[x], "asdf", 4);
+				}
 			}
 		}
 		/* Our caller will obtain the rest */
@@ -12103,11 +12119,7 @@ static int pvt_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct chan_iax2_pvt *pvt = obj, *pvt2 = arg;
 
-	/* The frames_received field is used to hold whether we're matching
-	 * against a full frame or not ... */
-
-	return match(&pvt2->addr, pvt2->peercallno, pvt2->callno, pvt, 
-		pvt2->frames_received) ? CMP_MATCH : 0;
+	return match(&pvt2->addr, pvt2->peercallno, pvt2->callno, pvt) ? CMP_MATCH : 0;
 }
 
 /*! \brief Load IAX2 module, load configuraiton ---*/

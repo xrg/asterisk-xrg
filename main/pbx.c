@@ -292,6 +292,7 @@ static int pbx_builtin_keepalive(struct ast_channel *, void *);
 static int pbx_builtin_resetcdr(struct ast_channel *, void *);
 static int pbx_builtin_setamaflags(struct ast_channel *, void *);
 static int pbx_builtin_ringing(struct ast_channel *, void *);
+static int pbx_builtin_proceeding(struct ast_channel *, void *);
 static int pbx_builtin_progress(struct ast_channel *, void *);
 static int pbx_builtin_congestion(struct ast_channel *, void *);
 static int pbx_builtin_busy(struct ast_channel *, void *);
@@ -588,9 +589,15 @@ static struct pbx_builtin {
 	"purposes. Any text that is provided as arguments to this application can be\n"
 	"viewed at the Asterisk CLI. This method can be used to see the evaluations of\n"
 	"variables or functions without having any effect. Alternatively, see the\n"
-  "Verbose() application for finer grain control of output at custom verbose levels.\n"
+		"Verbose() application for finer grain control of output at custom verbose levels.\n"
 	},
-
+	
+	{ "Proceeding", pbx_builtin_proceeding,
+	"Indicate proceeding",
+	"  Proceeding(): This application will request that a proceeding message\n"
+	"be provided to the calling channel.\n"
+	},
+	
 	{ "Progress", pbx_builtin_progress,
 	"Indicate progress",
 	"  Progress(): This application will request that in-band progress information\n"
@@ -2320,7 +2327,7 @@ void pbx_retrieve_variable(struct ast_channel *c, const char *var, char **ret, c
 		}
 	}
 	/* if not found, look into chanvars or global vars */
-	for (i = 0; s == &not_found && i < (sizeof(places) / sizeof(places[0])); i++) {
+	for (i = 0; s == &not_found && i < ARRAY_LEN(places); i++) {
 		struct ast_var_t *variables;
 		if (!places[i])
 			continue;
@@ -2901,18 +2908,6 @@ static void pbx_substitute_variables(char *passdata, int datalen, struct ast_cha
 	pbx_substitute_variables_helper(c, e->data, passdata, datalen - 1);
 }
 
-/*! \brief report AGI state for channel */
-const char *ast_agi_state(struct ast_channel *chan)
-{
-	if (ast_test_flag(chan, AST_FLAG_AGI))
-		return "AGI";
-	if (ast_test_flag(chan, AST_FLAG_FASTAGI))
-		return "FASTAGI";
-	if (ast_test_flag(chan, AST_FLAG_ASYNCAGI))
-		return "ASYNCAGI";
-	return "";
-}
-
 /*! 
  * \brief The return value depends on the action:
  *
@@ -2993,9 +2988,8 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 					"Priority: %d\r\n"
 					"Application: %s\r\n"
 					"AppData: %s\r\n"
-					"Uniqueid: %s\r\n"
-					"AGIstate: %s\r\n",
-					c->name, c->context, c->exten, c->priority, app->name, passdata, c->uniqueid, ast_agi_state(c));
+					"Uniqueid: %s\r\n",
+					c->name, c->context, c->exten, c->priority, app->name, passdata, c->uniqueid);
 			return pbx_exec(c, app, passdata);	/* 0 on success, -1 on failure */
 		}
 	} else if (q.swo) {	/* not found here, but in another switch */
@@ -3098,7 +3092,7 @@ const char *ast_extension_state2str(int extension_state)
 {
 	int i;
 
-	for (i = 0; (i < (sizeof(extension_states) / sizeof(extension_states[0]))); i++) {
+	for (i = 0; (i < ARRAY_LEN(extension_states)); i++) {
 		if (extension_states[i].extension_state == extension_state)
 			return extension_states[i].text;
 	}
@@ -7232,6 +7226,15 @@ static void wait_for_hangup(struct ast_channel *chan, void *data)
 		if (f)
 			ast_frfree(f);
 	} while(f);
+}
+
+/*!
+ * \ingroup applications
+ */
+static int pbx_builtin_proceeding(struct ast_channel *chan, void *data)
+{
+	ast_indicate(chan, AST_CONTROL_PROCEEDING);
+	return 0;
 }
 
 /*!

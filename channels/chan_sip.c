@@ -2631,7 +2631,7 @@ static unsigned int parse_sip_options(struct sip_pvt *pvt, const char *supported
 		next = ast_skip_blanks(next);
 		if (sipdebug)
 			ast_debug(3, "Found SIP option: -%s-\n", next);
-		for (i=0; i < (sizeof(sip_options) / sizeof(sip_options[0])); i++) {
+		for (i = 0; i < ARRAY_LEN(sip_options); i++) {
 			if (!strcasecmp(next, sip_options[i].text)) {
 				profile |= sip_options[i].id;
 				found = TRUE;
@@ -4849,6 +4849,7 @@ static const char *hangup_cause2sip(int cause)
 		case AST_CAUSE_NO_USER_RESPONSE:	/* 18 */
 			return "408 Request Timeout";
 		case AST_CAUSE_NO_ANSWER:		/* 19 */
+		case AST_CAUSE_UNREGISTERED:        /* 20 */
 			return "480 Temporarily unavailable";
 		case AST_CAUSE_CALL_REJECTED:		/* 21 */
 			return "403 Forbidden";
@@ -5716,9 +5717,10 @@ static const char *find_alias(const char *name, const char *_default)
 	};
 	int x;
 
-	for (x=0; x<sizeof(aliases) / sizeof(aliases[0]); x++) 
+	for (x = 0; x < ARRAY_LEN(aliases); x++) {
 		if (!strcasecmp(aliases[x].fullname, name))
 			return aliases[x].shortname;
+	}
 
 	return _default;
 }
@@ -13116,7 +13118,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  SIP Options  : ");
 		if (peer->sipoptions) {
 			int lastoption = -1;
-			for (x=0 ; (x < (sizeof(sip_options) / sizeof(sip_options[0]))); x++) {
+			for (x = 0 ; x < ARRAY_LEN(sip_options); x++) {
 				if (sip_options[x].id != lastoption) {
 					if (peer->sipoptions & sip_options[x].id)
 						ast_cli(fd, "%s ", sip_options[x].text);
@@ -13978,7 +13980,7 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  SIP Options:            ");
 			if (cur->sipoptions) {
 				int x;
-				for (x=0 ; (x < (sizeof(sip_options) / sizeof(sip_options[0]))); x++) {
+				for (x = 0 ; x < ARRAY_LEN(sip_options); x++) {
 					if (cur->sipoptions & sip_options[x].id)
 						ast_cli(a->fd, "%s ", sip_options[x].text);
 				}
@@ -15195,21 +15197,17 @@ static void handle_response_invite(struct sip_pvt *p, int resp, char *rest, stru
 		if (outgoing) {
 			update_call_counter(p, DEC_CALL_RINGING);
 			parse_ok_contact(p, req);
-			if(set_address_from_contact(p)) {
-				/* Bad contact - we don't know how to reach this device */
-				/* We need to ACK, but then send a bye */
-				/* OEJ: Possible issue that may need a check:
-					If we have a proxy route between us and the device,
-					should we care about resolving the contact
-					or should we just send it?
-				*/
-				if (!req->ignore)
-					ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
-			} 
-
 			/* Save Record-Route for any later requests we make on this dialogue */
 			if (!reinvite)
 				build_route(p, req, 1);
+
+			if(set_address_from_contact(p)) {
+				/* Bad contact - we don't know how to reach this device */
+				/* We need to ACK, but then send a bye */
+				if (!p->route && !req->ignore)
+					ast_set_flag(&p->flags[0], SIP_PENDINGBYE);	
+			} 
+
 		}
 		
 		if (p->owner && (p->owner->_state == AST_STATE_UP) && (bridgepeer = ast_bridged_channel(p->owner))) { /* if this is a re-invite */
@@ -17086,8 +17084,8 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			else
 				ast_debug(2, "Got a SIP re-transmit of INVITE for call %s\n", p->callid);
 		}
-
-		reinvite = 1;
+		if (!req->ignore)
+			reinvite = 1;
 		c = p->owner;
 	}
 
@@ -22117,12 +22115,12 @@ static struct ast_cli_entry cli_sip_do_history_deprecated = AST_CLI_DEFINE(sip_d
 static struct ast_cli_entry cli_sip[] = {
 	AST_CLI_DEFINE(sip_show_channels, "List active SIP channels or subscriptions"),
 	AST_CLI_DEFINE(sip_show_channelstats, "List statistics for active SIP channels"),
-	AST_CLI_DEFINE(sip_show_domains, "List our local SIP domains."),
+	AST_CLI_DEFINE(sip_show_domains, "List our local SIP domains"),
 	AST_CLI_DEFINE(sip_show_inuse, "List all inuse/limits"),
 	AST_CLI_DEFINE(sip_show_objects, "List all SIP object allocations"),
 	AST_CLI_DEFINE(sip_show_peers, "List defined SIP peers"),
 	AST_CLI_DEFINE(sip_show_registry, "List SIP registration status"),
-	AST_CLI_DEFINE(sip_unregister, "Unregister (force expiration) a SIP peer from the registery\n"),
+	AST_CLI_DEFINE(sip_unregister, "Unregister (force expiration) a SIP peer from the registry"),
 	AST_CLI_DEFINE(sip_show_settings, "Show SIP global settings"),
 	AST_CLI_DEFINE(sip_cli_notify, "Send a notify packet to a SIP peer"),
 	AST_CLI_DEFINE(sip_show_channel, "Show detailed SIP channel info"),
