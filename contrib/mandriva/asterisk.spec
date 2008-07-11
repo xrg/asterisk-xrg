@@ -333,7 +333,7 @@ done
 cat %{SOURCE1} > asterisk.init
 cat %{SOURCE2} > asterisk.sysconfig
 
-cat %{SOURCE4} > menuselect.makeopts
+#cat %{SOURCE4} > menuselect.makeopts
 
 # Generate the ilbc code
 pushd codecs/ilbc
