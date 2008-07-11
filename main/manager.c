@@ -130,9 +130,12 @@ static struct permalias {
 	{ 0, "none" },
 };
 
-static const char *command_blacklist[] = {
-	"module load",
-	"module unload",
+#define MAX_BLACKLIST_CMD_LEN 2
+static struct {
+	char *words[AST_MAX_CMD_LEN];
+} command_blacklist[] = {
+	{{ "module", "load", NULL }},
+	{{ "module", "unload", NULL }},
 };
 
 struct mansession {
@@ -1681,6 +1684,41 @@ static int action_redirect(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+static int check_blacklist(const char *cmd)
+{
+	char *cmd_copy, *cur_cmd;
+	char *cmd_words[MAX_BLACKLIST_CMD_LEN] = { NULL, };
+	int i;
+
+	cmd_copy = ast_strdupa(cmd);
+	for (i = 0; i < MAX_BLACKLIST_CMD_LEN && (cur_cmd = strsep(&cmd_copy, " ")); i++) {
+		cur_cmd = ast_strip(cur_cmd);
+		if (ast_strlen_zero(cur_cmd)) {
+			i--;
+			continue;
+		}
+
+		cmd_words[i] = cur_cmd;
+	}
+
+	for (i = 0; i < ARRAY_LEN(command_blacklist); i++) {
+		int j, match = 1;
+
+		for (j = 0; command_blacklist[i].words[j]; j++) {
+			if (ast_strlen_zero(cmd_words[j]) || strcasecmp(cmd_words[j], command_blacklist[i].words[j])) {
+				match = 0;
+				break;
+			}
+		}
+
+		if (match) {
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 static char mandescr_command[] = 
 "Description: Run a CLI command.\n"
 "Variables: (Names marked with * are required)\n"
@@ -1694,14 +1732,17 @@ static int action_command(struct mansession *s, const struct message *m)
 	const char *id = astman_get_header(m, "ActionID");
 	char *buf, *final_buf;
 	char template[] = "/tmp/ast-ami-XXXXXX";	/* template for temporary file */
-	int fd = mkstemp(template), i = 0;
+	int fd = mkstemp(template);
 	off_t l;
 
-	for (i = 0; i < sizeof(command_blacklist) / sizeof(command_blacklist[0]); i++) {
-		if (!strncmp(cmd, command_blacklist[i], strlen(command_blacklist[i]))) {
-			astman_send_error(s, m, "Command blacklisted");
-			return 0;
-		}
+	if (ast_strlen_zero(cmd)) {
+		astman_send_error(s, m, "No command provided");
+		return 0;
+	}
+
+	if (check_blacklist(cmd)) {
+		astman_send_error(s, m, "Command blacklisted");
+		return 0;
 	}
 
 	astman_append(s, "Response: Follows\r\nPrivilege: Command\r\n");
@@ -2836,7 +2877,7 @@ static int webregged = 0;
 
 int init_manager(void)
 {
-	struct ast_config *cfg = NULL;
+	struct ast_config *cfg = NULL, *ucfg = NULL;
 	const char *val;
 	char *cat = NULL;
 	int oldportno = portno;
@@ -2933,6 +2974,71 @@ int init_manager(void)
 	}
 
 	AST_LIST_LOCK(&users);
+
+	if ((ucfg = ast_config_load("users.conf"))) {
+		while ((cat = ast_category_browse(ucfg, cat))) {
+			int hasmanager = 0;
+			struct ast_variable *var = NULL;
+
+			if (!strcasecmp(cat, "general")) {
+				continue;
+			}
+
+			if (!(hasmanager = ast_true(ast_variable_retrieve(ucfg, cat, "hasmanager")))) {
+				continue;
+			}
+
+			/* Look for an existing entry, if none found - create one and add it to the list */
+			if (!(user = ast_get_manager_by_name_locked(cat))) {
+				if (!(user = ast_calloc(1, sizeof(*user)))) {
+					break;
+				}
+				/* Copy name over */
+				ast_copy_string(user->username, cat, sizeof(user->username));
+				/* Insert into list */
+				AST_LIST_INSERT_TAIL(&users, user, list);
+			}
+
+			/* Make sure we keep this user and don't destroy it during cleanup */
+			user->keep = 1;
+
+			for (var = ast_variable_browse(ucfg, cat); var; var = var->next) {
+				if (!strcasecmp(var->name, "secret")) {
+					if (user->secret) {
+						free(user->secret);
+					}
+					user->secret = ast_strdup(var->value);
+				} else if (!strcasecmp(var->name, "deny") ) {
+					if (user->deny) {
+						free(user->deny);
+					}
+					user->deny = ast_strdup(var->value);
+				} else if (!strcasecmp(var->name, "permit") ) {
+					if (user->permit) {
+						free(user->permit);
+					}
+					user->permit = ast_strdup(var->value);
+				} else if (!strcasecmp(var->name, "read") ) {
+					if (user->read) {
+						free(user->read);
+					}
+					user->read = ast_strdup(var->value);
+				} else if (!strcasecmp(var->name, "write") ) {
+					if (user->write) {
+						free(user->write);
+					}
+					user->write = ast_strdup(var->value);
+				} else if (!strcasecmp(var->name, "displayconnects") ) {
+					user->displayconnects = ast_true(var->value);
+				} else if (!strcasecmp(var->name, "hasmanager")) {
+					/* already handled */
+				} else {
+					ast_log(LOG_DEBUG, "%s is an unknown option (to the manager module).\n", var->name);
+				}
+			}
+		}
+		ast_config_destroy(ucfg);
+	}
 
 	while ((cat = ast_category_browse(cfg, cat))) {
 		struct ast_variable *var = NULL;

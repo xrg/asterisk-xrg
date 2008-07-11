@@ -44,10 +44,6 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 				; ability to place SIP calls based on domain 
 				; names to some other SIP users on the Internet
 				
-;domain=mydomain.tld		; Set default domain for this host
-				; If configured, Asterisk will only allow
-				; INVITE and REFER to non-local domains
-				; Use "sip show domains" to list local domains
 ;pedantic=yes			; Enable checking of tags in headers, 
 				; international character conversions in URIs
 				; and multiline formatted headers for strict
@@ -197,7 +193,8 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;subscribecontext = default	; Set a specific context for SUBSCRIBE requests
 				; Useful to limit subscriptions to local extensions
 				; Settable per peer/user also
-;notifyringing = yes		; Notify subscriptions on RINGING state (default: no)
+;notifyringing = yes           ; Control whether subscriptions already INUSE get sent
+                               ; RINGING when another call is sent (default: no)
 ;notifyhold = yes		; Notify subscriptions on HOLD state (default: no)
 				; Turning on notifyringing and notifyhold will add a lot
 				; more database transactions if you are using realtime.
@@ -373,6 +370,9 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ; domains, each of which can direct the call to a specific context if desired.
 ; By default, all domains are accepted and sent to the default context or the
 ; context associated with the user/peer placing the call.
+; REGISTER to non-local domains will be automatically denied if a domain
+; list is configured.
+;
 ; Domains can be specified using:
 ; domain=<domain>[,<context>]
 ; Examples:

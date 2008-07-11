@@ -1064,16 +1064,17 @@ static int bridge_p2p_rtp_write(struct ast_rtp *rtp, struct ast_rtp *bridged, un
 	/* Check what the payload value should be */
 	rtpPT = ast_rtp_lookup_pt(rtp, payload);
 
-	/* If the payload coming in is not one of the negotiated ones then send it to the core, this will cause formats to change and the bridge to break */
-	if (!bridged->current_RTP_PT[payload].code)
-		return -1;
-
 	/* If the payload is DTMF, and we are listening for DTMF - then feed it into the core */
 	if (ast_test_flag(rtp, FLAG_P2P_NEED_DTMF) && !rtpPT.isAstFormat && rtpPT.code == AST_RTP_DTMF)
 		return -1;
 
 	/* Otherwise adjust bridged payload to match */
 	bridged_payload = ast_rtp_lookup_code(bridged, rtpPT.isAstFormat, rtpPT.code);
+
+	/* If the payload coming in is not one of the negotiated ones then send it to the core, this will cause formats to change and the bridge to break */
+	if (!bridged->current_RTP_PT[bridged_payload].code)
+		return -1;
+
 
 	/* If the mark bit has not been sent yet... do it now */
 	if (!ast_test_flag(rtp, FLAG_P2P_SENT_MARK)) {
@@ -2047,7 +2048,9 @@ struct ast_rtp *ast_rtp_get_bridged(struct ast_rtp *rtp)
 
 void ast_rtp_stop(struct ast_rtp *rtp)
 {
-	AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+	if (rtp->rtcp) {
+		AST_SCHED_DEL(rtp->sched, rtp->rtcp->schedid);
+	}
 
 	memset(&rtp->them.sin_addr, 0, sizeof(rtp->them.sin_addr));
 	memset(&rtp->them.sin_port, 0, sizeof(rtp->them.sin_port));

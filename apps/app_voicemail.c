@@ -109,7 +109,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #ifdef IMAP_STORAGE
 AST_MUTEX_DEFINE_STATIC(imaptemp_lock);
 static char imaptemp[1024];
-
 static char imapserver[48];
 static char imapport[8];
 static char imapflags[128];
@@ -119,6 +118,7 @@ static char authpassword[42];
 
 static int expungeonhangup = 1;
 static char delimiter = '\0';
+static const long DEFAULT_IMAP_TCP_TIMEOUT = 60L;
 
 struct vm_state;
 struct ast_vm_user;
@@ -131,6 +131,7 @@ static void vm_imap_delete(int msgnum, struct vm_state *vms);
 static char *get_user_by_mailbox(char *mailbox);
 static struct vm_state *get_vm_state_by_imapuser(char *user, int interactive);
 static struct vm_state *get_vm_state_by_mailbox(const char *mailbox, int interactive);
+static struct vm_state *create_vm_state_from_user(struct ast_vm_user *vmu, char *mailbox);
 static void vmstate_insert(struct vm_state *vms);
 static void vmstate_delete(struct vm_state *vms);
 static void set_update(MAILSTREAM * stream);
@@ -571,6 +572,22 @@ static unsigned char adsisec[4] = "\x9B\xDB\xF7\xAC";
 static int adsiver = 1;
 static char emaildateformat[32] = "%A, %B %d, %Y at %r";
 
+
+static char *strip_control(const char *input, char *buf, size_t buflen)
+{
+	char *bufptr = buf;
+	for (; *input; input++) {
+		if (*input < 32) {
+			continue;
+		}
+		*bufptr++ = *input;
+		if (bufptr == buf + buflen - 1) {
+			break;
+		}
+	}
+	*bufptr = '\0';
+	return buf;
+}
 
 static void populate_defaults(struct ast_vm_user *vmu)
 {
@@ -1126,9 +1143,14 @@ static int retrieve_file(char *dir, int msgnum)
 					truncate(full_fn, fdlen);
 				}
 			} else {
-				res = SQLGetData(stmt, x + 1, SQL_CHAR, rowdata, sizeof(rowdata), NULL);
+				SQLLEN ind;
+				res = SQLGetData(stmt, x + 1, SQL_CHAR, rowdata, sizeof(rowdata), &ind);
 				if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-					ast_log(LOG_WARNING, "SQL Get Data error!\n[%s]\n\n", sql);
+					SQLINTEGER nativeerror = 0;
+					SQLSMALLINT diagbytes = 0;
+					unsigned char state[10], diagnostic[256];
+					SQLGetDiagRec(SQL_HANDLE_STMT, stmt, 1, state, &nativeerror, diagnostic, sizeof(diagnostic), &diagbytes);
+					ast_log(LOG_WARNING, "SQL Get Data error: %s: %s!\n[%s]\n\n", state, diagnostic, sql);
 					SQLFreeHandle (SQL_HANDLE_STMT, stmt);
 					ast_odbc_release_obj(obj);
 					goto yuck;
@@ -1312,23 +1334,85 @@ static void copy_file(char *sdir, int smsg, char *ddir, int dmsg, char *dmailbox
 	return;	
 }
 
+struct insert_cb_struct {
+	char *dir;
+	char *msgnum;
+	void *recording;
+	size_t recordinglen;
+	SQLLEN indlen;
+	const char *context;
+	const char *macrocontext;
+	const char *callerid;
+	const char *origtime;
+	const char *duration;
+	char *mailboxuser;
+	char *mailboxcontext;
+	const char *category;
+	char *sql;
+};
+
+static SQLHSTMT insert_cb(struct odbc_obj *obj, void *vd)
+{
+	struct insert_cb_struct *d = vd;
+	int res;
+	SQLHSTMT stmt;
+
+	res = SQLAllocHandle(SQL_HANDLE_STMT, obj->con, &stmt);
+	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+		ast_log(LOG_WARNING, "SQL Alloc Handle failed!\n");
+		return NULL;
+	}
+
+	res = SQLPrepare(stmt, (unsigned char *)d->sql, SQL_NTS);
+	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+		ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", d->sql);
+		SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+		return NULL;
+	}
+
+	SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->dir), 0, (void *)d->dir, 0, NULL);
+	SQLBindParameter(stmt, 2, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->msgnum), 0, (void *)d->msgnum, 0, NULL);
+	SQLBindParameter(stmt, 3, SQL_PARAM_INPUT, SQL_C_BINARY, SQL_LONGVARBINARY, d->recordinglen, 0, (void *)d->recording, 0, &d->indlen);
+	SQLBindParameter(stmt, 4, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->context), 0, (void *)d->context, 0, NULL);
+	SQLBindParameter(stmt, 5, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->macrocontext), 0, (void *)d->macrocontext, 0, NULL);
+	SQLBindParameter(stmt, 6, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->callerid), 0, (void *)d->callerid, 0, NULL);
+	SQLBindParameter(stmt, 7, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->origtime), 0, (void *)d->origtime, 0, NULL);
+	SQLBindParameter(stmt, 8, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->duration), 0, (void *)d->duration, 0, NULL);
+	SQLBindParameter(stmt, 9, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->mailboxuser), 0, (void *)d->mailboxuser, 0, NULL);
+	SQLBindParameter(stmt, 10, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->mailboxcontext), 0, (void *)d->mailboxcontext, 0, NULL);
+	if (!ast_strlen_zero(d->category)) {
+		SQLBindParameter(stmt, 11, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(d->category), 0, (void *)d->category, 0, NULL);
+	}
+
+	return stmt;
+}
+
 static int store_file(char *dir, char *mailboxuser, char *mailboxcontext, int msgnum)
 {
 	int x = 0;
-	int res;
 	int fd = -1;
 	void *fdm = MAP_FAILED;
 	size_t fdlen = -1;
 	SQLHSTMT stmt;
-	SQLLEN len;
 	char sql[PATH_MAX];
 	char msgnums[20];
 	char fn[PATH_MAX];
 	char full_fn[PATH_MAX];
 	char fmt[80]="";
 	char *c;
-	const char *context="", *macrocontext="", *callerid="", *origtime="", *duration="";
-	const char *category = "";
+	struct insert_cb_struct d = {
+		.dir = dir,
+		.msgnum = msgnums,
+		.context = "",
+		.macrocontext = "",
+		.callerid = "",
+		.origtime = "",
+		.duration = "",
+		.mailboxuser = mailboxuser,
+		.mailboxcontext = mailboxcontext,
+		.category = "",
+		.sql = sql
+	};
 	struct ast_config *cfg=NULL;
 	struct odbc_obj *obj;
 
@@ -1356,66 +1440,38 @@ static int store_file(char *dir, char *mailboxuser, char *mailboxcontext, int ms
 			goto yuck;
 		}
 		if (cfg) {
-			context = ast_variable_retrieve(cfg, "message", "context");
-			if (!context) context = "";
-			macrocontext = ast_variable_retrieve(cfg, "message", "macrocontext");
-			if (!macrocontext) macrocontext = "";
-			callerid = ast_variable_retrieve(cfg, "message", "callerid");
-			if (!callerid) callerid = "";
-			origtime = ast_variable_retrieve(cfg, "message", "origtime");
-			if (!origtime) origtime = "";
-			duration = ast_variable_retrieve(cfg, "message", "duration");
-			if (!duration) duration = "";
-			category = ast_variable_retrieve(cfg, "message", "category");
-			if (!category) category = "";
+			d.context = ast_variable_retrieve(cfg, "message", "context");
+			if (!d.context) d.context = "";
+			d.macrocontext = ast_variable_retrieve(cfg, "message", "macrocontext");
+			if (!d.macrocontext) d.macrocontext = "";
+			d.callerid = ast_variable_retrieve(cfg, "message", "callerid");
+			if (!d.callerid) d.callerid = "";
+			d.origtime = ast_variable_retrieve(cfg, "message", "origtime");
+			if (!d.origtime) d.origtime = "";
+			d.duration = ast_variable_retrieve(cfg, "message", "duration");
+			if (!d.duration) d.duration = "";
+			d.category = ast_variable_retrieve(cfg, "message", "category");
+			if (!d.category) d.category = "";
 		}
 		fdlen = lseek(fd, 0, SEEK_END);
 		lseek(fd, 0, SEEK_SET);
 		printf("Length is %zd\n", fdlen);
-		fdm = mmap(NULL, fdlen, PROT_READ | PROT_WRITE, MAP_SHARED,fd, 0);
+		fdm = mmap(NULL, fdlen, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_32BIT, fd, 0);
 		if (fdm == MAP_FAILED) {
 			ast_log(LOG_WARNING, "Memory map failed!\n");
 			ast_odbc_release_obj(obj);
 			goto yuck;
-		} 
-		res = SQLAllocHandle(SQL_HANDLE_STMT, obj->con, &stmt);
-		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-			ast_log(LOG_WARNING, "SQL Alloc Handle failed!\n");
-			ast_odbc_release_obj(obj);
-			goto yuck;
 		}
-		if (!ast_strlen_zero(category)) 
+		d.recording = fdm;
+		d.recordinglen = d.indlen = fdlen; /* SQL_LEN_DATA_AT_EXEC(fdlen); */
+		if (!ast_strlen_zero(d.category)) 
 			snprintf(sql, sizeof(sql), "INSERT INTO %s (dir,msgnum,recording,context,macrocontext,callerid,origtime,duration,mailboxuser,mailboxcontext,category) VALUES (?,?,?,?,?,?,?,?,?,?,?)",odbc_table); 
 		else
-			snprintf(sql, sizeof(sql), "INSERT INTO %s (dir,msgnum,recording,context,macrocontext,callerid,origtime,duration,mailboxuser,mailboxcontext) VALUES (?,?,?,?,?,?,?,?,?,?)",odbc_table);
-		res = SQLPrepare(stmt, (unsigned char *)sql, SQL_NTS);
-		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-			ast_log(LOG_WARNING, "SQL Prepare failed![%s]\n", sql);
-			SQLFreeHandle (SQL_HANDLE_STMT, stmt);
-			ast_odbc_release_obj(obj);
-			goto yuck;
+			snprintf(sql, sizeof(sql), "INSERT INTO %s (dir,msgnum,recording,context,macrocontext,callerid,origtime,duration,mailboxuser,mailboxcontext) VALUES (?,?, ? , ?,?,?,?,?,?,?)",odbc_table);
+		stmt = ast_odbc_prepare_and_execute(obj, insert_cb, &d);
+		if (stmt) {
+			SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 		}
-		len = fdlen; /* SQL_LEN_DATA_AT_EXEC(fdlen); */
-		SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(dir), 0, (void *)dir, 0, NULL);
-		SQLBindParameter(stmt, 2, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(msgnums), 0, (void *)msgnums, 0, NULL);
-		SQLBindParameter(stmt, 3, SQL_PARAM_INPUT, SQL_C_BINARY, SQL_LONGVARBINARY, fdlen, 0, (void *)fdm, fdlen, &len);
-		SQLBindParameter(stmt, 4, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(context), 0, (void *)context, 0, NULL);
-		SQLBindParameter(stmt, 5, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(macrocontext), 0, (void *)macrocontext, 0, NULL);
-		SQLBindParameter(stmt, 6, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(callerid), 0, (void *)callerid, 0, NULL);
-		SQLBindParameter(stmt, 7, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(origtime), 0, (void *)origtime, 0, NULL);
-		SQLBindParameter(stmt, 8, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(duration), 0, (void *)duration, 0, NULL);
-		SQLBindParameter(stmt, 9, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(mailboxuser), 0, (void *)mailboxuser, 0, NULL);
-		SQLBindParameter(stmt, 10, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(mailboxcontext), 0, (void *)mailboxcontext, 0, NULL);
-		if (!ast_strlen_zero(category))
-			SQLBindParameter(stmt, 11, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(category), 0, (void *)category, 0, NULL);
-		res = ast_odbc_smart_execute(obj, stmt);
-		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-			ast_log(LOG_WARNING, "SQL Execute error!\n[%s]\n\n", sql);
-			SQLFreeHandle (SQL_HANDLE_STMT, stmt);
-			ast_odbc_release_obj(obj);
-			goto yuck;
-		}
-		SQLFreeHandle (SQL_HANDLE_STMT, stmt);
 		ast_odbc_release_obj(obj);
 	} else
 		ast_log(LOG_WARNING, "Failed to obtain database object for '%s'!\n", odbc_database);
@@ -1529,11 +1585,11 @@ static int copy(char *infile, char *outfile)
 	if (link(infile, outfile)) {
 #endif
 		if ((ifd = open(infile, O_RDONLY)) < 0) {
-			ast_log(LOG_WARNING, "Unable to open %s in read-only mode\n", infile);
+			ast_log(LOG_WARNING, "Unable to open %s in read-only mode: %s\n", infile, strerror(errno));
 			return -1;
 		}
 		if ((ofd = open(outfile, O_WRONLY | O_TRUNC | O_CREAT, VOICEMAIL_FILE_MODE)) < 0) {
-			ast_log(LOG_WARNING, "Unable to open %s in write-only mode\n", outfile);
+			ast_log(LOG_WARNING, "Unable to open %s in write-only mode: %s\n", outfile, strerror(errno));
 			close(ifd);
 			return -1;
 		}
@@ -1791,6 +1847,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	char fname[256];
 	char dur[256];
 	char tmpcmd[256];
+	char enc_cidnum[256] = "", enc_cidname[256] = "";
 	struct tm tm;
 	char *passdata2;
 	size_t len_passdata;
@@ -1800,6 +1857,12 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 #define ENDL "\n"
 #endif
 
+	if (cidnum) {
+		strip_control(cidnum, enc_cidnum, sizeof(enc_cidnum));
+	}
+	if (cidname) {
+		strip_control(cidname, enc_cidname, sizeof(enc_cidname));
+	}
 	gethostname(host, sizeof(host) - 1);
 	if (strchr(srcemail, '@'))
 		ast_copy_string(who, srcemail, sizeof(who));
@@ -1820,7 +1883,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 			int vmlen = strlen(fromstring)*3 + 200;
 			if ((passdata = alloca(vmlen))) {
 				memset(passdata, 0, vmlen);
-				prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
+				prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, enc_cidnum, enc_cidname, dur, date, passdata, vmlen, category);
 				pbx_substitute_variables_helper(ast, fromstring, passdata, vmlen);
 				len_passdata = strlen(passdata) * 2 + 3;
 				passdata2 = alloca(len_passdata);
@@ -1845,18 +1908,21 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 				prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category);
 				pbx_substitute_variables_helper(ast, emailsubject, passdata, vmlen);
 				fprintf(p, "Subject: %s" ENDL, passdata);
-			} else
+			} else {
 				ast_log(LOG_WARNING, "Cannot allocate workspace for variable substitution\n");
+			}
 			ast_channel_free(ast);
-		} else
+		} else {
 			ast_log(LOG_WARNING, "Cannot allocate the channel for variables substitution\n");
+		}
 	} else	if (*emailtitle) {
 		fprintf(p, emailtitle, msgnum + 1, mailbox) ;
 		fprintf(p, ENDL) ;
-	} else if (ast_test_flag((&globalflags), VM_PBXSKIP))
+	} else if (ast_test_flag((&globalflags), VM_PBXSKIP)) {
 		fprintf(p, "Subject: New message %d in mailbox %s" ENDL, msgnum + 1, mailbox);
-	else
+	} else {
 		fprintf(p, "Subject: [PBX]: New message %d in mailbox %s" ENDL, msgnum + 1, mailbox);
+	}
 	fprintf(p, "Message-ID: <Asterisk-%d-%d-%s-%d@%s>" ENDL, msgnum + 1, (unsigned int)ast_random(), mailbox, (int)getpid(), host);
 	if (imap) {
 		/* additional information needed for IMAP searching */
@@ -1867,18 +1933,21 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 		fprintf(p, "X-Asterisk-VM-Extension: %s" ENDL, mailbox);
 		fprintf(p, "X-Asterisk-VM-Priority: %d" ENDL, chan->priority);
 		fprintf(p, "X-Asterisk-VM-Caller-channel: %s" ENDL, chan->name);
-		fprintf(p, "X-Asterisk-VM-Caller-ID-Num: %s" ENDL, cidnum);
-		fprintf(p, "X-Asterisk-VM-Caller-ID-Name: %s" ENDL, cidname);
+		fprintf(p, "X-Asterisk-VM-Caller-ID-Num: %s" ENDL, enc_cidnum);
+		fprintf(p, "X-Asterisk-VM-Caller-ID-Name: %s" ENDL, enc_cidname);
 		fprintf(p, "X-Asterisk-VM-Duration: %d" ENDL, duration);
-		if (!ast_strlen_zero(category))
+		if (!ast_strlen_zero(category)) {
 			fprintf(p, "X-Asterisk-VM-Category: %s" ENDL, category);
+		}
 		fprintf(p, "X-Asterisk-VM-Orig-date: %s" ENDL, date);
 		fprintf(p, "X-Asterisk-VM-Orig-time: %ld" ENDL, (long)time(NULL));
 	}
-	if (!ast_strlen_zero(cidnum))
-		fprintf(p, "X-Asterisk-CallerID: %s" ENDL, cidnum);
-	if (!ast_strlen_zero(cidname))
-		fprintf(p, "X-Asterisk-CallerIDName: %s" ENDL, cidname);
+	if (!ast_strlen_zero(cidnum)) {
+		fprintf(p, "X-Asterisk-CallerID: %s" ENDL, enc_cidnum);
+	}
+	if (!ast_strlen_zero(cidname)) {
+		fprintf(p, "X-Asterisk-CallerIDName: %s" ENDL, enc_cidname);
+	}
 	fprintf(p, "MIME-Version: 1.0" ENDL);
 	if (attach_user_voicemail) {
 		/* Something unique. */
@@ -4214,6 +4283,9 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 
 				/* get destination mailbox */
 				dstvms = get_vm_state_by_mailbox(vmtmp->mailbox,0);
+				if (!dstvms) {
+					dstvms = create_vm_state_from_user(vmtmp, vmtmp->mailbox);
+				}
 				if (dstvms) {
 					init_mailstream(dstvms, 0);
 					if (!dstvms->mailstream) {
@@ -7384,6 +7456,7 @@ static int load_config(void)
 	const char *auth_user;
 	const char *auth_password;
 	const char *expunge_on_hangup;
+	const char *imap_timeout;
 #endif
 	const char *astcallop;
 	const char *astreview;
@@ -7531,6 +7604,36 @@ static int load_config(void)
 		} else {
 			ast_copy_string(imapfolder,"INBOX", sizeof(imapfolder));
 		}
+
+		/* There is some very unorthodox casting done here. This is due
+		 * to the way c-client handles the argument passed in. It expects a 
+		 * void pointer and casts the pointer directly to a long without
+		 * first dereferencing it. */
+
+		if ((imap_timeout = ast_variable_retrieve(cfg, "general", "imapreadtimeout"))) {
+			mail_parameters(NIL, SET_READTIMEOUT, (void *) (atol(imap_timeout)));
+		} else {
+			mail_parameters(NIL, SET_READTIMEOUT, (void *) DEFAULT_IMAP_TCP_TIMEOUT);
+		}
+
+		if ((imap_timeout = ast_variable_retrieve(cfg, "general", "imapwritetimeout"))) {
+			mail_parameters(NIL, SET_WRITETIMEOUT, (void *) (atol(imap_timeout)));
+		} else {
+			mail_parameters(NIL, SET_WRITETIMEOUT, (void *) DEFAULT_IMAP_TCP_TIMEOUT);
+		}
+
+		if ((imap_timeout = ast_variable_retrieve(cfg, "general", "imapopentimeout"))) {
+			mail_parameters(NIL, SET_OPENTIMEOUT, (void *) (atol(imap_timeout)));
+		} else {
+			mail_parameters(NIL, SET_OPENTIMEOUT, (void *) DEFAULT_IMAP_TCP_TIMEOUT);
+		}
+
+		if ((imap_timeout = ast_variable_retrieve(cfg, "general", "imapclosetimeout"))) {
+			mail_parameters(NIL, SET_CLOSETIMEOUT, (void *) (atol(imap_timeout)));
+		} else {
+			mail_parameters(NIL, SET_CLOSETIMEOUT, (void *) DEFAULT_IMAP_TCP_TIMEOUT);
+		}
+
 #endif
 		/* External voicemail notify application */
 		
@@ -8883,6 +8986,27 @@ static char *get_user_by_mailbox(char *mailbox)
 		*eol_pnt = '\0';
 		return imaptemp+1;
 	}
+}
+
+static struct vm_state *create_vm_state_from_user(struct ast_vm_user *vmu, char *mailbox)
+{
+	struct vm_state *vms_p;
+
+	if (option_debug > 4)
+		ast_log(LOG_DEBUG,"Adding new vmstate for %s\n",vmu->imapuser);
+	if (!(vms_p = ast_calloc(1, sizeof(*vms_p))))
+		return NULL;
+	ast_copy_string(vms_p->imapuser,vmu->imapuser, sizeof(vms_p->imapuser));
+	ast_copy_string(vms_p->username, mailbox, sizeof(vms_p->username)); /* save for access from interactive entry point */
+	vms_p->mailstream = NIL; /* save for access from interactive entry point */
+	if (option_debug > 4)
+		ast_log(LOG_DEBUG,"Copied %s to %s\n",vmu->imapuser,vms_p->imapuser);
+	vms_p->updated = 1;
+	/* set mailbox to INBOX! */
+	ast_copy_string(vms_p->curbox, mbox(0), sizeof(vms_p->curbox));
+	init_vm_state(vms_p);
+	vmstate_insert(vms_p);
+	return vms_p;
 }
 
 static struct vm_state *get_vm_state_by_imapuser(char *user, int interactive)

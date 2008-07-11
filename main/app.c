@@ -64,7 +64,7 @@ of 'maxlen' or 'size' minus the original strlen() of collect digits.
 */
 int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, size_t size, int maxlen, int timeout) 
 {
-	struct tone_zone_sound *ts;
+	struct ind_tone_zone_sound *ts;
 	int res=0, x=0;
 
 	if (maxlen > size)
@@ -955,7 +955,7 @@ int ast_app_group_list_unlock(void)
 unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arraylen)
 {
 	int argc;
-	char *scan;
+	char *scan, *wasdelim = NULL;
 	int paren = 0, quote = 0;
 
 	if (!buf || !array || !arraylen)
@@ -982,14 +982,18 @@ unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arra
 				/* Literal character, don't parse */
 				memmove(scan, scan + 1, strlen(scan));
 			} else if ((*scan == delim) && !paren && !quote) {
+				wasdelim = scan;
 				*scan++ = '\0';
 				break;
 			}
 		}
 	}
 
-	if (*scan)
+	/* If the last character in the original string was the delimiter, then
+	 * there is one additional argument. */
+	if (*scan || (scan > buf && (scan - 1) == wasdelim)) {
 		array[argc++] = scan;
+	}
 
 	return argc;
 }
@@ -1385,6 +1389,18 @@ char *ast_read_textfile(const char *filename)
 	}
 	close(fd);
 	return output;
+}
+
+void ast_app_options2str(const struct ast_app_option *options, struct ast_flags *flags, char *buf, size_t len)
+{
+	unsigned int i, found = 0;
+
+	for (i = 32; i < 128 && found < len;i++) {
+		if (ast_test_flag(flags, options[i].flag)) {
+			buf[found++] = i;
+		}
+	}
+	buf[found] = '\0';
 }
 
 int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags *flags, char **args, char *optstr)

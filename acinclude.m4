@@ -42,7 +42,7 @@ AC_SUBST([$1_DIR])
 AC_SUBST([PBX_$1])
 ])
 
-# AST_EXT_LIB_CHECK([package symbol name], [package library name], [function to check], [package header], [additional LIB data])
+# AST_EXT_LIB_CHECK([package symbol name], [package library name], [function to check], [package header], [additional LIB data], [additional INCLUDE data])
 
 AC_DEFUN([AST_EXT_LIB_CHECK],
 [
@@ -63,17 +63,14 @@ if test "${USE_$1}" != "no"; then
       if test "x${$1_DIR}" != "x"; then
          $1_LIB="${pbxlibdir} ${$1_LIB}"
 	 $1_INCLUDE="-I${$1_DIR}/include"
-	 saved_cppflags="${CPPFLAGS}"
-	 CPPFLAGS="${CPPFLAGS} -I${$1_DIR}/include"
-	 if test "x$4" != "x" ; then
-	    AC_CHECK_HEADER([${$1_DIR}/include/$4], [$1_HEADER_FOUND=1], [$1_HEADER_FOUND=0])
-	 fi
-	 CPPFLAGS="${saved_cppflags}"
-      else
-	 if test "x$4" != "x" ; then
-            AC_CHECK_HEADER([$4], [$1_HEADER_FOUND=1], [$1_HEADER_FOUND=0])
-	 fi
       fi
+      $1_INCLUDE="${$1_INCLUDE} $6"
+      saved_cppflags="${CPPFLAGS}"
+      CPPFLAGS="${CPPFLAGS} ${$1_INCLUDE}"
+      if test "x$4" != "x" ; then
+         AC_CHECK_HEADER([$4], [$1_HEADER_FOUND=1], [$1_HEADER_FOUND=0])
+      fi
+      CPPFLAGS="${saved_cppflags}"
       if test "x${$1_HEADER_FOUND}" = "x0" ; then
          if test -n "${$1_MANDATORY}" ;
          then
@@ -99,6 +96,54 @@ if test "${USE_$1}" != "no"; then
       exit 1
    fi
 fi
+])
+
+# The next three functions check for the availability of a given package.
+# AST_C_DEFINE_CHECK looks for the presence of a #define in a header file,
+# AST_C_COMPILE_CHECK can be used for testing for various items in header files,
+# AST_EXT_LIB_CHECK looks for a symbol in a given library, or at least
+#   for the presence of a header file.
+# AST_EXT_TOOL_CHECK looks for a symbol in using $1-config to determine CFLAGS and LIBS
+#
+# They are only run if PBX_$1 != 1 (where $1 is the package),
+# so you can call them multiple times and stop at the first matching one.
+# On success, they both set PBX_$1 = 1, set $1_INCLUDE and $1_LIB as applicable,
+# and also #define HAVE_$1 1 and #define HAVE_$1_VERSION ${last_argument}
+# in autoconfig.h so you can tell which test succeeded.
+# They should be called after AST_EXT_LIB_SETUP($1, ...)
+
+# Check if a given macro is defined in a certain header.
+
+# AST_C_DEFINE_CHECK([package], [macro name], [header file], [version])
+AC_DEFUN([AST_C_DEFINE_CHECK],
+[
+    if test "x${PBX_$1}" != "x1"; then
+    AC_MSG_CHECKING([for $2 in $3])
+    saved_cppflags="${CPPFLAGS}"
+    if test "x${$1_DIR}" != "x"; then
+        $1_INCLUDE="-I${$1_DIR}/include"
+    fi
+    CPPFLAGS="${CPPFLAGS} ${$1_INCLUDE}"
+
+    AC_COMPILE_IFELSE(
+        [ AC_LANG_PROGRAM( [#include <$3>],
+                   [#if defined($2)
+                int foo = 0;
+                    #else
+                    int foo = bar;
+                    #endif
+                0
+                   ])],
+        [   AC_MSG_RESULT(yes)
+        PBX_$1=1
+        AC_DEFINE([HAVE_$1], 1, [Define if your system has the $1 headers.])
+        AC_DEFINE([HAVE_$1_VERSION], $4, [Define $1 headers version])
+        ],
+        [   AC_MSG_RESULT(no) ] 
+    )
+    CPPFLAGS="${saved_cppflags}"
+    fi
+    AC_SUBST(PBX_$1)
 ])
 
 # AST_C_COMPILE_CHECK can be used for testing for various items in header files

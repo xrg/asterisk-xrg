@@ -37,9 +37,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <unistd.h>
 #include <math.h>
 
-#ifdef HAVE_ZAPTEL
+#if defined(HAVE_ZAPTEL) || defined (HAVE_DAHDI)
 #include <sys/ioctl.h>
-#include <zaptel/zaptel.h>
+#include "asterisk/dahdi_compat.h"
 #endif
 
 #include "asterisk/pbx.h"
@@ -742,13 +742,19 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 	for (x = 0; x < AST_MAX_FDS - 2; x++)
 		tmp->fds[x] = -1;
 
+#ifdef HAVE_DAHDI
+
 #ifdef HAVE_ZAPTEL
 	tmp->timingfd = open("/dev/zap/timer", O_RDWR);
+#else
+	tmp->timingfd = open("/dev/dahdi/timer", O_RDWR);
+#endif
+
 	if (tmp->timingfd > -1) {
 		/* Check if timing interface supports new
 		   ping/pong scheme */
 		flags = 1;
-		if (!ioctl(tmp->timingfd, ZT_TIMERPONG, &flags))
+		if (!ioctl(tmp->timingfd, DAHDI_TIMERPONG, &flags))
 			needqueue = 0;
 	}
 #else
@@ -758,7 +764,8 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 	if (needqueue) {
 		if (pipe(tmp->alertpipe)) {
 			ast_log(LOG_WARNING, "Channel allocation failed: Can't create alert pipe!\n");
-#ifdef HAVE_ZAPTEL
+alertpipe_failed:
+#ifdef HAVE_DAHDI
 			if (tmp->timingfd > -1)
 				close(tmp->timingfd);
 #endif
@@ -768,9 +775,19 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 			return NULL;
 		} else {
 			flags = fcntl(tmp->alertpipe[0], F_GETFL);
-			fcntl(tmp->alertpipe[0], F_SETFL, flags | O_NONBLOCK);
+			if (fcntl(tmp->alertpipe[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+				ast_log(LOG_WARNING, "Channel allocation failed: Unable to set alertpipe nonblocking! (%d: %s)\n", errno, strerror(errno));
+				close(tmp->alertpipe[0]);
+				close(tmp->alertpipe[1]);
+				goto alertpipe_failed;
+			}
 			flags = fcntl(tmp->alertpipe[1], F_GETFL);
-			fcntl(tmp->alertpipe[1], F_SETFL, flags | O_NONBLOCK);
+			if (fcntl(tmp->alertpipe[1], F_SETFL, flags | O_NONBLOCK) < 0) {
+				ast_log(LOG_WARNING, "Channel allocation failed: Unable to set alertpipe nonblocking! (%d: %s)\n", errno, strerror(errno));
+				close(tmp->alertpipe[0]);
+				close(tmp->alertpipe[1]);
+				goto alertpipe_failed;
+			}
 		}
 	} else	/* Make sure we've got it done right if they don't */
 		tmp->alertpipe[0] = tmp->alertpipe[1] = -1;
@@ -912,7 +929,7 @@ int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
 	if (((fin->frametype == AST_FRAME_VOICE) && (qlen > 96)) || (qlen  > 128)) {
 		if (fin->frametype != AST_FRAME_VOICE) {
 			ast_log(LOG_WARNING, "Exceptionally long queue length queuing to %s\n", chan->name);
-			ast_assert(0);
+			ast_assert(fin->frametype == AST_FRAME_VOICE);
 		} else {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Dropping voice to exceptionally long queue on %s\n", chan->name);
@@ -926,9 +943,9 @@ int ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin)
 		if (write(chan->alertpipe[1], &blah, sizeof(blah)) != sizeof(blah))
 			ast_log(LOG_WARNING, "Unable to write to alert pipe on %s, frametype/subclass %d/%d (qlen = %d): %s!\n",
 				chan->name, f->frametype, f->subclass, qlen, strerror(errno));
-#ifdef HAVE_ZAPTEL
+#ifdef HAVE_DAHDI
 	} else if (chan->timingfd > -1) {
-		ioctl(chan->timingfd, ZT_TIMERPING, &blah);
+		ioctl(chan->timingfd, DAHDI_TIMERPING, &blah);
 #endif				
 	} else if (ast_test_flag(chan, AST_FLAG_BLOCKING)) {
 		pthread_kill(chan->blocker, SIGURG);
@@ -1417,7 +1434,6 @@ static void free_translation(struct ast_channel *clone)
 int ast_hangup(struct ast_channel *chan)
 {
 	int res = 0;
-	struct ast_cdr *cdr = NULL;
 
 	/* Don't actually hang up a channel that will masquerade as someone else, or
 	   if someone is going to masquerade as us */
@@ -1467,16 +1483,11 @@ int ast_hangup(struct ast_channel *chan)
 		chan->generator->release(chan, chan->generatordata);
 	chan->generatordata = NULL;
 	chan->generator = NULL;
-	if (chan->cdr) {		/* End the CDR if it hasn't already */
-		ast_cdr_end(chan->cdr);
-		cdr = chan->cdr;
-		chan->cdr = NULL;
-	}
 	if (ast_test_flag(chan, AST_FLAG_BLOCKING)) {
 		ast_log(LOG_WARNING, "Hard hangup called by thread %ld on %s, while fd "
 					"is blocked by thread %ld in procedure %s!  Expect a failure\n",
 					(long)pthread_self(), chan->name, (long)chan->blocker, chan->blockproc);
-		ast_assert(0);
+		ast_assert(ast_test_flag(chan, AST_FLAG_BLOCKING) == 0);
 	}
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE)) {
 		if (option_debug)
@@ -1499,10 +1510,13 @@ int ast_hangup(struct ast_channel *chan)
 			chan->hangupcause,
 			ast_cause2str(chan->hangupcause)
 			);
-	ast_channel_free(chan);
 
-	if (cdr)
-		ast_cdr_detach(cdr);
+	if (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_BRIDGED) && !ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED) && chan->cdr->disposition != AST_CDR_NULL) {
+		ast_cdr_end(chan->cdr);
+		ast_cdr_detach(chan->cdr);
+	}
+	
+	ast_channel_free(chan);
 
 	return res;
 }
@@ -1530,7 +1544,6 @@ int ast_answer(struct ast_channel *chan)
 		ast_cdr_answer(chan->cdr);
 		break;
 	case AST_STATE_UP:
-		ast_cdr_answer(chan->cdr);
 		break;
 	default:
 		break;
@@ -1794,7 +1807,7 @@ int ast_waitfordigit(struct ast_channel *c, int ms)
 int ast_settimeout(struct ast_channel *c, int samples, int (*func)(const void *data), void *data)
 {
 	int res = -1;
-#ifdef HAVE_ZAPTEL
+#ifdef HAVE_DAHDI
 	if (c->timingfd > -1) {
 		if (!func) {
 			samples = 0;
@@ -1802,7 +1815,7 @@ int ast_settimeout(struct ast_channel *c, int samples, int (*func)(const void *d
 		}
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Scheduling timer at %d sample intervals\n", samples);
-		res = ioctl(c->timingfd, ZT_TIMERCONFIG, &samples);
+		res = ioctl(c->timingfd, DAHDI_TIMERCONFIG, &samples);
 		c->timingfunc = func;
 		c->timingdata = data;
 	}
@@ -1994,29 +2007,41 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	
 	/* Read and ignore anything on the alertpipe, but read only
 	   one sizeof(blah) per frame that we send from it */
-	if (chan->alertpipe[0] > -1)
+	if (chan->alertpipe[0] > -1) {
+		int flags = fcntl(chan->alertpipe[0], F_GETFL);
+		/* For some odd reason, the alertpipe occasionally loses nonblocking status,
+		 * which immediately causes a deadlock scenario.  Detect and prevent this. */
+		if ((flags & O_NONBLOCK) == 0) {
+			ast_log(LOG_ERROR, "Alertpipe on channel %s lost O_NONBLOCK?!!\n", chan->name);
+			if (fcntl(chan->alertpipe[0], F_SETFL, flags | O_NONBLOCK) < 0) {
+				ast_log(LOG_WARNING, "Unable to set alertpipe nonblocking! (%d: %s)\n", errno, strerror(errno));
+				f = &ast_null_frame;
+				goto done;
+			}
+		}
 		read(chan->alertpipe[0], &blah, sizeof(blah));
+	}
 
-#ifdef HAVE_ZAPTEL
+#ifdef HAVE_DAHDI
 	if (chan->timingfd > -1 && chan->fdno == AST_TIMING_FD && ast_test_flag(chan, AST_FLAG_EXCEPTION)) {
 		int res;
 
 		ast_clear_flag(chan, AST_FLAG_EXCEPTION);
 		blah = -1;
 		/* IF we can't get event, assume it's an expired as-per the old interface */
-		res = ioctl(chan->timingfd, ZT_GETEVENT, &blah);
+		res = ioctl(chan->timingfd, DAHDI_GETEVENT, &blah);
 		if (res)
-			blah = ZT_EVENT_TIMER_EXPIRED;
+			blah = DAHDI_EVENT_TIMER_EXPIRED;
 
-		if (blah == ZT_EVENT_TIMER_PING) {
+		if (blah == DAHDI_EVENT_TIMER_PING) {
 			if (AST_LIST_EMPTY(&chan->readq) || !AST_LIST_NEXT(AST_LIST_FIRST(&chan->readq), frame_list)) {
 				/* Acknowledge PONG unless we need it again */
-				if (ioctl(chan->timingfd, ZT_TIMERPONG, &blah)) {
+				if (ioctl(chan->timingfd, DAHDI_TIMERPONG, &blah)) {
 					ast_log(LOG_WARNING, "Failed to pong timer on '%s': %s\n", chan->name, strerror(errno));
 				}
 			}
-		} else if (blah == ZT_EVENT_TIMER_EXPIRED) {
-			ioctl(chan->timingfd, ZT_TIMERACK, &blah);
+		} else if (blah == DAHDI_EVENT_TIMER_EXPIRED) {
+			ioctl(chan->timingfd, DAHDI_TIMERACK, &blah);
 			if (chan->timingfunc) {
 				/* save a copy of func/data before unlocking the channel */
 				int (*func)(const void *) = chan->timingfunc;
@@ -2025,7 +2050,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				func(data);
 			} else {
 				blah = 0;
-				ioctl(chan->timingfd, ZT_TIMERCONFIG, &blah);
+				ioctl(chan->timingfd, DAHDI_TIMERCONFIG, &blah);
 				chan->timingdata = NULL;
 				ast_channel_unlock(chan);
 			}
@@ -2100,15 +2125,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 				} else {
 					/* Answer the CDR */
 					ast_setstate(chan, AST_STATE_UP);
-					if (!chan->cdr) { /* up till now, this insertion hasn't been done. Therefore,
-										 to keep from throwing off the basic order of the universe,
-										 we will try to keep this cdr from getting posted. */
-						chan->cdr = ast_cdr_alloc();
-						ast_cdr_init(chan->cdr, chan);
-						ast_cdr_start(chan->cdr);
-					}
-					
-					ast_cdr_answer(chan->cdr);
+					/* removed a call to ast_cdr_answer(chan->cdr) from here. */
 				}
 			}
 			break;
@@ -2168,7 +2185,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					ast_log(LOG_DTMF, "DTMF end accepted without begin '%c' on %s\n", f->subclass, chan->name);
 					f->len = AST_MIN_DTMF_DURATION;
 				}
-				if (f->len < AST_MIN_DTMF_DURATION) {
+				if (f->len < AST_MIN_DTMF_DURATION && !ast_test_flag(chan, AST_FLAG_END_DTMF_ONLY)) {
 					ast_log(LOG_DTMF, "DTMF end '%c' has duration %ld but want minimum %d, emulating on %s\n", f->subclass, f->len, AST_MIN_DTMF_DURATION, chan->name);
 					ast_set_flag(chan, AST_FLAG_EMULATE_DTMF);
 					chan->emulate_dtmf_digit = f->subclass;
@@ -2177,6 +2194,9 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					f = &ast_null_frame;
 				} else {
 					ast_log(LOG_DTMF, "DTMF end passthrough '%c' on %s\n", f->subclass, chan->name);
+					if (f->len < AST_MIN_DTMF_DURATION) {
+						f->len = AST_MIN_DTMF_DURATION;
+					}
 					chan->dtmf_tv = now;
 				}
 				if (chan->audiohooks) {
@@ -2265,10 +2285,10 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					f = &ast_null_frame;
 				}
 			} else if ((f->frametype == AST_FRAME_VOICE) && !(f->subclass & chan->nativeformats)) {
-				/* This frame can't be from the current native formats -- drop it on the
-				   floor */
+				/* This frame is not one of the current native formats -- drop it on the floor */
+				char to[200];
 				ast_log(LOG_NOTICE, "Dropping incompatible voice frame on %s of format %s since our native format has changed to %s\n",
-					chan->name, ast_getformatname(f->subclass), ast_getformatname(chan->nativeformats));
+					chan->name, ast_getformatname(f->subclass), ast_getformatname_multiple(to, sizeof(to), chan->nativeformats));
 				ast_frfree(f);
 				f = &ast_null_frame;
 			} else if ((f->frametype == AST_FRAME_VOICE)) {
@@ -2320,9 +2340,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		chan->_softhangup |= AST_SOFTHANGUP_DEV;
 		if (chan->generator)
 			ast_deactivate_generator(chan);
-		/* End the CDR if appropriate */
-		if (chan->cdr)
-			ast_cdr_end(chan->cdr);
+		/* We no longer End the CDR here */
 	}
 
 	/* High bit prints debugging */
@@ -2379,7 +2397,7 @@ int ast_indicate_data(struct ast_channel *chan, int condition, const void *data,
 		if (condition < 0)
 			ast_playtones_stop(chan);
 		else {
-			const struct tone_zone_sound *ts = NULL;
+			const struct ind_tone_zone_sound *ts = NULL;
 			switch (condition) {
 			case AST_CONTROL_RINGING:
 				ts = ast_get_indication_tone(chan->zone, "ring");
@@ -2762,6 +2780,7 @@ static int set_format(struct ast_channel *chan, int fmt, int *rawformat, int *fo
 {
 	int native;
 	int res;
+	char from[200], to[200];
 	
 	/* Make sure we only consider audio */
 	fmt &= AST_FORMAT_AUDIO_MASK;
@@ -2777,7 +2796,8 @@ static int set_format(struct ast_channel *chan, int fmt, int *rawformat, int *fo
 
 	if (res < 0) {
 		ast_log(LOG_WARNING, "Unable to find a codec translation path from %s to %s\n",
-			ast_getformatname(native), ast_getformatname(fmt));
+			ast_getformatname_multiple(from, sizeof(from), native),
+			ast_getformatname_multiple(to, sizeof(to), fmt));
 		return -1;
 	}
 	
@@ -2882,15 +2902,6 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, void *d
 	}
 	ast_set_callerid(chan, cid_num, cid_name, cid_num);
 
-	
-
-	if (!chan->cdr) { /* up till now, this insertion hasn't been done. Therefore,
-				to keep from throwing off the basic order of the universe,
-				we will try to keep this cdr from getting posted. */
-		chan->cdr = ast_cdr_alloc();
-		ast_cdr_init(chan->cdr, chan);
-		ast_cdr_start(chan->cdr);
-	}
 	if (ast_call(chan, data, 0)) {	/* ast_call failed... */
 		ast_log(LOG_NOTICE, "Unable to call channel %s/%s\n", type, (char *)data);
 	} else {
@@ -2996,6 +3007,11 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 	if (AST_LIST_LOCK(&channels)) {
 		ast_log(LOG_WARNING, "Unable to lock channel list\n");
 		return NULL;
+	}
+
+	if (!strcasecmp(type, "Zap")) {
+		type = "DAHDI";
+		ast_log(LOG_NOTICE, "Zap interface translated to DAHDI.\n");
 	}
 
 	AST_LIST_TRAVERSE(&backends, chan, list) {
@@ -3639,8 +3655,6 @@ void ast_set_callerid(struct ast_channel *chan, const char *callerid, const char
 			free(chan->cid.cid_ani);
 		chan->cid.cid_ani = ast_strdup(ani);
 	}
-	if (chan->cdr)
-		ast_cdr_setcid(chan->cdr, chan);
 	manager_event(EVENT_FLAG_CALL, "Newcallerid",
 				"Channel: %s\r\n"
 				"CallerID: %s\r\n"
@@ -4111,6 +4125,12 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			o0nativeformats = c0->nativeformats;
 			o1nativeformats = c1->nativeformats;
 		}
+
+		if (!ast_strlen_zero(pbx_builtin_getvar_helper(c0, "BRIDGEPEER")))
+			pbx_builtin_setvar_helper(c0, "BRIDGEPEER", c1->name);
+		if (!ast_strlen_zero(pbx_builtin_getvar_helper(c1, "BRIDGEPEER")))
+			pbx_builtin_setvar_helper(c1, "BRIDGEPEER", c0->name);
+
 		res = ast_generic_bridge(c0, c1, config, fo, rc, nexteventts);
 		if (res != AST_BRIDGE_RETRY)
 			break;

@@ -2371,17 +2371,6 @@ static int __ast_pbx_run(struct ast_channel *c)
 	}
 	if (!(c->pbx = ast_calloc(1, sizeof(*c->pbx))))
 		return -1;
-	if (c->amaflags) {
-		if (!c->cdr) {
-			c->cdr = ast_cdr_alloc();
-			if (!c->cdr) {
-				ast_log(LOG_WARNING, "Unable to create Call Detail Record\n");
-				free(c->pbx);
-				return -1;
-			}
-			ast_cdr_init(c->cdr, c);
-		}
-	}
 	/* Set reasonable defaults */
 	c->pbx->rtimeout = 10;
 	c->pbx->dtimeout = 5;
@@ -2406,8 +2395,6 @@ static int __ast_pbx_run(struct ast_channel *c)
 			ast_copy_string(c->context, "default", sizeof(c->context));
 		}
 	}
-	if (c->cdr && ast_tvzero(c->cdr->start))
-		ast_cdr_start(c->cdr);
 	for (;;) {
 		char dst_exten[256];	/* buffer to accumulate digits */
 		int pos = 0;		/* XXX should check bounds */
@@ -2553,8 +2540,6 @@ static int __ast_pbx_run(struct ast_channel *c)
 	if (res != AST_PBX_KEEPALIVE)
 		ast_softhangup(c, c->hangupcause ? c->hangupcause : AST_CAUSE_NORMAL_CLEARING);
 	if ((res != AST_PBX_KEEPALIVE) && ast_exists_extension(c, c->context, "h", 1, c->cid.cid_num)) {
-		if (c->cdr && ast_opt_end_cdr_before_h_exten)
-			ast_cdr_end(c->cdr);
 		set_ext_pri(c, "h", 1);
 		while(ast_exists_extension(c, c->context, c->exten, c->priority, c->cid.cid_num)) {
 			if ((res = ast_spawn_extension(c, c->context, c->exten, c->priority, c->cid.cid_num))) {
@@ -2820,11 +2805,16 @@ int ast_context_remove_switch2(struct ast_context *con, const char *sw, const ch
  */
 int ast_context_remove_extension(const char *context, const char *extension, int priority, const char *registrar)
 {
+	return ast_context_remove_extension_callerid(context, extension, priority, NULL, 0, registrar);
+}
+
+int ast_context_remove_extension_callerid(const char *context, const char *extension, int priority, const char *callerid, int matchcid, const char *registrar)
+{
 	int ret = -1; /* default error return */
 	struct ast_context *c = find_context_locked(context);
 
 	if (c) { /* ... remove extension ... */
-		ret = ast_context_remove_extension2(c, extension, priority, registrar);
+		ret = ast_context_remove_extension_callerid2(c, extension, priority, callerid, matchcid, registrar);
 		ast_unlock_contexts();
 	}
 	return ret;
@@ -2842,12 +2832,20 @@ int ast_context_remove_extension(const char *context, const char *extension, int
  */
 int ast_context_remove_extension2(struct ast_context *con, const char *extension, int priority, const char *registrar)
 {
+	return ast_context_remove_extension_callerid2(con, extension, priority, NULL, 0, registrar);
+}
+
+int ast_context_remove_extension_callerid2(struct ast_context *con, const char *extension, int priority, const char *callerid, int matchcid, const char *registrar)
+{
 	struct ast_exten *exten, *prev_exten = NULL;
 	struct ast_exten *peer;
+	struct ast_exten *previous_peer = NULL;
+	struct ast_exten *next_peer = NULL;
+	int found = 0;
 
 	ast_mutex_lock(&con->lock);
 
-	/* scan the extension list to find matching extension-registrar */
+	/* scan the extension list to find first matching extension-registrar */
 	for (exten = con->root; exten; prev_exten = exten, exten = exten->next) {
 		if (!strcmp(exten->exten, extension) &&
 			(!registrar || !strcmp(exten->registrar, registrar)))
@@ -2859,56 +2857,43 @@ int ast_context_remove_extension2(struct ast_context *con, const char *extension
 		return -1;
 	}
 
-	/* should we free all peers in this extension? (priority == 0)? */
-	if (priority == 0) {
-		/* remove this extension from context list */
-		if (prev_exten)
-			prev_exten->next = exten->next;
-		else
-			con->root = exten->next;
+	/* scan the priority list to remove extension with exten->priority == priority */
+	for (peer = exten, next_peer = exten->peer ? exten->peer : exten->next;
+			peer && !strcmp(peer->exten, extension);
+			peer = next_peer, next_peer = next_peer ? (next_peer->peer ? next_peer->peer : next_peer->next) : NULL) {
+		if ((priority == 0 || peer->priority == priority) &&
+				(!callerid || !matchcid || (matchcid && !strcmp(peer->cidmatch, callerid))) &&
+				(!registrar || !strcmp(peer->registrar, registrar) )) {
+			found = 1;
 
-		/* fire out all peers */
-		while ( (peer = exten) ) {
-			exten = peer->peer; /* prepare for next entry */
+			/* we are first priority extension? */
+			if (!previous_peer) {
+				/*
+				 * We are first in the priority chain, so must update the extension chain.
+				 * The next node is either the next priority or the next extension
+				 */
+				struct ast_exten *next_node = peer->peer ? peer->peer : peer->next;
+
+				if (!prev_exten) {	/* change the root... */
+					con->root = next_node;
+				} else {
+					prev_exten->next = next_node; /* unlink */
+				}
+				if (peer->peer)	{ /* update the new head of the pri list */
+					peer->peer->next = peer->next;
+				}
+			} else { /* easy, we are not first priority in extension */
+				previous_peer->peer = peer->peer;
+			}
+
+			/* now, free whole priority extension */
 			destroy_exten(peer);
+		} else {
+			previous_peer = peer;
 		}
-	} else {
-		/* scan the priority list to remove extension with exten->priority == priority */
-		struct ast_exten *previous_peer = NULL;
-
-		for (peer = exten; peer; previous_peer = peer, peer = peer->peer) {
-			if (peer->priority == priority &&
-					(!registrar || !strcmp(peer->registrar, registrar) ))
-				break; /* found our priority */
-		}
-		if (!peer) { /* not found */
-			ast_mutex_unlock(&con->lock);
-			return -1;
-		}
-		/* we are first priority extension? */
-		if (!previous_peer) {
-			/*
-			 * We are first in the priority chain, so must update the extension chain.
-			 * The next node is either the next priority or the next extension
-			 */
-			struct ast_exten *next_node = peer->peer ? peer->peer : peer->next;
-
-			if (!prev_exten)	/* change the root... */
-				con->root = next_node;
-			else
-				prev_exten->next = next_node; /* unlink */
-			if (peer->peer)	/* XXX update the new head of the pri list */
-				peer->peer->next = peer->next;
-		} else { /* easy, we are not first priority in extension */
-			previous_peer->peer = peer->peer;
-		}
-
-		/* now, free whole priority extension */
-		destroy_exten(peer);
-		/* XXX should we return -1 ? */
 	}
 	ast_mutex_unlock(&con->lock);
-	return 0;
+	return found ? 0 : -1;
 }
 
 
@@ -5179,18 +5164,6 @@ int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, 
 	if (sync) {
 		chan = __ast_request_and_dial(type, format, data, timeout, reason, cid_num, cid_name, &oh);
 		if (chan) {
-			if (!chan->cdr) { /* check if the channel already has a cdr record, if not give it one */
-				chan->cdr = ast_cdr_alloc();   /* allocate a cdr for the channel */
-				if(!chan->cdr) {
-					/* allocation of the cdr failed */
-					free(chan->pbx);
-					res = -1;
-					goto outgoing_app_cleanup;
-				}
-				/* allocation of the cdr was successful */
-				ast_cdr_init(chan->cdr, chan);  /* initilize our channel's cdr */
-				ast_cdr_start(chan->cdr);
-			}
 			ast_set_variables(chan, vars);
 			if (account)
 				ast_cdr_setaccount(chan, account);
@@ -6326,7 +6299,7 @@ int ast_context_verify_includes(struct ast_context *con)
 			continue;
 
 		res = -1;
-		ast_log(LOG_WARNING, "Context '%s' tries includes nonexistent context '%s'\n",
+		ast_log(LOG_WARNING, "Context '%s' tries to include nonexistent context '%s'\n",
 			ast_get_context_name(con), inc->rname);
 		break;
 	}
@@ -6409,7 +6382,6 @@ int ast_parseable_goto(struct ast_channel *chan, const char *goto_string)
 		ipri = chan->priority + (ipri * mode);
 
 	ast_explicit_goto(chan, context, exten, ipri);
-	ast_cdr_update(chan);
 	return 0;
 
 }

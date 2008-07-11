@@ -186,13 +186,15 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 	while (other && ast_channel_trylock(other)) {
 		ast_mutex_unlock(&p->lock);
 		if (us && us_locked) {
-			ast_channel_unlock(us);
+			do {
+				ast_channel_unlock(us);
+				usleep(1);
+				ast_channel_lock(us);
+			} while (ast_mutex_trylock(&p->lock));
+		} else {
+			usleep(1);
+			ast_mutex_lock(&p->lock);
 		}
-		usleep(1);
-		if (us && us_locked) {
-			ast_channel_lock(us);
-		}
-		ast_mutex_lock(&p->lock);
 		other = isoutbound ? p->owner : p->chan;
 	}
 
@@ -510,7 +512,12 @@ static int local_hangup(struct ast_channel *ast)
 	if (!p)
 		return -1;
 
-	ast_mutex_lock(&p->lock);
+	while (ast_mutex_trylock(&p->lock)) {
+		ast_channel_unlock(ast);
+		usleep(1);
+		ast_channel_lock(ast);
+	}
+
 	isoutbound = IS_OUTBOUND(ast, p);
 	if (isoutbound) {
 		const char *status = pbx_builtin_getvar_helper(p->chan, "DIALSTATUS");
@@ -538,6 +545,9 @@ static int local_hangup(struct ast_channel *ast)
 	} else {
 		p->owner = NULL;
 		ast_module_user_remove(p->u_owner);
+		if (p->chan) {
+			ast_queue_hangup(p->chan);
+		}
 	}
 	
 	ast->tech_pvt = NULL;
@@ -756,7 +766,6 @@ static int unload_module(void)
 				ast_softhangup(p->owner, AST_SOFTHANGUP_APPUNLOAD);
 		}
 		AST_LIST_UNLOCK(&locals);
-		AST_LIST_HEAD_DESTROY(&locals);
 	} else {
 		ast_log(LOG_WARNING, "Unable to lock the monitor\n");
 		return -1;
