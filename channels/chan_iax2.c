@@ -10118,9 +10118,8 @@ static void *network_thread(void *ignore)
 
 		/* Go through the queue, sending messages which have not yet been
 		   sent, and scheduling retransmissions if appropriate */
+		AST_LIST_LOCK(&frame_queue);
 		count = 0;
-		wakeup = 2;
-		if (AST_LIST_TRYLOCK(&frame_queue) ==0){
 		wakeup = -1;
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&frame_queue, f, list) {
 			if (f->sentyet)
@@ -10154,7 +10153,6 @@ static void *network_thread(void *ignore)
 		}
 		AST_LIST_TRAVERSE_SAFE_END;
 		AST_LIST_UNLOCK(&frame_queue);
-		}
 
 		pthread_testcancel();
 		if (count >= 20)
