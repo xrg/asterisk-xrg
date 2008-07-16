@@ -22,3 +22,5 @@ autom4te.cache
 .*.moduleinfo
 .makeopts
 .moduleinfo
+.version
+main/db1-ast/libdb1.a
