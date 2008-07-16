@@ -39,7 +39,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
 #include <string.h>
 #include <math.h>
 
-#include "asterisk/plc.h"
+#include <spandsp/plc.h>
 
 #if !defined(FALSE)
 #define FALSE 0

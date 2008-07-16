@@ -32,12 +32,13 @@ extern "C" {
 
 #if 1	/* need lots of stuff... */
 #include "asterisk/frame.h"
-#include "asterisk/plc.h"
+// #include <spandsp/plc.h>  // we'd better not include this here
 #include "asterisk/linkedlists.h"
 // XXX #include "asterisk/module.h"
 #endif
 
 struct ast_trans_pvt;	/* declared below */
+struct plc_state_t;
 
 /*! \brief
  * Descriptor of a translator. Name, callbacks, and various options
@@ -145,7 +146,7 @@ struct ast_trans_pvt {
 	int datalen;
 	void *pvt;		/*!< more private data, if any */
 	char *outbuf;		/*!< the useful portion of the buffer */
-	plc_state_t *plc;	/*!< optional plc pointer */
+	struct plc_state_t *plc;	/*!< optional plc pointer */
 	struct ast_trans_pvt *next;	/*!< next in translator chain */
 	struct timeval nextin;
 	struct timeval nextout;
