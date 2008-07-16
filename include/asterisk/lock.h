@@ -213,9 +213,9 @@ int ast_find_lock_info(void *lock_addr, char *filename, size_t filename_size, in
 
 #define DEADLOCK_AVOIDANCE2(lock,tmout) \
 	do { \
-		const char *__filename, *__func, *__mutex_name; \
+		char __filename[80], __func[80], __mutex_name[80]; \
 		int __lineno; \
-		int __res = ast_find_lock_info(lock, &__filename, &__lineno, &__func, &__mutex_name); \
+		int __res = ast_find_lock_info(lock, __filename, sizeof(__filename), &__lineno, __func, sizeof(__func), __mutex_name, sizeof(__mutex_name)); \
 		ast_mutex_unlock(lock); \
 		usleep(tmout); \
 		if (__res < 0) { /* Shouldn't ever happen, but just in case... */ \
