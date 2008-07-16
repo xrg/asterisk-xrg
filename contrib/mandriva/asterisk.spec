@@ -58,9 +58,6 @@ Source0:	%{name}-%{version}.tar.gz
 Source1:	asterisk.init
 Source2:	asterisk.sysconfig
 Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
-Source4:	asterisk.menuselect.makeopts
-Source5:	http://www.ietf.org/rfc/rfc3951.txt
-Source6:	http://www.ilbcfreeware.org/documentation/extract-cfile.awk
 Provides:	asterisk
 Obsoletes:	asterisk
 Requires(pre): rpm-helper
@@ -327,22 +324,10 @@ for i in `find . -type d -name CVS` `find . -type f -name .cvs\*` `find . -type 
     if [ -e "$i" ]; then rm -rf $i; fi >&/dev/null
 done
 
-#%if %{build_h323}
-#%patch50 -p1 -b .no-h323
-#%patch51 -p1
-#%endif
-
 cat %{SOURCE1} > asterisk.init
 cat %{SOURCE2} > asterisk.sysconfig
 
-#cat %{SOURCE4} > menuselect.makeopts
-
-# Generate the ilbc code
-#pushd codecs/ilbc
-#    cat %{SOURCE5} > rfc3951.txt
-#    cat %{SOURCE6} > extract-cfile.awk
-#    awk -f extract-cfile.awk rfc3951.txt >extract-cfile.log
-#popd
+cp contrib/mandriva/menuselect.makeopts ./
 
 # lib64 fix
 find -name "Makefile" | xargs perl -pi -e "s|/usr/lib|%{_libdir}|g"
