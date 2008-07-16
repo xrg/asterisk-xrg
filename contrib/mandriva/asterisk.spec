@@ -599,8 +599,8 @@ fi
 %attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/keys
 %attr(0644,root,root)					%{_localstatedir}/asterisk/keys/*.pub
 %attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/moh
-%attr(0644,root,root)					%{_localstatedir}/asterisk/moh/*.wav
-%doc							%{_localstatedir}/asterisk/moh/LICENSE-asterisk-moh-freeplay-wav
+# %attr(0644,root,root)					%{_localstatedir}/asterisk/moh/*.wav
+# %doc							%{_localstatedir}/asterisk/moh/LICENSE-asterisk-moh-freeplay-wav
 #attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/mohmp3
 #attr(0644,root,root)					%{_localstatedir}/asterisk/mohmp3/*.mp3
 %attr(0755,root,root)		%dir			%{_localstatedir}/asterisk/static-http
@@ -632,8 +632,8 @@ fi
 %attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/default
 %attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/default/1234
 #attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/default/1234/INBOX
-%attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/busy.gsm
-%attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/unavail.gsm
+#attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/busy.gsm
+#attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/unavail.gsm
 #attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/voicemail
 
 							%{_mandir}/man8/asterisk.8*
