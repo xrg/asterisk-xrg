@@ -53,14 +53,13 @@ Source0:	asterisk-%{version}.tar.gz
 Source1:	asterisk.init
 Source2:	asterisk.sysconfig
 Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
-Source4:	menuselect.tar.gz
-Source5:	mxml.tar.gz
 Requires(pre): rpm-helper
 Requires(postun): rpm-helper
 Requires(post): rpm-helper
 Requires(preun): rpm-helper
 Requires:	mpg123
 Requires:	asterisk-core-sounds
+BuildRequires:	ast_menuselect
 BuildRequires:	libtool
 BuildRequires:	autoconf >= 1:2.60
 BuildRequires:	automake1.9 >= 1.9.6
@@ -293,8 +292,6 @@ DO NOT INSTALL THIS PACKAGE!
 %prep
 %git_get_source
 %setup -q -a3
-%setup -q -D -T -a4
-%setup -q -D -T -a5
 
 find . -type d -perm 0700 -exec chmod 755 {} \;
 find . -type d -perm 0555 -exec chmod 755 {} \;
