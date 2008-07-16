@@ -766,7 +766,7 @@ fi
 %attr(0644,root,root)					/var/www/html/_asterisk/play.gif
 
 %files tests
-# %attr(0755,root,root)					%{_libdir}/asterisk/modules/test_dlinklists.so
+%attr(0755,root,root)					%{_libdir}/asterisk/modules/test_dlinklists.so
 %attr(0755,root,root)                                   %{_sbindir}/refcounter
 
 %changelog
