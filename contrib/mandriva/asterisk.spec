@@ -1,9 +1,9 @@
 %define git_repo asterisk
-%define git_head xrg14
+%define git_head xrg14-dbg
 
 %define version %{git_get_ver}
 %define distsuffix xrg
-%define release %{git_get_rel}
+%define release %{git_get_rel}d
 
 %define _requires_exceptions perl(Carp::Heavy)
 
@@ -154,8 +154,8 @@ The Hitchhiker's Guide to Asterisk
 %package	plugins-fax
 Summary:	FAX plugins for Asterisk
 Group:		System/Servers
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 
 %description	plugins-fax
 This package contains FAX plugins for Asterisk:
@@ -170,8 +170,8 @@ Summary:	ODBC plugins for Asterisk
 Group:		System/Servers
 BuildRequires:	libunixODBC-devel
 BuildRequires:	libtool-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 
 %description	plugins-odbc
 This package contains ODBC plugins for Asterisk:
@@ -186,8 +186,8 @@ Summary:	PostgreSQL plugins for Asterisk
 Group:		System/Servers
 BuildRequires:	postgresql-devel
 BuildRequires:	zlib-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 
 %description	plugins-pgsql
 This package contains PostgreSQL plugins for Asterisk:
@@ -200,8 +200,8 @@ This package contains PostgreSQL plugins for Asterisk:
 Summary:	Radiusclient plugins for Asterisk
 Group:		System/Servers
 BuildRequires:	radiusclient-ng-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 
 %description	plugins-radius
 This package contains Radiusclient plugins for Asterisk:
@@ -212,8 +212,8 @@ This package contains Radiusclient plugins for Asterisk:
 %package	plugins-sqlite
 Summary:	SQLite plugins for Asterisk
 Group:		System/Servers
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 
 %description	plugins-sqlite
 This package contains SQLite plugins for Asterisk:
@@ -224,8 +224,8 @@ This package contains SQLite plugins for Asterisk:
 %package	plugins-tds
 Summary:	FreeTDS plugins for Asterisk
 Group:		System/Servers
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 BuildRequires:	freetds_mssql-devel >= 0.64
 
 %description	plugins-tds
@@ -238,8 +238,8 @@ This package contains FreeTDS plugins for Asterisk:
 Summary:	Open Settlement Protocol for Asterisk
 Group:		System/Servers
 BuildRequires:	libosp-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 
 %description	plugins-osp
 This package contains OSP (Open Settlement Protocol) support for Asterisk
@@ -251,8 +251,8 @@ Requires:	net-snmp
 BuildRequires:	libnet-snmp-devel
 BuildRequires:	tcp_wrappers-devel
 BuildRequires:	openssl-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 
 %description	plugins-snmp
 This package contains brief SNMP Agent / SubAgent support for Asterisk.
@@ -265,8 +265,8 @@ BuildRequires:	libgnutls-devel
 BuildRequires:	libgpg-error-devel
 BuildRequires:	libiksemel-devel
 BuildRequires:	zlib-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires(post): %{name} = %{version}-%{release}
+Requires(preun): %{name} = %{version}-%{release}
 
 %description	plugins-jabber
 This package contains Jabber support for Asterisk.
