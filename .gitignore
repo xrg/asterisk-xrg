@@ -1,3 +1,7 @@
+*.o
+*~
+.*.o.d
+*.so
 agi/eagi-sphinx-test
 agi/eagi-test
 agi/strcompat.c
