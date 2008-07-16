@@ -4,7 +4,7 @@ agi/strcompat.c
 main/asterisk
 makeopts
 menuselect.makedeps
-menuselect.makeopts
+/menuselect.makeopts
 makeopts.embed_rules
 menuselect-tree
 config.log
@@ -14,3 +14,7 @@ defaults.h
 build_tools/menuselect-deps
 aclocal.m4
 autom4te.cache
+.*.makeopts
+.*.moduleinfo
+.makeopts
+.moduleinfo
