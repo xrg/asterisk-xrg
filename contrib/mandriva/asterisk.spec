@@ -58,9 +58,6 @@ Source0:	%{name}-%{version}.tar.gz
 Source1:	asterisk.init
 Source2:	asterisk.sysconfig
 Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
-Source4:	asterisk.menuselect.makeopts
-Source5:	http://www.ietf.org/rfc/rfc3951.txt
-Source6:	http://www.ilbcfreeware.org/documentation/extract-cfile.awk
 Provides:	asterisk
 Obsoletes:	asterisk
 Requires(pre): rpm-helper
@@ -69,6 +66,7 @@ Requires(post): rpm-helper
 Requires(preun): rpm-helper
 Requires:	mpg123
 Requires:	asterisk-core-sounds
+BuildRequires:	ast_menuselect
 BuildRequires:	libtool
 BuildRequires:	autoconf >= 1:2.60
 BuildRequires:	automake1.9 >= 1.9.6
