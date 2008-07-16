@@ -7,7 +7,7 @@
 
 %define _requires_exceptions perl(Carp::Heavy)
 
-%define build_h323	1
+%define build_h323	0
 %{?_without_h323:	%global build_h323 0}
 %{?_with_h323:		%global build_h323 1}
 
