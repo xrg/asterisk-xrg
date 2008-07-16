@@ -1,3 +1,6 @@
+%define git_repo asterisk
+%define git_head xrg14
+
 %define version %{git_get_ver}
 %define distsuffix xrg
 %define release %{git_get_rel}
@@ -46,13 +49,12 @@ License:	GPL
 Group:		System/Servers
 URL:		http://www.asterisk.org/
 #Source0:	http://www.asterisk.org/html/downloads/%{name}-%{version}.tar.bz2
-Source0:	asterisk-%{version}.tar.bz2
+Source0:	asterisk-%{version}.tar.gz
 Source1:	asterisk.init
 Source2:	asterisk.sysconfig
 Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
 Source4:	menuselect.tar.gz
 Source5:	mxml.tar.gz
-Patch50:	asterisk-1.4.x-No-h323-stop.diff
 Requires(pre): rpm-helper
 Requires(postun): rpm-helper
 Requires(post): rpm-helper
@@ -72,7 +74,7 @@ BuildRequires:	libilbc-devel
 BuildRequires:	libnbs-devel
 BuildRequires:	libncurses-devel
 BuildRequires:	libpri-devel >= 1.4.0
-BuildRequires:	libspandsp-devel
+BuildRequires:	spandsp-devel
 BuildRequires:	libspeex-devel
 BuildRequires:	libvorbis-devel
 BuildRequires:	libtermcap-devel
@@ -303,9 +305,7 @@ for i in `find . -type d -name CVS` `find . -type f -name .cvs\*` `find . -type 
     if [ -e "$i" ]; then rm -rf $i; fi >&/dev/null
 done
 
-%if %{build_h323}
-%patch50 -p1 -b .no-h323
-%endif
+cp contrib/mandriva/menuselect.makeopts ./
 
 cat %{SOURCE1} > asterisk.init
 cat %{SOURCE2} > asterisk.sysconfig

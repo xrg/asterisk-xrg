@@ -77,13 +77,9 @@ clean::
 else
 h323/libchanh323.a h323/Makefile.ast:
 	$(CMD_PREFIX) $(MAKE) -C h323
-	$(CMD_PREFIX) rm -f ../main/asterisk
-	$(CMD_PREFIX) echo "***************************************************************"
-	$(CMD_PREFIX) echo
-	$(CMD_PREFIX) echo "********** Re-run 'make' to pick up H.323 parameters **********"
-	$(CMD_PREFIX) echo
-	$(CMD_PREFIX) echo "***************************************************************"
-	$(CMD_PREFIX) exit 1
+	$(CMD_PREFIX) if [ -f ../main/asterisk ] ; then rm -f ../main/asterisk ; \
+		echo "Re-run 'make' to pick up H.323 parameters" ; \
+		exit 1 ; fi
 endif
 
 dist-clean::
