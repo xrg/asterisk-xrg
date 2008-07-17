@@ -435,7 +435,6 @@ clean: $(SUBDIRS_CLEAN)
 	rm -f include/asterisk/build.h
 	rm -f main/version.c
 	rm -f include/asterisk/version.h
-	@$(MAKE) -C menuselect clean
 	cp -f .cleancount .lastclean
 
 dist-clean: distclean
