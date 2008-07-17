@@ -1,6 +1,6 @@
 MENUSELECT_APPS=app_fax app_ivrdemo app_rpt app_skel 
 MENUSELECT_CDR=
-MENUSELECT_CHANNELS=chan_features chan_misdn chan_usbradio chan_vpb 
+MENUSELECT_CHANNELS=chan_features chan_h323 chan_misdn chan_usbradio chan_vpb 
 MENUSELECT_CODECS=
 MENUSELECT_FORMATS=
 MENUSELECT_FUNCS=
