@@ -349,6 +349,7 @@ echo "%{version}-%{release}" > .version
 export ASTCFLAGS="%{optflags}"
 
 %configure2_5x \
+    --localstatedir=/var \
     --without-kde \
     --without-qt \
     --without-tinfo \
@@ -421,19 +422,21 @@ export ASTCFLAGS="%{optflags}"
 
 %install
 [ -n "%{buildroot}" -a "%{buildroot}" != / ] && rm -rf %{buildroot}
-
+install -d %{buildroot}%{astvardir}
 install -d %{buildroot}/var/www/{html,cgi-bin}
+install -d %{buildroot}/var/run/asterisk
+install -d %{buildroot}/var/log/asterisk
+install -d %{buildroot}/var/log/asterisk/cdr-csv
+install -d %{buildroot}/var/spool/asterisk
+install -d %{buildroot}/var/spool/asterisk/outgoing
 
+# ASTSBINDIR="%{_sbindir}" HTTPDIR="/var/www"
 %makeinstall_std \
-	ASTSBINDIR="%{_sbindir}" \
-	HTTPDIR="/var/www" samples webvmail adsi
+	 samples webvmail adsi
 
 # don't fiddle with the initscript!
 export DONT_GPRINTIFY=1
 
-install -d %{buildroot}/var/run/asterisk
-install -d %{buildroot}/var/spool/asterisk
-install -d %{buildroot}/var/spool/asterisk/outgoing
 
 # install init scrips
 install -d %{buildroot}%{_initrddir}
