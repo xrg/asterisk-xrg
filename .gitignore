@@ -1,3 +1,7 @@
+*.o
+*~
+.*.o.d
+*.so
 agi/eagi-sphinx-test
 agi/eagi-test
 agi/strcompat.c
@@ -16,3 +20,8 @@ defaults.h
 build_tools/menuselect-deps
 aclocal.m4
 autom4te.cache
+.*.makeopts
+.*.moduleinfo
+.makeopts
+.moduleinfo
+.version
