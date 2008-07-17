@@ -16,7 +16,7 @@ uname -s | grep -q BSD
 if [ $? = 0 ] ; then	# BSD case
 	case `uname -sr` in
 		'FreeBSD 4'*)	# FreeBSD 4.x has a different naming
-			MY_AC_VER=259
+			MY_AC_VER=261
 			MY_AM_VER=19
 			;;
 		*)
@@ -27,8 +27,8 @@ if [ $? = 0 ] ; then	# BSD case
 else	# linux case
 	MY_AC_VER=
 	MY_AM_VER=
-	AUTOCONF_VERSION=2.62
-	AUTOMAKE_VERSION=1.10
+	AUTOCONF_VERSION=2.61
+	AUTOMAKE_VERSION=1.9
 	export AUTOCONF_VERSION
 	export AUTOMAKE_VERSION
 fi

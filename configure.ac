@@ -6,7 +6,7 @@
 # this file just have to remember to set the AC_PREREQ argument
 # to something that suits their needs.
 
-AC_PREREQ(2.62)
+AC_PREREQ(2.61)
 
 AC_INIT(asterisk, 1.6, www.asterisk.org)
 

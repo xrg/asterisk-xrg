@@ -1,4 +1,4 @@
-%define git_repodir /home/panosl/panos/build
+#define git_repodir /home/panosl/panos/build
 %define git_repo asterisk
 %define git_head 16xrg
 
@@ -80,7 +80,7 @@ BuildRequires:	libilbc-devel
 BuildRequires:	libnbs-devel
 BuildRequires:	libncurses-devel
 BuildRequires:	libpri-devel >= 1.4.0
-BuildRequires:	libspandsp-devel
+BuildRequires:	spandsp-devel
 BuildRequires:	libspeex-devel
 BuildRequires:	libtermcap-devel
 BuildRequires:	libtiff-devel
