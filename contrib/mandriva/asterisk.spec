@@ -10,7 +10,7 @@
 
 %define _requires_exceptions perl(Carp::Heavy)
 
-%define build_h323	1
+%define build_h323	0
 %{?_without_h323:	%global build_h323 0}
 %{?_with_h323:		%global build_h323 1}
 
@@ -99,6 +99,7 @@ BuildRequires:	flex
 BuildRequires:	imap-devel
 BuildRequires:	krb5-devel
 BuildRequires:	pam-devel
+BuildRequires:	gmime-devel
 %if %{build_misdn}
 BuildRequires:	libmisdn-devel >= 1:3.4
 %endif

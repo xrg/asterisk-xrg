@@ -350,7 +350,7 @@ makeopts: configure
 	@echo "****"
 	@exit 1
 
-menuselect.makeopts: ast_menuselect menuselect-tree makeopts
+menuselect.makeopts: menuselect-tree makeopts
 	ast_menuselect --check-deps menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
 
 $(MOD_SUBDIRS_EMBED_LDSCRIPT):
