@@ -6,7 +6,7 @@ main/striplist
 main/version.c
 makeopts
 menuselect.makedeps
-menuselect.makeopts
+/menuselect.makeopts
 makeopts.embed_rules
 menuselect-tree
 config.log
