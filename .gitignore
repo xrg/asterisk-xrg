@@ -1,3 +1,7 @@
+*.o
+*~
+.*.o.d
+*.so
 .applied
 .cleancount
 .depend
@@ -21,6 +25,11 @@ defaults.h
 main/asterisk
 makeopts
 makeopts.embed_rules
+.*.makeopts
+.*.moduleinfo
+.makeopts
 menuselect.makeopts
 menuselect-tree
 tags
+.moduleinfo
+.version
