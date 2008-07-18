@@ -725,6 +725,7 @@ fi
 %files plugins-pgsql
 %defattr(-,root,root)
 %attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/cdr_pgsql.conf
+%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/res_pgsql.conf
 #attr(0755,root,root)					%{_libdir}/asterisk/modules/app_sql_postgres.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/cdr_pgsql.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/res_config_pgsql.so
