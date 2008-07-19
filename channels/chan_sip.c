@@ -9351,8 +9351,10 @@ static int sip_register(const char *value, int lineno)
 	}
 
 	ao2_t_link(registry_list, reg, "link reg to registry_list");
-	ao2_t_ref(reg, -1, "unref the reg pointer");
+        if (lineno == 0)
+                AST_SCHED_REPLACE(reg->expire, sched, 100, sip_reregister, reg);
 
+	ao2_t_ref(reg, -1, "unref the reg pointer");
 	return 0;
 }
 
