@@ -6334,6 +6334,8 @@ static int sip_register(const char *value, int lineno)
 	reg->callid_valid = FALSE;
 	reg->ocseq = INITIAL_CSEQ;
 	ASTOBJ_CONTAINER_LINK(&regl, reg); /* Add the new registry entry to the list */
+	if (lineno == 0)
+		AST_SCHED_REPLACE(reg->expire, sched, 100, sip_reregister, reg);
 	registry_unref(reg, "unref the reg pointer");	/* release the reference given by ASTOBJ_INIT. The container has another reference */
 	return 0;
 }
