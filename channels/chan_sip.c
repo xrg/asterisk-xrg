@@ -1982,6 +1982,11 @@ static char *sip_show_peer(struct ast_cli_entry *e, int cmd, struct ast_cli_args
 static char *_sip_qualify_peer(int type, int fd, struct mansession *s, const struct message *m, int argc, const char *argv[]);
 static char *sip_qualify_peer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_show_registry(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *sip_registry_resched(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *sip_registry_add(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *sip_registry_prune(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+
+
 static char *sip_unregister(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static const char *subscription_type2str(enum subscriptiontype subtype) attribute_pure;
@@ -13330,6 +13335,112 @@ static char *sip_show_registry(struct ast_cli_entry *e, int cmd, struct ast_cli_
 #undef FORMAT2
 }
 
+/*! \brief  Reschedule all SIP Registry entries (mostly for debugging) */
+static char *sip_registry_resched(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "sip registry reschedule";
+		e->usage =
+			"Usage: sip registry reschedule\n"
+			"       Sends again registration events for all registry entries.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+	ast_cli(a->fd, "SIP registrations rescheduled.\n");
+	return CLI_SUCCESS;
+}
+
+/*! \brief  Dynamically add a SIP Registry */
+static char *sip_registry_add(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "sip registry add";
+		e->usage =
+			"Usage: sip registry add [transport://]user[:secret[:authuser]]@host[:port][/contact][~expiry]\n"
+			"       Dynamically create a registry entry and register on a sip proxy.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
+		
+
+	if (sip_register(a->argv[3],0)==0) {
+		ast_cli(a->fd, "SIP registration added.\n");
+		return CLI_SUCCESS;
+	}else
+		return NULL;
+}
+
+/*! \brief  Prune a SIP Registry in real time
+   This cli command is useful whenever a SIP registry is useless (eg. no-auth), or
+   the corresponding Realtime peer has been pruned.
+*/
+static char *sip_registry_prune(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int portnum = 0;
+	enum sip_transport transport = SIP_TRANSPORT_UDP;
+	char buf[256] = "";
+	char *username = NULL, *hostname=NULL;
+	int count_found=0;
+	
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "sip registry prune";
+		e->usage =
+			"Usage: sip registry prune [transport://]user@host[:port]\n"
+			"       Dynamically removes a registry entry.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
+		
+	ast_copy_string(buf, a->argv[3], sizeof(buf));
+	sip_parse_host(buf, 0, &username, &portnum, &transport);
+		
+		/* First split around the last '@' then parse the two components. */
+	hostname = strrchr(username, '@'); /* allow @ in the first part */
+	if (hostname)
+		*hostname++ = '\0';
+	if (ast_strlen_zero(username) || ast_strlen_zero(hostname)) {
+		ast_cli(a->fd, "Format for registration is [transport://]user@host[:port]\n");
+		return NULL;
+	}
+
+	ASTOBJ_CONTAINER_TRAVERSE(&regl, 1, do {
+		ASTOBJ_WRLOCK(iterator); /* now regl is locked, and the object is also locked */
+		if ( !strcmp(iterator->hostname,hostname) && !strcmp(iterator->username,username) &&
+				(iterator->transport==transport) && 
+				(iterator->portno <=0 || iterator->portno == portnum )) {
+			ast_debug(3, "Destroying SIP registry %s@%s\n", iterator->username, iterator->hostname);
+				// explictly mark the object, without the macro, because
+				// we want to keep inside the lock.
+			iterator->objflags |= ASTOBJ_FLAG_MARKED;
+			count_found++;
+		}
+		ASTOBJ_UNLOCK(iterator);	
+	} while(0));
+
+	if (count_found)
+		ASTOBJ_CONTAINER_PRUNE_MARKED(&regl,sip_registry_destroy);
+	
+	ast_cli(a->fd, "SIP registrations pruned : %d.\n",count_found);
+	return CLI_SUCCESS;
+}
+
+
 /*! \brief Unregister (force expiration) a SIP peer in the registry via CLI 
 	\note This function does not tell the SIP device what's going on,
 	so use it with great care.
@@ -22122,6 +22233,9 @@ static struct ast_cli_entry cli_sip[] = {
 	AST_CLI_DEFINE(sip_show_objects, "List all SIP object allocations"),
 	AST_CLI_DEFINE(sip_show_peers, "List defined SIP peers"),
 	AST_CLI_DEFINE(sip_show_registry, "List SIP registration status"),
+	AST_CLI_DEFINE(sip_registry_resched, "Refresh all SIP registrations"),
+	AST_CLI_DEFINE(sip_registry_add, "Dynamically add a SIP registration"),
+	AST_CLI_DEFINE(sip_registry_prune, "Dynamically prune a SIP registration"),
 	AST_CLI_DEFINE(sip_unregister, "Unregister (force expiration) a SIP peer from the registry"),
 	AST_CLI_DEFINE(sip_show_settings, "Show SIP global settings"),
 	AST_CLI_DEFINE(sip_cli_notify, "Send a notify packet to a SIP peer"),
