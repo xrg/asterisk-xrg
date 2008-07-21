@@ -505,11 +505,11 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 	ast_cli(a->fd, "\nSystem Statistics\n");
 	ast_cli(a->fd, "-----------------\n");
 	ast_cli(a->fd, "  System Uptime:             %ld hours\n", sys_info.uptime/3600);
-	ast_cli(a->fd, "  Total RAM:                 %ld KiB\n", (sys_info.totalram / sys_info.mem_unit)/1024);
-	ast_cli(a->fd, "  Free RAM:                  %ld KiB\n", (sys_info.freeram / sys_info.mem_unit)/1024);
-	ast_cli(a->fd, "  Buffer RAM:                %ld KiB\n", (sys_info.bufferram / sys_info.mem_unit)/1024);
-	ast_cli(a->fd, "  Total Swap Space:          %ld KiB\n", (sys_info.totalswap / sys_info.mem_unit)/1024);
-	ast_cli(a->fd, "  Free Swap Space:           %ld KiB\n\n", (sys_info.freeswap / sys_info.mem_unit)/1024);
+	ast_cli(a->fd, "  Total RAM:                 %ld KiB\n", (sys_info.totalram * sys_info.mem_unit)/1024);
+	ast_cli(a->fd, "  Free RAM:                  %ld KiB\n", (sys_info.freeram * sys_info.mem_unit)/1024);
+	ast_cli(a->fd, "  Buffer RAM:                %ld KiB\n", (sys_info.bufferram * sys_info.mem_unit)/1024);
+	ast_cli(a->fd, "  Total Swap Space:          %ld KiB\n", (sys_info.totalswap * sys_info.mem_unit)/1024);
+	ast_cli(a->fd, "  Free Swap Space:           %ld KiB\n\n", (sys_info.freeswap * sys_info.mem_unit)/1024);
 	ast_cli(a->fd, "  Number of Processes:       %d \n\n", sys_info.procs);
 	return CLI_SUCCESS;
 }
@@ -2881,8 +2881,10 @@ static void run_startup_commands(void)
 		return;
 
 	fd = open("/dev/null", O_RDWR);
-	if (fd < 0)
+	if (fd < 0) {
+		ast_config_destroy(cfg);
 		return;
+	}
 
 	for (v = ast_variable_browse(cfg, "startup_commands"); v; v = v->next) {
 		if (ast_true(v->value))
@@ -2910,9 +2912,9 @@ int main(int argc, char *argv[])
 	char *remotesock = NULL;
 
 	/* Remember original args for restart */
-	if (argc > sizeof(_argv) / sizeof(_argv[0]) - 1) {
-		fprintf(stderr, "Truncating argument size to %d\n", (int)(sizeof(_argv) / sizeof(_argv[0])) - 1);
-		argc = sizeof(_argv) / sizeof(_argv[0]) - 1;
+	if (argc > ARRAY_LEN(_argv) - 1) {
+		fprintf(stderr, "Truncating argument size to %d\n", (int)ARRAY_LEN(_argv) - 1);
+		argc = ARRAY_LEN(_argv) - 1;
 	}
 	for (x = 0; x < argc; x++)
 		_argv[x] = argv[x];

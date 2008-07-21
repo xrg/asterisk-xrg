@@ -416,6 +416,9 @@ struct dahdi_pri {
 	int span;
 	int resetting;
 	int resetpos;
+#ifdef HAVE_PRI_INBANDRELEASE
+	unsigned int inbandrelease:1;					/*!< Should we support inband audio after receiving RELEASE? */
+#endif
 	time_t lastreset;						/*!< time when unused channels were last reset */
 	long resetinterval;						/*!< Interval (in seconds) for resetting unused channels */
 	int sig;
@@ -507,6 +510,8 @@ static struct dahdi_pvt {
 	struct dahdi_pvt *master;				/*!< Master to us (we follow their conferencing) */
 	int inconference;				/*!< If our real should be in the conference */
 	
+	int buf_no;					/*!< Number of buffers */
+	int buf_policy;				/*!< Buffer policy */
 	int sig;					/*!< Signalling style */
 	int radio;					/*!< radio type */
 	int outsigmod;					/*!< Outbound Signalling style (modifier) */
@@ -798,7 +803,10 @@ static struct dahdi_chan_conf dahdi_chan_conf_default(void) {
 
 			.polarityonanswerdelay = 600,
 
-			.sendcalleridafter = DEFAULT_CIDRINGS
+			.sendcalleridafter = DEFAULT_CIDRINGS,
+		
+			.buf_policy = DAHDI_POLICY_IMMEDIATE,
+			.buf_no = numbufs
 		},
 		.timing = {
 			.prewinktime = -1,
@@ -1151,9 +1159,9 @@ static int alloc_sub(struct dahdi_pvt *p, int x)
 
 	res = ioctl(p->subs[x].zfd, DAHDI_GET_BUFINFO, &bi);
 	if (!res) {
-		bi.txbufpolicy = DAHDI_POLICY_IMMEDIATE;
-		bi.rxbufpolicy = DAHDI_POLICY_IMMEDIATE;
-		bi.numbufs = numbufs;
+		bi.txbufpolicy = p->buf_policy;
+		bi.rxbufpolicy = p->buf_policy;
+		bi.numbufs = p->buf_no;
 		res = ioctl(p->subs[x].zfd, DAHDI_SET_BUFINFO, &bi);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Unable to set buffer policy on channel %d: %s\n", x, strerror(errno));
@@ -1354,7 +1362,7 @@ static char *alarm2str(int alarm)
 static char *event2str(int event)
 {
 	static char buf[256];
-	if ((event < (sizeof(events) / sizeof(events[0]))) && (event > -1))
+	if ((event < (ARRAY_LEN(events))) && (event > -1))
 		return events[event];
 	sprintf(buf, "Event %d", event); /* safe */
 	return buf;
@@ -5903,12 +5911,13 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 			else
 				i->dsp = NULL;
 			if (i->dsp) {
-				i->dsp_features = features & ~DSP_PROGRESS_TALK;
+				i->dsp_features = features;
 #if defined(HAVE_PRI) || defined(HAVE_SS7)
 				/* We cannot do progress detection until receives PROGRESS message */
 				if (i->outgoing && ((i->sig == SIG_PRI) || (i->sig == SIG_BRI) || (i->sig == SIG_BRI_PTMP) || (i->sig == SIG_SS7))) {
 					/* Remember requested DSP features, don't treat
 					   talking as ANSWER */
+					i->dsp_features = features & ~DSP_PROGRESS_TALK;
 					features = 0;
 				}
 #endif
@@ -6922,7 +6931,7 @@ static void *ss_thread(void *data)
 									break;
 								/* Increment the ringT counter so we can match it against
 								   values in chan_dahdi.conf for distinctive ring */
-								if (++receivedRingT == (sizeof(curRingData) / sizeof(curRingData[0])))
+								if (++receivedRingT == ARRAY_LEN(curRingData))
 									break;
 							} else if (i & DAHDI_IOMUX_READ) {
 								res = read(p->subs[index].zfd, buf, sizeof(buf));
@@ -7081,7 +7090,7 @@ static void *ss_thread(void *data)
 							break;
 						/* Increment the ringT counter so we can match it against
 						   values in chan_dahdi.conf for distinctive ring */
-						if (++receivedRingT == (sizeof(curRingData) / sizeof(curRingData[0])))
+						if (++receivedRingT == ARRAY_LEN(curRingData))
 							break;
 					} else if (i & DAHDI_IOMUX_READ) {
 						res = read(p->subs[index].zfd, buf, sizeof(buf));
@@ -7142,7 +7151,7 @@ static void *ss_thread(void *data)
 								break;
 							/* Increment the ringT counter so we can match it against
 							   values in chan_dahdi.conf for distinctive ring */
-							if (++receivedRingT == (sizeof(curRingData) / sizeof(curRingData[0])))
+							if (++receivedRingT == ARRAY_LEN(curRingData))
 								break;
 						} else if (i & DAHDI_IOMUX_READ) {
 							res = read(p->subs[index].zfd, buf, sizeof(buf));
@@ -8447,6 +8456,9 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 						pris[span].minunused = conf->pri.minunused;
 						pris[span].minidle = conf->pri.minidle;
 						pris[span].overlapdial = conf->pri.overlapdial;
+#ifdef HAVE_PRI_INBANDRELEASE
+						pris[span].inbandrelease = conf->pri.inbandrelease;
+#endif
 						pris[span].facilityenable = conf->pri.facilityenable;
 						ast_copy_string(pris[span].idledial, conf->pri.idledial, sizeof(pris[span].idledial));
 						ast_copy_string(pris[span].idleext, conf->pri.idleext, sizeof(pris[span].idleext));
@@ -8543,9 +8555,9 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 			memset(&bi, 0, sizeof(bi));
 			res = ioctl(tmp->subs[SUB_REAL].zfd, DAHDI_GET_BUFINFO, &bi);
 			if (!res) {
-				bi.txbufpolicy = DAHDI_POLICY_IMMEDIATE;
-				bi.rxbufpolicy = DAHDI_POLICY_IMMEDIATE;
-				bi.numbufs = numbufs;
+				bi.txbufpolicy = conf->chan.buf_policy;
+				bi.rxbufpolicy = conf->chan.buf_policy;
+				bi.numbufs = conf->chan.buf_no;
 				res = ioctl(tmp->subs[SUB_REAL].zfd, DAHDI_SET_BUFINFO, &bi);
 				if (res < 0) {
 					ast_log(LOG_WARNING, "Unable to set buffer policy on channel %d: %s\n", channel, strerror(errno));
@@ -8899,9 +8911,9 @@ static struct dahdi_pvt *chandup(struct dahdi_pvt *src)
 		}
 		res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_GET_BUFINFO, &bi);
 		if (!res) {
-			bi.txbufpolicy = DAHDI_POLICY_IMMEDIATE;
-			bi.rxbufpolicy = DAHDI_POLICY_IMMEDIATE;
-			bi.numbufs = numbufs;
+			bi.txbufpolicy = src->buf_policy;
+			bi.rxbufpolicy = src->buf_policy;
+			bi.numbufs = src->buf_no;
 			res = ioctl(p->subs[SUB_REAL].zfd, DAHDI_SET_BUFINFO, &bi);
 			if (res < 0) {
 				ast_log(LOG_WARNING, "Unable to set buffer policy on dup channel: %s\n", strerror(errno));
@@ -11478,6 +11490,9 @@ static int start_pri(struct dahdi_pri *pri)
 		if (pri->switchtype == PRI_SWITCH_GR303_TMC)
 			pri->overlapdial |= DAHDI_OVERLAPDIAL_BOTH;
 		pri_set_overlapdial(pri->dchans[i],(pri->overlapdial & DAHDI_OVERLAPDIAL_OUTGOING)?1:0);
+#ifdef HAVE_PRI_INBANDRELEASE
+		pri_set_inbandrelease(pri->dchans[i], pri->inbandrelease);
+#endif
 		/* Enslave to master if appropriate */
 		if (i)
 			pri_enslave(pri->dchans[0], pri->dchans[i]);
@@ -13221,7 +13236,11 @@ static int linkset_addsigchan(int sigchan)
 			return -1;
 		}
 
-		ss7_add_link(link->ss7, SS7_TRANSPORT_DAHDI, link->fds[curfd]);
+		if (p.sigtype == DAHDI_SIG_MTP2)
+			ss7_add_link(link->ss7, SS7_TRANSPORT_DAHDIMTP2, link->fds[curfd]);
+		else
+			ss7_add_link(link->ss7, SS7_TRANSPORT_DAHDIDCHAN, link->fds[curfd]);
+
 		link->numsigchans++;
 
 		memset(&si, 0, sizeof(si));
@@ -13692,7 +13711,7 @@ static void process_echocancel(struct dahdi_chan_conf *confp, const char *data, 
 	unsigned int param_count;
 	unsigned int x;
 
-	if (!(param_count = ast_app_separate_args(parse, ',', params, sizeof(params) / sizeof(params[0]))))
+	if (!(param_count = ast_app_separate_args(parse, ',', params, ARRAY_LEN(params))))
 		return;
 
 	memset(&confp->chan.echocancel, 0, sizeof(confp->chan.echocancel));
@@ -13744,7 +13763,7 @@ static void process_echocancel(struct dahdi_chan_conf *confp, const char *data, 
 static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct ast_variable *v, int reload, int options)
 {
 	struct dahdi_pvt *tmp;
-	const char *ringc; /* temporary string for parsing the dring number. */
+	const char *tempstr; /* temporary string for parsing the dring number, buffers policy */
 	int y;
 	int found_pseudo = 0;
 	char dahdichan[MAX_CHANLIST_LEN] = {};
@@ -13770,6 +13789,19 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
  			iscrv = !strcasecmp(v->name, "crv");
  			if (build_channels(confp, iscrv, v->value, reload, v->lineno, &found_pseudo))
  					return -1;
+		} else if (!strcasecmp(v->name, "buffers")) {
+			char policy[8];
+			tempstr = v->value;
+			sscanf(tempstr, "%d,%s", &confp->chan.buf_no, policy);
+			if (confp->chan.buf_no < 0)
+				confp->chan.buf_no = numbufs;
+			if (!strcasecmp(policy, "full")) {
+				confp->chan.buf_policy = DAHDI_POLICY_WHEN_FULL;
+			} else if (!strcasecmp(policy, "half")) {
+				confp->chan.buf_policy = DAHDI_POLICY_IMMEDIATE /*HALF_FULL*/;
+			} else {
+				confp->chan.buf_policy = DAHDI_POLICY_IMMEDIATE;
+			}
  		} else if (!strcasecmp(v->name, "dahdichan")) {
  			ast_copy_string(dahdichan, v->value, sizeof(dahdichan));
 		} else if (!strcasecmp(v->name, "usedistinctiveringdetection")) {
@@ -13789,14 +13821,14 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 		} else if (!strcasecmp(v->name, "dring3range")) {
 			confp->chan.drings.ringnum[2].range = atoi(v->value);
 		} else if (!strcasecmp(v->name, "dring1")) {
-			ringc = v->value;
-			sscanf(ringc, "%d,%d,%d", &confp->chan.drings.ringnum[0].ring[0], &confp->chan.drings.ringnum[0].ring[1], &confp->chan.drings.ringnum[0].ring[2]);
+			tempstr = v->value;
+			sscanf(tempstr, "%d,%d,%d", &confp->chan.drings.ringnum[0].ring[0], &confp->chan.drings.ringnum[0].ring[1], &confp->chan.drings.ringnum[0].ring[2]);
 		} else if (!strcasecmp(v->name, "dring2")) {
-			ringc = v->value;
-			sscanf(ringc,"%d,%d,%d", &confp->chan.drings.ringnum[1].ring[0], &confp->chan.drings.ringnum[1].ring[1], &confp->chan.drings.ringnum[1].ring[2]);
+			tempstr = v->value;
+			sscanf(tempstr,"%d,%d,%d", &confp->chan.drings.ringnum[1].ring[0], &confp->chan.drings.ringnum[1].ring[1], &confp->chan.drings.ringnum[1].ring[2]);
 		} else if (!strcasecmp(v->name, "dring3")) {
-			ringc = v->value;
-			sscanf(ringc, "%d,%d,%d", &confp->chan.drings.ringnum[2].ring[0], &confp->chan.drings.ringnum[2].ring[1], &confp->chan.drings.ringnum[2].ring[2]);
+			tempstr = v->value;
+			sscanf(tempstr, "%d,%d,%d", &confp->chan.drings.ringnum[2].ring[0], &confp->chan.drings.ringnum[2].ring[1], &confp->chan.drings.ringnum[2].ring[2]);
 		} else if (!strcasecmp(v->name, "usecallerid")) {
 			confp->chan.use_callerid = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "cidsignalling")) {
@@ -14286,6 +14318,10 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 				} else {
 					confp->pri.overlapdial = DAHDI_OVERLAPDIAL_NONE;
 				}
+#ifdef HAVE_PRI_INBANDRELEASE
+			} else if (!strcasecmp(v->name, "inbandrelease")) {
+				confp->pri.inbandrelease = ast_true(v->value);
+#endif
 			} else if (!strcasecmp(v->name, "pritimer")) {
 #ifdef PRI_GETSET_TIMERS
 				char tmp[20], *timerc, *c = tmp;
@@ -14796,7 +14832,7 @@ static int load_module(void)
 	ast_cli_register_multiple(dahdi_pri_cli, sizeof(dahdi_pri_cli) / sizeof(struct ast_cli_entry));
 #endif	
 #ifdef HAVE_SS7
-	ast_cli_register_multiple(dahdi_ss7_cli, sizeof(dahdi_ss7_cli) / sizeof(dahdi_ss7_cli[0]));
+	ast_cli_register_multiple(dahdi_ss7_cli, ARRAY_LEN(dahdi_ss7_cli));
 #endif
 
 	ast_cli_register_multiple(dahdi_cli, sizeof(dahdi_cli) / sizeof(struct ast_cli_entry));

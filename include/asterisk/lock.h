@@ -515,9 +515,9 @@ static inline int __ast_pthread_mutex_lock(const char *filename, int lineno, con
 		ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
 		bt = &lt->backtrace[lt->reentrancy];
 		ast_reentrancy_unlock(lt);
-		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex, bt);
+		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t, bt);
 #else
-		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex);
+		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t);
 #endif
 	}
 
@@ -579,7 +579,7 @@ static inline int __ast_pthread_mutex_lock(const char *filename, int lineno, con
 		}
 		ast_reentrancy_unlock(lt);
 		if (t->tracking) {
-			ast_mark_lock_acquired(&t->mutex);
+			ast_mark_lock_acquired(t);
 		}
 	} else {
 #ifdef HAVE_BKTR
@@ -591,11 +591,11 @@ static inline int __ast_pthread_mutex_lock(const char *filename, int lineno, con
 			bt = NULL;
 		}
 		if (t->tracking) {
-			ast_remove_lock_info(&t->mutex, bt);
+			ast_remove_lock_info(t, bt);
 		}
 #else
 		if (t->tracking) {
-			ast_remove_lock_info(&t->mutex);
+			ast_remove_lock_info(t);
 		}
 #endif
 		__ast_mutex_logger("%s line %d (%s): Error obtaining mutex: %s\n",
@@ -637,9 +637,9 @@ static inline int __ast_pthread_mutex_trylock(const char *filename, int lineno, 
 		ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
 		bt = &lt->backtrace[lt->reentrancy];
 		ast_reentrancy_unlock(lt);
-		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex, bt);
+		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t, bt);
 #else
-		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex);
+		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t);
 #endif
 	}
 
@@ -657,10 +657,10 @@ static inline int __ast_pthread_mutex_trylock(const char *filename, int lineno, 
 		}
 		ast_reentrancy_unlock(lt);
 		if (t->tracking) {
-			ast_mark_lock_acquired(&t->mutex);
+			ast_mark_lock_acquired(t);
 		}
 	} else if (t->tracking) {
-		ast_mark_lock_failed(&t->mutex);
+		ast_mark_lock_failed(t);
 	}
 
 	return res;
@@ -723,9 +723,9 @@ static inline int __ast_pthread_mutex_unlock(const char *filename, int lineno, c
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
-		ast_remove_lock_info(&t->mutex, bt);
+		ast_remove_lock_info(t, bt);
 #else
-		ast_remove_lock_info(&t->mutex);
+		ast_remove_lock_info(t);
 #endif
 	}
 
@@ -820,9 +820,9 @@ static inline int __ast_cond_wait(const char *filename, int lineno, const char *
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
-		ast_remove_lock_info(&t->mutex, bt);
+		ast_remove_lock_info(t, bt);
 #else
-		ast_remove_lock_info(&t->mutex);
+		ast_remove_lock_info(t);
 #endif
 	}
 
@@ -850,9 +850,9 @@ static inline int __ast_cond_wait(const char *filename, int lineno, const char *
 
 		if (t->tracking) {
 #ifdef HAVE_BKTR
-			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex, bt);
+			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t, bt);
 #else
-			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex);
+			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t);
 #endif
 		}
 	}
@@ -917,9 +917,9 @@ static inline int __ast_cond_timedwait(const char *filename, int lineno, const c
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
-		ast_remove_lock_info(&t->mutex, bt);
+		ast_remove_lock_info(t, bt);
 #else
-		ast_remove_lock_info(&t->mutex);
+		ast_remove_lock_info(t);
 #endif
 	}
 	
@@ -947,9 +947,9 @@ static inline int __ast_cond_timedwait(const char *filename, int lineno, const c
 
 		if (t->tracking) {
 #ifdef HAVE_BKTR
-			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex, bt);
+			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t, bt);
 #else
-			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, &t->mutex);
+			ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t);
 #endif
 		}
 	}
@@ -1129,9 +1129,9 @@ static inline int _ast_rwlock_unlock(ast_rwlock_t *t, const char *name,
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
-		ast_remove_lock_info(&t->lock, bt);
+		ast_remove_lock_info(t, bt);
 #else
-		ast_remove_lock_info(&t->lock);
+		ast_remove_lock_info(t);
 #endif
 	}
 
@@ -1175,9 +1175,9 @@ static inline int _ast_rwlock_rdlock(ast_rwlock_t *t, const char *name,
 		ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
 		bt = &lt->backtrace[lt->reentrancy];
 		ast_reentrancy_unlock(lt);	
-		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, &t->lock, bt);
+		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, t, bt);
 #else
-		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, &t->lock);
+		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, t);
 #endif
 	}
 	
@@ -1227,7 +1227,7 @@ static inline int _ast_rwlock_rdlock(ast_rwlock_t *t, const char *name,
 		}
 		ast_reentrancy_unlock(lt);
 		if (t->tracking) {
-			ast_mark_lock_acquired(&t->lock);
+			ast_mark_lock_acquired(t);
 		}
 	} else {
 #ifdef HAVE_BKTR
@@ -1239,11 +1239,11 @@ static inline int _ast_rwlock_rdlock(ast_rwlock_t *t, const char *name,
 			bt = NULL;
 		}
 		if (t->tracking) {
-			ast_remove_lock_info(&t->lock, bt);
+			ast_remove_lock_info(t, bt);
 		}
 #else
 		if (t->tracking) {
-			ast_remove_lock_info(&t->lock);
+			ast_remove_lock_info(t);
 		}
 #endif
 		__ast_mutex_logger("%s line %d (%s): Error obtaining read lock: %s\n",
@@ -1284,9 +1284,9 @@ static inline int _ast_rwlock_wrlock(ast_rwlock_t *t, const char *name,
 		ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
 		bt = &lt->backtrace[lt->reentrancy];
 		ast_reentrancy_unlock(lt);
-		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, &t->lock, bt);
+		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t, bt);
 #else
-		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, &t->lock);
+		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t);
 #endif
 	}
 #ifdef DETECT_DEADLOCKS
@@ -1335,7 +1335,7 @@ static inline int _ast_rwlock_wrlock(ast_rwlock_t *t, const char *name,
 		}
 		ast_reentrancy_unlock(lt);
 		if (t->tracking) {
-			ast_mark_lock_acquired(&t->lock);
+			ast_mark_lock_acquired(t);
 		}
 	} else {
 #ifdef HAVE_BKTR
@@ -1346,11 +1346,11 @@ static inline int _ast_rwlock_wrlock(ast_rwlock_t *t, const char *name,
 			bt = NULL;
 		}
 		if (t->tracking) {
-			ast_remove_lock_info(&t->lock, bt);
+			ast_remove_lock_info(t, bt);
 		}
 #else
 		if (t->tracking) {
-			ast_remove_lock_info(&t->lock);
+			ast_remove_lock_info(t);
 		}
 #endif
 		__ast_mutex_logger("%s line %d (%s): Error obtaining write lock: %s\n",
@@ -1392,9 +1392,9 @@ static inline int _ast_rwlock_tryrdlock(ast_rwlock_t *t, const char *name,
 		ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
 		bt = &lt->backtrace[lt->reentrancy];
 		ast_reentrancy_unlock(lt);
-		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, &t->lock, bt);
+		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, t, bt);
 #else
-		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, &t->lock);
+		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, t);
 #endif
 	}
 	
@@ -1412,10 +1412,10 @@ static inline int _ast_rwlock_tryrdlock(ast_rwlock_t *t, const char *name,
 		}
 		ast_reentrancy_unlock(lt);
 		if (t->tracking) {
-			ast_mark_lock_acquired(&t->lock);
+			ast_mark_lock_acquired(t);
 		}
 	} else if (t->tracking) {
-		ast_mark_lock_failed(&t->lock);
+		ast_mark_lock_failed(t);
 	}
 	return res;
 }
@@ -1452,9 +1452,9 @@ static inline int _ast_rwlock_trywrlock(ast_rwlock_t *t, const char *name,
 		ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
 		bt = &lt->backtrace[lt->reentrancy];
 		ast_reentrancy_unlock(lt);
-		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, &t->lock, bt);
+		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t, bt);
 #else
-		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, &t->lock);
+		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t);
 #endif
 	}
 	
@@ -1472,10 +1472,10 @@ static inline int _ast_rwlock_trywrlock(ast_rwlock_t *t, const char *name,
 		}
 		ast_reentrancy_unlock(lt);
 		if (t->tracking) {
-			ast_mark_lock_acquired(&t->lock);
+			ast_mark_lock_acquired(t);
 		}
 	} else if (t->tracking) {
-		ast_mark_lock_failed(&t->lock);
+		ast_mark_lock_failed(t);
 	}
 	return res;
 }

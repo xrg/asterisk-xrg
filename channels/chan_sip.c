@@ -1057,11 +1057,13 @@ struct sip_auth {
 #define SIP_PAGE2_BUGGY_MWI		(1 << 26)	/*!< DP: Buggy CISCO MWI fix */
 #define SIP_PAGE2_REGISTERTRYING        (1 << 29)       /*!< DP: Send 100 Trying on REGISTER attempts */
 #define SIP_PAGE2_UDPTL_DESTINATION     (1 << 30)       /*!< DP: Use source IP of RTP as destination if NAT is enabled */
+#define SIP_PAGE2_VIDEOSUPPORT_ALWAYS	(1 << 31)       /*!< DP: Always set up video, even if endpoints don't support it */
 
 #define SIP_PAGE2_FLAGS_TO_COPY \
 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_VIDEOSUPPORT | \
 	SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | SIP_PAGE2_BUGGY_MWI | \
-	SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_UDPTL_DESTINATION)
+	SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_UDPTL_DESTINATION | \
+	SIP_PAGE2_VIDEOSUPPORT_ALWAYS)
 
 /*@}*/ 
 
@@ -2607,7 +2609,7 @@ static int find_sip_method(const char *msg)
 	
 	if (ast_strlen_zero(msg))
 		return 0;
-	for (i = 1; i < (sizeof(sip_methods) / sizeof(sip_methods[0])) && !res; i++) {
+	for (i = 1; i < ARRAY_LEN(sip_methods) && !res; i++) {
 		if (method_match(i, msg))
 			res = sip_methods[i].id;
 	}
@@ -4163,7 +4165,10 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	ast_copy_flags(&dialog->flags[0], &peer->flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&dialog->flags[1], &peer->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
 	dialog->capability = peer->capability;
-	if ((!ast_test_flag(&dialog->flags[1], SIP_PAGE2_VIDEOSUPPORT) || !(dialog->capability & AST_FORMAT_VIDEO_MASK)) && dialog->vrtp) {
+	if (!ast_test_flag(&dialog->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS) &&
+			(!ast_test_flag(&dialog->flags[1], SIP_PAGE2_VIDEOSUPPORT) ||
+				!(dialog->capability & AST_FORMAT_VIDEO_MASK)) &&
+			dialog->vrtp) {
 		ast_rtp_destroy(dialog->vrtp);
 		dialog->vrtp = NULL;
 	}
@@ -5525,7 +5530,9 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	   We also check for vrtp. If it's not there, we are not allowed do any video anyway.
 	 */
 	if (i->vrtp) {
-		if (i->prefcodec)
+		if (ast_test_flag(&i->flags[1], SIP_PAGE2_VIDEOSUPPORT))
+			needvideo = AST_FORMAT_VIDEO_MASK;
+		else if (i->prefcodec)
 			needvideo = i->prefcodec & AST_FORMAT_VIDEO_MASK;	/* Outbound call */
  		else
 			needvideo = i->jointcapability & AST_FORMAT_VIDEO_MASK;	/* Inbound call */
@@ -11812,7 +11819,10 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		if (p->peercapability)
 			p->jointcapability &= p->peercapability;
 		p->maxcallbitrate = peer->maxcallbitrate;
-		if ((!ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) || !(p->capability & AST_FORMAT_VIDEO_MASK)) && p->vrtp) {
+		if (!ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS) &&
+				(!ast_test_flag(&p->flags[1], SIP_PAGE2_VIDEOSUPPORT) ||
+					!(p->capability & AST_FORMAT_VIDEO_MASK)) &&
+				p->vrtp) {
 			ast_rtp_destroy(p->vrtp);
 			p->vrtp = NULL;
 		}
@@ -12914,7 +12924,7 @@ static int manager_sip_show_peer(struct mansession *s, const struct message *m)
 
 	peer = astman_get_header(m, "Peer");
 	if (ast_strlen_zero(peer)) {
-		astman_send_error(s, m, "Peer: <name> missing.\n");
+		astman_send_error(s, m, "Peer: <name> missing.");
 		return 0;
 	}
 	a[0] = "sip";
@@ -12960,7 +12970,7 @@ static char *_sip_qualify_peer(int type, int fd, struct mansession *s, const str
 	} else if (type == 0) {
 		ast_cli(fd, "Peer '%s' not found\n", argv[3]);
 	} else {
-		astman_send_error(s, m, "Peer not found\n");
+		astman_send_error(s, m, "Peer not found");
 	}
 	return CLI_SUCCESS;
 }
@@ -12973,7 +12983,7 @@ static int manager_sip_qualify_peer(struct mansession *s, const struct message *
 
 	peer = astman_get_header(m, "Peer");
 	if (ast_strlen_zero(peer)) {
-		astman_send_error(s, m, "Peer: <name> missing.\n");
+		astman_send_error(s, m, "Peer: <name> missing.");
 		return 0;
 	}
 	a[0] = "sip";
@@ -13045,7 +13055,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 			if (!ast_strlen_zero(id))
 				astman_append(s, "ActionID: %s\r\n", id);
 		} else {
-			snprintf (cbuf, sizeof(cbuf), "Peer %s not found.\n", argv[3]);
+			snprintf (cbuf, sizeof(cbuf), "Peer %s not found.", argv[3]);
 			astman_send_error(s, m, cbuf);
 			return CLI_SUCCESS;
 		}
@@ -13766,7 +13776,7 @@ static const char *subscription_type2str(enum subscriptiontype subtype)
 {
 	int i;
 
-	for (i = 1; (i < (sizeof(subscription_types) / sizeof(subscription_types[0]))); i++) {
+	for (i = 1; i < ARRAY_LEN(subscription_types); i++) {
 		if (subscription_types[i].type == subtype) {
 			return subscription_types[i].text;
 		}
@@ -13779,7 +13789,7 @@ static const struct cfsubscription_types *find_subscription_type(enum subscripti
 {
 	int i;
 
-	for (i = 1; (i < (sizeof(subscription_types) / sizeof(subscription_types[0]))); i++) {
+	for (i = 1; i < ARRAY_LEN(subscription_types); i++) {
 		if (subscription_types[i].type == subtype) {
 			return &subscription_types[i];
 		}
@@ -20134,8 +20144,13 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 		ast_set_flag(&mask[0], SIP_PROMISCREDIR);
 		ast_set2_flag(&flags[0], ast_true(v->value), SIP_PROMISCREDIR);
 	} else if (!strcasecmp(v->name, "videosupport")) {
-		ast_set_flag(&mask[1], SIP_PAGE2_VIDEOSUPPORT);
-		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_VIDEOSUPPORT);
+		if (!strcasecmp(v->value, "always")) {
+			ast_set_flag(&mask[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS);
+			ast_set_flag(&flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS);
+		} else {
+			ast_set_flag(&mask[1], SIP_PAGE2_VIDEOSUPPORT);
+			ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_VIDEOSUPPORT);
+		}
 	} else if (!strcasecmp(v->name, "textsupport")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_TEXTSUPPORT);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_TEXTSUPPORT);
@@ -21062,7 +21077,7 @@ static int reload_config(enum channelreloadreason reason)
 	/* Copy the default jb config over global_jbconf */
 	memcpy(&global_jbconf, &default_jbconf, sizeof(struct ast_jb_conf));
 
-	ast_clear_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT);
+	ast_clear_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_VIDEOSUPPORT_ALWAYS);
 	ast_clear_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT);
 
 

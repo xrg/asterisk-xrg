@@ -202,18 +202,18 @@ static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audioho
 
 	/* If we want to provide only a read factory make sure we aren't waiting for other audio */
 	if (usable_read && !usable_write && (ast_tvdiff_ms(ast_tvnow(), audiohook->write_time) < (samples/8)*2)) {
-		ast_debug(1, "Write factory %p was pretty quick last time, waiting for them.\n", &audiohook->write_factory);
+		ast_debug(3, "Write factory %p was pretty quick last time, waiting for them.\n", &audiohook->write_factory);
 		return NULL;
 	}
 
 	/* If we want to provide only a write factory make sure we aren't waiting for other audio */
-	if (usable_write && !usable_read && (ast_tvdiff_ms(ast_tvnow(), audiohook->write_time) < (samples/8)*2)) {
-		ast_debug(1, "Read factory %p was pretty quick last time, waiting for them.\n", &audiohook->read_factory);
+	if (usable_write && !usable_read && (ast_tvdiff_ms(ast_tvnow(), audiohook->read_time) < (samples/8)*2)) {
+		ast_debug(3, "Read factory %p was pretty quick last time, waiting for them.\n", &audiohook->read_factory);
 		return NULL;
 	}
 
 	/* Start with the read factory... if there are enough samples, read them in */
-	if (usable_read && ast_slinfactory_available(&audiohook->read_factory) >= samples) {
+	if (usable_read) {
 		if (ast_slinfactory_read(&audiohook->read_factory, buf1, samples)) {
 			read_buf = buf1;
 			/* Adjust read volume if need be */
@@ -232,7 +232,7 @@ static struct ast_frame *audiohook_read_frame_both(struct ast_audiohook *audioho
 		ast_log(LOG_DEBUG, "Failed to get %d samples from read factory %p\n", (int)samples, &audiohook->read_factory);
 
 	/* Move on to the write factory... if there are enough samples, read them in */
-	if (usable_write && ast_slinfactory_available(&audiohook->write_factory) >= samples) {
+	if (usable_write) {
 		if (ast_slinfactory_read(&audiohook->write_factory, buf2, samples)) {
 			write_buf = buf2;
 			/* Adjust write volume if need be */
