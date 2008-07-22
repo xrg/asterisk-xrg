@@ -459,6 +459,7 @@ rm -rf %{buildroot}%{_localstatedir}/asterisk/sounds
 
 %pre
 %_pre_useradd asterisk %{_localstatedir}/asterisk /bin/sh
+%_pre_groupadd asterisk
 
 %post
 %create_ghostfile /var/log/asterisk/console asterisk asterisk 644
@@ -515,9 +516,9 @@ fi
 %attr(0755,root,root)					%{_initrddir}/asterisk
 %attr(0644,root,root) %config(noreplace)		%{_sysconfdir}/logrotate.d/asterisk
 %attr(0750,asterisk,asterisk) %dir			%{_sysconfdir}/asterisk
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*.adsi
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*.conf
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/extensions.ael
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*.adsi
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*.conf
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/extensions.ael
 %attr(0644,root,root) %config(noreplace)		%{_sysconfdir}/sysconfig/asterisk
 # TODO
 #attr(0750,root,asterisk) %dir				%{_sysconfdir}/ssl/asterisk
@@ -668,13 +669,13 @@ fi
 %if %{build_odbc}
 %files plugins-odbc
 %defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*_odbc.conf
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*_odbc.conf
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/*_odbc.so
 %endif
 
 %files plugins-pgsql
 %defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/cdr_pgsql.conf
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/cdr_pgsql.conf
 #attr(0755,root,root)					%{_libdir}/asterisk/modules/app_sql_postgres.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/cdr_pgsql.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/res_config_pgsql.so
@@ -692,24 +693,24 @@ fi
 %if %build_tds
 %files plugins-tds
 %defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/cdr_tds.conf
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/cdr_tds.conf
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/cdr_tds.so
 %endif
 
 %files plugins-osp
 %defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/osp.conf
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/osp.conf
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/app_osplookup.so
 
 %files plugins-snmp
 %defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/res_snmp.conf
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/res_snmp.conf
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/res_snmp.so
 
 %files plugins-jabber
 %defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/gtalk.conf
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/jabber.conf
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/gtalk.conf
+%attr(0640,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/jabber.conf
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/chan_gtalk.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/res_jabber.so
 
