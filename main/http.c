@@ -228,12 +228,12 @@ static struct ast_str *static_callback(struct ast_tcptls_session_instance *ser, 
 out404:
 	return ast_http_error((*status = 404),
 			      (*title = ast_strdup("Not Found")),
-			       NULL, "Nothing to see here.  Move along.");
+			       NULL, "The requested URL was not found on this server.");
 
 out403:
 	return ast_http_error((*status = 403),
 			      (*title = ast_strdup("Access Denied")),
-			      NULL, "Sorry, I cannot let you do that, Dave.");
+			      NULL, "You do not have permission to access the requested URL.");
 }
 
 
@@ -391,6 +391,7 @@ void ast_http_uri_unlink_all_with_key(const char *key)
 		}
 	}
 	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_UNLOCK(&uris);
 }
 
 /*
@@ -400,10 +401,13 @@ void ast_http_uri_unlink_all_with_key(const char *key)
  */
 static void http_decode(char *s)
 {
-	for (;*s; s++) {
-		if (*s == '+')
-			*s = ' ';
+	char *t;
+	
+	for (t = s; *t; t++) {
+		if (*t == '+')
+			*t = ' ';
 	}
+
 	ast_uri_decode(s);
 }
 
@@ -476,7 +480,7 @@ static struct ast_str *handle_uri(struct ast_tcptls_session_instance *ser, char 
 			snprintf(buf, sizeof(buf), "Location: %s\r\n", redirect->dest);
 			out = ast_http_error((*status = 302),
 					     (*title = ast_strdup("Moved Temporarily")),
-					     buf, "There is no spoon...");
+					     buf, "Redirecting...");
 
 			break;
 		}
@@ -540,7 +544,7 @@ static struct ast_str *handle_uri(struct ast_tcptls_session_instance *ser, char 
 	if (method == AST_HTTP_POST && !astman_is_authed(manid_from_vars(vars))) {
 		out = ast_http_error((*status = 403),
 			      (*title = ast_strdup("Access Denied")),
-			      NULL, "Sorry, I cannot let you do that, Dave.");
+			      NULL, "You do not have permission to access the requested URL.");
 	} else if (urih) {
 		*static_content = urih->static_content;
 		out = urih->callback(ser, urih, uri, method, vars, headers, status, title, contentlength);
@@ -653,6 +657,7 @@ static void *httpd_helper_thread(void *data)
 	int status = 200, contentlength = 0;
 	struct ast_str *out = NULL;
 	unsigned int static_content = 0;
+	struct ast_variable *tail = headers;
 
 	if (!fgets(buf, sizeof(buf), ser->f)) {
 		goto done;
@@ -682,6 +687,24 @@ static void *httpd_helper_thread(void *data)
 		}
 		if (!strncasecmp(cookie, "Cookie: ", 8)) {
 			vars = parse_cookies(cookie);
+		} else {
+			char *name, *val;
+
+			val = cookie;
+			name = strsep(&val, ":");
+			if (ast_strlen_zero(name) || ast_strlen_zero(val)) {
+				continue;
+			}
+			ast_trim_blanks(name);
+			val = ast_skip_blanks(val);
+
+			if (!headers) {
+				headers = ast_variable_new(name, val, __FILE__);
+				tail = headers;
+			} else {
+				tail->next = ast_variable_new(name, val, __FILE__);
+				tail = tail->next;
+			}
 		}
 	}
 

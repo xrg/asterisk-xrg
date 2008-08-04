@@ -7,7 +7,7 @@
 ; syntaxes for dialing SIP devices.
 ;	SIP/devicename
 ;	SIP/username@domain   (SIP uri)
-;	SIP/username[:password[:md5secret[:authname]]]@host[:port]
+;	SIP/username[:password[:md5secret[:authname[:transport]]]]@host[:port]
 ;	SIP/devicename/extension
 ;
 ;
@@ -961,8 +961,10 @@ srvlookup=yes			; Enable DNS SRV lookups on outbound calls
 ;defaultuser=goran		; Username to use when calling this device before registration
 				; Normally you do NOT need to set this parameter
 ;setvar=CUSTID=5678		; Channel variable to be set for all calls from this device
-;setvar=ATTENDED_TRANSFER_COMPLETE_SOUND=beep ; This channel variable will cause the given audio file to be played
-                                              ; upon completion of an attended transfer
+;setvar=ATTENDED_TRANSFER_COMPLETE_SOUND=beep   ; This channel variable will
+                                                ; cause the given audio file to
+                                                ; be played upon completion of
+                                                ; an attended transfer.
 
 ;[pre14-asterisk]
 ;type=friend

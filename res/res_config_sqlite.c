@@ -27,18 +27,12 @@
  * res_config_sqlite is a module for the Asterisk Open Source PBX to
  * support SQLite 2 databases. It can be used to fetch configuration
  * from a database (static configuration files and/or using the Asterisk
- * RealTime Architecture - ARA).
- * It can also be used to log CDR entries. Finally, it can be used for simple
- * queries in the Dialplan. Note that Asterisk already comes with a module
- * named cdr_sqlite. There are two reasons for including it in res_config_sqlite:
+ * RealTime Architecture - ARA).  It can also be used to log CDR entries. 
+ * Note that Asterisk already comes with a module named cdr_sqlite.
+ * There are two reasons for including it in res_config_sqlite:
  * the first is that rewriting it was a training to learn how to write a
  * simple module for Asterisk, the other is to have the same database open for
  * all kinds of operations, which improves reliability and performance.
- *
- * There is already a module for SQLite 3 (named res_sqlite3) in the Asterisk
- * addons. res_config_sqlite was developed because we, at Proformatique, are using
- * PHP 4 in our embedded systems, and PHP 4 has no stable support for SQLite 3
- * at this time. We also needed RealTime support.
  *
  * \section conf_sec Configuration
  *
@@ -86,6 +80,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sqlite.h>
 
+#include "asterisk/app.h"
 #include "asterisk/pbx.h"
 #include "asterisk/cdr.h"
 #include "asterisk/cli.h"
@@ -129,7 +124,7 @@ MACRO_END
 
 /*!
  * Maximum number of loops before giving up executing a query. Calls to
- * sqlite_xxx() functions which can return SQLITE_BUSY or SQLITE_LOCKED
+ * sqlite_xxx() functions which can return SQLITE_BUSY
  * are enclosed by RES_CONFIG_SQLITE_BEGIN and RES_CONFIG_SQLITE_END, e.g.
  * <pre>
  * char *errormsg;
@@ -162,7 +157,7 @@ MACRO_BEGIN								\
  * \see RES_CONFIG_SQLITE_MAX_LOOPS.
  */
 #define RES_CONFIG_SQLITE_END(error)					\
-		if (error != SQLITE_BUSY && error != SQLITE_LOCKED)	\
+		if (error != SQLITE_BUSY)	\
 			break;						\
 		usleep(1000);						\
 	}								\
@@ -324,7 +319,7 @@ static int add_rt_cfg_entry(void *arg, int argc, char **argv,
 	char **columnNames);
 
 /*!
- * Asterisk callback function for RealTime configuration.
+ * \brief Asterisk callback function for RealTime configuration.
  *
  * Asterisk will call this function each time it requires a variable
  * through the RealTime architecture. ap is a list of parameters and
@@ -449,6 +444,10 @@ static int realtime_destroy_handler(const char *database, const char *table,
  * \return RESULT_SUCCESS
  */
 static char *handle_cli_show_sqlite_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+static char *handle_cli_sqlite_show_tables(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+
+static int realtime_require_handler(const char *database, const char *table, va_list ap);
+static int realtime_unload_handler(const char *unused, const char *tablename);
 
 /*! The SQLite database object. */
 static sqlite *db;
@@ -483,7 +482,9 @@ static struct ast_config_engine sqlite_engine =
 	.realtime_multi_func = realtime_multi_handler,
 	.store_func = realtime_store_handler,
 	.destroy_func = realtime_destroy_handler,
-	.update_func = realtime_update_handler
+	.update_func = realtime_update_handler,
+	.require_func = realtime_require_handler,
+	.unload_func = realtime_unload_handler,
 };
 
 /*!
@@ -497,7 +498,23 @@ AST_MUTEX_DEFINE_STATIC(mutex);
  */
 static struct ast_cli_entry cli_status[] = {
 	AST_CLI_DEFINE(handle_cli_show_sqlite_status, "Show status information about the SQLite 2 driver"),
+	AST_CLI_DEFINE(handle_cli_sqlite_show_tables, "Cached table information about the SQLite 2 driver"),
 };
+
+struct sqlite_cache_columns {
+	char *name;
+	char *type;
+	unsigned char isint;    /*!< By definition, only INTEGER PRIMARY KEY is an integer; everything else is a string. */
+	AST_RWLIST_ENTRY(sqlite_cache_columns) list;
+};
+
+struct sqlite_cache_tables {
+	char *name;
+	AST_RWLIST_HEAD(_columns, sqlite_cache_columns) columns;
+	AST_RWLIST_ENTRY(sqlite_cache_tables) list;
+};
+
+static AST_RWLIST_HEAD_STATIC(sqlite_tables, sqlite_cache_tables);
 
 /*
  * Taken from Asterisk 1.2 cdr_sqlite.so.
@@ -528,47 +545,11 @@ static char *sql_create_cdr_table =
 "	PRIMARY KEY	(id)\n"
 ");";
 
-/*! SQL query format to insert a CDR entry. */
-static char *sql_add_cdr_entry =
-"INSERT INTO '%q' ("
-"	clid,"
-"	src,"
-"	dst,"
-"	dcontext,"
-"	channel,"
-"	dstchannel,"
-"	lastapp,"
-"	lastdata,"
-"	start,"
-"	answer,"
-"	end,"
-"	duration,"
-"	billsec,"
-"	disposition,"
-"	amaflags,"
-"	accountcode,"
-"	uniqueid,"
-"	userfield"
-") VALUES ("
-"	'%q',"
-"	'%q',"
-"	'%q',"
-"	'%q',"
-"	'%q',"
-"	'%q',"
-"	'%q',"
-"	'%q',"
-"	datetime(%d,'unixepoch','localtime'),"
-"	datetime(%d,'unixepoch','localtime'),"
-"	datetime(%d,'unixepoch','localtime'),"
-"	'%ld',"
-"	'%ld',"
-"	'%ld',"
-"	'%ld',"
-"	'%q',"
-"	'%q',"
-"	'%q'"
-");";
+/*!
+ * SQL query format to describe the table structure
+ */
+static char *sql_table_structure =
+"SELECT sql FROM sqlite_master WHERE type='table' AND tbl_name='%s'";
 
 /*!
  * SQL query format to fetch the static configuration of a file.
@@ -576,11 +557,142 @@ static char *sql_add_cdr_entry =
  *
  * \see add_cfg_entry()
  */
-static char *sql_get_config_table =
+static const char *sql_get_config_table =
 "SELECT *"
 "	FROM '%q'"
 "	WHERE filename = '%q' AND commented = 0"
 "	ORDER BY cat_metric ASC, var_metric ASC;";
+
+static void free_table(struct sqlite_cache_tables *tblptr)
+{
+	struct sqlite_cache_columns *col;
+
+	/* Obtain a write lock to ensure there are no read locks outstanding */
+	AST_RWLIST_WRLOCK(&(tblptr->columns));
+	while ((col = AST_RWLIST_REMOVE_HEAD(&(tblptr->columns), list))) {
+		ast_free(col);
+	}
+	AST_RWLIST_UNLOCK(&(tblptr->columns));
+	AST_RWLIST_HEAD_DESTROY(&(tblptr->columns));
+	ast_free(tblptr);
+}
+
+static int find_table_cb(void *vtblptr, int argc, char **argv, char **columnNames)
+{
+	struct sqlite_cache_tables *tblptr = vtblptr;
+	char *sql = ast_strdupa(argv[0]), *start, *end, *type, *remainder;
+	int i;
+	AST_DECLARE_APP_ARGS(fie,
+		AST_APP_ARG(ld)[100]; /* This means we support up to 100 columns per table */
+	);
+	struct sqlite_cache_columns *col;
+
+	/* This is really fun.  We get to parse an SQL statement to figure out
+	 * what columns are in the table.
+	 */
+	if ((start = strchr(sql, '(')) && (end = strrchr(sql, ')'))) {
+		start++;
+		*end = '\0';
+	} else {
+		/* Abort */
+		return -1;
+	}
+
+	AST_STANDARD_APP_ARGS(fie, start);
+	for (i = 0; i < fie.argc; i++) {
+		fie.ld[i] = ast_skip_blanks(fie.ld[i]);
+		ast_debug(5, "Found field: %s\n", fie.ld[i]);
+		if (strncasecmp(fie.ld[i], "PRIMARY KEY", 11) == 0 && (start = strchr(fie.ld[i], '(')) && (end = strchr(fie.ld[i], ')'))) {
+			*end = '\0';
+			AST_RWLIST_TRAVERSE(&(tblptr->columns), col, list) {
+				if (strcasecmp(start + 1, col->name) == 0 && strcasestr(col->type, "INTEGER")) {
+					col->isint = 1;
+				}
+			}
+			continue;
+		}
+		/* type delimiter could be any space character */
+		for (type = fie.ld[i]; *type > 32; type++);
+		*type++ = '\0';
+		type = ast_skip_blanks(type);
+		for (remainder = type; *remainder > 32; remainder++);
+		*remainder = '\0';
+		if (!(col = ast_calloc(1, sizeof(*col) + strlen(fie.ld[i]) + strlen(type) + 2))) {
+			return -1;
+		}
+		col->name = (char *)col + sizeof(*col);
+		col->type = (char *)col + sizeof(*col) + strlen(fie.ld[i]) + 1;
+		strcpy(col->name, fie.ld[i]); /* SAFE */
+		strcpy(col->type, type); /* SAFE */
+		if (strcasestr(col->type, "INTEGER") && strcasestr(col->type, "PRIMARY KEY")) {
+			col->isint = 1;
+		}
+		AST_LIST_INSERT_TAIL(&(tblptr->columns), col, list);
+	}
+	return 0;
+}
+
+static struct sqlite_cache_tables *find_table(const char *tablename)
+{
+	struct sqlite_cache_tables *tblptr;
+	int i, err;
+	char *sql, *errstr = NULL;
+
+	AST_RWLIST_RDLOCK(&sqlite_tables);
+
+	for (i = 0; i < 2; i++) {
+		AST_RWLIST_TRAVERSE(&sqlite_tables, tblptr, list) {
+			if (strcmp(tblptr->name, tablename) == 0) {
+				break;
+			}
+		}
+		if (tblptr) {
+			AST_RWLIST_RDLOCK(&(tblptr->columns));
+			AST_RWLIST_UNLOCK(&sqlite_tables);
+			return tblptr;
+		}
+
+		if (i == 0) {
+			AST_RWLIST_UNLOCK(&sqlite_tables);
+			AST_RWLIST_WRLOCK(&sqlite_tables);
+		}
+	}
+
+	/* Table structure not cached; build the structure now */
+	asprintf(&sql, sql_table_structure, tablename);
+	if (!(tblptr = ast_calloc(1, sizeof(*tblptr) + strlen(tablename) + 1))) {
+		AST_RWLIST_UNLOCK(&sqlite_tables);
+		ast_log(LOG_ERROR, "Memory error.  Cannot cache table '%s'\n", tablename);
+		return NULL;
+	}
+	tblptr->name = (char *)tblptr + sizeof(*tblptr);
+	strcpy(tblptr->name, tablename); /* SAFE */
+	AST_RWLIST_HEAD_INIT(&(tblptr->columns));
+
+	ast_debug(1, "About to query table structure: %s\n", sql);
+
+	ast_mutex_lock(&mutex);
+	if ((err = sqlite_exec(db, sql, find_table_cb, tblptr, &errstr))) {
+		ast_mutex_unlock(&mutex);
+		ast_log(LOG_WARNING, "SQLite error %d: %s\n", err, errstr);
+		ast_free(errstr);
+		free_table(tblptr);
+		return NULL;
+	}
+	ast_mutex_unlock(&mutex);
+
+	if (AST_LIST_EMPTY(&(tblptr->columns))) {
+		free_table(tblptr);
+		return NULL;
+	}
+
+	AST_RWLIST_INSERT_TAIL(&sqlite_tables, tblptr, list);
+	AST_RWLIST_RDLOCK(&(tblptr->columns));
+	AST_RWLIST_UNLOCK(&sqlite_tables);
+	return tblptr;
+}
+
+#define release_table(a)	AST_RWLIST_UNLOCK(&((a)->columns))
 
 static int set_var(char **var, const char *name, const char *value)
 {
@@ -628,9 +740,9 @@ static int load_config(void)
 			SET_VAR(config, dbfile, var);
 		else if (!strcasecmp(var->name, "config_table"))
 			SET_VAR(config, config_table, var);
-		else if (!strcasecmp(var->name, "cdr_table"))
+		else if (!strcasecmp(var->name, "cdr_table")) {
 			SET_VAR(config, cdr_table, var);
-		else
+		} else
 			ast_log(LOG_WARNING, "Unknown parameter : %s\n", var->name);
 	}
 
@@ -647,49 +759,82 @@ static int load_config(void)
 
 static void unload_config(void)
 {
+	struct sqlite_cache_tables *tbl;
 	ast_free(dbfile);
 	dbfile = NULL;
 	ast_free(config_table);
 	config_table = NULL;
 	ast_free(cdr_table);
 	cdr_table = NULL;
+	AST_RWLIST_WRLOCK(&sqlite_tables);
+	while ((tbl = AST_RWLIST_REMOVE_HEAD(&sqlite_tables, list))) {
+		free_table(tbl);
+	}
+	AST_RWLIST_UNLOCK(&sqlite_tables);
 }
 
 static int cdr_handler(struct ast_cdr *cdr)
 {
-	char *query, *errormsg;
-	int error;
+	char *errormsg = NULL, *tmp, workspace[500];
+	int error, scannum;
+	struct sqlite_cache_tables *tbl = find_table(cdr_table);
+	struct sqlite_cache_columns *col;
+	struct ast_str *sql1 = ast_str_create(160), *sql2 = ast_str_create(16);
 
-	query = sqlite_mprintf(sql_add_cdr_entry, cdr_table, cdr->clid,
-			cdr->src, cdr->dst, cdr->dcontext, cdr->channel,
-			cdr->dstchannel, cdr->lastapp, cdr->lastdata,
-			cdr->start.tv_sec, cdr->answer.tv_sec,
-			cdr->end.tv_sec, cdr->duration, cdr->billsec,
-			cdr->disposition, cdr->amaflags, cdr->accountcode,
-			cdr->uniqueid, cdr->userfield);
-
-	if (!query) {
-		ast_log(LOG_WARNING, "Unable to allocate SQL query\n");
-		return 1;
+	if (!tbl) {
+		ast_log(LOG_WARNING, "No such table: %s\n", cdr_table);
+		return -1;
 	}
 
-	ast_debug(1, "SQL query: %s\n", query);
+	ast_str_set(&sql1, 0, "INSERT INTO %s (", cdr_table);
+	ast_str_set(&sql2, 0, ") VALUES (");
+
+	AST_RWLIST_TRAVERSE(&(tbl->columns), col, list) {
+		if (col->isint) {
+			ast_cdr_getvar(cdr, col->name, &tmp, workspace, sizeof(workspace), 0, 1);
+			if (!tmp) {
+				continue;
+			}
+			if (sscanf(tmp, "%d", &scannum) == 1) {
+				ast_str_append(&sql1, 0, "%s,", col->name);
+				ast_str_append(&sql2, 0, "%d,", scannum);
+			}
+		} else {
+			ast_cdr_getvar(cdr, col->name, &tmp, workspace, sizeof(workspace), 0, 0);
+			if (!tmp) {
+				continue;
+			}
+			ast_str_append(&sql1, 0, "%s,", col->name);
+			tmp = sqlite_mprintf("%Q", tmp);
+			ast_str_append(&sql2, 0, "%s,", tmp);
+			sqlite_freemem(tmp);
+		}
+	}
+	release_table(tbl);
+
+	sql1->str[--sql1->used] = '\0';
+	sql2->str[--sql2->used] = '\0';
+	ast_str_append(&sql1, 0, "%s)", sql2->str);
+	ast_free(sql2);
+
+	ast_debug(1, "SQL query: %s\n", sql1->str);
 
 	ast_mutex_lock(&mutex);
 
 	RES_CONFIG_SQLITE_BEGIN
-		error = sqlite_exec(db, query, NULL, NULL, &errormsg);
+		error = sqlite_exec(db, sql1->str, NULL, NULL, &errormsg);
 	RES_CONFIG_SQLITE_END(error)
 
 	ast_mutex_unlock(&mutex);
 
-	sqlite_freemem(query);
+	ast_free(sql1);
 
 	if (error) {
-		ast_log(LOG_ERROR, "%s\n", errormsg);
+		ast_log(LOG_ERROR, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 		sqlite_freemem(errormsg);
 		return 1;
 	}
+	sqlite_freemem(errormsg);
 
 	return 0;
 }
@@ -757,7 +902,7 @@ static struct ast_config *config_handler(const char *database,	const char *table
 	struct ast_config *cfg, struct ast_flags flags, const char *suggested_incl, const char *who_asked)
 {
 	struct cfg_entry_args args;
-	char *query, *errormsg;
+	char *query, *errormsg = NULL;
 	int error;
 
 	if (!config_table) {
@@ -794,10 +939,11 @@ static struct ast_config *config_handler(const char *database,	const char *table
 	sqlite_freemem(query);
 
 	if (error) {
-		ast_log(LOG_ERROR, "%s\n", errormsg);
+		ast_log(LOG_ERROR, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 		sqlite_freemem(errormsg);
 		return NULL;
 	}
+	sqlite_freemem(errormsg);
 
 	return cfg;
 }
@@ -871,7 +1017,7 @@ static int add_rt_cfg_entry(void *arg, int argc, char **argv, char **columnNames
 
 static struct ast_variable * realtime_handler(const char *database, const char *table, va_list ap)
 {
-	char *query, *errormsg, *op, *tmp_str;
+	char *query, *errormsg = NULL, *op, *tmp_str;
 	struct rt_cfg_entry_args args;
 	const char **params, **vals;
 	size_t params_count;
@@ -949,11 +1095,12 @@ static struct ast_variable * realtime_handler(const char *database, const char *
 	sqlite_freemem(query);
 
 	if (error) {
-		ast_log(LOG_WARNING, "%s\n", errormsg);
+		ast_log(LOG_WARNING, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 		sqlite_freemem(errormsg);
 		ast_variables_destroy(args.var);
 		return NULL;
 	}
+	sqlite_freemem(errormsg);
 
 	return args.var;
 }
@@ -1009,7 +1156,7 @@ static int add_rt_multi_cfg_entry(void *arg, int argc, char **argv, char **colum
 static struct ast_config *realtime_multi_handler(const char *database,
 	const char *table, va_list ap)
 {
-	char *query, *errormsg, *op, *tmp_str, *initfield;
+	char *query, *errormsg = NULL, *op, *tmp_str, *initfield;
 	struct rt_multi_cfg_entry_args args;
 	const char **params, **vals;
 	struct ast_config *cfg;
@@ -1115,11 +1262,12 @@ static struct ast_config *realtime_multi_handler(const char *database,
 	ast_free(initfield);
 
 	if (error) {
-		ast_log(LOG_WARNING, "%s\n", errormsg);
+		ast_log(LOG_WARNING, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 		sqlite_freemem(errormsg);
 		ast_config_destroy(cfg);
 		return NULL;
 	}
+	sqlite_freemem(errormsg);
 
 	return cfg;
 }
@@ -1127,7 +1275,7 @@ static struct ast_config *realtime_multi_handler(const char *database,
 static int realtime_update_handler(const char *database, const char *table,
 	const char *keyfield, const char *entity, va_list ap)
 {
-	char *query, *errormsg, *tmp_str;
+	char *query, *errormsg = NULL, *tmp_str;
 	const char **params, **vals;
 	size_t params_count;
 	int error, rows_num;
@@ -1199,16 +1347,16 @@ static int realtime_update_handler(const char *database, const char *table,
 	sqlite_freemem(query);
 
 	if (error) {
-		ast_log(LOG_WARNING, "%s\n", errormsg);
-		sqlite_freemem(errormsg);
+		ast_log(LOG_WARNING, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 	}
+	sqlite_freemem(errormsg);
 
 	return rows_num;
 }
 
 static int realtime_store_handler(const char *database, const char *table, va_list ap)
 {
-	char *errormsg, *tmp_str, *tmp_keys = NULL, *tmp_keys2 = NULL, *tmp_vals = NULL, *tmp_vals2 = NULL;
+	char *errormsg = NULL, *tmp_str, *tmp_keys = NULL, *tmp_keys2 = NULL, *tmp_vals = NULL, *tmp_vals2 = NULL;
 	const char **params, **vals;
 	size_t params_count;
 	int error, rows_id;
@@ -1293,9 +1441,9 @@ static int realtime_store_handler(const char *database, const char *table, va_li
 	sqlite_freemem(tmp_str);
 
 	if (error) {
-		ast_log(LOG_WARNING, "%s\n", errormsg);
-		sqlite_freemem(errormsg);
+		ast_log(LOG_WARNING, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 	}
+	sqlite_freemem(errormsg);
 
 	return rows_id;
 }
@@ -1303,7 +1451,7 @@ static int realtime_store_handler(const char *database, const char *table, va_li
 static int realtime_destroy_handler(const char *database, const char *table,
 	const char *keyfield, const char *entity, va_list ap)
 {
-	char *query, *errormsg, *tmp_str;
+	char *query, *errormsg = NULL, *tmp_str;
 	const char **params, **vals;
 	size_t params_count;
 	int error, rows_num;
@@ -1370,20 +1518,71 @@ static int realtime_destroy_handler(const char *database, const char *table,
 	sqlite_freemem(query);
 
 	if (error) {
-		ast_log(LOG_WARNING, "%s\n", errormsg);
-		sqlite_freemem(errormsg);
+		ast_log(LOG_WARNING, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 	}
+	sqlite_freemem(errormsg);
 
 	return rows_num;
+}
+
+static int realtime_require_handler(const char *unused, const char *tablename, va_list ap)
+{
+	struct sqlite_cache_tables *tbl = find_table(tablename);
+	struct sqlite_cache_columns *col;
+	char *elm;
+	int type, size, res = 0;
+
+	if (!tbl) {
+		return -1;
+	}
+
+	while ((elm = va_arg(ap, char *))) {
+		type = va_arg(ap, require_type);
+		size = va_arg(ap, int);
+		/* Check if the field matches the criteria */
+		AST_RWLIST_TRAVERSE(&tbl->columns, col, list) {
+			if (strcmp(col->name, elm) == 0) {
+				/* SQLite only has two types - the 32-bit integer field that
+				 * is the key column, and everything else (everything else
+				 * being a string).
+				 */
+				if (col->isint && !ast_rq_is_int(type)) {
+					ast_log(LOG_WARNING, "Realtime table %s: column '%s' is an integer field, but Asterisk requires that it not be!\n", tablename, col->name);
+					res = -1;
+				}
+				break;
+			}
+		}
+		if (!col) {
+			ast_log(LOG_WARNING, "Realtime table %s requires column '%s', but that column does not exist!\n", tablename, elm);
+		}
+	}
+	AST_RWLIST_UNLOCK(&(tbl->columns));
+	return res;
+}
+
+static int realtime_unload_handler(const char *unused, const char *tablename)
+{
+	struct sqlite_cache_tables *tbl;
+	AST_RWLIST_WRLOCK(&sqlite_tables);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&sqlite_tables, tbl, list) {
+		if (!strcasecmp(tbl->name, tablename)) {
+			AST_RWLIST_REMOVE_CURRENT(list);
+			free_table(tbl);
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_UNLOCK(&sqlite_tables);
+	return 0;
 }
 
 static char *handle_cli_show_sqlite_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "show sqlite status";
+		e->command = "sqlite show status";
 		e->usage =
-			"Usage: show sqlite status\n"
+			"Usage: sqlite show status\n"
 			"       Show status information about the SQLite 2 driver\n";
 		return NULL;
 	case CLI_GENERATE:
@@ -1411,6 +1610,44 @@ static char *handle_cli_show_sqlite_status(struct ast_cli_entry *e, int cmd, str
 	return CLI_SUCCESS;
 }
 
+static char *handle_cli_sqlite_show_tables(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct sqlite_cache_tables *tbl;
+	struct sqlite_cache_columns *col;
+	int found = 0;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "sqlite show tables";
+		e->usage =
+			"Usage: sqlite show tables\n"
+			"       Show table information about the SQLite 2 driver\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+
+	AST_RWLIST_RDLOCK(&sqlite_tables);
+	AST_RWLIST_TRAVERSE(&sqlite_tables, tbl, list) {
+		found++;
+		ast_cli(a->fd, "Table %s:\n", tbl->name);
+		AST_RWLIST_TRAVERSE(&(tbl->columns), col, list) {
+			fprintf(stderr, "%s\n", col->name);
+			ast_cli(a->fd, "  %20.20s  %-30.30s\n", col->name, col->type);
+		}
+	}
+	AST_RWLIST_UNLOCK(&sqlite_tables);
+
+	if (!found) {
+		ast_cli(a->fd, "No tables currently in cache\n");
+	}
+
+	return CLI_SUCCESS;
+}
+
 static int unload_module(void)
 {
 	if (cli_status_registered)
@@ -1431,7 +1668,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	char *errormsg;
+	char *errormsg = NULL;
 	int error;
 
 	db = NULL;
@@ -1446,12 +1683,14 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 
 	if (!(db = sqlite_open(dbfile, 0660, &errormsg))) {
-		ast_log(LOG_ERROR, "%s\n", errormsg);
+		ast_log(LOG_ERROR, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 		sqlite_freemem(errormsg);
 		unload_module();
 		return 1;
 	}
 
+	sqlite_freemem(errormsg);
+	errormsg = NULL;
 	ast_config_engine_register(&sqlite_engine);
 
 	if (use_cdr) {
@@ -1483,13 +1722,14 @@ static int load_module(void)
 			 * Unexpected error.
 			 */
 			if (error != SQLITE_ERROR) {
-				ast_log(LOG_ERROR, "%s\n", errormsg);
+				ast_log(LOG_ERROR, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 				sqlite_freemem(errormsg);
 				unload_module();
 				return 1;
 			}
 
 			sqlite_freemem(errormsg);
+			errormsg = NULL;
 			query = sqlite_mprintf(sql_create_cdr_table, cdr_table);
 
 			if (!query) {
@@ -1507,12 +1747,14 @@ static int load_module(void)
 			sqlite_freemem(query);
 
 			if (error) {
-				ast_log(LOG_ERROR, "%s\n", errormsg);
+				ast_log(LOG_ERROR, "%s\n", S_OR(errormsg, sqlite_error_string(error)));
 				sqlite_freemem(errormsg);
 				unload_module();
 				return 1;
 			}
 		}
+		sqlite_freemem(errormsg);
+		errormsg = NULL;
 
 		error = ast_cdr_register(RES_CONFIG_SQLITE_NAME, RES_CONFIG_SQLITE_DESCRIPTION, cdr_handler);
 

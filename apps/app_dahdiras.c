@@ -53,7 +53,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 
 static char *app = "DAHDIRAS";
-static char *deprecated_app = "ZapRAS";
 
 static char *synopsis = "Executes DAHDI ISDN RAS application";
 
@@ -181,7 +180,7 @@ static int dahdiras_exec(struct ast_channel *chan, void *data)
 {
 	int res=-1;
 	char *args;
-	DAHDI_PARAMS dahdip;
+	struct dahdi_params dahdip;
 
 	if (!data) 
 		data = "";
@@ -212,12 +211,6 @@ static int dahdiras_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
-static int dahdiras_exec_warn(struct ast_channel *chan, void *data)
-{
-	ast_log(LOG_WARNING, "Use of the command %s is deprecated, please use %s instead.\n", deprecated_app, app);
-	return dahdiras_exec(chan, data);
-}
-
 static int unload_module(void) 
 {
 	return ast_unregister_application(app);
@@ -225,7 +218,6 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-    ast_register_application(deprecated_app, dahdiras_exec_warn, synopsis, descrip);
 	return ((ast_register_application(app, dahdiras_exec, synopsis, descrip)) ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_SUCCESS);
 }
 

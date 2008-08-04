@@ -1104,8 +1104,8 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 		}
 		/*! \todo XXX Maybe we should have another message here instead of invalid extension XXX */
 	} else if (ast_exists_extension(transferee, transferer_real_context, xferto, 1, transferer->cid.cid_num)) {
-		pbx_builtin_setvar_helper(peer, "BLINDTRANSFER", transferee->name);
-		pbx_builtin_setvar_helper(chan, "BLINDTRANSFER", peer->name);
+		pbx_builtin_setvar_helper(transferer, "BLINDTRANSFER", transferee->name);
+		pbx_builtin_setvar_helper(transferee, "BLINDTRANSFER", transferer->name);
 		res=finishup(transferee);
 		if (!transferer->cdr) {
 			transferer->cdr=ast_cdr_alloc();
@@ -1235,6 +1235,21 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 
 	l = strlen(xferto);
 	snprintf(xferto + l, sizeof(xferto) - l, "@%s/n", transferer_real_context);	/* append context */
+
+	/* If we are performing an attended transfer and we have two channels involved then
+	   copy sound file information to play upon attended transfer completion */
+	if (transferee) {
+		const char *chan1_attended_sound = pbx_builtin_getvar_helper(transferer, "ATTENDED_TRANSFER_COMPLETE_SOUND");
+		const char *chan2_attended_sound = pbx_builtin_getvar_helper(transferee, "ATTENDED_TRANSFER_COMPLETE_SOUND");
+
+		if (!ast_strlen_zero(chan1_attended_sound)) {
+			pbx_builtin_setvar_helper(transferer, "BRIDGE_PLAY_SOUND", chan1_attended_sound);
+		}
+		if (!ast_strlen_zero(chan2_attended_sound)) {
+			pbx_builtin_setvar_helper(transferee, "BRIDGE_PLAY_SOUND", chan2_attended_sound);
+		}
+	}
+
 	newchan = ast_feature_request_and_dial(transferer, transferee, "Local", ast_best_codec(transferer->nativeformats),
 		xferto, atxfernoanswertimeout, &outstate, transferer->cid.cid_num, transferer->cid.cid_name, 1, transferer->language);
 
@@ -2055,6 +2070,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	struct ast_option_header *aoh;
 	struct ast_bridge_config backup_config;
 	struct ast_cdr *bridge_cdr = NULL;
+	struct ast_cdr *orig_peer_cdr = NULL;
 
 	memset(&backup_config, 0, sizeof(backup_config));
 
@@ -2092,6 +2108,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 
 	ast_copy_string(orig_channame,chan->name,sizeof(orig_channame));
 	ast_copy_string(orig_peername,peer->name,sizeof(orig_peername));
+	orig_peer_cdr = peer->cdr;
 	
 	if (!chan->cdr || (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED))) {
 		
@@ -2126,8 +2143,9 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		ast_cdr_answer(bridge_cdr);
 		ast_cdr_answer(chan->cdr); /* for the sake of cli status checks */
 		ast_set_flag(chan->cdr, AST_CDR_FLAG_BRIDGED);
-		if (peer->cdr)
+		if (peer->cdr) {
 			ast_set_flag(peer->cdr, AST_CDR_FLAG_BRIDGED);
+		}
 	}
 	for (;;) {
 		struct ast_channel *other;	/* used later */
@@ -2298,10 +2316,17 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		ast_cdr_detach(bridge_cdr);
 		
 		/* just in case, these channels get bridged again before hangup */
-		if (chan->cdr)
+		if (chan->cdr) {
 			ast_cdr_specialized_reset(chan->cdr,0);
-		if (peer->cdr)
-			ast_cdr_specialized_reset(peer->cdr,0);
+		}
+		if (peer->cdr) {
+			if (orig_peer_cdr && peer->cdr != orig_peer_cdr) {
+				/* this can only happen if there was a transfer, methinks */
+				ast_cdr_specialized_reset(orig_peer_cdr,0);
+			} else {
+				ast_cdr_specialized_reset(peer->cdr,0);
+			}
+		}
 	}
 	return res;
 }
@@ -2886,8 +2911,10 @@ static struct ast_parkinglot *build_parkinglot(char *name, struct ast_variable *
 
 	/* Add a parking extension into the context */
 	if (!oldparkinglot) {
-		if (ast_add_extension2(con, 1, ast_parking_ext(), 1, NULL, NULL, parkcall, strdup(""), ast_free, registrar) == -1)
-			error = 1;
+		if (!ast_strlen_zero(ast_parking_ext())) {
+			if (ast_add_extension2(con, 1, ast_parking_ext(), 1, NULL, NULL, parkcall, strdup(""), ast_free, registrar) == -1)
+				error = 1;
+		}
 	}
 
 	ao2_unlock(parkinglot);

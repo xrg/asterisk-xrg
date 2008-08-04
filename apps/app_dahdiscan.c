@@ -53,7 +53,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 
 static char *app = "DAHDIScan";
-static char *deprecated_app = "ZapScan";
 
 static char *synopsis = "Scan DAHDI channels to monitor calls";
 
@@ -68,7 +67,7 @@ static char *descrip =
 static struct ast_channel *get_dahdi_channel_locked(int num) {
 	char name[80];
 	
-	snprintf(name, sizeof(name), "%s/%d-1", dahdi_chan_name, num);
+	snprintf(name, sizeof(name), "DAHDI/%d-1", num);
 	return ast_get_channel_by_name_locked(name);
 }
 
@@ -109,7 +108,7 @@ static int conf_run(struct ast_channel *chan, int confno, int confflags)
 	char input[4];
 	int ic = 0;
 	
-	DAHDI_BUFFERINFO bi;
+	struct dahdi_bufferinfo bi;
 	char __buf[CONF_SIZE + AST_FRIENDLY_OFFSET];
 	char *buf = __buf + AST_FRIENDLY_OFFSET;
 	
@@ -357,12 +356,6 @@ static int conf_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 
-static int conf_exec_warn(struct ast_channel *chan, void *data)
-{
-    ast_log(LOG_WARNING, "Use of the command %s is deprecated, please use %s instead.\n", deprecated_app, app);
-    return conf_exec(chan, data);
-}
-
 static int unload_module(void)
 {
 	return ast_unregister_application(app);
@@ -370,7 +363,6 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	ast_register_application(deprecated_app, conf_exec_warn, synopsis, descrip);
 	return ((ast_register_application(app, conf_exec, synopsis, descrip)) ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_SUCCESS);
 }
 

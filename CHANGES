@@ -102,11 +102,13 @@ Application Changes
  * The Dial() application no longer copies the language used by the caller to the callee's
    channel. If you desire for the caller's channel's language to be used for file playback
    to the callee, then the file specified may be prepended with "${CHANNEL(language)}/" .
+ * SendImage() no longer hangs up the channel on error; instead, it sets the
+   status variable SENDIMAGESTATUS to one of 'SUCCESS', 'FAILURE', or
+   'UNSUPPORTED'.  This change makes SendImage() more consistent with other
+   applications.
 
 SIP Changes
 -----------
- * The ATTENDED_TRANSFER_COMPLETE_SOUND can now be set using setvar to cause a given
-   audio file to be played upon completion of an attended transfer.
  * Added DNS manager support to registrations for peers referencing peer entries.
    DNS manager runs in the background which allows DNS lookups to be run asynchronously 
    as well as periodically updating the IP address. These properties allow for
@@ -135,6 +137,10 @@ SIP Changes
 IAX Changes
 -----------
  * Existing DNS manager lookups extended to check for SRV records.
+ * IAX2 encryption support has been improved to support periodic key rotation
+   within a call for enhanced security.  The option "keyrotate" has been
+   provided to disable this functionality to preserve backwards compatibility
+   with older versions of IAX2 that do not support key rotation.
 
 CLI Changes
 -----------
@@ -175,6 +181,24 @@ Queue changes
   * A new configuration option, "timeoutpriority" has been added. Please see the section labeled
     "QUEUE TIMING OPTIONS" in configs/queues.conf.sample for a detailed explanation of the option
     as well as an explanation about timeout options in general
+
+Realtime changes
+----------------
+  * Several (ODBC, Postgres, MySQL, SQLite) realtime drivers have been given
+    adaptive capabilities.  What this means in practical terms is that if your
+    realtime table lacks critical fields, Asterisk will now emit warnings to
+    that effect.  Also, some of the realtime drivers have the ability (if
+    configured) to automatically add those columns to the table with the
+    correct type and length.
+
+Miscellaneous
+-------------
+  * The channel variable ATTENDED_TRANSFER_COMPLETE_SOUND can now be set using
+    the 'setvar' option to cause a given audio file to be played upon completion
+    of an attended transfer.  Currently it works for DAHDI, IAX2, SIP, and
+    Skinny channels only.
+  * You can now compile Asterisk against the Hoard Memory Allocator, see doc/hoard.txt
+    for more information.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.4.X to Asterisk 1.6.0  -------------
@@ -814,3 +838,9 @@ Miscellaneous
      as a backtrace of the stack which led to the lock calls.
   * users.conf now sports an optional alternateexts property, which permits
     allocation of additional extensions which will reach the specified user.
+  * A new option for the configure script, --enable-internal-poll, has been added
+    for use with systems which may have a buggy implementation of the poll system
+	call. If you notice odd behavior such as the CLI being unresponsive on remote
+	consoles, you may want to try using this option. This option is enabled by default
+	on Darwin systems since it is known that the Darwin poll() implementation has
+	odd issues.

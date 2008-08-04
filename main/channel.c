@@ -1277,7 +1277,7 @@ void ast_channel_free(struct ast_channel *chan)
 	struct ast_frame *f;
 	struct varshead *headp;
 	struct ast_datastore *datastore = NULL;
-	char name[AST_CHANNEL_NAME];
+	char name[AST_CHANNEL_NAME], *dashptr;
 	
 	headp=&chan->varshead;
 	
@@ -1310,6 +1310,9 @@ void ast_channel_free(struct ast_channel *chan)
 		sched_context_destroy(chan->sched);
 
 	ast_copy_string(name, chan->name, sizeof(name));
+	if ((dashptr = strrchr(name, '-'))) {
+		*dashptr = '\0';
+	}
 
 	/* Stop monitoring */
 	if (chan->monitor)
@@ -1361,7 +1364,7 @@ void ast_channel_free(struct ast_channel *chan)
 	ast_free(chan);
 	AST_RWLIST_UNLOCK(&channels);
 
-	ast_device_state_changed_literal(name);
+	ast_devstate_changed_literal(AST_DEVICE_NOT_INUSE, name);
 }
 
 struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
@@ -3423,11 +3426,6 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *c
 		return NULL;
 	}
 
-	if (!strcasecmp(type, "Zap")) {
-		type = "DAHDI";
-		ast_log(LOG_NOTICE, "Zap interface translated to DAHDI.\n");
-	}
-
 	AST_LIST_TRAVERSE(&backends, chan, list) {
 		if (strcasecmp(type, chan->tech->type))
 			continue;
@@ -4086,12 +4084,18 @@ void ast_set_callerid(struct ast_channel *chan, const char *cid_num, const char 
 int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 {
 	int oldstate = chan->_state;
+	char name[AST_CHANNEL_NAME], *dashptr;
 
 	if (oldstate == state)
 		return 0;
 
+	ast_copy_string(name, chan->name, sizeof(name));
+	if ((dashptr = strrchr(name, '-'))) {
+		*dashptr = '\0';
+	}
+
 	chan->_state = state;
-	ast_device_state_changed_literal(chan->name);
+	ast_devstate_changed_literal(ast_state_chan2dev(state), name);
 	/* setstate used to conditionally report Newchannel; this is no more */
 	manager_event(EVENT_FLAG_CALL,
 		      "Newstate",

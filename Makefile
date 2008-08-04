@@ -221,10 +221,16 @@ ifeq ($(OSARCH),linux-gnu)
 endif
 
 ifeq ($(findstring -save-temps,$(ASTCFLAGS)),)
-ASTCFLAGS+=-pipe
+  ifeq ($(findstring -pipe,$(ASTCFLAGS)),)
+    ASTCFLAGS+=-pipe
+  endif
 endif
 
-ASTCFLAGS+=-Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
+ifeq ($(findstring -Wall,$(ASTCFLAGS)),)
+  ASTCFLAGS+=-Wall
+endif
+
+ASTCFLAGS+=-Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
 ASTCFLAGS+=-include $(ASTTOPDIR)/include/asterisk/autoconfig.h
 
@@ -237,8 +243,10 @@ ifneq ($(findstring BSD,$(OSARCH)),)
   ASTLDFLAGS+=-L/usr/local/lib
 endif
 
-ifneq ($(PROC),ultrasparc)
-  ASTCFLAGS+=$(shell if $(CC) -march=$(PROC) -S -o /dev/null -xc /dev/null >/dev/null 2>&1; then echo "-march=$(PROC)"; fi)
+ifeq ($(findstring -march,$(ASTCFLAGS)),)
+  ifneq ($(PROC),ultrasparc)
+    ASTCFLAGS+=$(shell if $(CC) -march=$(PROC) -S -o /dev/null -xc /dev/null >/dev/null 2>&1; then echo "-march=$(PROC)"; fi)
+  endif
 endif
 
 ifeq ($(PROC),ppc)
@@ -404,12 +412,12 @@ defaults.h: makeopts
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-main/version.c:
+main/version.c: FORCE
 	@build_tools/make_version_c > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/version.h:
+include/asterisk/version.h: FORCE
 	@build_tools/make_version_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
@@ -758,6 +766,14 @@ progdocs:
 	(cat contrib/asterisk-ng-doxygen; echo "HAVE_DOT=$(HAVEDOT)"; \
 	echo "PROJECT_NUMBER=$(ASTERISKVERSION)") | doxygen - 
 
+install-logrotate:
+	if [ ! -d $(ASTETCDIR)/../logrotate.d ]; then \
+		mkdir $(ASTETCDIR)/../logrotate.d ; \
+	fi
+	sed 's#__LOGDIR__#$(ASTLOGDIR)#g' < contrib/scripts/asterisk.logrotate | sed 's#__SBINDIR__#$(ASTSBINDIR)#g' > contrib/scripts/asterisk.logrotate.tmp
+	install -m 0644 contrib/scripts/asterisk.logrotate.tmp $(ASTETCDIR)/../logrotate.d/asterisk
+	rm -f contrib/scripts/asterisk.logrotate.tmp
+
 config:
 	@if [ "${OSARCH}" = "linux-gnu" ]; then \
 		if [ -f /etc/redhat-release -o -f /etc/fedora-release ]; then \
@@ -890,4 +906,7 @@ pdf: asterisk.pdf
 asterisk.pdf:
 	$(MAKE) -C doc/tex asterisk.pdf
 
-.PHONY: menuselect menuselect.makeopts main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all pdf dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell main/version.c include/asterisk/version.h installdirs
+.PHONY: menuselect menuselect.makeopts main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all pdf dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell installdirs
+
+FORCE:
+

@@ -20,9 +20,15 @@
  * \file
  *
  * \brief Resample slinear audio
+ * 
+ * \arg http://svn.digium.com/svn/libresample/trunk
  *
  * \ingroup codecs
  */
+
+/*** MODULEINFO
+	<depend>resample</depend>
+ ***/
 
 #include "asterisk.h"
 
@@ -37,13 +43,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <limits.h>
 /* } */
 
+#include <libresample.h>
+
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
-#include "asterisk/libresample.h"
 
 #include "slin_resample_ex.h"
 
-#define RESAMPLER_QUALITY 0
+#define RESAMPLER_QUALITY 1
 
 #define OUTBUF_SIZE   8096
 

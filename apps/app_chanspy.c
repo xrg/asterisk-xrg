@@ -218,7 +218,7 @@ AST_APP_OPTIONS(spy_opts, {
 	AST_APP_OPTION('d', OPTION_DTMF_SWITCH_MODES),
 });
 
-int next_unique_id_to_use = 0;
+static int next_unique_id_to_use = 0;
 
 struct chanspy_translation_helper {
 	/* spy data */
@@ -595,7 +595,7 @@ static struct chanspy_ds *next_channel(struct ast_channel *chan,
 	const char *exten, const char *context, struct chanspy_ds *chanspy_ds)
 {
 	struct ast_channel *next;
-	char channel_name[AST_CHANNEL_NAME];
+	const size_t pseudo_len = strlen("DAHDI/pseudo");
 
 redo:
 	if (!ast_strlen_zero(spec))
@@ -608,8 +608,8 @@ redo:
 	if (!next)
 		return NULL;
 
-	snprintf(channel_name, AST_CHANNEL_NAME, "%s/pseudo", dahdi_chan_name);
-	if (!strncmp(next->name, channel_name, 10)) {
+	if (!strncmp(next->name, "DAHDI/pseudo", pseudo_len)) {
+		last = next;
 		ast_channel_unlock(next);
 		goto redo;
 	} else if (next == chan) {

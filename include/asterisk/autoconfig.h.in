@@ -343,6 +343,12 @@
 /* Define if your system has the GTK2 libraries. */
 #undef HAVE_GTK2
 
+/* Define this to indicate the ${HOARD_DESCRIP} library */
+#undef HAVE_HOARD
+
+/* Define to indicate the ${HOARD_DESCRIP} library version */
+#undef HAVE_HOARD_VERSION
+
 /* Define this to indicate the ${ICONV_DESCRIP} library */
 #undef HAVE_ICONV
 
@@ -602,11 +608,11 @@
 /* Define this to indicate the ${PRI_DESCRIP} library */
 #undef HAVE_PRI
 
-/* Define this to indicate the ${PRI_INBANDRELEASE_DESCRIP} library */
-#undef HAVE_PRI_INBANDRELEASE
+/* Define this to indicate the ${PRI_INBANDDISCONNECT_DESCRIP} library */
+#undef HAVE_PRI_INBANDDISCONNECT
 
-/* Define to indicate the ${PRI_INBANDRELEASE_DESCRIP} library version */
-#undef HAVE_PRI_INBANDRELEASE_VERSION
+/* Define to indicate the ${PRI_INBANDDISCONNECT_DESCRIP} library version */
+#undef HAVE_PRI_INBANDDISCONNECT_VERSION
 
 /* Define to indicate the ${PRI_DESCRIP} library version */
 #undef HAVE_PRI_VERSION
@@ -664,6 +670,12 @@
 
 /* Define to indicate the ${REMAINDER_DESCRIP} library version */
 #undef HAVE_REMAINDER_VERSION
+
+/* Define this to indicate the ${RESAMPLE_DESCRIP} library */
+#undef HAVE_RESAMPLE
+
+/* Define to indicate the ${RESAMPLE_DESCRIP} library version */
+#undef HAVE_RESAMPLE_VERSION
 
 /* Define to 1 if your system has the ndestroy resolver function. */
 #undef HAVE_RES_NDESTROY

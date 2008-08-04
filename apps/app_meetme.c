@@ -1520,7 +1520,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	char members[10] = "";
 	int dtmf, opt_waitmarked_timeout = 0;
 	time_t timeout = 0;
-	DAHDI_BUFFERINFO bi;
+	struct dahdi_bufferinfo bi;
 	char __buf[CONF_SIZE + AST_FRIENDLY_OFFSET];
 	char *buf = __buf + AST_FRIENDLY_OFFSET;
 	char *exitkeys = NULL;
@@ -1927,7 +1927,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 		ast_mutex_unlock(&conf->playlock);
 		goto outrun;
 	}
-	ast_debug(1, "Placed channel %s in ZAP conf %d\n", chan->name, conf->dahdiconf);
+	ast_debug(1, "Placed channel %s in DAHDI conf %d\n", chan->name, conf->dahdiconf);
 
 	if (!sent_event) {
 		manager_event(EVENT_FLAG_CALL, "MeetmeJoin", 

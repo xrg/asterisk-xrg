@@ -125,6 +125,7 @@ static char imapserver[48];
 static char imapport[8];
 static char imapflags[128];
 static char imapfolder[64];
+static char imapparentfolder[64] = "\0";
 static char greetingfolder[64];
 static char authuser[32];
 static char authpassword[42];
@@ -2600,10 +2601,16 @@ static int add_email_attachment(FILE *p, struct ast_vm_user *vmu, char *format, 
 		chmod(newtmp, VOICEMAIL_FILE_MODE & ~my_umask);
 		ast_debug(3, "newtmp: %s\n", newtmp);
 		if (tmpfd > -1) {
+			int soxstatus;
 			snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, attach, format, newtmp, format);
-			ast_safe_system(tmpcmd);
-			attach = newtmp;
-			ast_debug(3, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", attach, format, vmu->volgain, mailbox);
+			if ((soxstatus = ast_safe_system(tmpcmd)) == 0) {
+				attach = newtmp;
+				ast_debug(3, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", attach, format, vmu->volgain, mailbox);
+			} else {
+				ast_log(LOG_WARNING, "Sox failed to reencode %s.%s: %s (have you installed support for all sox file formats?)\n", attach, format,
+					soxstatus == 1 ? "Problem with command line options" : "An error occurred during file processing");
+				ast_log(LOG_WARNING, "Voicemail attachment will have no volume gain.\n");
+			}
 		}
 	}
 	fprintf(p, "--%s" ENDL, bound);
@@ -5715,10 +5722,33 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 
 	adsi_message(chan, vms);
 	ast_debug(5,"**************  About to check urgent flag, set to:%s\n", flag);
-	if (!vms->curmsg)
-		res = wait_file2(chan, vms, "vm-first");	/* "First" */
-	else if (vms->curmsg == vms->lastmsg)
-		res = wait_file2(chan, vms, "vm-last");		/* "last" */
+	if (!strcasecmp(chan->language, "he")) {	/* HEBREW FORMAT */
+		/*
+		 * The syntax in hebrew for counting the number of message is up side down
+		 * in comparison to english.
+		 */
+		if (!vms->curmsg) {
+			res = wait_file2(chan, vms, "vm-message");
+			res = wait_file2(chan, vms, "vm-first");    /* "First" */
+		} else if (vms->curmsg == vms->lastmsg) {
+			res = wait_file2(chan, vms, "vm-message");
+			res = wait_file2(chan, vms, "vm-last");     /* "last" */
+		} else {
+			res = wait_file2(chan, vms, "vm-message");  /* "message" */
+			if (vms->curmsg && (vms->curmsg != vms->lastmsg)) {
+				ast_log(LOG_DEBUG, "curmsg: %s\n", vms->curmsg);
+				ast_log(LOG_DEBUG, "lagmsg: %s\n", vms->lastmsg);
+				if (!res) {
+					res = ast_say_number(chan, vms->curmsg + 1, AST_DIGIT_ANY, chan->language, "f");
+				}
+			}
+		}
+	} else {
+		if (!vms->curmsg)
+			res = wait_file2(chan, vms, "vm-first");	/* "First" */
+		else if (vms->curmsg == vms->lastmsg)
+			res = wait_file2(chan, vms, "vm-last");		/* "last" */
+	}
 	/* Play the word urgent if we are listening to urgent messages */
 	if (!ast_strlen_zero(flag) && !strcmp(flag, "Urgent")) {
 		res = wait_file2(chan, vms, "vm-Urgent");	/* "urgent" */
@@ -5849,6 +5879,19 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 			}
 			if (!res)
 				res = wait_file2(chan, vms, "vm-message");
+		/* HEBREW syntax */
+		} else if (!strcasecmp(chan->language, "he")) {
+			if (!vms->curmsg) {
+				res = wait_file2(chan, vms, "vm-message");
+				res = wait_file2(chan, vms, "vm-first");
+			} else if (vms->curmsg == vms->lastmsg) {
+				res = wait_file2(chan, vms, "vm-message");
+				res = wait_file2(chan, vms, "vm-last");
+			} else {
+				res = wait_file2(chan, vms, "vm-message");
+				res = wait_file2(chan, vms, "vm-number");
+				res = ast_say_number(chan, vms->curmsg + 1, AST_DIGIT_ANY, chan->language, "f");
+			}
 		} else {
 			if (!strcasecmp(chan->language, "se")) /* SWEDISH syntax */
 				res = wait_file2(chan, vms, "vm-meddelandet");  /* "message" */
@@ -5944,8 +5987,13 @@ static void imap_mailbox_name(char *spec, size_t len, struct vm_state *vms, int 
 		snprintf(spec, len, "%s%s", tmp, use_folder? imapfolder: "INBOX");
 	else if (box == GREETINGS_FOLDER)
 		snprintf(spec, len, "%s%s", tmp, greetingfolder);
-	else
-		snprintf(spec, len, "%s%s%c%s", tmp, imapfolder, delimiter, mbox(box));
+	else 	/* Other folders such as Friends, Family, etc... */
+		if (!ast_strlen_zero(imapparentfolder)) {
+			/* imapparentfolder would typically be set to INBOX */
+			snprintf(spec, len, "%s%s%c%s", tmp, imapparentfolder, delimiter, mbox(box));
+		} else {
+			snprintf(spec, len, "%s%s", tmp, mbox(box));
+		}
 }
 
 static int init_mailstream(struct vm_state *vms, int box)
@@ -6440,6 +6488,73 @@ static int vm_intro_gr(struct ast_channel *chan, struct vm_state *vms)
 		}
 	} else if (!vms->oldmessages && !vms->newmessages) 
 		res = ast_play_and_wait(chan, "vm-denExeteMynhmata"); 
+	return res;
+}
+
+/* Hebrew syntax */
+static int vm_intro_he(struct ast_channel *chan, struct vm_state *vms)
+{
+	int res = 0;
+
+	/* Introduce messages they have */
+	if (!res) {
+		if ((vms->newmessages) || (vms->oldmessages)) {
+			res = ast_play_and_wait(chan, "vm-youhave");
+		}
+		/*
+		 * The word "shtei" refers to the number 2 in hebrew when performing a count
+		 * of elements. In Hebrew, there are 6 forms of enumerating the number 2 for
+		 * an element, this is one of them.
+		 */
+		if (vms->newmessages) {
+			if (!res) {
+				if (vms->newmessages == 1) {
+					res = ast_play_and_wait(chan, "vm-INBOX1");
+				} else {
+					if (vms->newmessages == 2) {
+						res = ast_play_and_wait(chan, "vm-shtei");
+					} else {
+						res = ast_say_number(chan, vms->newmessages, AST_DIGIT_ANY, chan->language, "f");
+					}
+					res = ast_play_and_wait(chan, "vm-INBOX");
+				}
+			}
+			if (vms->oldmessages && !res) {
+				res = ast_play_and_wait(chan, "vm-and");
+				if (vms->oldmessages == 1) {
+					res = ast_play_and_wait(chan, "vm-Old1");
+				} else {
+					if (vms->oldmessages == 2) {
+						res = ast_play_and_wait(chan, "vm-shtei");
+					} else {
+						res = ast_say_number(chan, vms->oldmessages, AST_DIGIT_ANY, chan->language, "f");
+					}
+					res = ast_play_and_wait(chan, "vm-Old");
+				}
+			}
+		}
+		if (!res && vms->oldmessages && !vms->newmessages) {
+			if (!res) {
+				if (vms->oldmessages == 1) {
+					res = ast_play_and_wait(chan, "vm-Old1");
+				} else {
+					if (vms->oldmessages == 2) {
+						res = ast_play_and_wait(chan, "vm-shtei");
+					} else {
+						res = ast_say_number(chan, vms->oldmessages, AST_DIGIT_ANY, chan->language, "f");            
+					}
+					res = ast_play_and_wait(chan, "vm-Old");
+				}
+			}
+		}
+		if (!res) {
+			if (!vms->oldmessages && !vms->newmessages) {
+				if (!res) {
+					res = ast_play_and_wait(chan, "vm-nomessages");
+				}
+			}
+		}
+	}
 	return res;
 }
 	
@@ -7283,6 +7398,8 @@ static int vm_intro(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm
 		return vm_intro_tw(chan, vms);
 	} else if (!strcasecmp(chan->language, "ua")) { /* UKRAINIAN syntax */
 		return vm_intro_ua(chan, vms);
+	} else if (!strcasecmp(chan->language, "he")) { /* HEBREW syntax */
+		 return vm_intro_he(chan, vms);
 	} else {					/* Default to ENGLISH */
 		return vm_intro_en(chan, vms);
 	}
@@ -7748,6 +7865,23 @@ static int vm_browse_messages_gr(struct ast_channel *chan, struct vm_state *vms,
 	return cmd;
 }
 
+/* Hebrew Syntax */
+static int vm_browse_messages_he(struct ast_channel *chan, struct vm_state *vms, struct ast_vm_user *vmu)
+{
+	int cmd = 0;
+
+	if (vms->lastmsg > -1) {
+		cmd = play_message(chan, vmu, vms);
+	} else {
+		if (!strcasecmp(vms->fn, "INBOX")) {
+			cmd = ast_play_and_wait(chan, "vm-nonewmessages");
+		} else {
+			cmd = ast_play_and_wait(chan, "vm-nomessages");
+		}
+	}
+	return cmd;
+}
+
 /*! 
  * \brief Default English syntax for 'You have N messages' greeting.
  * \param chan
@@ -7905,6 +8039,8 @@ static int vm_browse_messages(struct ast_channel *chan, struct vm_state *vms, st
 		return vm_browse_messages_gr(chan, vms, vmu);   /* GREEK */
 	} else if (!strcasecmp(chan->language, "tw")){
 		return vm_browse_messages_tw(chan, vms, vmu);   /* CHINESE (Taiwan) */
+	} else if (!strcasecmp(chan->language, "he")) {
+		return vm_browse_messages_he(chan, vms, vmu);   /* HEBREW */
 	} else {	/* Default to English syntax */
 		return vm_browse_messages_en(chan, vms, vmu);
 	}
@@ -9446,7 +9582,9 @@ static int load_config(int reload)
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
 		ucfg = ast_config_load("users.conf", config_flags);
 	}
-
+#ifdef IMAP_STORAGE
+	ast_copy_string(imapparentfolder, "\0", sizeof(imapparentfolder));
+#endif
 	/* set audio control prompts */
 	strcpy(listen_control_forward_key,DEFAULT_LISTEN_CONTROL_FORWARD_KEY);
 	strcpy(listen_control_reverse_key,DEFAULT_LISTEN_CONTROL_REVERSE_KEY);
@@ -9600,6 +9738,9 @@ static int load_config(int reload)
 			ast_copy_string(imapfolder, val, sizeof(imapfolder));
 		} else {
 			ast_copy_string(imapfolder,"INBOX", sizeof(imapfolder));
+		}
+		if ((val = ast_variable_retrieve(cfg, "general", "imapparentfolder"))) {
+			ast_copy_string(imapparentfolder, val, sizeof(imapparentfolder));
 		}
 		if ((val = ast_variable_retrieve(cfg, "general", "imapgreetings"))) {
 			imapgreetings = ast_true(val);

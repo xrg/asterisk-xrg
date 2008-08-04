@@ -35,11 +35,13 @@ case "${host_os}" in
 
      *)
      ac_default_prefix=/usr
-     if test ${sysconfdir} = '${prefix}/etc'; then
-        sysconfdir=/etc
-     fi
-     if test ${mandir} = '${prefix}/man'; then
-        mandir=/usr/share/man
+     if test ${prefix} = '/usr' || test ${prefix} = 'NONE'; then
+        if test ${sysconfdir} = '${prefix}/etc'; then
+           sysconfdir=/etc
+        fi
+        if test ${mandir} = '${prefix}/man'; then
+           mandir=/usr/share/man
+        fi
      fi
      ;;
 esac
@@ -213,6 +215,7 @@ AST_EXT_LIB_SETUP([GSM], [External GSM library], [gsm], [, use 'internal' GSM ot
 AST_EXT_LIB_SETUP([GTK], [gtk libraries], [gtk])
 AST_EXT_LIB_SETUP([GTK2], [gtk2 libraries], [gtk2])
 AST_EXT_LIB_SETUP([GMIME], [GMime library], [gmime])
+AST_EXT_LIB_SETUP([HOARD], [Hoard Memory Allocator], [hoard])
 AST_EXT_LIB_SETUP([ICONV], [Iconv Library], [iconv])
 AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
 AST_EXT_LIB_SETUP([IMAP_TK], [UW IMAP Toolkit], [imap])
@@ -234,6 +237,7 @@ AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
+AST_EXT_LIB_SETUP([RESAMPLE], [LIBRESAMPLE], [resample])
 AST_EXT_LIB_SETUP([SPANDSP], [SPANDSP], [spandsp])
 AST_EXT_LIB_SETUP([SS7], [ISDN SS7], [ss7])
 AST_EXT_LIB_SETUP([PWLIB], [PWlib], [pwlib])
@@ -326,7 +330,17 @@ AC_CHECK_HEADER([sys/poll.h],
    [HAS_POLL=1]
    AC_DEFINE([HAVE_SYS_POLL_H], 1, [Define to 1 if your system has working sys/poll.h]),
    )
+
+AC_ARG_ENABLE(internal-poll,
+	[  --enable-internal-poll	Use Asterisk's poll implementation],
+	[case "${enableval}" in
+		y|ye|yes) HAS_POLL="";;
+		n|no) HAS_POLL="${HAS_POLL}" ;;
+		*) AC_MSG_ERROR(bad value ${enableval} for --enable-internal-poll) ;;
+	esac])
 AC_SUBST(HAS_POLL)
+
+
 
 # https support (in main/http.c) uses funopen on BSD systems,
 # fopencookie on linux
@@ -602,7 +616,7 @@ AST_EXT_LIB_CHECK([STRTOD], [c], [strtod], [stdlib.h])
 AST_EXT_LIB_CHECK([FLOOR], [m], [floor])
 AST_EXT_LIB_CHECK([CEIL], [m], [ceil])
 
-AST_C_COMPILE_CHECK([GETIFADDRS], [struct ifaddrs *p; getifaddrs(&p)], [ifaddrs.h])
+AST_C_COMPILE_CHECK([GETIFADDRS], [struct ifaddrs *p; getifaddrs(&p)], [ifaddrs.h], , [getifaddrs() support])
 
 GSM_INTERNAL="yes"
 AC_SUBST(GSM_INTERNAL)
@@ -1295,13 +1309,15 @@ AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_get_version], [libpri.h])
 
-AST_EXT_LIB_CHECK([PRI_INBANDRELEASE], [pri], [pri_set_inbandrelease], [libpri.h])
+AST_EXT_LIB_CHECK([PRI_INBANDDISCONNECT], [pri], [pri_set_inbanddisconnect], [libpri.h])
+
+AST_EXT_LIB_CHECK([RESAMPLE], [resample], [resample_open], [libresample.h], [-lm])
 
 AST_C_COMPILE_CHECK([SPANDSP], [
 		#if SPANDSP_RELEASE_DATE < 20080516
 		#error "spandsp 0.0.5 or greater is required"
 		#endif
-	], [spandsp/version.h])
+	], [spandsp/version.h], , [minimum version of SpanDSP])
 
 if test "x${PBX_SPANDSP}" = "x1" ; then
 	# We found the correct version in the header, now let's make sure it links
@@ -1410,6 +1426,8 @@ then
 fi
 
 AST_EXT_TOOL_CHECK([GMIME], [gmime])
+
+AST_EXT_LIB_CHECK([HOARD], [hoard], [malloc], [])
 
 AST_EXT_LIB_CHECK([FREETDS], [sybdb], [dbinit], [sybdb.h])
 

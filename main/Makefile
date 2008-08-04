@@ -17,8 +17,6 @@ all: asterisk
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
 
-RESAMPLE_OBJS:=libresample/src/resample.o libresample/src/resamplesubs.o libresample/src/filterkit.o
-
 OBJS= tcptls.o io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	translate.o file.o pbx.o cli.o md5.o term.o \
 	ulaw.o alaw.o callerid.o fskmodem.o image.o app.o \
@@ -29,7 +27,7 @@ OBJS= tcptls.o io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	netsock.o slinfactory.o ast_expr2.o ast_expr2f.o \
 	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o \
 	strcompat.o threadstorage.o dial.o event.o adsistub.o audiohook.o \
-	astobj2.o hashtab.o global_datastores.o $(RESAMPLE_OBJS) version.o \
+	astobj2.o hashtab.o global_datastores.o version.o \
 	features.o taskprocessor.o timing.o
 
 # we need to link in the objects statically, not as a library, because
@@ -44,12 +42,13 @@ OBJS+=say.o
 AST_LIBS += $(SSL_LIB)
 AST_LIBS += $(BKTR_LIB)
 
+
 ifeq ($(POLL_AVAILABLE),)
   OBJS+=poll.o
-endif
-
-ifeq ($(wildcard /usr/include/dlfcn.h),)
-  OBJS+=dlfcn.o
+else
+  ifneq ($(findstring darwin,$(OSARCH)),)
+    OBJS+=poll.o
+  endif
 endif
 
 ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi ),)
@@ -103,6 +102,12 @@ endif
 ifeq ($(OSARCH),SunOS)
   AST_LIBS+=-lpthread -ldl -lnsl -lsocket -lresolv -L/opt/ssl/lib -L/usr/local/ssl/lib
   ASTLINK=
+endif
+
+ifneq ($(findstring USE_HOARD_ALLOCATOR,$(MENUSELECT_CFLAGS)),)
+  ifneq ($(HOARD_LIB),)
+    AST_LIBS+=$(HOARD_LIB)
+  endif
 endif
 
 CHECK_SUBDIR:	# do nothing, just make sure that we recurse in the subdir/

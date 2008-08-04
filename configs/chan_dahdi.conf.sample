@@ -164,7 +164,7 @@
 ;
 ; Allow inband audio (progress) when a call is RELEASEd by the far end of a PRI
 ;
-;inbandrelease=yes
+;inbanddisconnect=yes
 ;
 ; PRI Out of band indications.
 ; Enable this to report Busy and Congestion on a PRI using out-of-band
@@ -464,13 +464,12 @@ callreturn=yes
 ;
 echocancel=yes
 ;
-; As of Zaptel 1.4.8, some DAHDI echo cancellers (software and hardware)
-; support adjustable parameters; these parameters can be supplied as
-; additional options to the 'echocancel' setting. Note that Asterisk
-; does not attempt to validate the parameters or their values, so if you
-; supply an invalid parameter you will not know the specific reason it
-; failed without checking the kernel message log for the error(s)
-; put there by DAHDI.
+; Some DAHDI echo cancellers (software and hardware) support adjustable
+; parameters; these parameters can be supplied as additional options to
+; the 'echocancel' setting. Note that Asterisk does not attempt to
+; validate the parameters or their values, so if you supply an invalid
+; parameter you will not know the specific reason it failed without
+; checking the kernel message log for the error(s) put there by DAHDI.
 ;
 ;echocancel=128,param1=32,param2=0,param3=14
 ;
@@ -539,7 +538,11 @@ callgroup=1
 pickupgroup=1
 
 ; Channel variable to be set for all calls from this channel
-;setvar=CHANNEL=42             
+;setvar=CHANNEL=42
+;setvar=ATTENDED_TRANSFER_COMPLETE_SOUND=beep   ; This channel variable will
+                                                ; cause the given audio file to
+                                                ; be played upon completion of
+                                                ; an attended transfer.
 
 ;
 ; Specify whether the channel should be answered immediately or if the simple
