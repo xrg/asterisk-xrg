@@ -116,6 +116,7 @@ BuildRequires:	oggvorbis-devel
 BuildRequires:	libpopt-devel
 #BuildRequires:	swig-devel
 BuildRequires:	wget
+BuildRequires:	resample-devel
 BuildRoot:	%{_tmppath}/%{name}-%{version}-root
 
 %description
