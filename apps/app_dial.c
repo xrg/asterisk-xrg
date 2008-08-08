@@ -672,6 +672,10 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 					if (!peer) {
 						ast_verb(3, "%s answered %s\n", c->name, in->name);
 						peer = c;
+						if (peer->cdr) {
+							peer->cdr->answer = ast_tvnow();
+							peer->cdr->disposition = AST_CDR_ANSWERED;
+						}
 						ast_copy_flags64(peerflags, o,
 							OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER |
 							OPT_CALLEE_HANGUP | OPT_CALLER_HANGUP |
@@ -1354,7 +1358,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	ast_copy_flags64(peerflags, &opts, OPT_DTMF_EXIT | OPT_GO_ON | OPT_ORIGINAL_CLID | OPT_CALLER_HANGUP | OPT_IGNORE_FORWARDING);
 
 	/* Create datastore for channel dial features for caller */
-	if (!(ds_caller_features = ast_channel_datastore_alloc(&dial_features_info, NULL))) {
+	if (!(ds_caller_features = ast_datastore_alloc(&dial_features_info, NULL))) {
 		ast_log(LOG_WARNING, "Unable to create channel datastore for dial features. Aborting!\n");
 		goto out;
 	}
@@ -1416,7 +1420,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		if (datastore)
 			dialed_interfaces = datastore->data;
 		else {
-			if (!(datastore = ast_channel_datastore_alloc(&dialed_interface_info, NULL))) {
+			if (!(datastore = ast_datastore_alloc(&dialed_interface_info, NULL))) {
 				ast_log(LOG_WARNING, "Unable to create channel datastore for dialed interfaces. Aborting!\n");
 				ast_free(tmp);
 				goto out;
@@ -1522,7 +1526,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_copy_string(tc->exten, chan->exten, sizeof(tc->exten));
 
 		/* Save callee features */
-		if (!(ds_callee_features = ast_channel_datastore_alloc(&dial_features_info, NULL))) {
+		if (!(ds_callee_features = ast_datastore_alloc(&dial_features_info, NULL))) {
 			ast_log(LOG_WARNING, "Unable to create channel datastore for dial features. Aborting!\n");
 			ast_free(tmp);
 			goto out;
@@ -1624,7 +1628,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	 * datastore again, causing a crash
 	 */
 	if (!ast_channel_datastore_remove(chan, datastore))
-		ast_channel_datastore_free(datastore);
+		ast_datastore_free(datastore);
 	if (!peer) {
 		if (result) {
 			res = result;

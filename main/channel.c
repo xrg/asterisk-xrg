@@ -1117,24 +1117,27 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 
 	for (retries = 0; retries < 200; retries++) {
 		int done;
+		/* Reset prev on each retry.  See note below for the reason. */
+		prev = _prev;
 		AST_RWLIST_RDLOCK(&channels);
 		AST_RWLIST_TRAVERSE(&channels, c, chan_list) {
-			prev = _prev;
-			if (prev) {	/* look for next item */
+			if (prev) {	/* look for last item, first, before any evaluation */
 				if (c != prev)	/* not this one */
 					continue;
 				/* found, prepare to return c->next */
 				if ((c = AST_RWLIST_NEXT(c, chan_list)) == NULL) break;
-				/* If prev was the last item on the channel list, then we just
-				 * want to return NULL, instead of trying to deref NULL in the
-				 * next section.
+				/*!\note
+				 * We're done searching through the list for the previous item.
+				 * Any item after this point, we want to evaluate for a match.
+				 * If we didn't set prev to NULL here, then we would only
+				 * return matches for the first matching item (since the above
+				 * "if (c != prev)" would not permit any other potential
+				 * matches to reach the additional matching logic, below).
+				 * Instead, it would just iterate until it once again found the
+				 * original match, then iterate down to the end of the list and
+				 * quit.
 				 */
 				prev = NULL;
-				/* We want prev to be NULL in case we end up doing more searching through
-				 * the channel list to find the channel (ie: name searching). If we didn't
-				 * set this to NULL the logic would just blow up
-				 * XXX Need a better explanation for this ...
-				 */
 			}
 			if (name) { /* want match by name */
 				if ((!namelen && strcasecmp(c->name, name) && strcmp(c->uniqueid, name)) ||
@@ -1294,7 +1297,7 @@ void ast_channel_free(struct ast_channel *chan)
 	/* Get rid of each of the data stores on the channel */
 	while ((datastore = AST_LIST_REMOVE_HEAD(&chan->datastores, entry)))
 		/* Free the data store */
-		ast_channel_datastore_free(datastore);
+		ast_datastore_free(datastore);
 
 	/* Lock and unlock the channel just to be sure nobody has it locked still
 	   due to a reference that was stored in a datastore. (i.e. app_chanspy) */
@@ -1369,46 +1372,12 @@ void ast_channel_free(struct ast_channel *chan)
 
 struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
 {
-	struct ast_datastore *datastore = NULL;
-
-	/* Make sure we at least have type so we can identify this */
-	if (!info) {
-		return NULL;
-	}
-
-	/* Allocate memory for datastore and clear it */
-	datastore = ast_calloc(1, sizeof(*datastore));
-	if (!datastore) {
-		return NULL;
-	}
-
-	datastore->info = info;
-
-	datastore->uid = ast_strdup(uid);
-
-	return datastore;
+	return ast_datastore_alloc(info, uid);
 }
 
 int ast_channel_datastore_free(struct ast_datastore *datastore)
 {
-	int res = 0;
-
-	/* Using the destroy function (if present) destroy the data */
-	if (datastore->info->destroy != NULL && datastore->data != NULL) {
-		datastore->info->destroy(datastore->data);
-		datastore->data = NULL;
-	}
-
-	/* Free allocated UID memory */
-	if (datastore->uid != NULL) {
-		ast_free((void *) datastore->uid);
-		datastore->uid = NULL;
-	}
-
-	/* Finally free memory used by ourselves */
-	ast_free(datastore);
-
-	return res;
+	return ast_datastore_free(datastore);
 }
 
 int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *to)
@@ -1417,7 +1386,7 @@ int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *
 
 	AST_LIST_TRAVERSE(&from->datastores, datastore, entry) {
 		if (datastore->inheritance > 0) {
-			datastore2 = ast_channel_datastore_alloc(datastore->info, datastore->uid);
+			datastore2 = ast_datastore_alloc(datastore->info, datastore->uid);
 			if (datastore2) {
 				datastore2->data = datastore->info->duplicate(datastore->data);
 				datastore2->inheritance = datastore->inheritance == DATASTORE_INHERIT_FOREVER ? DATASTORE_INHERIT_FOREVER : datastore->inheritance - 1;
@@ -1450,19 +1419,21 @@ struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const
 		return NULL;
 
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->datastores, datastore, entry) {
-		if (datastore->info == info) {
-			if (uid != NULL && datastore->uid != NULL) {
-				if (!strcasecmp(uid, datastore->uid)) {
-					/* Matched by type AND uid */
-					break;
-				}
-			} else {
-				/* Matched by type at least */
-				break;
-			}
+		if (datastore->info != info) {
+			continue;
+		}
+
+		if (uid == NULL) {
+			/* matched by type only */
+			break;
+		}
+
+		if ((datastore->uid != NULL) && !strcasecmp(uid, datastore->uid)) {
+			/* Matched by type AND uid */
+			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 
 	return datastore;
 }
@@ -1665,7 +1636,10 @@ int ast_hangup(struct ast_channel *chan)
 			ast_cause2str(chan->hangupcause)
 			);
 
-	if (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_BRIDGED) && !ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED) && chan->cdr->disposition != AST_CDR_NULL) {
+	if (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_BRIDGED) && 
+		!ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED) && 
+	    (chan->cdr->disposition != AST_CDR_NULL || ast_test_flag(chan->cdr, AST_CDR_FLAG_DIALED))) {
+			
 		ast_cdr_end(chan->cdr);
 		ast_cdr_detach(chan->cdr);
 	}
@@ -1675,6 +1649,7 @@ int ast_hangup(struct ast_channel *chan)
 	return res;
 }
 
+#define ANSWER_WAIT_MS 500
 int __ast_answer(struct ast_channel *chan, unsigned int delay)
 {
 	int res = 0;
@@ -1696,31 +1671,43 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay)
 	switch (chan->_state) {
 	case AST_STATE_RINGING:
 	case AST_STATE_RING:
-		if (delay) {
-			int needanswer = (chan->tech->answer != NULL);
-
-			ast_cdr_answer(chan->cdr);
-			ast_channel_unlock(chan);
+		if (chan->tech->answer)
+			res = chan->tech->answer(chan);
+		ast_setstate(chan, AST_STATE_UP);
+		ast_cdr_answer(chan->cdr);
+		if (delay)
 			ast_safe_sleep(chan, delay);
-			/* don't tell the channel it has been answered until *after* the delay,
-			   so that the media path will be in place and usable when it wants to
-			   send media
-			*/
-			if (needanswer) {
-				ast_channel_lock(chan);
-				res = chan->tech->answer(chan);
-				ast_channel_unlock(chan);
+		else {
+			struct ast_frame *f;
+			int ms = ANSWER_WAIT_MS;
+			while (1) {
+				/* 500 ms was the original delay here, so now
+				 * we cap our waiting at 500 ms
+				 */
+				ms = ast_waitfor(chan, ms);
+				if (ms < 0) {
+					ast_log(LOG_WARNING, "Error condition occurred when polling channel %s for a voice frame: %s\n", chan->name, strerror(errno));
+					res = -1;
+					break;
+				}
+				if (ms == 0) {
+					ast_debug(2, "Didn't receive a voice frame from %s within %d ms of answering. Continuing anyway\n", chan->name, ANSWER_WAIT_MS);
+					res = 0;
+					break;
+				}
+				f = ast_read(chan);
+				if (!f || (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_HANGUP)) {
+					res = -1;
+					ast_debug(2, "Hangup of channel %s detected in answer routine\n", chan->name);
+					break;
+				}
+				if (f->frametype == AST_FRAME_VOICE) {
+					res = 0;
+					break;
+				}
 			}
-			ast_setstate(chan, AST_STATE_UP);	
-		} else {
-			if (chan->tech->answer) {
-				res = chan->tech->answer(chan);
-			}
-			ast_setstate(chan, AST_STATE_UP);
-			ast_cdr_answer(chan->cdr);
-			ast_channel_unlock(chan);
 		}
-		return res;
+		break;
 	case AST_STATE_UP:
 		break;
 	default:
@@ -1734,7 +1721,7 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay)
 
 int ast_answer(struct ast_channel *chan)
 {
-	return __ast_answer(chan, 500);
+	return __ast_answer(chan, 0);
 }
 
 void ast_deactivate_generator(struct ast_channel *chan)
@@ -3471,6 +3458,8 @@ int ast_call(struct ast_channel *chan, char *addr, int timeout)
 	/* Stop if we're a zombie or need a soft hangup */
 	ast_channel_lock(chan);
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE) && !ast_check_hangup(chan)) {
+		if (chan->cdr)
+			ast_set_flag(chan->cdr, AST_CDR_FLAG_DIALED);
 		if (chan->tech->call)
 			res = chan->tech->call(chan, addr, timeout);
 		ast_set_flag(chan, AST_FLAG_OUTGOING);
@@ -4186,6 +4175,8 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 
 	/* Check the need of a jitterbuffer for each channel */
 	jb_in_use = ast_jb_do_usecheck(c0, c1);
+	if (jb_in_use)
+		ast_jb_empty_and_reset(c0, c1);
 
 	ast_poll_channel_add(c0, c1);
 
@@ -4251,6 +4242,9 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			case AST_CONTROL_VIDUPDATE:
 			case AST_CONTROL_SRCUPDATE:
 				ast_indicate_data(other, f->subclass, f->data.ptr, f->datalen);
+				if (jb_in_use) {
+					ast_jb_empty_and_reset(c0, c1);
+				}
 				break;
 			default:
 				*fo = f;

@@ -2257,6 +2257,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 		ast_verb(3, "Couldn't call %s\n", tmp->interface);
 		do_hang(tmp);
 		(*busies)++;
+		update_status(tmp->member->interface, ast_device_state(tmp->member->interface));
 		return 0;
 	} else if (qe->parent->eventwhencalled) {
 		char vars[2048];
@@ -2282,6 +2283,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 		ast_verb(3, "Called %s\n", tmp->interface);
 	}
 
+	update_status(tmp->member->interface, ast_device_state(tmp->member->interface));
 	return 1;
 }
 
@@ -3143,7 +3145,7 @@ static void queue_transfer_fixup(void *data, struct ast_channel *old_chan, struc
 	}
 
 	ast_channel_datastore_remove(new_chan, datastore);
-	ast_channel_datastore_free(datastore);
+	ast_datastore_free(datastore);
 }
 
 /*! \brief mechanism to tell if a queue caller was atxferred by a queue member.
@@ -3170,7 +3172,7 @@ static void setup_transfer_datastore(struct queue_ent *qe, struct member *member
 	}
 
 	ast_channel_lock(qe->chan);
-	if (!(ds = ast_channel_datastore_alloc(&queue_transfer_info, NULL))) {
+	if (!(ds = ast_datastore_alloc(&queue_transfer_info, NULL))) {
 		ast_channel_unlock(qe->chan);
 		ast_log(LOG_WARNING, "Unable to create transfer datastore. queue_log will not show attended transfer\n");
 		return;
@@ -3344,7 +3346,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			goto out;
 		}
 		if (!datastore) {
-			if (!(datastore = ast_channel_datastore_alloc(&dialed_interface_info, NULL))) {
+			if (!(datastore = ast_datastore_alloc(&dialed_interface_info, NULL))) {
 				ao2_ref(cur, -1);
 				ao2_unlock(qe->parent);
 				if (use_weight)
@@ -3446,7 +3448,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	 * datastore again, causing a crash
 	 */
 	if (datastore && !ast_channel_datastore_remove(qe->chan, datastore)) {
-		ast_channel_datastore_free(datastore);
+		ast_datastore_free(datastore);
 	}
 	ao2_lock(qe->parent);
 	if (qe->parent->strategy == QUEUE_STRATEGY_RRMEMORY) {
@@ -3868,7 +3870,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			transfer_ds = ast_channel_datastore_find(qe->chan, &queue_transfer_info, NULL);
 			if (transfer_ds) {
 				ast_channel_datastore_remove(qe->chan, transfer_ds);
-				ast_channel_datastore_free(transfer_ds);
+				ast_datastore_free(transfer_ds);
 			}
 			ast_channel_unlock(qe->chan);
 		}
