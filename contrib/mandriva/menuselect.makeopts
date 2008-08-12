@@ -1,7 +1,7 @@
 MENUSELECT_APPS=app_ivrdemo app_rpt app_skel 
 MENUSELECT_CDR=cdr_odbc cdr_tds 
 MENUSELECT_CHANNELS=chan_features chan_h323 chan_vpb 
-MENUSELECT_CODECS=codec_ilbc 
+MENUSELECT_CODECS=
 MENUSELECT_FORMATS=
 MENUSELECT_FUNCS=func_odbc 
 MENUSELECT_PBX=pbx_gtkconsole 
