@@ -180,8 +180,8 @@ void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
   \return nothing
 */
 void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
-				    ast_string_field *fields, int num_fields,
-				    int index, const char *format, va_list a1, va_list a2);
+				       ast_string_field *fields, int num_fields,
+				       int index, const char *format, va_list a1, va_list a2);
 
 /*!
   \brief Declare a string field
@@ -234,36 +234,36 @@ void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
   \return nothing
 */
 #define ast_string_field_index_set(x, index, data) do { \
-    char *__zz__ = (char*)(x)->__begin_field[index]; \
-    size_t __dlen__ = strlen(data); \
-    if( __dlen__ == 0 ) { (x)->__begin_field[index] = __ast_string_field_empty; \
+    char *__zz__ = (char*) (x)->__begin_field[index]; \
+    size_t __dlen__ = strlen(data) + 1; \
+    if ( __dlen__ == 1 ) {\
+      (x)->__begin_field[index] = __ast_string_field_empty; \
     } else { \
-     if( __zz__[0] != 0 && __dlen__ <= strlen(__zz__) ) { \
-	   strcpy(__zz__, data); \
-     } else { \
-       if (((x)->__begin_field[index] = __ast_string_field_alloc_space(&(x)->__field_mgr, __dlen__ + 1, &(x)->__begin_field[0], ast_string_field_count(x)))) \
-	       strcpy((char*)(x)->__begin_field[index], data); \
-	 } \
-	} \
+      if ((__zz__[0] != 0) && (__dlen__ <= (strlen(__zz__) + 1))) { \
+        memcpy(__zz__, data, __dlen__); \
+      } else { \
+        if (((x)->__begin_field[index] = __ast_string_field_alloc_space(&(x)->__field_mgr, __dlen__, &(x)->__begin_field[0], ast_string_field_count(x)))) \
+          memcpy((char*) (x)->__begin_field[index], data, __dlen__); \
+      } \
+     } \
    } while (0)
 
-#ifdef FOR_TEST
 #define ast_string_field_index_logset(x, index, data, logstr) do { \
-    char *__zz__ = (char*)(x)->__begin_field[index]; \
-    size_t __dlen__ = strlen(data); \
-    if( __dlen__ == 0 ) { (x)->__begin_field[index] = __ast_string_field_empty; \
+    char *__zz__ = (char*) (x)->__begin_field[index]; \
+    size_t __dlen__ = strlen(data) + 1; \
+    if ( __dlen__ == 1 ) {\
+      (x)->__begin_field[index] = __ast_string_field_empty; \
     } else { \
-     if( __zz__[0] != 0 && __dlen__ <= strlen(__zz__) ) { \
-       ast_verbose("%s: ======replacing '%s' with '%s'\n", logstr, __zz__, data); \
-	   strcpy(__zz__, data); \
-     } else { \
-       ast_verbose("%s: ++++++allocating room for '%s' to replace '%s'\n", logstr, data, __zz__); \
-       if (((x)->__begin_field[index] = __ast_string_field_alloc_space(&(x)->__field_mgr, __dlen__ + 1, &(x)->__begin_field[0], ast_string_field_count(x)))) \
-	       strcpy((char*)(x)->__begin_field[index], data); \
-	 } \
-	} \
+      if ((__zz__[0] != 0) && (__dlen__ <= strlen(__zz__) + 1)) { \
+        ast_verbose("%s: ======replacing '%s' with '%s'\n", logstr, __zz__, data); \
+        memcpy(__zz__, data, __dlen__); \
+      } else { \
+        if (((x)->__begin_field[index] = __ast_string_field_alloc_space(&(x)->__field_mgr, __dlen__, &(x)->__begin_field[0], ast_string_field_count(x)))) \
+          ast_verbose("%s: ++++++allocating room for '%s' to replace '%s'\n", logstr, data, __zz__); \
+          memcpy((char*) (x)->__begin_field[index], data, __dlen__); \
+      } \
+     } \
    } while (0)
-#endif
 
 /*!
   \brief Set a field to a simple string value
@@ -275,10 +275,8 @@ void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
 #define ast_string_field_set(x, field, data) \
 	ast_string_field_index_set(x, ast_string_field_index(x, field), data)
 
-#ifdef FOR_TEST
 #define ast_string_field_logset(x, field, data, logstr) \
 	ast_string_field_index_logset(x, ast_string_field_index(x, field), data, logstr)
-#endif
 
 /*!
   \brief Set a field to a complex (built) value

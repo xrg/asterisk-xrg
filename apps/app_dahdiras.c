@@ -156,7 +156,7 @@ static void run_ras(struct ast_channel *chan, char *args)
 	int status;
 	int res;
 	int signalled = 0;
-	DAHDI_BUFFERINFO savebi;
+	struct dahdi_bufferinfo savebi;
 	int x;
 	
 	res = ioctl(chan->fds[0], DAHDI_GET_BUFINFO, &savebi);
@@ -214,7 +214,7 @@ static int exec(struct ast_channel *chan, void *data)
 	int res=-1;
 	char *args;
 	struct ast_module_user *u;
-	DAHDI_PARAMS ztp;
+	struct dahdi_params ztp;
 
 	if (!data) 
 		data = "";
@@ -260,7 +260,7 @@ static int unload_module(void)
 {
 	int res = 0;
 
-	if (dahdi_chan_mode == DAHDI_PLUS_ZAP) {
+	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
 		res |= ast_unregister_application(dahdi_app);
 	}
 
@@ -275,7 +275,7 @@ static int load_module(void)
 {
 	int res = 0;
 
-	if (dahdi_chan_mode == DAHDI_PLUS_ZAP) {
+	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
 		res |= ast_register_application(dahdi_app, exec, dahdi_synopsis, dahdi_descrip);
 	}
 

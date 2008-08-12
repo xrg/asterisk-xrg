@@ -1229,9 +1229,9 @@ static struct call_queue *find_queue_by_name_rt(const char *queuename, struct as
 		ast_mutex_lock(&q->lock);
 		clear_queue(q);
 		q->realtime = 1;
-		init_queue(q);		/* Ensure defaults for all parameters not set explicitly. */
 		AST_LIST_INSERT_HEAD(&queues, q, list);
 	}
+	init_queue(q);		/* Ensure defaults for all parameters not set explicitly. */
 
 	memset(tmpbuf, 0, sizeof(tmpbuf));
 	for (v = queue_vars; v; v = v->next) {
@@ -1890,6 +1890,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 			ast_verbose(VERBOSE_PREFIX_3 "Couldn't call %s\n", tmp->interface);
 		do_hang(tmp);
 		(*busies)++;
+		update_status(tmp->member->interface, ast_device_state(tmp->member->interface));
 		return 0;
 	} else if (qe->parent->eventwhencalled) {
 		char vars[2048];
@@ -1913,6 +1914,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 			ast_verbose(VERBOSE_PREFIX_3 "Called %s\n", tmp->interface);
 	}
 
+	update_status(tmp->member->interface, ast_device_state(tmp->member->interface));
 	return 1;
 }
 
@@ -2452,17 +2454,35 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 			(res = say_position(qe)))
 			break;
 
+		/* If we have timed out, break out */
+		if (qe->expire && (time(NULL) > qe->expire)) {
+			*reason = QUEUE_TIMEOUT;
+			break;
+		}
+
 		/* Make a periodic announcement, if enabled */
 		if (qe->parent->periodicannouncefrequency && !ringing &&
 			(res = say_periodic_announcement(qe)))
 			break;
 
+		/* If we have timed out, break out */
+		if (qe->expire && (time(NULL) > qe->expire)) {
+			*reason = QUEUE_TIMEOUT;
+			break;
+		}
+		
 		/* Wait a second before checking again */
 		if ((res = ast_waitfordigit(qe->chan, RECHECK * 1000))) {
 			if (res > 0 && !valid_exit(qe, res))
 				res = 0;
 			else
 				break;
+		}
+		
+		/* If we have timed out, break out */
+		if (qe->expire && (time(NULL) > qe->expire)) {
+			*reason = QUEUE_TIMEOUT;
+			break;
 		}
 	}
 
@@ -2578,7 +2598,7 @@ static void queue_transfer_fixup(void *data, struct ast_channel *old_chan, struc
 	struct member *member = qtds->member;
 	int callstart = qtds->starttime;
 	struct ast_datastore *datastore;
-	
+
 	ast_queue_log(qe->parent->name, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld",
 				new_chan->exten, new_chan->context, (long) (callstart - qe->start),
 				(long) (time(NULL) - callstart));
@@ -2589,6 +2609,7 @@ static void queue_transfer_fixup(void *data, struct ast_channel *old_chan, struc
 	}
 
 	ast_channel_datastore_remove(new_chan, datastore);
+	ast_channel_datastore_free(datastore);
 }
 
 /*! \brief mechanism to tell if a queue caller was atxferred by a queue member.
@@ -2699,6 +2720,15 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 
 	memset(&bridge_config, 0, sizeof(bridge_config));
 	time(&now);
+
+	/* If we've already exceeded our timeout, then just stop
+	 * This should be extremely rare. queue_exec will take care
+	 * of removing the caller and reporting the timeout as the reason.
+	 */
+	if (qe->expire && now > qe->expire) {
+		res = 0;
+		goto out;
+	}
 		
 	for (; options && *options; options++)
 		switch (*options) {
@@ -3109,6 +3139,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		bridge = ast_bridge_call(qe->chan,peer, &bridge_config);
 
 		if (!attended_transfer_occurred(qe->chan)) {
+			struct ast_datastore *transfer_ds;
 			if (strcasecmp(oldcontext, qe->chan->context) || strcasecmp(oldexten, qe->chan->exten)) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld",
 					qe->chan->exten, qe->chan->context, (long) (callstart - qe->start),
@@ -3147,6 +3178,13 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 							(long)(time(NULL) - callstart),
 							qe->parent->eventwhencalled == QUEUE_EVENT_VARIABLES ? vars2manager(qe->chan, vars, sizeof(vars)) : "");
 			}
+			ast_channel_lock(qe->chan);
+			transfer_ds = ast_channel_datastore_find(qe->chan, &queue_transfer_info, NULL);
+			if (transfer_ds) {
+				ast_channel_datastore_remove(qe->chan, transfer_ds);
+				ast_channel_datastore_free(transfer_ds);
+			}
+			ast_channel_unlock(qe->chan);
 		}
 
 		if (bridge != AST_PBX_NO_HANGUP_PEER)
@@ -3920,11 +3958,27 @@ check_turns:
 			}
 			makeannouncement = 1;
 
+			/* Leave if we have exceeded our queuetimeout */
+			if (qe.expire && (time(NULL) > qe.expire)) {
+				record_abandoned(&qe);
+				reason = QUEUE_TIMEOUT;
+				res = 0;
+				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
+				break;
+			}
 			/* Make a periodic announcement, if enabled */
 			if (qe.parent->periodicannouncefrequency && !ringing)
 				if ((res = say_periodic_announcement(&qe)))
 					goto stop;
 
+			/* Leave if we have exceeded our queuetimeout */
+			if (qe.expire && (time(NULL) > qe.expire)) {
+				record_abandoned(&qe);
+				reason = QUEUE_TIMEOUT;
+				res = 0;
+				ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHTIMEOUT", "%d", qe.pos);
+				break;
+			}
 			/* Try calling all queue members for 'timeout' seconds */
 			res = try_calling(&qe, args.options, args.announceoverride, args.url, &tries, &noption, args.agi);
 			if (res)
@@ -3977,7 +4031,6 @@ check_turns:
 			res = wait_a_bit(&qe);
 			if (res)
 				goto stop;
-
 
 			/* Since this is a priority queue and
 			 * it is not sure that we are still at the head
@@ -4994,7 +5047,6 @@ static int unload_module(void)
 	ast_cli_unregister_multiple(cli_queue, sizeof(cli_queue) / sizeof(struct ast_cli_entry));
 	res = ast_manager_unregister("QueueStatus");
 	res |= ast_manager_unregister("Queues");
-	res |= ast_manager_unregister("QueueStatus");
 	res |= ast_manager_unregister("QueueAdd");
 	res |= ast_manager_unregister("QueueRemove");
 	res |= ast_manager_unregister("QueuePause");

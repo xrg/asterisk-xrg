@@ -1043,24 +1043,27 @@ static struct ast_channel *channel_find_locked(const struct ast_channel *prev,
 
 	for (retries = 0; retries < 200; retries++) {
 		int done;
+		/* Reset prev on each retry.  See note below for the reason. */
+		prev = _prev;
 		AST_LIST_LOCK(&channels);
 		AST_LIST_TRAVERSE(&channels, c, chan_list) {
-			prev = _prev;
-			if (prev) {	/* look for next item */
+			if (prev) {	/* look for last item, first, before any evaluation */
 				if (c != prev)	/* not this one */
 					continue;
 				/* found, prepare to return c->next */
 				if ((c = AST_LIST_NEXT(c, chan_list)) == NULL) break;
-				/* If prev was the last item on the channel list, then we just
-				 * want to return NULL, instead of trying to deref NULL in the
-				 * next section.
+				/*!\note
+				 * We're done searching through the list for the previous item.
+				 * Any item after this point, we want to evaluate for a match.
+				 * If we didn't set prev to NULL here, then we would only
+				 * return matches for the first matching item (since the above
+				 * "if (c != prev)" would not permit any other potential
+				 * matches to reach the additional matching logic, below).
+				 * Instead, it would just iterate until it once again found the
+				 * original match, then iterate down to the end of the list and
+				 * quit.
 				 */
 				prev = NULL;
-				/* We want prev to be NULL in case we end up doing more searching through
-				 * the channel list to find the channel (ie: name searching). If we didn't
-				 * set this to NULL the logic would just blow up
-				 * XXX Need a better explanation for this ...
-				 */
 			}
 			if (name) { /* want match by name */
 				if ((!namelen && strcasecmp(c->name, name)) ||
@@ -1201,7 +1204,7 @@ void ast_channel_free(struct ast_channel *chan)
 	struct ast_frame *f;
 	struct varshead *headp;
 	struct ast_datastore *datastore = NULL;
-	char name[AST_CHANNEL_NAME];
+	char name[AST_CHANNEL_NAME], *dashptr;
 	
 	headp=&chan->varshead;
 	
@@ -1234,6 +1237,9 @@ void ast_channel_free(struct ast_channel *chan)
 		sched_context_destroy(chan->sched);
 
 	ast_copy_string(name, chan->name, sizeof(name));
+	if ((dashptr = strrchr(name, '-'))) {
+		*dashptr = '\0';
+	}
 
 	/* Stop monitoring */
 	if (chan->monitor)
@@ -1511,7 +1517,10 @@ int ast_hangup(struct ast_channel *chan)
 			ast_cause2str(chan->hangupcause)
 			);
 
-	if (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_BRIDGED) && !ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED) && chan->cdr->disposition != AST_CDR_NULL) {
+	if (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_BRIDGED) && 
+		!ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED) && 
+	    (chan->cdr->disposition != AST_CDR_NULL || ast_test_flag(chan->cdr, AST_CDR_FLAG_DIALED))) {
+			
 		ast_cdr_end(chan->cdr);
 		ast_cdr_detach(chan->cdr);
 	}
@@ -3049,6 +3058,8 @@ int ast_call(struct ast_channel *chan, char *addr, int timeout)
 	/* Stop if we're a zombie or need a soft hangup */
 	ast_channel_lock(chan);
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE) && !ast_check_hangup(chan)) {
+		if (chan->cdr)
+			ast_set_flag(chan->cdr, AST_CDR_FLAG_DIALED);
 		if (chan->tech->call)
 			res = chan->tech->call(chan, addr, timeout);
 		ast_set_flag(chan, AST_FLAG_OUTGOING);
@@ -3669,13 +3680,19 @@ void ast_set_callerid(struct ast_channel *chan, const char *callerid, const char
 
 int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 {
+	char name[AST_CHANNEL_NAME], *dashptr;
 	int oldstate = chan->_state;
 
 	if (oldstate == state)
 		return 0;
 
+	ast_copy_string(name, chan->name, sizeof(name));
+	if ((dashptr = strrchr(name, '-'))) {
+		*dashptr = '\0';
+	}
+
 	chan->_state = state;
-	ast_device_state_changed_literal(chan->name);
+	ast_device_state_changed_literal(name);
 	/* setstate used to conditionally report Newchannel; this is no more */
 	manager_event(EVENT_FLAG_CALL,
 		      "Newstate",
@@ -3765,6 +3782,8 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 
 	/* Check the need of a jitterbuffer for each channel */
 	jb_in_use = ast_jb_do_usecheck(c0, c1);
+	if (jb_in_use)
+		ast_jb_empty_and_reset(c0, c1);
 
 	for (;;) {
 		struct ast_channel *who, *other;
@@ -3829,6 +3848,9 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			case AST_CONTROL_VIDUPDATE:
 			case AST_CONTROL_SRCUPDATE:
 				ast_indicate_data(other, f->subclass, f->data, f->datalen);
+				if (jb_in_use) {
+					ast_jb_empty_and_reset(c0, c1);
+				}
 				break;
 			default:
 				*fo = f;

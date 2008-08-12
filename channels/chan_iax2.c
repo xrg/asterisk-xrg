@@ -268,6 +268,7 @@ enum {
 	IAX_DELAYPBXSTART =	(1 << 25),	/*!< Don't start a PBX on the channel until the peer sends us a
 						     response, so that we've achieved a three-way handshake with
 						     them before sending voice or anything else*/
+	IAX_ALLOWFWDOWNLOAD = (1 << 26),	/*!< Allow the FWDOWNL command? */
 } iax2_flags;
 
 static int global_rtautoclear = 120;
@@ -1051,8 +1052,8 @@ static void __send_lagrq(const void *data)
 			/* I am the schedule, so I'm allowed to do this */
 			iaxs[callno]->lagid = -1;
 		}
-	} else if (option_debug > 0) {
-		ast_log(LOG_DEBUG, "I was supposed to send a LAGRQ with callno %d, but no such call exists (and I cannot remove lagid, either).\n", callno);
+	} else {
+		ast_log(LOG_WARNING, "I was supposed to send a LAGRQ with callno %d, but no such call exists (and I cannot remove lagid, either).\n", callno);
 	}
 
 	ast_mutex_unlock(&iaxsl[callno]);
@@ -1119,7 +1120,7 @@ static int peer_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct iax2_peer *peer = obj, *peer2 = arg;
 
-	return !strcasecmp(peer->name, peer2->name) ? CMP_MATCH : 0;
+	return !strcmp(peer->name, peer2->name) ? CMP_MATCH : 0;
 }
 
 /*!
@@ -1139,7 +1140,7 @@ static int user_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct iax2_user *user = obj, *user2 = arg;
 
-	return !strcasecmp(user->name, user2->name) ? CMP_MATCH : 0;
+	return !strcmp(user->name, user2->name) ? CMP_MATCH : 0;
 }
 
 /*!
@@ -1305,9 +1306,9 @@ retry:
 			goto retry;
 		}
 	}
-	if (!owner) {
-		AST_SCHED_DEL(sched, iaxs[callno]->lagid);
-		AST_SCHED_DEL(sched, iaxs[callno]->pingid);
+	if (!owner && iaxs[callno]) {
+		AST_SCHED_DEL_SPINLOCK(sched, iaxs[callno]->lagid, &iaxsl[callno]);
+		AST_SCHED_DEL_SPINLOCK(sched, iaxs[callno]->pingid, &iaxsl[callno]);
 		iaxs[callno] = NULL;
 	}
 
@@ -1618,10 +1619,10 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 			snprintf(host, sizeof(host), "%s:%d", ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
 
 		now = ast_tvnow();
-		start = 1 + (ast_random() % (TRUNK_CALL_START - 1));
+		start = 2 + (ast_random() % (TRUNK_CALL_START - 1));
 		for (x = start; 1; x++) {
 			if (x == TRUNK_CALL_START) {
-				x = 0;
+				x = 1;
 				continue;
 			}
 
@@ -3198,6 +3199,15 @@ struct parsed_dial_string {
 	char *options;
 };
 
+static int send_apathetic_reply(unsigned short callno, unsigned short dcallno, struct sockaddr_in *sin, int command, int ts, unsigned char seqno)
+{
+	struct ast_iax2_full_hdr f = { .scallno = htons(0x8000 | callno), .dcallno = htons(dcallno),
+		.ts = htonl(ts), .iseqno = seqno, .oseqno = seqno, .type = AST_FRAME_IAX,
+		.csub = compress_subclass(command) };
+
+	return sendto(defaultsockfd, &f, sizeof(f), 0, (struct sockaddr *)sin, sizeof(*sin));
+}
+
 /*!
  * \brief Parses an IAX dial string into its component parts.
  * \param data the string to be parsed
@@ -3406,17 +3416,15 @@ static int iax2_call(struct ast_channel *c, char *dest, int timeout)
 static int iax2_hangup(struct ast_channel *c) 
 {
 	unsigned short callno = PTR_TO_CALLNO(c->tech_pvt);
-	int alreadygone;
  	struct iax_ie_data ied;
  	memset(&ied, 0, sizeof(ied));
 	ast_mutex_lock(&iaxsl[callno]);
 	if (callno && iaxs[callno]) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "We're hanging up %s now...\n", c->name);
-		alreadygone = ast_test_flag(iaxs[callno], IAX_ALREADYGONE);
 		/* Send the hangup unless we have had a transmission error or are already gone */
  		iax_ie_append_byte(&ied, IAX_IE_CAUSECODE, (unsigned char)c->hangupcause);
-		if (!iaxs[callno]->error && !alreadygone) {
+		if (!iaxs[callno]->error && !ast_test_flag(iaxs[callno], IAX_ALREADYGONE)) {
  			send_command_final(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_HANGUP, 0, ied.buf, ied.pos, -1);
 			if (!iaxs[callno]) {
 				ast_mutex_unlock(&iaxsl[callno]);
@@ -3426,11 +3434,17 @@ static int iax2_hangup(struct ast_channel *c)
 		/* Explicitly predestroy it */
 		iax2_predestroy(callno);
 		/* If we were already gone to begin with, destroy us now */
-		if (alreadygone && iaxs[callno]) {
+		if (iaxs[callno]) {
 			if (option_debug)
 				ast_log(LOG_DEBUG, "Really destroying %s now...\n", c->name);
 			iax2_destroy(callno);
 		}
+	} else if (c->tech_pvt) {
+		/* If this call no longer exists, but the channel still
+		 * references it we need to set the channel's tech_pvt to null
+		 * to avoid ast_channel_free() trying to free it.
+		 */
+		c->tech_pvt = NULL;
 	}
 	ast_mutex_unlock(&iaxsl[callno]);
 	if (option_verbose > 2) 
@@ -7186,6 +7200,17 @@ static int socket_process(struct iax2_thread *thread)
 		} else {
 			f.subclass = uncompress_subclass(fh->csub);
 		}
+
+		/* Deal with POKE/PONG without allocating a callno */
+		if (f.frametype == AST_FRAME_IAX && f.subclass == IAX_COMMAND_POKE) {
+			/* Reply back with a PONG, but don't care about the result. */
+			send_apathetic_reply(1, ntohs(fh->scallno), &sin, IAX_COMMAND_PONG, ntohs(fh->ts), fh->oseqno);
+			return 1;
+		} else if (f.frametype == AST_FRAME_IAX && f.subclass == IAX_COMMAND_ACK && dcallno == 1) {
+			/* Ignore */
+			return 1;
+		}
+
 		if ((f.frametype == AST_FRAME_IAX) && ((f.subclass == IAX_COMMAND_NEW) || (f.subclass == IAX_COMMAND_REGREQ) ||
 						       (f.subclass == IAX_COMMAND_POKE) || (f.subclass == IAX_COMMAND_FWDOWNL) ||
 						       (f.subclass == IAX_COMMAND_REGREL)))
@@ -8416,6 +8441,10 @@ retryowner2:
 				break;
 			case IAX_COMMAND_FWDOWNL:
 				/* Firmware download */
+				if (!ast_test_flag(&globalflags, IAX_ALLOWFWDOWNLOAD)) {
+					send_command_final(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_UNSUPPORT, 0, NULL, 0, -1);
+					break;
+				}
 				memset(&ied0, 0, sizeof(ied0));
 				res = iax_firmware_append(&ied0, (unsigned char *)ies.devicetype, ies.fwdesc);
 				if (res < 0)
@@ -9483,33 +9512,20 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 				if (!ast_strlen_zero(v->value)) {
 					char name2[80];
 					char num2[80];
-					ast_callerid_split(v->value, name2, 80, num2, 80);
+					ast_callerid_split(v->value, name2, sizeof(name2), num2, sizeof(num2));
 					ast_string_field_set(peer, cid_name, name2);
 					ast_string_field_set(peer, cid_num, num2);
-					ast_set_flag(peer, IAX_HASCALLERID);
 				} else {
-					ast_clear_flag(peer, IAX_HASCALLERID);
 					ast_string_field_set(peer, cid_name, "");
 					ast_string_field_set(peer, cid_num, "");
 				}
+				ast_set_flag(peer, IAX_HASCALLERID);
 			} else if (!strcasecmp(v->name, "fullname")) {
-				if (!ast_strlen_zero(v->value)) {
-					ast_string_field_set(peer, cid_name, v->value);
-					ast_set_flag(peer, IAX_HASCALLERID);
-				} else {
-					ast_string_field_set(peer, cid_name, "");
-					if (ast_strlen_zero(peer->cid_num))
-						ast_clear_flag(peer, IAX_HASCALLERID);
-				}
+				ast_string_field_set(peer, cid_name, S_OR(v->value, ""));
+				ast_set_flag(peer, IAX_HASCALLERID);
 			} else if (!strcasecmp(v->name, "cid_number")) {
-				if (!ast_strlen_zero(v->value)) {
-					ast_string_field_set(peer, cid_num, v->value);
-					ast_set_flag(peer, IAX_HASCALLERID);
-				} else {
-					ast_string_field_set(peer, cid_num, "");
-					if (ast_strlen_zero(peer->cid_name))
-						ast_clear_flag(peer, IAX_HASCALLERID);
-				}
+				ast_string_field_set(peer, cid_num, S_OR(v->value, ""));
+				ast_set_flag(peer, IAX_HASCALLERID);
 			} else if (!strcasecmp(v->name, "sendani")) {
 				ast_set2_flag(peer, ast_true(v->value), IAX_SENDANI);	
 			} else if (!strcasecmp(v->name, "inkeys")) {
@@ -10049,6 +10065,8 @@ static int set_config(char *config_file, int reload)
 			ast_set2_flag((&globalflags), ast_true(v->value), IAX_FORCEJITTERBUF);	
 		else if (!strcasecmp(v->name, "delayreject"))
 			delayreject = ast_true(v->value);
+		else if (!strcasecmp(v->name, "allowfwdownload"))
+			ast_set2_flag((&globalflags), ast_true(v->value), IAX_ALLOWFWDOWNLOAD);
 		else if (!strcasecmp(v->name, "rtcachefriends"))
 			ast_set2_flag((&globalflags), ast_true(v->value), IAX_RTCACHEFRIENDS);	
 		else if (!strcasecmp(v->name, "rtignoreregexpire"))

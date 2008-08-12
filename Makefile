@@ -346,10 +346,10 @@ $(SUBDIRS): include/asterisk/version.h include/asterisk/buildopts.h defaults.h m
 main: $(filter-out main,$(MOD_SUBDIRS))
 
 $(MOD_SUBDIRS):
-	@ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AST_LIBS="$(AST_LIBS)" $(MAKE) --no-print-directory --no-builtin-rules -C $@ SUBDIR=$@ all
+	@ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AST_LIBS="$(AST_LIBS)" $(MAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 $(OTHER_SUBDIRS):
-	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AUDIO_LIBS="$(AUDIO_LIBS)" $(MAKE) --no-print-directory --no-builtin-rules -C $@ SUBDIR=$@ all
+	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" AUDIO_LIBS="$(AUDIO_LIBS)" $(MAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 defaults.h: makeopts
 	@build_tools/make_defaults_h > $@.tmp
@@ -358,7 +358,7 @@ defaults.h: makeopts
 	fi
 	@rm -f $@.tmp
 
-include/asterisk/version.h:
+include/asterisk/version.h: FORCE
 	@build_tools/make_version_h > $@.tmp
 	@if cmp -s $@.tmp $@ ; then : ; else \
 		mv $@.tmp $@ ; \
@@ -392,7 +392,7 @@ distclean: $(SUBDIRS_DIST_CLEAN) clean
 	@$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts menuselect-tree menuselect.makedeps
 	rm -f makeopts.embed_rules
-	rm -f config.log config.status
+	rm -f config.log config.status config.cache
 	rm -rf autom4te.cache
 	rm -f include/asterisk/autoconfig.h
 	rm -f include/asterisk/buildopts.h
@@ -778,4 +778,6 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 	@cat sounds/sounds.xml >> $@
 	@echo "</menu>" >> $@
 
-.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts include/asterisk/version.h installdirs
+.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts installdirs
+
+FORCE:

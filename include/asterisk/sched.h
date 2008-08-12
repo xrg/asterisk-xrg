@@ -60,6 +60,22 @@ extern "C" {
 		(_sched_res); \
 	})
 
+#define AST_SCHED_DEL_SPINLOCK(sched, id, lock) \
+	({ \
+		int _count = 0; \
+		int _sched_res = -1; \
+		while (id > -1 && (_sched_res = ast_sched_del(sched, id)) && ++_count < 10) { \
+			ast_mutex_unlock(lock); \
+			usleep(1); \
+			ast_mutex_lock(lock); \
+		} \
+		if (_count == 10 && option_debug > 2) { \
+			ast_log(LOG_DEBUG, "Unable to cancel schedule ID %d.\n", id); \
+		} \
+		id = -1; \
+		(_sched_res); \
+	})
+
 struct sched_context;
 
 /*! \brief New schedule context
@@ -118,7 +134,12 @@ int ast_sched_add_variable(struct sched_context *con, int when, ast_sched_cb cal
  * \param id ID of the scheduled item to delete
  * \return Returns 0 on success, -1 on failure
  */
+#ifndef AST_DEVMODE
 int ast_sched_del(struct sched_context *con, int id);
+#else
+int _ast_sched_del(struct sched_context *con, int id, const char *file, int line, const char *function);
+#define	ast_sched_del(a, b)	_ast_sched_del(a, b, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#endif
 
 /*! \brief Determines number of seconds until the next outstanding event to take place
  * Determine the number of seconds until the next outstanding event

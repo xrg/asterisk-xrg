@@ -1263,8 +1263,8 @@ ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr
 }
 
 void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
-				    ast_string_field *fields, int num_fields,
-				    int index, const char *format, va_list ap1, va_list ap2)
+				       ast_string_field *fields, int num_fields,
+				       int index, const char *format, va_list ap1, va_list ap2)
 {
 	size_t needed;
 

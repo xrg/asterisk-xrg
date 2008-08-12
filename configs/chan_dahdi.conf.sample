@@ -118,7 +118,7 @@ switchtype=national
 ;
 ; Allow inband audio (progress) when a call is RELEASEd by the far end of a PRI
 ;
-;inbandrelease=yes
+;inbanddisconnect=yes
 ;
 ; PRI Out of band indications.
 ; Enable this to report Busy and Congestion on a PRI using out-of-band
@@ -526,13 +526,13 @@ immediate=no
 ; passed through as signalling instead of generating hold music locally. This
 ; setting is only valid when used on a channel that uses digital signalling.
 ;
-; This option may be specified globally, or on a per-user or per-peer basis.
+; This option may be specified globally, or on a per-channel basis.
 ;
 ;mohinterpret=default
 ;
 ; This option specifies which music on hold class to suggest to the peer channel
 ; when this channel places the peer on hold. It may be specified globally or on
-; a per-user or per-peer basis.
+; a per-channel.
 ;
 ;mohsuggest=default
 ;
@@ -623,7 +623,7 @@ immediate=no
 ; different context and use E & M signalling instead.
 ;
 ;context=remote
-;sigalling=em
+;signaling=em
 ;channel => 15
 ;channel => 16
 

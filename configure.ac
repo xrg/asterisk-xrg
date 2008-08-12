@@ -28,11 +28,13 @@ case "${host_os}" in
      ;;
      *)
      ac_default_prefix=/usr
-     if test ${sysconfdir} = '${prefix}/etc'; then
-        sysconfdir=/etc
-     fi
-     if test ${mandir} = '${prefix}/man'; then
-        mandir=/usr/share/man
+     if test ${prefix} = '/usr' || test ${prefix} = 'NONE'; then
+        if test ${sysconfdir} = '${prefix}/etc'; then
+           sysconfdir=/etc
+        fi
+        if test ${mandir} = '${prefix}/man'; then
+           mandir=/usr/share/man
+        fi
      fi
      ;;
 esac
@@ -437,15 +439,16 @@ if test "x${host_os}" = "xlinux-gnu" ; then
   AST_EXT_LIB_CHECK([CAP], [cap], [cap_from_text], [sys/capability.h])
 fi
 
+PBX_DAHDI_TRANSCODE=0
 if test "${USE_DAHDI}" != "no" ; then
 	AST_C_DEFINE_CHECK([DAHDI], [DAHDI_CODE], [dahdi/user.h])
 	if test "x${PBX_DAHDI}" = "x1" ; then
-		PBX_ZAPTEL_TRANSCODE=1
-		AC_SUBST(PBX_ZAPTEL_TRANSCODE)
+		PBX_DAHDI_TRANSCODE=1
+		AC_SUBST(PBX_DAHDI_TRANSCODE)
 	fi
 fi
 
-AST_C_COMPILE_CHECK([GETIFADDRS], [struct ifaddrs *p; getifaddrs(&p)], [ifaddrs.h])
+AST_C_COMPILE_CHECK([GETIFADDRS], [struct ifaddrs *p; getifaddrs(&p)], [ifaddrs.h], , [getifaddrs() support])
 
 GSM_INTERNAL="yes"
 AC_SUBST(GSM_INTERNAL)
@@ -1246,7 +1249,7 @@ AST_EXT_LIB_CHECK([PRI], [pri], [pri_keypad_facility], [libpri.h])
 
 AST_EXT_LIB_CHECK([PRI_VERSION], [pri], [pri_get_version], [libpri.h])
 
-AST_EXT_LIB_CHECK([PRI_INBANDRELEASE], [pri], [pri_set_inbandrelease], [libpri.h])
+AST_EXT_LIB_CHECK([PRI_INBANDDISCONNECT], [pri], [pri_set_inbanddisconnect], [libpri.h])
 
 if test "${USE_PWLIB}" != "no"; then
 	if test -n "${PWLIB_DIR}"; then
@@ -1492,31 +1495,9 @@ if test "${PBX_ZAPTEL}" = 1 && test "x${PBX_DAHDI}" != "x1"; then
    if test "${ac_cv_zaptel_vldtmf}" = "yes"; then
 	PBX_ZAPTEL_VLDTMF=1
    fi
-   AC_MSG_CHECKING(for ZT_TCOP_ALLOCATE in zaptel/zaptel.h)
-   saved_cppflags="${CPPFLAGS}"
-   if test "x${ZAPTEL_DIR}" != "x"; then
-      CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
-   fi
-   AC_COMPILE_IFELSE(
-	[
-	AC_LANG_PROGRAM(
-	[#include <zaptel/zaptel.h>],
-	[int foo = ZT_TCOP_ALLOCATE;])
-	],
-	[	AC_MSG_RESULT(yes) 
-		ac_cv_zaptel_transcode="yes" 
-	],
-	[	AC_MSG_RESULT(no) 
-		ac_cv_zaptel_transcode="no" 
-	]
-	)
-   CPPFLAGS="${saved_cppflags}"
-   if test "${ac_cv_zaptel_transcode}" = "yes"; then
-	PBX_ZAPTEL_TRANSCODE=1
-   fi
 fi
 AC_SUBST(PBX_ZAPTEL_VLDTMF)
-AC_SUBST(PBX_ZAPTEL_TRANSCODE)
+AC_SUBST(PBX_DAHDI_TRANSCODE)
 
 if test "x${PBX_ZAPTEL}" = "x1" ; then
 	PBX_DAHDI=1

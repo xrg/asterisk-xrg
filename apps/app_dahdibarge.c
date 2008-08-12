@@ -102,7 +102,7 @@ static int careful_write(int fd, unsigned char *data, int len)
 static int conf_run(struct ast_channel *chan, int confno, int confflags)
 {
 	int fd;
-	DAHDI_CONFINFO ztc;
+	struct dahdi_confinfo ztc;
 	struct ast_frame *f;
 	struct ast_channel *c;
 	struct ast_frame fr;
@@ -114,8 +114,7 @@ static int conf_run(struct ast_channel *chan, int confno, int confflags)
 	int retryzap;
 	int origfd;
 	int ret = -1;
-
-	DAHDI_BUFFERINFO bi;
+	struct dahdi_bufferinfo bi;
 	char __buf[CONF_SIZE + AST_FRIENDLY_OFFSET];
 	char *buf = __buf + AST_FRIENDLY_OFFSET;
 
@@ -336,7 +335,7 @@ static int unload_module(void)
 {
 	int res = 0;
 
-	if (dahdi_chan_mode == DAHDI_PLUS_ZAP) {
+	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
 		res |= ast_unregister_application(dahdi_app);
 	}
 
@@ -351,7 +350,7 @@ static int load_module(void)
 {
 	int res = 0;
 
-	if (dahdi_chan_mode == DAHDI_PLUS_ZAP) {
+	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
 		res |= ast_register_application(dahdi_app, exec_dahdi, dahdi_synopsis, dahdi_descrip);
 	}
 

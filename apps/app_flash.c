@@ -84,7 +84,7 @@ static int flash_exec(struct ast_channel *chan, void *data)
 	int res = -1;
 	int x;
 	struct ast_module_user *u;
-	DAHDI_PARAMS ztp;
+	struct dahdi_params ztp;
 	u = ast_module_user_add(chan);
 	if (!strcasecmp(chan->tech->type, dahdi_chan_name)) {
 		memset(&ztp, 0, sizeof(ztp));
@@ -126,7 +126,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if (dahdi_chan_mode == ZAP_ONLY_MODE) {
+	if (dahdi_chan_mode == CHAN_ZAP_MODE) {
 		return ast_register_application(app, flash_exec, zap_synopsis, zap_descrip);
 	} else {
 		return ast_register_application(app, flash_exec, dahdi_synopsis, dahdi_descrip);
