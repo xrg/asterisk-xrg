@@ -547,7 +547,7 @@ fi
 %files
 %defattr(-,root,root)
 %doc BUGS CHANGES CREDITS LICENSE README* apps/rpt_flow.pdf
-%doc doc/*.txt contrib/init.d/rc.mandrake* contrib/asterisk-ices.xml
+%doc doc/*.txt contrib/init.d/rc.mandriva* contrib/asterisk-ices.xml
 %doc contrib/scripts contrib/i18n.testsuite.conf contrib/README.festival
 %attr(0755,root,root)					%{_initrddir}/asterisk
 %attr(0644,root,root) %config(noreplace)		%{_sysconfdir}/logrotate.d/asterisk
