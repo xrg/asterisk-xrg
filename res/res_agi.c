@@ -73,19 +73,20 @@ static char *deadsynopsis = "Executes AGI on a hungup channel";
 
 static char *descrip =
 "  [E|Dead]AGI(command,args): Executes an Asterisk Gateway Interface compliant\n"
-"program on a channel. AGI allows Asterisk to launch external programs\n"
-"written in any language to control a telephony channel, play audio,\n"
-"read DTMF digits, etc. by communicating with the AGI protocol on stdin\n"
-"and stdout.\n"
-"  This channel will stop dialplan execution on hangup inside of this\n"
-"application, except when using DeadAGI.  Otherwise, dialplan execution\n"
-"will continue normally.\n"
+"program on a channel. AGI allows Asterisk to launch external programs written\n"
+"in any language to control a telephony channel, play audio, read DTMF digits,\n"
+"etc. by communicating with the AGI protocol on stdin and stdout.\n"
+"  As of 1.6.0, this channel will not stop dialplan execution on hangup inside\n"
+"of this application. Dialplan execution will continue normally, even upon\n"
+"hangup until the AGI application signals a desire to stop (either by exiting\n"
+"or, in the case of a net script, by closing the connection).\n"
 "  A locally executed AGI script will receive SIGHUP on hangup from the channel\n"
-"except when using DeadAGI. This can be disabled by setting the AGISIGHUP channel\n"
-"variable to \"no\" before executing the AGI application.\n"
+"except when using DeadAGI. A fast AGI server will correspondingly receive a\n"
+"HANGUP in OOB data. Both of these signals may be disabled by setting the\n"
+"AGISIGHUP channel variable to \"no\" before executing the AGI application.\n"
 "  Using 'EAGI' provides enhanced AGI, with incoming audio available out of band\n"
-"on file descriptor 3\n\n"
-"  Use the CLI command 'agi show' to list available agi commands\n"
+"on file descriptor 3.\n\n"
+"  Use the CLI command 'agi show' to list available agi commands.\n"
 "  This application sets the following channel variable upon completion:\n"
 "     AGISTATUS      The status of the attempt to the run the AGI script\n"
 "                    text string, one of SUCCESS | FAILURE | NOTFOUND | HANGUP\n";
@@ -517,7 +518,7 @@ static enum agi_result launch_netscript(char *agiurl, char *argv[], int *fds, in
 	int s, flags, res, port = AGI_PORT;
 	struct pollfd pfds[1];
 	char *host, *c, *script = "";
-	struct sockaddr_in sin;
+	struct sockaddr_in addr_in;
 	struct hostent *hp;
 	struct ast_hostent ahp;
 
@@ -556,11 +557,11 @@ static enum agi_result launch_netscript(char *agiurl, char *argv[], int *fds, in
 		close(s);
 		return -1;
 	}
-	memset(&sin, 0, sizeof(sin));
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(port);
-	memcpy(&sin.sin_addr, hp->h_addr, sizeof(sin.sin_addr));
-	if (connect(s, (struct sockaddr *)&sin, sizeof(sin)) && (errno != EINPROGRESS)) {
+	memset(&addr_in, 0, sizeof(addr_in));
+	addr_in.sin_family = AF_INET;
+	addr_in.sin_port = htons(port);
+	memcpy(&addr_in.sin_addr, hp->h_addr, sizeof(addr_in.sin_addr));
+	if (connect(s, (struct sockaddr *)&addr_in, sizeof(addr_in)) && (errno != EINPROGRESS)) {
 		ast_log(LOG_WARNING, "Connect failed with unexpected error: %s\n", strerror(errno));
 		close(s);
 		return AGI_RESULT_FAILURE;
@@ -883,7 +884,7 @@ static int handle_sendimage(struct ast_channel *chan, AGI *agi, int argc, char *
 static int handle_controlstreamfile(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
 {
 	int res = 0, skipms = 3000;
-	char *fwd = "#", *rev = "*", *pause = NULL, *stop = NULL;	/* Default values */
+	char *fwd = "#", *rev = "*", *suspend = NULL, *stop = NULL;	/* Default values */
 
 	if (argc < 5 || argc > 9) {
 		return RESULT_SHOWUSAGE;
@@ -906,10 +907,10 @@ static int handle_controlstreamfile(struct ast_channel *chan, AGI *agi, int argc
 	}
 
 	if (argc > 8 && !ast_strlen_zero(argv[8])) {
-		pause = argv[8];
+		suspend = argv[8];
 	}
 
-	res = ast_control_streamfile(chan, argv[3], fwd, rev, stop, pause, NULL, skipms, NULL);
+	res = ast_control_streamfile(chan, argv[3], fwd, rev, stop, suspend, NULL, skipms, NULL);
 
 	ast_agi_fdprintf(chan, agi->fd, "200 result=%d\n", res);
 
@@ -1448,14 +1449,14 @@ static int handle_hangup(struct ast_channel *chan, AGI *agi, int argc, char **ar
 static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv)
 {
 	int res;
-	struct ast_app *app;
+	struct ast_app *app_to_exec;
 
 	if (argc < 2)
 		return RESULT_SHOWUSAGE;
 
 	ast_verb(3, "AGI Script Executing Application: (%s) Options: (%s)\n", argv[1], argv[2]);
 
-	if ((app = pbx_findapp(argv[1]))) {
+	if ((app_to_exec = pbx_findapp(argv[1]))) {
 		if (ast_compat_res_agi && !ast_strlen_zero(argv[2])) {
 			char *compat = alloca(strlen(argv[2]) * 2 + 1), *cptr, *vptr;
 			for (cptr = compat, vptr = argv[2]; *vptr; vptr++) {
@@ -1469,9 +1470,9 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 				}
 			}
 			*cptr = '\0';
-			res = pbx_exec(chan, app, compat);
+			res = pbx_exec(chan, app_to_exec, compat);
 		} else {
-			res = pbx_exec(chan, app, argv[2]);
+			res = pbx_exec(chan, app_to_exec, argv[2]);
 		}
 	} else {
 		ast_log(LOG_WARNING, "Could not find application (%s)\n", argv[1]);
@@ -2601,6 +2602,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	/* how many times we'll retry if ast_waitfor_nandfs will return without either
 	  channel or file descriptor in case select is interrupted by a system call (EINTR) */
 	int retry = AGI_NANDFS_RETRY;
+	const char *sighup;
 
 	if (!(readf = fdopen(agi->ctrl, "r"))) {
 		ast_log(LOG_WARNING, "Unable to fdopen file descriptor\n");
@@ -2615,8 +2617,11 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 		if (needhup) {
 			needhup = 0;
 			dead = 1;
-			if (pid > -1)
+			if (pid > -1) {
 				kill(pid, SIGHUP);
+			} else if (agi->fast) {
+				send(agi->ctrl, "HANGUP\n", 7, MSG_OOB);
+			}
 		}
 		ms = -1;
 		c = ast_waitfor_nandfds(&chan, dead ? 0 : 1, &agi->ctrl, 1, NULL, &outfd, &ms);
@@ -2698,16 +2703,18 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 		}
 	}
 	/* Notify process */
-	if (pid > -1) {
-		const char *sighup = pbx_builtin_getvar_helper(chan, "AGISIGHUP");
-		if (ast_strlen_zero(sighup) || !ast_false(sighup)) {
+	sighup = pbx_builtin_getvar_helper(chan, "AGISIGHUP");
+	if (ast_strlen_zero(sighup) || !ast_false(sighup)) {
+		if (pid > -1) {
 			if (kill(pid, SIGHUP)) {
 				ast_log(LOG_WARNING, "unable to send SIGHUP to AGI process %d: %s\n", pid, strerror(errno));
 			} else { /* Give the process a chance to die */
 				usleep(1);
 			}
+			waitpid(pid, status, WNOHANG);
+		} else if (agi->fast) {
+			send(agi->ctrl, "HANGUP\n", 7, MSG_OOB);
 		}
-		waitpid(pid, status, WNOHANG);
 	}
 	fclose(readf);
 	return returnstatus;

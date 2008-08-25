@@ -93,12 +93,14 @@ enum skinny_codecs {
 #define DEFAULT_SKINNY_BACKLOG 2
 #define SKINNY_MAX_PACKET 1000
 
-static unsigned int tos = 0;
-static unsigned int tos_audio = 0;
-static unsigned int tos_video = 0;
-static unsigned int cos = 0;
-static unsigned int cos_audio = 0;
-static unsigned int cos_video = 0;
+static struct {
+	unsigned int tos;
+	unsigned int tos_audio;
+	unsigned int tos_video;
+	unsigned int cos;
+	unsigned int cos_audio;
+	unsigned int cos_video;
+} qos = { 0, 0, 0, 0, 0, 0 };
 
 static int keep_alive = 120;
 static char vmexten[AST_MAX_EXTENSION];      /* Voicemail pilot number */
@@ -965,7 +967,7 @@ struct ast_hostent ahp;
 struct hostent *hp;
 static int skinnysock = -1;
 static pthread_t accept_t;
-static char context[AST_MAX_CONTEXT] = "default";
+static char global_context[AST_MAX_CONTEXT] = "default";
 static char language[MAX_LANGUAGE] = "";
 static char mohinterpret[MAX_MUSICCLASS] = "default";
 static char mohsuggest[MAX_MUSICCLASS] = "";
@@ -2305,15 +2307,15 @@ static int has_voicemail(struct skinny_line *l)
 {
 	int new_msgs;
 	struct ast_event *event;
-	char *mailbox, *context;
+	char *mbox, *context;
 
-	context = mailbox = ast_strdupa(l->mailbox);
+	context = mbox = ast_strdupa(l->mailbox);
 	strsep(&context, "@");
 	if (ast_strlen_zero(context))
 		context = "default";
 
 	event = ast_event_get_cached(AST_EVENT_MWI,
-		AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
+		AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mbox,
 		AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, context,
 		AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_EXISTS,
 		AST_EVENT_IE_END);
@@ -3040,7 +3042,7 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 			} else if (!strcasecmp(v->name, "vmexten")) {
 				ast_copy_string(device_vmexten, v->value, sizeof(device_vmexten));
 			} else if (!strcasecmp(v->name, "context")) {
-				ast_copy_string(context, v->value, sizeof(context));
+				ast_copy_string(global_context, v->value, sizeof(global_context));
 			} else if (!strcasecmp(v->name, "regexten")) {
 				ast_copy_string(regexten, v->value, sizeof(regexten));
 			} else if (!strcasecmp(v->name, "allow")) {
@@ -3154,7 +3156,7 @@ static struct skinny_device *build_device(const char *cat, struct ast_variable *
 					ast_copy_string(l->name, v->value, sizeof(l->name));
 
 					/* XXX Should we check for uniqueness?? XXX */
-					ast_copy_string(l->context, context, sizeof(l->context));
+					ast_copy_string(l->context, global_context, sizeof(l->context));
 					ast_copy_string(l->cid_num, cid_num, sizeof(l->cid_num));
 					ast_copy_string(l->cid_name, cid_name, sizeof(l->cid_name));
 					ast_copy_string(l->label, linelabel, sizeof(l->label));
@@ -3249,11 +3251,11 @@ static void start_rtp(struct skinny_subchannel *sub)
 		ast_channel_set_fd(sub->owner, 3, ast_rtcp_fd(sub->vrtp));
 	}
 	if (sub->rtp) {
-		ast_rtp_setqos(sub->rtp, tos_audio, cos_audio, "Skinny RTP");
+		ast_rtp_setqos(sub->rtp, qos.tos_audio, qos.cos_audio, "Skinny RTP");
 		ast_rtp_setnat(sub->rtp, l->nat);
 	}
 	if (sub->vrtp) {
-		ast_rtp_setqos(sub->vrtp, tos_video, cos_video, "Skinny VRTP");
+		ast_rtp_setqos(sub->vrtp, qos.tos_video, qos.cos_video, "Skinny VRTP");
 		ast_rtp_setnat(sub->vrtp, l->nat);
 	}
 	/* Set Frame packetization */
@@ -3416,12 +3418,18 @@ static int skinny_call(struct ast_channel *ast, char *dest, int timeout)
 		return -1;
 	}
 
+	if (AST_LIST_NEXT(sub,list) && !l->callwaiting) {
+		ast_queue_control(ast, AST_CONTROL_BUSY);
+		return -1;
+	}
+	
 	switch (l->hookstate) {
 	case SKINNY_OFFHOOK:
 		tone = SKINNY_CALLWAITTONE;
 		break;
 	case SKINNY_ONHOOK:
 		tone = SKINNY_ALERT;
+		l->activesub = sub;
 		break;
 	default:
 		ast_log(LOG_ERROR, "Don't know how to deal with hookstate %d\n", l->hookstate);
@@ -3452,9 +3460,13 @@ static int skinny_hangup(struct ast_channel *ast)
 		ast_debug(1, "Asked to hangup channel not connected\n");
 		return 0;
 	}
+
 	l = sub->parent;
 	d = l->parent;
 	s = d->session;
+
+	if (skinnydebug)
+		ast_verb(3,"Hanging up %s/%d\n",d->name,sub->callid);
 
 	AST_LIST_REMOVE(&l->sub, sub, list);
 
@@ -3467,6 +3479,7 @@ static int skinny_hangup(struct ast_channel *ast)
 
 			}
 			if (sub == l->activesub) {      /* we are killing the active sub, but there are other subs on the line*/
+				ast_verb(4,"Killing active sub %d\n", sub->callid);
 				if (sub->related) {
 					l->activesub = sub->related;
 				} else {
@@ -3476,12 +3489,13 @@ static int skinny_hangup(struct ast_channel *ast)
 						l->activesub = AST_LIST_FIRST(&l->sub);
 					}
 				}
-				transmit_callstate(d, l->instance, SKINNY_ONHOOK, sub->callid);
+				//transmit_callstate(d, l->instance, SKINNY_ONHOOK, sub->callid);
 				transmit_activatecallplane(d, l);
 				transmit_closereceivechannel(d, sub);
 				transmit_stopmediatransmission(d, sub);
 				transmit_lamp_indication(d, STIMULUS_LINE, l->instance, SKINNY_LAMP_BLINK);
 			} else {    /* we are killing a background sub on the line with other subs*/
+				ast_verb(4,"Killing inactive sub %d\n", sub->callid);
 				if (AST_LIST_NEXT(sub, list)) {
 					transmit_lamp_indication(d, STIMULUS_LINE, l->instance, SKINNY_LAMP_BLINK);
 				} else {
@@ -3489,7 +3503,7 @@ static int skinny_hangup(struct ast_channel *ast)
 				}
 			}
 		} else {                                                /* no more subs on line so make idle */
-
+			ast_verb(4,"Killing only sub %d\n", sub->callid);
 			l->hookstate = SKINNY_ONHOOK;
 			transmit_callstate(d, l->instance, SKINNY_ONHOOK, sub->callid);
 			l->activesub = NULL;
@@ -3945,7 +3959,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 			sub->related = NULL;
 
 			AST_LIST_INSERT_HEAD(&l->sub, sub, list);
-			l->activesub = sub;
+			//l->activesub = sub;
 		}
 		tmp->tech = &skinny_tech;
 		tmp->tech_pvt = sub;
@@ -4363,6 +4377,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		if (!l) {
 			return 0;
 		}
+		sub = l->activesub;
 	} else {
 		l = sub->parent;
 	}
@@ -4386,6 +4401,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		} else {
 			sub = c->tech_pvt;
 			l = sub->parent;
+			l->activesub = sub;
 			if (l->hookstate == SKINNY_ONHOOK) {
 				l->hookstate = SKINNY_OFFHOOK;
 				transmit_callstate(d, l->instance, SKINNY_OFFHOOK, sub->callid);
@@ -4426,6 +4442,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		} else {
 			sub = c->tech_pvt;
 			l = sub->parent;
+			l->activesub = sub;
 			if (l->hookstate == SKINNY_ONHOOK) {
 				l->hookstate = SKINNY_OFFHOOK;
 				transmit_speaker_mode(d, SKINNY_SPEAKERON);
@@ -4485,6 +4502,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		} else {
 			sub = c->tech_pvt;
 			l = sub->parent;
+			l->activesub = sub;
 
 			if (ast_strlen_zero(l->vmexten))  /* Exit the call if no VM pilot */
 				break;
@@ -4649,6 +4667,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 				c = skinny_new(l, AST_STATE_DOWN);
 				if (c) {
 					sub = c->tech_pvt;
+					l->activesub = sub;
 					transmit_callstate(d, l->instance, SKINNY_OFFHOOK, sub->callid);
 					if (skinnydebug)
 						ast_verb(1, "Attempting to Clear display on Skinny %s@%s\n", l->name, d->name);
@@ -4746,6 +4765,7 @@ static int handle_offhook_message(struct skinny_req *req, struct skinnysession *
 			c = skinny_new(l, AST_STATE_DOWN);
 			if (c) {
 				sub = c->tech_pvt;
+				l->activesub = sub;
 				transmit_callstate(d, l->instance, SKINNY_OFFHOOK, sub->callid);
 				if (skinnydebug)
 					ast_verb(1, "Attempting to Clear display on Skinny %s@%s\n", l->name, d->name);
@@ -4787,6 +4807,9 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 	} else {
 		l = d->activeline;
 		sub = l->activesub;
+		if (!sub) {
+			return 0;
+		}
 	}
 
 	if (l->hookstate == SKINNY_ONHOOK) {
@@ -4940,13 +4963,13 @@ static int handle_line_state_req_message(struct skinny_req *req, struct skinnyse
 
 static int handle_time_date_req_message(struct skinny_req *req, struct skinnysession *s)
 {
-	struct timeval tv = ast_tvnow();
+	struct timeval now = ast_tvnow();
 	struct ast_tm cmtime;
 
 	if (!(req = req_alloc(sizeof(struct definetimedate_message), DEFINETIMEDATE_MESSAGE)))
 		return -1;
 
-	ast_localtime(&tv, &cmtime, NULL);
+	ast_localtime(&now, &cmtime, NULL);
 	req->data.definetimedate.year = htolel(cmtime.tm_year+1900);
 	req->data.definetimedate.month = htolel(cmtime.tm_mon+1);
 	req->data.definetimedate.dayofweek = htolel(cmtime.tm_wday);
@@ -4955,7 +4978,7 @@ static int handle_time_date_req_message(struct skinny_req *req, struct skinnyses
 	req->data.definetimedate.minute = htolel(cmtime.tm_min);
 	req->data.definetimedate.seconds = htolel(cmtime.tm_sec);
 	req->data.definetimedate.milliseconds = htolel(cmtime.tm_usec / 1000);
-	req->data.definetimedate.timestamp = htolel(tv.tv_sec);
+	req->data.definetimedate.timestamp = htolel(now.tv_sec);
 	transmit_response(s->device, req);
 	return 1;
 }
@@ -5239,6 +5262,7 @@ static int handle_enbloc_call_message(struct skinny_req *req, struct skinnysessi
 		l->hookstate = SKINNY_OFFHOOK;
 
 		sub = c->tech_pvt;
+		l->activesub = sub;
 		transmit_callstate(d, l->instance, SKINNY_OFFHOOK, sub->callid);
 		if (skinnydebug)
 			ast_verb(1, "Attempting to Clear display on Skinny %s@%s\n", l->name, d->name);
@@ -5353,6 +5377,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 		} else {
 			sub = c->tech_pvt;
+			l->activesub = sub;
 			if (l->hookstate == SKINNY_ONHOOK) {
 				l->hookstate = SKINNY_OFFHOOK;
 				transmit_speaker_mode(d, SKINNY_SPEAKERON);
@@ -5391,6 +5416,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 		} else {
 			sub = c->tech_pvt;
+			l->activesub = sub;
 			if (l->hookstate == SKINNY_ONHOOK) {
 				l->hookstate = SKINNY_OFFHOOK;
 				transmit_speaker_mode(d, SKINNY_SPEAKERON);
@@ -5457,6 +5483,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 		} else {
 			sub = c->tech_pvt;
+			l->activesub = sub;
 			handle_callforward_button(sub, SKINNY_CFWD_ALL);
 		}
 		break;
@@ -5474,6 +5501,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 		} else {
 			sub = c->tech_pvt;
+			l->activesub = sub;
 			handle_callforward_button(sub, SKINNY_CFWD_BUSY);
 		}
 		break;
@@ -5492,6 +5520,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 		} else {
 			sub = c->tech_pvt;
+			l->activesub = sub;
 			handle_callforward_button(sub, SKINNY_CFWD_NOANSWER);
 		}
 #endif
@@ -6211,22 +6240,22 @@ static int reload_config(void)
 		} else if (!strcasecmp(v->name, "dateformat")) {
 			memcpy(date_format, v->value, sizeof(date_format));
 		} else if (!strcasecmp(v->name, "tos")) {
-			if (ast_str2tos(v->value, &tos))
+			if (ast_str2tos(v->value, &qos.tos))
 				ast_log(LOG_WARNING, "Invalid tos value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "tos_audio")) {
-			if (ast_str2tos(v->value, &tos_audio))
+			if (ast_str2tos(v->value, &qos.tos_audio))
 				ast_log(LOG_WARNING, "Invalid tos_audio value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "tos_video")) {
-			if (ast_str2tos(v->value, &tos_video))
+			if (ast_str2tos(v->value, &qos.tos_video))
 				ast_log(LOG_WARNING, "Invalid tos_video value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "cos")) {
-			if (ast_str2cos(v->value, &cos))
+			if (ast_str2cos(v->value, &qos.cos))
 				ast_log(LOG_WARNING, "Invalid cos value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "cos_audio")) {
-			if (ast_str2cos(v->value, &cos_audio))
+			if (ast_str2cos(v->value, &qos.cos_audio))
 				ast_log(LOG_WARNING, "Invalid cos_audio value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "cos_video")) {
-			if (ast_str2cos(v->value, &cos_video))
+			if (ast_str2cos(v->value, &qos.cos_video))
 				ast_log(LOG_WARNING, "Invalid cos_video value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "allow")) {
 			ast_parse_allow_disallow(&default_prefs, &default_capability, v->value, 1);
@@ -6312,7 +6341,7 @@ static int reload_config(void)
 			}
 			ast_verb(2, "Skinny listening on %s:%d\n",
 					ast_inet_ntoa(bindaddr.sin_addr), ntohs(bindaddr.sin_port));
-			ast_netsock_set_qos(skinnysock, tos, cos, "Skinny");
+			ast_netsock_set_qos(skinnysock, qos.tos, qos.cos, "Skinny");
 			ast_pthread_create_background(&accept_t, NULL, accept_thread, NULL);
 		}
 	}

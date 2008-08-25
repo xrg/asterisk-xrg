@@ -1056,7 +1056,7 @@ static int insert_penaltychange (const char *list_name, const char *content, con
 	char *timestr, *maxstr, *minstr, *contentdup;
 	struct penalty_rule *rule = NULL, *rule_iter;
 	struct rule_list *rl_iter;
-	int time, inserted = 0;
+	int penaltychangetime, inserted = 0;
 
 	if (!(rule = ast_calloc(1, sizeof(*rule)))) {
 		ast_log(LOG_ERROR, "Cannot allocate memory for penaltychange rule at line %d!\n", linenum);
@@ -1074,13 +1074,13 @@ static int insert_penaltychange (const char *list_name, const char *content, con
 	*maxstr++ = '\0';
 	timestr = contentdup;
 
-	if ((time = atoi(timestr)) < 0) {
+	if ((penaltychangetime = atoi(timestr)) < 0) {
 		ast_log(LOG_WARNING, "Improper time parameter specified for penaltychange rule at line %d. Ignoring.\n", linenum);
 		ast_free(rule);
 		return -1;
 	}
 
-	rule->time = time;
+	rule->time = penaltychangetime;
 
 	if ((minstr = strchr(maxstr,',')))
 		*minstr++ = '\0';
@@ -1684,7 +1684,7 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	int res = -1;
 	int pos = 0;
 	int inserted = 0;
-	enum queue_member_status stat;
+	enum queue_member_status status;
 	char timebuf[20] = "0";
 	char priobuf[5] = "0";
 
@@ -1695,12 +1695,12 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	ao2_lock(q);
 
 	/* This is our one */
-	stat = get_member_status(q, qe->max_penalty, qe->min_penalty);
-	if (!q->joinempty && (stat == QUEUE_NO_MEMBERS))
+	status = get_member_status(q, qe->max_penalty, qe->min_penalty);
+	if (!q->joinempty && (status == QUEUE_NO_MEMBERS))
 		*reason = QUEUE_JOINEMPTY;
-	else if ((q->joinempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS || stat == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS || stat == QUEUE_NO_MEMBERS))
+	else if ((q->joinempty == QUEUE_EMPTY_STRICT) && (status == QUEUE_NO_REACHABLE_MEMBERS || status == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS || status == QUEUE_NO_MEMBERS))
 		*reason = QUEUE_JOINUNAVAIL;
-	else if ((q->joinempty == QUEUE_EMPTY_LOOSE) && (stat == QUEUE_NO_REACHABLE_MEMBERS || stat == QUEUE_NO_MEMBERS))
+	else if ((q->joinempty == QUEUE_EMPTY_LOOSE) && (status == QUEUE_NO_REACHABLE_MEMBERS || status == QUEUE_NO_MEMBERS))
 		*reason = QUEUE_JOINUNAVAIL;
 	else if (q->maxlen && (q->count >= q->maxlen))
 		*reason = QUEUE_FULL;
@@ -1978,7 +1978,7 @@ static void recalc_holdtime(struct queue_ent *qe, int newholdtime)
 static void leave_queue(struct queue_ent *qe)
 {
 	struct call_queue *q;
-	struct queue_ent *cur, *prev = NULL;
+	struct queue_ent *current, *prev = NULL;
 	struct penalty_rule *pr_iter;
 	int pos = 0;
 
@@ -1988,8 +1988,8 @@ static void leave_queue(struct queue_ent *qe)
 	ao2_lock(q);
 
 	prev = NULL;
-	for (cur = q->head; cur; cur = cur->next) {
-		if (cur == qe) {
+	for (current = q->head; current; current = current->next) {
+		if (current == qe) {
 			q->count--;
 
 			/* Take us out of the queue */
@@ -2003,16 +2003,16 @@ static void leave_queue(struct queue_ent *qe)
 			}
 			/* Take us out of the queue */
 			if (prev)
-				prev->next = cur->next;
+				prev->next = current->next;
 			else
-				q->head = cur->next;
+				q->head = current->next;
 			/* Free penalty rules */
 			while ((pr_iter = AST_LIST_REMOVE_HEAD(&qe->qe_rules, list)))
 				ast_free(pr_iter);
 		} else {
 			/* Renumber the people after us in the queue based on a new count */
-			cur->pos = ++pos;
-			prev = cur;
+			current->pos = ++pos;
+			prev = current;
 		}
 	}
 	ao2_unlock(q);
@@ -2336,6 +2336,14 @@ static int ring_one(struct queue_ent *qe, struct callattempt *outgoing, int *bus
 			/* Ring just the best channel */
 			ast_debug(1, "Trying '%s' with metric %d\n", best->interface, best->metric);
 			ret = ring_entry(qe, best, busies);
+		}
+		
+		/* If we have timed out, break out */
+		if (qe->expire && (time(NULL) >= qe->expire)) {
+			if (option_debug)
+				ast_log(LOG_DEBUG, "Queue timed out while ringing members.\n");
+			ret = 0;
+			break;
 		}
 	}
 
@@ -2872,21 +2880,21 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 
 	/* This is the holding pen for callers 2 through maxlen */
 	for (;;) {
-		enum queue_member_status stat;
+		enum queue_member_status status;
 
 		if (is_our_turn(qe))
 			break;
 
 		/* If we have timed out, break out */
-		if (qe->expire && (time(NULL) > qe->expire)) {
+		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
 		}
 
-		stat = get_member_status(qe->parent, qe->max_penalty, qe->min_penalty);
+		status = get_member_status(qe->parent, qe->max_penalty, qe->min_penalty);
 
 		/* leave the queue if no agents, if enabled */
-		if (qe->parent->leavewhenempty && (stat == QUEUE_NO_MEMBERS)) {
+		if (qe->parent->leavewhenempty && (status == QUEUE_NO_MEMBERS)) {
 			*reason = QUEUE_LEAVEEMPTY;
 			ast_queue_log(qe->parent->name, qe->chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe->pos, qe->opos, (long) time(NULL) - qe->start);
 			leave_queue(qe);
@@ -2894,13 +2902,13 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 		}
 
 		/* leave the queue if no reachable agents, if enabled */
-		if ((qe->parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS || stat == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS)) {
+		if ((qe->parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (status == QUEUE_NO_REACHABLE_MEMBERS || status == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS)) {
 			*reason = QUEUE_LEAVEUNAVAIL;
 			ast_queue_log(qe->parent->name, qe->chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe->pos, qe->opos, (long) time(NULL) - qe->start);
 			leave_queue(qe);
 			break;
 		}
-		if ((qe->parent->leavewhenempty == QUEUE_EMPTY_LOOSE) && (stat == QUEUE_NO_REACHABLE_MEMBERS)) {
+		if ((qe->parent->leavewhenempty == QUEUE_EMPTY_LOOSE) && (status == QUEUE_NO_REACHABLE_MEMBERS)) {
 			*reason = QUEUE_LEAVEUNAVAIL;
 			ast_queue_log(qe->parent->name, qe->chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe->pos, qe->opos, (long) time(NULL) - qe->start);
 			leave_queue(qe);
@@ -2913,7 +2921,7 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 			break;
 
 		/* If we have timed out, break out */
-		if (qe->expire && (time(NULL) > qe->expire)) {
+		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
 		}
@@ -2924,12 +2932,12 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 			break;
 		
 		/* see if we need to move to the next penalty level for this queue */
-		while (qe->pr && ((time(NULL) - qe->start) > qe->pr->time)) {
+		while (qe->pr && ((time(NULL) - qe->start) >= qe->pr->time)) {
 			update_qe_rule(qe);
 		}
 
 		/* If we have timed out, break out */
-		if (qe->expire && (time(NULL) > qe->expire)) {
+		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
 		}
@@ -2943,7 +2951,7 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 		}
 		
 		/* If we have timed out, break out */
-		if (qe->expire && (time(NULL) > qe->expire)) {
+		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
 		}
@@ -3227,7 +3235,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	struct ast_channel *which;
 	struct callattempt *lpeer;
 	struct member *member;
-	struct ast_app *app;
+	struct ast_app *application;
 	int res = 0, bridge = 0;
 	int numbusies = 0;
 	int x=0;
@@ -3268,7 +3276,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	 * This should be extremely rare. queue_exec will take care
 	 * of removing the caller and reporting the timeout as the reason.
 	 */
-	if (qe->expire && now > qe->expire) {
+	if (qe->expire && now >= qe->expire) {
 		res = 0;
 		goto out;
 	}
@@ -3430,10 +3438,22 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		}
 	}
 
-	if (qe->expire && (!qe->parent->timeout || (qe->parent->timeoutpriority == TIMEOUT_PRIORITY_APP && (qe->expire - now) <= qe->parent->timeout)))
-		to = (qe->expire - now) * 1000;
-	else
-		to = (qe->parent->timeout) ? qe->parent->timeout * 1000 : -1;
+	if (qe->parent->timeoutpriority == TIMEOUT_PRIORITY_APP) {
+		/* Application arguments have higher timeout priority (behaviour for <=1.6) */
+		if (qe->expire && (!qe->parent->timeout || (qe->expire - now) <= qe->parent->timeout))
+			to = (qe->expire - now) * 1000;
+		else
+			to = (qe->parent->timeout) ? qe->parent->timeout * 1000 : -1;
+	} else {
+		/* Config timeout is higher priority thatn application timeout */
+		if (qe->expire && qe->expire<=now) {
+			to = 0;
+		} else if (qe->parent->timeout) {
+			to = qe->parent->timeout * 1000;
+		} else {
+			to = -1;
+		}
+	}
 	orig = to;
 	++qe->pending;
 	ao2_unlock(qe->parent);
@@ -3738,10 +3758,10 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				res = -1;
 			}
 			
-			app = pbx_findapp("Macro");
+			application = pbx_findapp("Macro");
 
-			if (app) {
-				res = pbx_exec(qe->chan, app, macroexec);
+			if (application) {
+				res = pbx_exec(qe->chan, application, macroexec);
 				ast_debug(1, "Macro exited with status %d\n", res);
 				res = 0;
 			} else {
@@ -3774,9 +3794,9 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				res = -1;
 			}
 			
-			app = pbx_findapp("Gosub");
+			application = pbx_findapp("Gosub");
 			
-			if (app) {
+			if (application) {
 				char *gosub_args, *gosub_argstart;
 
 				/* Set where we came from */
@@ -3793,7 +3813,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 					asprintf(&gosub_args, "%s,s,1", gosubexec);
 				}
 				if (gosub_args) {
-					res = pbx_exec(qe->chan, app, gosub_args);
+					res = pbx_exec(qe->chan, application, gosub_args);
 					ast_pbx_run(qe->chan);
 					free(gosub_args);
 					if (option_debug)
@@ -3815,10 +3835,10 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 
 		if (!ast_strlen_zero(agi)) {
 			ast_debug(1, "app_queue: agi=%s.\n", agi);
-			app = pbx_findapp("agi");
-			if (app) {
+			application = pbx_findapp("agi");
+			if (application) {
 				agiexec = ast_strdupa(agi);
-				ret = pbx_exec(qe->chan, app, agiexec);
+				ret = pbx_exec(qe->chan, application, agiexec);
 			} else
 				ast_log(LOG_WARNING, "Asked to execute an AGI on this channel, but could not find application (agi)!\n");
 		}
@@ -4727,10 +4747,10 @@ check_turns:
 		/* they may dial a digit from the queue context; */
 		/* or, they may timeout. */
 
-		enum queue_member_status stat;
+		enum queue_member_status status;
 
 		/* Leave if we have exceeded our queuetimeout */
-		if (qe.expire && (time(NULL) > qe.expire)) {
+		if (qe.expire && (time(NULL) >= qe.expire)) {
 			record_abandoned(&qe);
 			reason = QUEUE_TIMEOUT;
 			res = 0;
@@ -4753,7 +4773,7 @@ check_turns:
 				goto stop;
 	
 		/* Leave if we have exceeded our queuetimeout */
-		if (qe.expire && (time(NULL) > qe.expire)) {
+		if (qe.expire && (time(NULL) >= qe.expire)) {
 			record_abandoned(&qe);
 			reason = QUEUE_TIMEOUT;
 			res = 0;
@@ -4772,7 +4792,7 @@ check_turns:
 			goto stop;
 		}
 
-		stat = get_member_status(qe.parent, qe.max_penalty, qe.min_penalty);
+		status = get_member_status(qe.parent, qe.max_penalty, qe.min_penalty);
 
 		/* exit after 'timeout' cycle if 'n' option enabled */
 		if (noption && tries >= qe.parent->membercount) {
@@ -4785,7 +4805,7 @@ check_turns:
 		}
 
 		/* leave the queue if no agents, if enabled */
-		if (qe.parent->leavewhenempty && (stat == QUEUE_NO_MEMBERS)) {
+		if (qe.parent->leavewhenempty && (status == QUEUE_NO_MEMBERS)) {
 			record_abandoned(&qe);
 			reason = QUEUE_LEAVEEMPTY;
 			ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe.pos, qe.opos, (long)(time(NULL) - qe.start));
@@ -4794,14 +4814,14 @@ check_turns:
 		}
 
 		/* leave the queue if no reachable agents, if enabled */
-		if ((qe.parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (stat == QUEUE_NO_REACHABLE_MEMBERS || stat == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS)) {
+		if ((qe.parent->leavewhenempty == QUEUE_EMPTY_STRICT) && (status == QUEUE_NO_REACHABLE_MEMBERS || status == QUEUE_NO_UNPAUSED_REACHABLE_MEMBERS)) {
 			record_abandoned(&qe);
 			reason = QUEUE_LEAVEUNAVAIL;
 			ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITEMPTY", "%d|%d|%ld", qe.pos, qe.opos, (long)(time(NULL) - qe.start));
 			res = 0;
 			break;
 		}
-		if ((qe.parent->leavewhenempty == QUEUE_EMPTY_LOOSE) && (stat == QUEUE_NO_REACHABLE_MEMBERS)) {
+		if ((qe.parent->leavewhenempty == QUEUE_EMPTY_LOOSE) && (status == QUEUE_NO_REACHABLE_MEMBERS)) {
 			record_abandoned(&qe);
 			reason = QUEUE_LEAVEUNAVAIL;
 			res = 0;
@@ -4809,7 +4829,7 @@ check_turns:
 		}
 
 		/* Leave if we have exceeded our queuetimeout */
-		if (qe.expire && (time(NULL) > qe.expire)) {
+		if (qe.expire && (time(NULL) >= qe.expire)) {
 			record_abandoned(&qe);
 			reason = QUEUE_TIMEOUT;
 			res = 0;

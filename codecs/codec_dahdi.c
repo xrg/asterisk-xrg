@@ -82,11 +82,8 @@ static AST_LIST_HEAD_STATIC(translators, translator);
 struct pvt {
 	int fd;
 	int fake;
-#ifdef DEBUG_TRANSCODE
-	int totalms;
-	int lasttotalms;
-#endif
 	struct dahdi_transcoder_formats fmts;
+	int samples;
 };
 
 static char *handle_cli_transcoder_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -159,7 +156,7 @@ static struct ast_frame *dahdi_frameout(struct ast_trans_pvt *pvt)
 				return NULL;
 			}
 		} else {
-			pvt->f.samples = res;
+			pvt->f.samples = dahdip->samples;
 			pvt->f.datalen = res;
 			pvt->datalen = 0;
 			pvt->f.frametype = AST_FRAME_VOICE;
@@ -248,10 +245,14 @@ static int dahdi_translate(struct ast_trans_pvt *pvt, int dest, int source)
 
 	switch (dahdip->fmts.dstfmt) {
 	case AST_FORMAT_G729A:
+		dahdip->samples = 160;
+		break;
 	case AST_FORMAT_G723_1:
+		dahdip->samples = 240;
 		ast_atomic_fetchadd_int(&channels.encoders, +1);
 		break;
 	default:
+		dahdip->samples = 160;
 		ast_atomic_fetchadd_int(&channels.decoders, +1);
 		break;
 	}
@@ -334,12 +335,12 @@ static void drop_translator(int dst, int src)
 
 static void unregister_translators(void)
 {
-	struct translator *cur;
+	struct translator *current;
 
 	AST_LIST_LOCK(&translators);
-	while ((cur = AST_LIST_REMOVE_HEAD(&translators, entry))) {
-		ast_unregister_translator(&cur->t);
-		ast_free(cur);
+	while ((current = AST_LIST_REMOVE_HEAD(&translators, entry))) {
+		ast_unregister_translator(&current->t);
+		ast_free(current);
 	}
 	AST_LIST_UNLOCK(&translators);
 }
