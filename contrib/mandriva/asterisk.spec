@@ -96,7 +96,7 @@ BuildRequires:	portaudio-devel
 BuildRequires:  libjack-devel
 BuildRequires:	bison
 BuildRequires:	flex
-BuildRequires:	imap-devel
+BuildRequires:	c-client-devel
 BuildRequires:	krb5-devel
 BuildRequires:	pam-devel
 BuildRequires:	gmime-devel
