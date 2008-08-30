@@ -2337,7 +2337,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	int format = AST_FORMAT_SLINEAR;
 
 	pthread_t th;
-	if (!ast_strlen_zero(name)) {
+	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "Channel not specified");
 		return 0;
 	}
@@ -3566,7 +3566,7 @@ static int variable_count_cmp_fn(void *obj, void *vstr, int flags)
 	 * the address of both the struct and the string are exactly the same. */
 	struct variable_count *vc = obj;
 	char *str = vstr;
-	return !strcmp(vc->varname, str) ? CMP_MATCH : 0;
+	return !strcmp(vc->varname, str) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*! \brief Convert the input into XML or HTML.

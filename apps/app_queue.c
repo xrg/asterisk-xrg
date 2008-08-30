@@ -582,7 +582,7 @@ static int queue_hash_cb(const void *obj, const int flags)
 static int queue_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct call_queue *q = obj, *q2 = arg;
-	return !strcasecmp(q->name, q2->name) ? CMP_MATCH : 0;
+	return !strcasecmp(q->name, q2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static inline struct call_queue *queue_ref(struct call_queue *q)
@@ -872,7 +872,7 @@ static int member_hash_fn(const void *obj, const int flags)
 static int member_cmp_fn(void *obj1, void *obj2, int flags)
 {
 	struct member *mem1 = obj1, *mem2 = obj2;
-	return strcasecmp(mem1->interface, mem2->interface) ? 0 : CMP_MATCH;
+	return strcasecmp(mem1->interface, mem2->interface) ? 0 : CMP_MATCH | CMP_STOP;
 }
 
 /*! 
@@ -2472,20 +2472,25 @@ static void record_abandoned(struct queue_ent *qe)
 static void rna(int rnatime, struct queue_ent *qe, char *interface, char *membername)
 {
 	ast_verb(3, "Nobody picked up in %d ms\n", rnatime);
-	if (qe->parent->eventwhencalled)
+	if (qe->parent->eventwhencalled) {
+		char vars[2048];
+
 		manager_event(EVENT_FLAG_AGENT, "AgentRingNoAnswer",
 						"Queue: %s\r\n"
 						"Uniqueid: %s\r\n"
 						"Channel: %s\r\n"
 						"Member: %s\r\n"
 						"MemberName: %s\r\n"
-						"Ringtime: %d\r\n",
+						"Ringtime: %d\r\n"
+						"%s",
 						qe->parent->name,
 						qe->chan->uniqueid,
 						qe->chan->name,
 						interface,
 						membername,
-						rnatime);
+						rnatime,
+						qe->parent->eventwhencalled == QUEUE_EVENT_VARIABLES ? vars2manager(qe->chan, vars, sizeof(vars)) : "");
+	}
 	ast_queue_log(qe->parent->name, qe->chan->uniqueid, membername, "RINGNOANSWER", "%d", rnatime);
 	if (qe->parent->autopause) {
 		if (!set_member_paused(qe->parent->name, interface, "Auto-Pause", 1)) {

@@ -182,6 +182,7 @@ static char *descrip2 =
 " options - A list of options for this parked call.  Valid options are:\n"
 "    'r' - Send ringing instead of MOH to the parked call.\n"
 "    'R' - Randomize the selection of a parking space.\n"
+"    's' - Silence announcement of the parking space number.\n"
 "";
 
 static struct ast_app *monitor_app = NULL;
@@ -230,7 +231,7 @@ static int parkinglot_hash_cb(const void *obj, const int flags)
 static int parkinglot_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct ast_parkinglot *parkinglot = obj, *parkinglot2 = arg;
-	return !strcasecmp(parkinglot->name, parkinglot2->name) ? CMP_MATCH : 0;
+	return !strcasecmp(parkinglot->name, parkinglot2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*!
@@ -431,6 +432,8 @@ enum ast_park_call_options {
 	/*! Randomly choose a parking spot for the caller instead of choosing
 	 *  the first one that is available. */
 	AST_PARK_OPT_RANDOMIZE = (1 << 1),
+	/*! Do not announce the parking number */
+	AST_PARK_OPT_SILENCE = (1 << 2),
 };
 
 struct ast_park_call_args {
@@ -625,7 +628,7 @@ static int ast_park_call_full(struct ast_channel *chan, struct ast_channel *peer
 	if (!con)	/* Still no context? Bad */
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", parkinglot->parking_con);
 	/* Tell the peer channel the number of the parking space */
-	if (peer && (ast_strlen_zero(args->orig_chan_name) || !strcasecmp(peer->name, args->orig_chan_name))) { /* Only say number if it's a number and the channel hasn't been masqueraded away */
+	if (peer && !ast_test_flag(args, AST_PARK_OPT_SILENCE) && (ast_strlen_zero(args->orig_chan_name) || !strcasecmp(peer->name, args->orig_chan_name))) { /* Only say number if it's a number and the channel hasn't been masqueraded away */
 		/* If a channel is masqueraded into peer while playing back the parking slot number do not continue playing it back. This is the case if an attended transfer occurs. */
 		ast_set_flag(peer, AST_FLAG_MASQ_NOSTREAM);
 		ast_say_digits(peer, pu->parkingnum, "", peer->language);
@@ -2323,49 +2326,6 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 
 	}
    before_you_go:
-	if (ast_exists_extension(chan, chan->context, "h", 1, chan->cid.cid_num)) {
-		struct ast_cdr *swapper;
-		char savelastapp[AST_MAX_EXTENSION];
-		char savelastdata[AST_MAX_EXTENSION];
-		char save_exten[AST_MAX_EXTENSION];
-		int  save_prio;
-		int  found = 0;	/* set if we find at least one match */
-		
-		if (chan->cdr && ast_opt_end_cdr_before_h_exten) {
-			ast_cdr_end(bridge_cdr);
-		}
-		/* swap the bridge cdr and the chan cdr for a moment, and let the endbridge
-		   dialplan code operate on it */
-		swapper = chan->cdr;
-		ast_copy_string(savelastapp, bridge_cdr->lastapp, sizeof(bridge_cdr->lastapp));
-		ast_copy_string(savelastdata, bridge_cdr->lastdata, sizeof(bridge_cdr->lastdata));
-		chan->cdr = bridge_cdr;
-		ast_channel_lock(chan);
-		ast_copy_string(save_exten, chan->exten, sizeof(save_exten));
-		save_prio = chan->priority;
-		ast_copy_string(chan->exten, "h", sizeof(chan->exten));
-		chan->priority = 1;
-		ast_channel_unlock(chan);
-		while ((res = ast_spawn_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num, &found, 1)) == 0) {
-			chan->priority++;
-		}
-		if (found && res) 
-		{
-			/* Something bad happened, or a hangup has been requested. */
-			ast_debug(1, "Spawn extension (%s,%s,%d) exited non-zero on '%s'\n", chan->context, chan->exten, chan->priority, chan->name);
-			ast_verb(2, "Spawn extension (%s, %s, %d) exited non-zero on '%s'\n", chan->context, chan->exten, chan->priority, chan->name);
-		}
-		/* swap it back */
-		ast_channel_lock(chan);
-		ast_copy_string(chan->exten, save_exten, sizeof(chan->exten));
-		chan->priority = save_prio;
-		chan->cdr = swapper;
-		ast_channel_unlock(chan);
-		/* protect the lastapp/lastdata against the effects of the hangup/dialplan code */
-		ast_copy_string(bridge_cdr->lastapp, savelastapp, sizeof(bridge_cdr->lastapp));
-		ast_copy_string(bridge_cdr->lastdata, savelastdata, sizeof(bridge_cdr->lastdata));
-	}
-
 	/* obey the NoCDR() wishes. */
 	if (!chan->cdr || (chan->cdr && !ast_test_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED))) {
 		
@@ -2645,6 +2605,7 @@ struct ast_parkinglot *find_parkinglot(const char *name)
 AST_APP_OPTIONS(park_call_options, BEGIN_OPTIONS
 	AST_APP_OPTION('r', AST_PARK_OPT_RINGING),
 	AST_APP_OPTION('R', AST_PARK_OPT_RANDOMIZE),
+	AST_APP_OPTION('s', AST_PARK_OPT_SILENCE),
 END_OPTIONS );
 
 /*! \brief Park a call */
@@ -2713,7 +2674,7 @@ static int park_call_exec(struct ast_channel *chan, void *data)
 			}
 		}
 
-		ast_app_parse_options(park_call_options, &flags, NULL, NULL);
+		ast_app_parse_options(park_call_options, &flags, NULL, app_args.options);
 		args.flags = flags.flags;
 
 		res = ast_park_call_full(chan, chan, &args);

@@ -1312,7 +1312,7 @@ static int peer_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct iax2_peer *peer = obj, *peer2 = arg;
 
-	return !strcmp(peer->name, peer2->name) ? CMP_MATCH : 0;
+	return !strcmp(peer->name, peer2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*!
@@ -1332,7 +1332,7 @@ static int user_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct iax2_user *user = obj, *user2 = arg;
 
-	return !strcmp(user->name, user2->name) ? CMP_MATCH : 0;
+	return !strcmp(user->name, user2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*!
@@ -10164,15 +10164,14 @@ static void *sched_thread(void *ignore)
 	struct timespec ts;
 
 	for (;;) {
+		pthread_testcancel();
+		ast_mutex_lock(&sched_lock);
 		res = ast_sched_wait(sched);
 		if ((res > 1000) || (res < 0))
 			res = 1000;
 		wait = ast_tvadd(ast_tvnow(), ast_samp2tv(res, 1000));
 		ts.tv_sec = wait.tv_sec;
 		ts.tv_nsec = wait.tv_usec * 1000;
-
-		pthread_testcancel();
-		ast_mutex_lock(&sched_lock);
 		ast_cond_timedwait(&sched_cond, &sched_lock, &ts);
 		ast_mutex_unlock(&sched_lock);
 		pthread_testcancel();
@@ -12204,7 +12203,7 @@ static int pvt_cmp_cb(void *obj, void *arg, int flags)
 	 * against a full frame or not ... */
 
 	return match(&pvt2->addr, pvt2->peercallno, pvt2->callno, pvt, 
-		pvt2->frames_received) ? CMP_MATCH : 0;
+		pvt2->frames_received) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*! \brief Load IAX2 module, load configuraiton ---*/

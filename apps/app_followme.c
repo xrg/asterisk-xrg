@@ -89,6 +89,7 @@ struct call_followme {
 	char moh[AST_MAX_CONTEXT];	/*!< Music On Hold Class to be used */
 	char context[AST_MAX_CONTEXT];  /*!< Context to dial from */
 	unsigned int active;		/*!< Profile is active (1), or disabled (0). */
+	int realtime;           /*!< Cached from realtime */
 	char takecall[20];		/*!< Digit mapping to take a call */
 	char nextindp[20];		/*!< Digit mapping to decline a call */
 	char callfromprompt[PATH_MAX];	/*!< Sound prompt name and path */
@@ -233,17 +234,17 @@ static void profile_set_param(struct call_followme *f, const char *param, const 
 		ast_copy_string(f->takecall, val, sizeof(f->takecall));
 	else if (!strcasecmp(param, "declinecall"))
 		ast_copy_string(f->nextindp, val, sizeof(f->nextindp));
-	else if (!strcasecmp(param, "call-from-prompt"))
+	else if (!strcasecmp(param, "call-from-prompt") || !strcasecmp(param, "call_from_prompt"))
 		ast_copy_string(f->callfromprompt, val, sizeof(f->callfromprompt));
-	else if (!strcasecmp(param, "followme-norecording-prompt")) 
+	else if (!strcasecmp(param, "followme-norecording-prompt") || !strcasecmp(param, "norecording_prompt")) 
 		ast_copy_string(f->norecordingprompt, val, sizeof(f->norecordingprompt));
-	else if (!strcasecmp(param, "followme-options-prompt")) 
+	else if (!strcasecmp(param, "followme-options-prompt") || !strcasecmp(param, "options_prompt")) 
 		ast_copy_string(f->optionsprompt, val, sizeof(f->optionsprompt));
-	else if (!strcasecmp(param, "followme-pls-hold-prompt"))
+	else if (!strcasecmp(param, "followme-pls-hold-prompt") || !strcasecmp(param, "hold_prompt"))
 		ast_copy_string(f->plsholdprompt, val, sizeof(f->plsholdprompt));
-	else if (!strcasecmp(param, "followme-status-prompt")) 
+	else if (!strcasecmp(param, "followme-status-prompt") || !strcasecmp(param, "status_prompt")) 
 		ast_copy_string(f->statusprompt, val, sizeof(f->statusprompt));
-	else if (!strcasecmp(param, "followme-sorry-prompt")) 
+	else if (!strcasecmp(param, "followme-sorry-prompt") || !strcasecmp(param, "sorry_prompt")) 
 		ast_copy_string(f->sorryprompt, val, sizeof(f->sorryprompt));
 	else if (failunknown) {
 		if (linenum >= 0)
@@ -312,37 +313,50 @@ static int reload_followme(int reload)
 			featuredigittimeout = 5000;
 	}
 
-	takecallstr = ast_variable_retrieve(cfg, "general", "takecall");
-	if (!ast_strlen_zero(takecallstr))
+	if ((takecallstr = ast_variable_retrieve(cfg, "general", "takecall")) && !ast_strlen_zero(takecallstr)) {
 		ast_copy_string(takecall, takecallstr, sizeof(takecall));
+	}
 
-	declinecallstr = ast_variable_retrieve(cfg, "general", "declinecall");
-	if (!ast_strlen_zero(declinecallstr))
+	if ((declinecallstr = ast_variable_retrieve(cfg, "general", "declinecall")) && !ast_strlen_zero(declinecallstr)) {
 		ast_copy_string(nextindp, declinecallstr, sizeof(nextindp));
+	}
 
-	tmpstr = ast_variable_retrieve(cfg, "general", "call-from-prompt");
-	if (!ast_strlen_zero(tmpstr))
+	if ((tmpstr = ast_variable_retrieve(cfg, "general", "call-from-prompt")) && !ast_strlen_zero(tmpstr)) {
 		ast_copy_string(callfromprompt, tmpstr, sizeof(callfromprompt));
+	} else if ((tmpstr = ast_variable_retrieve(cfg, "general", "call_from_prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(callfromprompt, tmpstr, sizeof(callfromprompt));
+	}
 
-	tmpstr = ast_variable_retrieve(cfg, "general", "norecording-prompt");
-	if (!ast_strlen_zero(tmpstr))
+	if ((tmpstr = ast_variable_retrieve(cfg, "general", "norecording-prompt")) && !ast_strlen_zero(tmpstr)) {
 		ast_copy_string(norecordingprompt, tmpstr, sizeof(norecordingprompt));
+	} else if ((tmpstr = ast_variable_retrieve(cfg, "general", "norecording_prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(callfromprompt, tmpstr, sizeof(callfromprompt));
+	}
 
-	tmpstr = ast_variable_retrieve(cfg, "general", "options-prompt");
-	if (!ast_strlen_zero(tmpstr))
+
+	if ((tmpstr = ast_variable_retrieve(cfg, "general", "options-prompt")) && !ast_strlen_zero(tmpstr)) {
 		ast_copy_string(optionsprompt, tmpstr, sizeof(optionsprompt));
+	} else if ((tmpstr = ast_variable_retrieve(cfg, "general", "options_prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(optionsprompt, tmpstr, sizeof(optionsprompt));
+	}
 
-	tmpstr = ast_variable_retrieve(cfg, "general", "pls-hold-prompt");
-	if (!ast_strlen_zero(tmpstr))
-		ast_copy_string(plsholdprompt, tmpstr, sizeof(plsholdprompt));
+	if ((tmpstr = ast_variable_retrieve(cfg, "general", "pls-hold-prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(optionsprompt, tmpstr, sizeof(optionsprompt));
+	} else if ((tmpstr = ast_variable_retrieve(cfg, "general", "pls_hold_prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(optionsprompt, tmpstr, sizeof(optionsprompt));
+	}
 
-	tmpstr = ast_variable_retrieve(cfg, "general", "status-prompt");
-	if (!ast_strlen_zero(tmpstr))
-		ast_copy_string(statusprompt, tmpstr, sizeof(statusprompt));
+	if ((tmpstr = ast_variable_retrieve(cfg, "general", "status-prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(optionsprompt, tmpstr, sizeof(optionsprompt));
+	} else if ((tmpstr = ast_variable_retrieve(cfg, "general", "status_prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(optionsprompt, tmpstr, sizeof(optionsprompt));
+	}
 
-	tmpstr = ast_variable_retrieve(cfg, "general", "sorry-prompt");
-	if (!ast_strlen_zero(tmpstr))
-		ast_copy_string(sorryprompt, tmpstr, sizeof(sorryprompt));
+	if ((tmpstr = ast_variable_retrieve(cfg, "general", "sorry-prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(optionsprompt, tmpstr, sizeof(optionsprompt));
+	} else if ((tmpstr = ast_variable_retrieve(cfg, "general", "sorry_prompt")) && !ast_strlen_zero(tmpstr)) {
+		ast_copy_string(optionsprompt, tmpstr, sizeof(optionsprompt));
+	}
 
 	/* Chug through config file */
 	while ((cat = ast_category_browse(cfg, cat))) {
@@ -375,7 +389,7 @@ static int reload_followme(int reload)
 		init_profile(f);
 		free_numbers(f);
 		var = ast_variable_browse(cfg, cat);
-		while(var) {
+		while (var) {
 			if (!strcasecmp(var->name, "number")) {
 				int idx = 0;
 
@@ -873,6 +887,67 @@ static void findmeexec(struct fm_args *tpargs)
 	return;
 }
 
+static struct call_followme *find_realtime(const char *name)
+{
+	struct ast_variable *var = ast_load_realtime("followme", "name", name, SENTINEL), *v;
+	struct ast_config *cfg;
+	const char *catg;
+	struct call_followme *new;
+	struct ast_str *str = ast_str_create(16);
+
+	if (!var) {
+		return NULL;
+	}
+
+	if (!(new = alloc_profile(name))) {
+		return NULL;
+	}
+
+	for (v = var; v; v = v->next) {
+		if (!strcasecmp(v->name, "active")) {
+			if (ast_false(v->value)) {
+				ast_mutex_destroy(&new->lock);
+				ast_free(new);
+				return NULL;
+			}
+		} else {
+			profile_set_param(new, v->name, v->value, 0, 0);
+		}
+	}
+
+	ast_variables_destroy(var);
+	new->realtime = 1;
+
+	/* Load numbers */
+	if (!(cfg = ast_load_realtime_multientry("followme_numbers", "ordinal LIKE", "%", "name", name, SENTINEL))) {
+		ast_mutex_destroy(&new->lock);
+		ast_free(new);
+		return NULL;
+	}
+
+	for (catg = ast_category_browse(cfg, NULL); catg; catg = ast_category_browse(cfg, catg)) {
+		const char *numstr, *timeoutstr, *ordstr;
+		int timeout;
+		struct number *cur;
+		if (!(numstr = ast_variable_retrieve(cfg, catg, "phonenumber"))) {
+			continue;
+		}
+		if (!(timeoutstr = ast_variable_retrieve(cfg, catg, "timeout")) || sscanf(timeoutstr, "%d", &timeout) != 1 || timeout < 1) {
+			timeout = 25;
+		}
+		/* This one has to exist; it was part of the query */
+		ordstr = ast_variable_retrieve(cfg, catg, "ordinal");
+		ast_str_make_space(&str, strlen(numstr) + 1);
+		ast_copy_string(str->str, numstr, str->len);
+		if ((cur = create_followme_number(str->str, timeout, atoi(ordstr)))) {
+			AST_LIST_INSERT_TAIL(&new->numbers, cur, entry);
+		}
+	}
+	ast_config_destroy(cfg);
+
+	return new;
+}
+
 static int app_exec(struct ast_channel *chan, void *data)
 {
 	struct fm_args targs;
@@ -916,6 +991,10 @@ static int app_exec(struct ast_channel *chan, void *data)
 	AST_RWLIST_UNLOCK(&followmes);
 
 	ast_debug(1, "New profile %s.\n", args.followmeid);
+
+	if (!f) {
+		f = find_realtime(args.followmeid);
+	}
 
 	if (!f) {
 		ast_log(LOG_WARNING, "Profile requested, %s, not found in the configuration.\n", args.followmeid);
@@ -1015,6 +1094,12 @@ static int app_exec(struct ast_channel *chan, void *data)
 	}
 
 	outrun:
+
+	if (f->realtime) {
+		/* Not in list */
+		free_numbers(f);
+		ast_free(f);
+	}
 
 	return res;
 }

@@ -1652,7 +1652,7 @@ static int peer_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct sip_peer *peer = obj, *peer2 = arg;
 
-	return !strcasecmp(peer->name, peer2->name) ? CMP_MATCH : 0;
+	return !strcasecmp(peer->name, peer2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*!
@@ -1684,11 +1684,11 @@ static int peer_ipcmp_cb(void *obj, void *arg, int flags)
 	
 	if (!ast_test_flag(&peer->flags[0], SIP_INSECURE_PORT) && !ast_test_flag(&peer2->flags[0], SIP_INSECURE_PORT)) {
 		if (peer->addr.sin_port == peer2->addr.sin_port)
-			return CMP_MATCH;
+			return CMP_MATCH | CMP_STOP;
 		else
 			return 0;
 	}
-	return CMP_MATCH;
+	return CMP_MATCH | CMP_STOP;
 }
 
 /*!
@@ -1708,7 +1708,7 @@ static int dialog_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct sip_pvt *pvt = obj, *pvt2 = arg;
 	
-	return !strcasecmp(pvt->callid, pvt2->callid) ? CMP_MATCH : 0;
+	return !strcasecmp(pvt->callid, pvt2->callid) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static int temp_pvt_init(void *);
@@ -4341,6 +4341,11 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct sockadd
 		if (newdialog)
 			dialog->socket.type = 0;
 		res = create_addr_from_peer(dialog, peer);
+		if (!ast_strlen_zero(port)) {
+			if ((portno = atoi(port))) {
+				dialog->sa.sin_port = dialog->recv.sin_port = htons(portno);
+			}
+		}
 		unref_peer(peer, "create_addr: unref peer from find_peer hashtab lookup");
 		return res;
 	}
@@ -11235,9 +11240,6 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 }
 
 /*! \brief Lock dialog lock and find matching pvt lock  
-	- Their tag is fromtag, our tag is to-tag
-	- This means that in some transactions, totag needs to be their tag :-)
-	  depending upon the direction
 	\return a reference, remember to release it when done 
 */
 static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *totag, const char *fromtag) 
@@ -11254,21 +11256,32 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 	
 	sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, OBJ_POINTER, "ao2_find of dialog in dialogs table");
 	if (sip_pvt_ptr) {
-		char *ourtag = sip_pvt_ptr->tag;
 		/* Go ahead and lock it (and its owner) before returning */
 		sip_pvt_lock(sip_pvt_ptr);
-		
-		if (pedanticsipchecking && (strcmp(fromtag, sip_pvt_ptr->theirtag) || (!ast_strlen_zero(totag) && strcmp(totag, ourtag)))) {
-			sip_pvt_unlock(sip_pvt_ptr);
-			ast_debug(4, "Matched %s call for callid=%s - But the pedantic check rejected the match; their tag is %s Our tag is %s\n",
-					  ast_test_flag(&sip_pvt_ptr->flags[0], SIP_OUTGOING) ? "OUTGOING": "INCOMING", sip_pvt_ptr->callid, 
-					  sip_pvt_ptr->theirtag, sip_pvt_ptr->tag);
-			return 0;
+		if (pedanticsipchecking) {
+			const char *pvt_fromtag, *pvt_totag;
+
+			if (sip_pvt_ptr->outgoing_call == TRUE) {
+				/* Outgoing call tags : from is "our", to is "their" */
+				pvt_fromtag = sip_pvt_ptr->tag ;
+				pvt_totag = sip_pvt_ptr->theirtag ;
+			} else {
+				/* Incoming call tags : from is "their", to is "our" */
+				pvt_fromtag = sip_pvt_ptr->theirtag ;
+				pvt_totag = sip_pvt_ptr->tag ;
+			}
+			if (ast_strlen_zero(fromtag) || strcmp(fromtag, pvt_fromtag) || (!ast_strlen_zero(totag) && strcmp(totag, pvt_totag))) {
+				sip_pvt_unlock(sip_pvt_ptr);
+				ast_debug(4, "Matched %s call for callid=%s - But the pedantic check rejected the match; their tag is %s Our tag is %s\n",
+						  sip_pvt_ptr->outgoing_call == TRUE ? "OUTGOING": "INCOMING", sip_pvt_ptr->callid, 
+						  sip_pvt_ptr->theirtag, sip_pvt_ptr->tag);
+				return NULL;
+			}
 		}
 		
 		if (totag)
 			ast_debug(4, "Matched %s call - their tag is %s Our tag is %s\n",
-					  ast_test_flag(&sip_pvt_ptr->flags[0], SIP_OUTGOING) ? "OUTGOING": "INCOMING",
+					  sip_pvt_ptr->outgoing_call == TRUE ? "OUTGOING": "INCOMING",
 					  sip_pvt_ptr->theirtag, sip_pvt_ptr->tag);
 
 		/* deadlock avoidance... */
@@ -19672,6 +19685,12 @@ static void *do_monitor(void *data)
 		   dialog that was found and destroyed, probably because the list contents would change,
 		   so we'd need to restart. This isn't the best thing to do with callbacks. */
 
+		/* XXX TODO The scheduler usage in this module does not have sufficient 
+		 * synchronization being done between running the scheduler and places 
+		 * scheduling tasks.  As it is written, any scheduled item may not run 
+		 * any sooner than about  1 second, regardless of whether a sooner time 
+		 * was asked for. */
+
 		pthread_testcancel();
 		/* Wait for sched or io */
 		res = ast_sched_wait(sched);
@@ -19681,11 +19700,9 @@ static void *do_monitor(void *data)
 		if (res > 20)
 			ast_debug(1, "chan_sip: ast_io_wait ran %d all at once\n", res);
 		ast_mutex_lock(&monlock);
-		if (res >= 0)  {
-			res = ast_sched_runq(sched);
-			if (res >= 20)
-				ast_debug(1, "chan_sip: ast_sched_runq ran %d all at once\n", res);
-		}
+		res = ast_sched_runq(sched);
+		if (res >= 20)
+			ast_debug(1, "chan_sip: ast_sched_runq ran %d all at once\n", res);
 		ast_mutex_unlock(&monlock);
 	}
 
@@ -22409,10 +22426,10 @@ static int sip_addheader(struct ast_channel *chan, void *data)
 	/* Check for headers */
 	while (!ok && no <= 50) {
 		no++;
-		snprintf(varbuf, sizeof(varbuf), "_SIPADDHEADER%.2d", no);
+		snprintf(varbuf, sizeof(varbuf), "__SIPADDHEADER%.2d", no);
 
-		/* Compare without the leading underscore */
-		if( (pbx_builtin_getvar_helper(chan, (const char *) varbuf + 1) == (const char *) NULL) )
+		/* Compare without the leading underscores */
+		if( (pbx_builtin_getvar_helper(chan, (const char *) varbuf + 2) == (const char *) NULL) )
 			ok = TRUE;
 	}
 	if (ok) {
