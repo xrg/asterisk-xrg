@@ -222,7 +222,7 @@ static int ast_bridge_frames(fax_session *s)
     {
         ast_dsp_set_threshold(dsp_cng, 256); 
         ast_dsp_set_features(dsp_cng, DSP_FEATURE_FAX_DETECT | DSP_FAXMODE_DETECT_CNG);
-        ast_dsp_set_digitmode(dsp_cng, DSP_DIGITMODE_DTMF | DSP_DIGITMODE_RELAXDTMF);
+        ast_dsp_digitmode(dsp_cng, DSP_DIGITMODE_DTMF | DSP_DIGITMODE_RELAXDTMF);
     }
 
     if ((dsp_ced = ast_dsp_new()) == NULL)
@@ -474,13 +474,13 @@ static int ast_t38_gateway(fax_session *s)
 //		    ast_log(LOG_DEBUG, "ast_t38_gateway received %d \n" , f->frametype);
 		    if (f->frametype == AST_FRAME_MODEM && f->subclass == AST_MODEM_T38)
 		    {
-			    t38_core_rx_ifp_packet(&t38_state.t38, f->data.ptr, f->datalen, f->seqno);
+			    t38_core_rx_ifp_packet(&t38_state.t38, f->data, f->datalen, f->seqno);
 			    
 		    }
 		    else if (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_T38 &&
 				f->datalen == sizeof(enum ast_control_t38)) {
 
-			t38control = *((enum ast_control_t38 *) f->data.ptr);
+			t38control = *((enum ast_control_t38 *) f->data);
 
 			if (t38control == AST_T38_TERMINATED || t38control == AST_T38_REFUSED) {
 				ast_log(LOG_DEBUG, "T38 down, terminating\n");
@@ -499,7 +499,7 @@ static int ast_t38_gateway(fax_session *s)
             {
                 if ((f = ast_read(active)))
                 {
-                    if (t38_gateway_rx(&t38_state, f->data.ptr, f->samples))
+                    if (t38_gateway_rx(&t38_state, f->data, f->samples))
                         break;
 
                     samples = (f->samples <= MAX_BLOCK_SIZE)  ?  f->samples  :  MAX_BLOCK_SIZE;
@@ -511,7 +511,7 @@ static int ast_t38_gateway(fax_session *s)
 			outf.src = "T38Gateway";
                         outf.datalen = len*sizeof(int16_t);
                         outf.samples = len;
-                        outf.data.ptr = &buf[AST_FRIENDLY_OFFSET];
+                        outf.data = &buf[AST_FRIENDLY_OFFSET];
                         outf.offset = AST_FRIENDLY_OFFSET;
 			outf.mallocd = 0;
 			outf.offset = 0;
@@ -556,6 +556,7 @@ static int transmit(fax_session *s)
 	char status[256];
 	struct ast_frame *f;
 	int state = 0, ready = 0;
+	int timeout;
 	
 	ast_log(LOG_DEBUG, "faxGw - transmit entry. \n");
 	
@@ -873,8 +874,7 @@ static int faxgw_exec(struct ast_channel *chan, void *data)
 	ast_channel_inherit_variables(session.chan, tc);
 	tc->appl = "AppDial";
 	tc->data = "(Outgoing Line)";
-	tc->whentohangup.tv_sec = 0;
-	tc->whentohangup.tv_usec = 0;
+	tc->whentohangup = 0;
 
 	S_REPLACE(tc->cid.cid_num, ast_strdup(chan->cid.cid_num));
 	S_REPLACE(tc->cid.cid_name, ast_strdup(chan->cid.cid_name));
