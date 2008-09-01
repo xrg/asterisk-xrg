@@ -556,6 +556,7 @@ static int transmit(fax_session *s)
 	char status[256];
 	struct ast_frame *f;
 	int state = 0, ready = 0;
+	int timeout;
 	
 	ast_log(LOG_DEBUG, "faxGw - transmit entry. \n");
 	
