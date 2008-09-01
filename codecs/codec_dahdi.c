@@ -44,7 +44,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/ioctl.h>
 #include <errno.h>
 #include <sys/mman.h>
-#include <dahdi/user.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/translate.h"
@@ -56,6 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/channel.h"
 #include "asterisk/utils.h"
 #include "asterisk/linkedlists.h"
+#include "asterisk/dahdi_compat.h"
 
 #define BUFFER_SAMPLES	8000
 
@@ -108,11 +108,7 @@ static AST_LIST_HEAD_STATIC(translators, translator);
 struct pvt {
 	int fd;
 	int fake;
-	unsigned int g729b_warning:1;
-#ifdef DEBUG_TRANSCODE
-	int totalms;
-	int lasttotalms;
-#endif
+	int samples;
 	struct dahdi_transcoder_formats fmts;
 };
 
@@ -139,7 +135,7 @@ static int zap_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 		/* Give the frame to the hardware transcoder... */
 		res = write(ztp->fd, f->data, f->datalen); 
 		if (-1 == res) {
-			ast_log(LOG_ERROR, "Failed to write to /dev/dahdi/transcode: %s\n", strerror(errno));
+			ast_log(LOG_ERROR, "Failed to write to transcoder: %s\n", strerror(errno));
 		}
 		if (f->datalen != res) {
 			ast_log(LOG_ERROR, "Requested write of %d bytes, but only wrote %d bytes.\n", f->datalen, res);
@@ -168,11 +164,11 @@ static struct ast_frame *zap_frameout(struct ast_trans_pvt *pvt)
 				/* Nothing waiting... */
 				return NULL;
 			} else {
-				ast_log(LOG_ERROR, "Failed to read from /dev/dahdi/transcode: %s\n", strerror(errno));
+				ast_log(LOG_ERROR, "Failed to read from transcoder: %s\n", strerror(errno));
 				return NULL;
 			}
 		} else {
-			pvt->f.samples = res;
+			pvt->f.samples = ztp->samples;
 			pvt->f.datalen = res;
 			pvt->datalen = 0;
 			pvt->f.frametype = AST_FRAME_VOICE;
@@ -234,10 +230,17 @@ static int zap_translate(struct ast_trans_pvt *pvt, int dest, int source)
 	struct pvt *ztp = pvt->pvt;
 	int flags;
 	
+#ifdef HAVE_ZAPTEL
+	if ((fd = open("/dev/zap/transcode", O_RDWR)) < 0) {
+		ast_log(LOG_ERROR, "Failed to open /dev/zap/transcode: %s\n", strerror(errno));
+		return -1;
+	}
+#else
 	if ((fd = open("/dev/dahdi/transcode", O_RDWR)) < 0) {
 		ast_log(LOG_ERROR, "Failed to open /dev/dahdi/transcode: %s\n", strerror(errno));
 		return -1;
 	}
+#endif
 	
 	ztp->fmts.srcfmt = (1 << source);
 	ztp->fmts.dstfmt = (1 << dest);
@@ -261,6 +264,20 @@ static int zap_translate(struct ast_trans_pvt *pvt, int dest, int source)
 
 	switch (ztp->fmts.dstfmt) {
 	case AST_FORMAT_G729A:
+		ztp->samples = 160;
+		break;
+	case AST_FORMAT_G723_1:
+		ztp->samples = 240;
+		break;
+	default:
+		ztp->samples = 160;
+		break;
+	};
+
+	switch (ztp->fmts.dstfmt) {
+	case AST_FORMAT_G729A:
+		ast_atomic_fetchadd_int(&channels.encoders, +1);
+		break;
 	case AST_FORMAT_G723_1:
 		ast_atomic_fetchadd_int(&channels.encoders, +1);
 		break;
@@ -405,10 +422,17 @@ static int find_transcoders(void)
 	int fd, res;
 	unsigned int x, y;
 
+#ifdef HAVE_ZAPTEL
+	if ((fd = open("/dev/zap/transcode", O_RDWR)) < 0) {
+		ast_log(LOG_ERROR, "Failed to open /dev/zap/transcode: %s\n", strerror(errno));
+		return 0;
+	}
+#else
 	if ((fd = open("/dev/dahdi/transcode", O_RDWR)) < 0) {
 		ast_log(LOG_ERROR, "Failed to open /dev/dahdi/transcode: %s\n", strerror(errno));
 		return 0;
 	}
+#endif
 
 	for (info.tcnum = 0; !(res = ioctl(fd, DAHDI_TC_GETINFO, &info)); info.tcnum++) {
 		if (option_verbose > 1)

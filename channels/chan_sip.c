@@ -1436,7 +1436,7 @@ static int sip_poke_peer_s(const void *data);
 static void set_peer_defaults(struct sip_peer *peer);
 static struct sip_peer *temp_peer(const char *name);
 static void register_peer_exten(struct sip_peer *peer, int onoff);
-static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int realtime);
+static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int realtime, int devstate_only);
 static struct sip_user *find_user(const char *name, int realtime);
 static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, struct sip_peer *p, struct sip_request *req);
 static int expire_register(const void *data);
@@ -1448,7 +1448,7 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, const char *username, const char *fullcontact, const char* useragent, int expirey);
 static struct sip_user *realtime_user(const char *username);
 static void update_peer(struct sip_peer *p, int expiry);
-static struct sip_peer *realtime_peer(const char *peername, struct sockaddr_in *sin);
+static struct sip_peer *realtime_peer(const char *peername, struct sockaddr_in *sin, int devstate_only);
 static int sip_prune_realtime(int fd, int argc, char *argv[]);
 
 /*--- Internal UA client handling (outbound registrations) */
@@ -2524,7 +2524,7 @@ static void update_peer(struct sip_peer *p, int expiry)
  * \todo Consider adding check of port address when matching here to follow the same
  * 	algorithm as for static peers. Will we break anything by adding that?
 */
-static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_in *sin)
+static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_in *sin, int devstate_only)
 {
 	struct sip_peer *peer=NULL;
 	struct ast_variable *var = NULL;
@@ -2643,7 +2643,7 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 		return NULL;
 	}
 
-	if (ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS)) {
+	if (ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && !devstate_only) {
 		/* Cache peer */
 		ast_copy_flags(&peer->flags[1],&global_flags[1], SIP_PAGE2_RTAUTOCLEAR|SIP_PAGE2_RTCACHEFRIENDS);
 		if (ast_test_flag(&global_flags[1], SIP_PAGE2_RTAUTOCLEAR)) {
@@ -2680,7 +2680,7 @@ static int sip_addrcmp(char *name, struct sockaddr_in *sin)
 /*! \brief Locate peer by name or ip address 
  *	This is used on incoming SIP message to find matching peer on ip
 	or outgoing message to find matching peer on name */
-static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int realtime)
+static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int realtime, int devstate_only)
 {
 	struct sip_peer *p = NULL;
 
@@ -2689,8 +2689,8 @@ static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int
 	else
 		p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp);
 
-	if (!p && realtime)
-		p = realtime_peer(peer, sin);
+	if (!p && (realtime || devstate_only))
+		p = realtime_peer(peer, sin, devstate_only);
 
 	return p;
 }
@@ -2917,15 +2917,19 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer)
 		*port++ = '\0';
 	dialog->sa.sin_family = AF_INET;
 	dialog->timer_t1 = 500; /* Default SIP retransmission timer T1 (RFC 3261) */
-	p = find_peer(peer, NULL, 1);
+	p = find_peer(peer, NULL, 1, 0);
+	
+	portno = port ? atoi(port) : STANDARD_SIP_PORT;
 
 	if (p) {
 		int res = create_addr_from_peer(dialog, p);
+		if (portno) {
+			dialog->sa.sin_port = dialog->recv.sin_port = htons(portno);
+		}
 		ASTOBJ_UNREF(p, sip_destroy_peer);
 		return res;
 	}
 	hostn = peer;
-	portno = port ? atoi(port) : STANDARD_SIP_PORT;
 	if (srvlookup) {
 		char service[MAXHOSTNAMELEN];
 		int tportno;
@@ -3245,7 +3249,7 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 		inuse = &u->inUse;
 		call_limit = &u->call_limit;
 		inringing = NULL;
-	} else if ( (p = find_peer(ast_strlen_zero(fup->peername) ? name : fup->peername, NULL, 1) ) ) { /* Try to find peer */
+	} else if ( (p = find_peer(ast_strlen_zero(fup->peername) ? name : fup->peername, NULL, 1, 0) ) ) { /* Try to find peer */
 		inuse = &p->inUse;
 		call_limit = &p->call_limit;
 		inringing = &p->inRinging;
@@ -4416,7 +4420,7 @@ static struct ast_frame *sip_read(struct ast_channel *ast)
 	}
 
 	/* Only allow audio through if they sent progress with SDP, or if the channel is actually answered */
-	if (fr->frametype == AST_FRAME_VOICE && p->invitestate != INV_EARLY_MEDIA && ast->_state != AST_STATE_UP) {
+	if (fr && fr->frametype == AST_FRAME_VOICE && p->invitestate != INV_EARLY_MEDIA && ast->_state != AST_STATE_UP) {
 		fr = &ast_null_frame;
 	}
 
@@ -8095,8 +8099,7 @@ static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req)
 	return TRUE;		
 }
 
-/*! \brief Change the other partys IP address based on given contact */
-static int set_address_from_contact(struct sip_pvt *pvt)
+static int __set_address_from_contact(const char *fullcontact, struct sockaddr_in *sin)
 {
 	struct hostent *hp;
 	struct ast_hostent ahp;
@@ -8105,15 +8108,8 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 	char contact_buf[256];
 	char *contact;
 
-	if (ast_test_flag(&pvt->flags[0], SIP_NAT_ROUTE)) {
-		/* NAT: Don't trust the contact field.  Just use what they came to us
-		   with. */
-		pvt->sa = pvt->recv;
-		return 0;
-	}
-
 	/* Work on a copy */
-	ast_copy_string(contact_buf, pvt->fullcontact, sizeof(contact_buf));
+	ast_copy_string(contact_buf, fullcontact, sizeof(contact_buf));
 	contact = contact_buf;
 
 	/* Make sure it's a SIP URL */
@@ -8150,11 +8146,24 @@ static int set_address_from_contact(struct sip_pvt *pvt)
 		ast_log(LOG_WARNING, "Invalid host name in Contact: (can't resolve in DNS) : '%s'\n", host);
 		return -1;
 	}
-	pvt->sa.sin_family = AF_INET;
-	memcpy(&pvt->sa.sin_addr, hp->h_addr, sizeof(pvt->sa.sin_addr));
-	pvt->sa.sin_port = htons(port);
+	sin->sin_family = AF_INET;
+	memcpy(&sin->sin_addr, hp->h_addr, sizeof(sin->sin_addr));
+	sin->sin_port = htons(port);
 
 	return 0;
+}
+
+/*! \brief Change the other partys IP address based on given contact */
+static int set_address_from_contact(struct sip_pvt *pvt)
+{
+	if (ast_test_flag(&pvt->flags[0], SIP_NAT_ROUTE)) {
+		/* NAT: Don't trust the contact field.  Just use what they came to us
+		   with. */
+		pvt->sa = pvt->recv;
+		return 0;
+	}
+
+	return __set_address_from_contact(pvt->fullcontact, &pvt->sa);
 }
 
 
@@ -8626,7 +8635,7 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 /*! \brief Change onhold state of a peer using a pvt structure */
 static void sip_peer_hold(struct sip_pvt *p, int hold)
 {
-	struct sip_peer *peer = find_peer(p->peername, NULL, 1);
+	struct sip_peer *peer = find_peer(p->peername, NULL, 1, 0);
 
 	if (!peer)
 		return;
@@ -8746,7 +8755,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 
 	ast_string_field_set(p, exten, name);
 	build_contact(p);
-	peer = find_peer(name, NULL, 1);
+	peer = find_peer(name, NULL, 1, 0);
 	if (!(peer && ast_apply_ha(peer->ha, sin))) {
 		/* Peer fails ACL check */
 		if (peer) {
@@ -9018,10 +9027,7 @@ static int get_destination(struct sip_pvt *p, struct sip_request *oreq)
 	return -1;
 }
 
-/*! \brief Lock interface lock and find matching pvt lock  
-	- Their tag is fromtag, our tag is to-tag
-	- This means that in some transactions, totag needs to be their tag :-)
-	  depending upon the direction
+/*! \brief Lock interface lock and find matching pvt lock
 */
 static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *totag, const char *fromtag) 
 {
@@ -9036,7 +9042,6 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 	for (sip_pvt_ptr = iflist; sip_pvt_ptr; sip_pvt_ptr = sip_pvt_ptr->next) {
 		if (!strcmp(sip_pvt_ptr->callid, callid)) {
 			int match = 1;
-			char *ourtag = sip_pvt_ptr->tag;
 
 			/* Go ahead and lock it (and its owner) before returning */
 			ast_mutex_lock(&sip_pvt_ptr->lock);
@@ -9045,8 +9050,21 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 			   (With a forking SIP proxy, several call legs share the
 			   call id, but have different tags)
 			*/
-			if (pedanticsipchecking && (strcmp(fromtag, sip_pvt_ptr->theirtag) || (!ast_strlen_zero(totag) && strcmp(totag, ourtag))))
-				match = 0;
+			if (pedanticsipchecking) {
+				const char *pvt_fromtag, *pvt_totag;
+
+				if (ast_test_flag(&sip_pvt_ptr->flags[1], SIP_PAGE2_OUTGOING_CALL)) {
+					/* Outgoing call tags : from is "our", to is "their" */
+					pvt_fromtag = sip_pvt_ptr->tag ;
+					pvt_totag = sip_pvt_ptr->theirtag ;
+				} else {
+					/* Incoming call tags : from is "their", to is "our" */
+					pvt_fromtag = sip_pvt_ptr->theirtag ;
+					pvt_totag = sip_pvt_ptr->tag ;
+				}
+				if (ast_strlen_zero(fromtag) || strcmp(fromtag, pvt_fromtag) || (!ast_strlen_zero(totag) && strcmp(totag, pvt_totag)))
+					match = 0;
+			}
 
 			if (!match) {
 				ast_mutex_unlock(&sip_pvt_ptr->lock);
@@ -9055,7 +9073,7 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 
 			if (option_debug > 3 && totag)				 
 				ast_log(LOG_DEBUG, "Matched %s call - their tag is %s Our tag is %s\n",
-					ast_test_flag(&sip_pvt_ptr->flags[0], SIP_OUTGOING) ? "OUTGOING": "INCOMING",
+					ast_test_flag(&sip_pvt_ptr->flags[1], SIP_PAGE2_OUTGOING_CALL) ? "OUTGOING": "INCOMING",
 					sip_pvt_ptr->theirtag, sip_pvt_ptr->tag);
 
 			/* deadlock avoidance... */
@@ -9607,13 +9625,13 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 		/* If we didn't find a user match, check for peers */
 		if (sipmethod == SIP_SUBSCRIBE)
 			/* For subscribes, match on peer name only */
-			peer = find_peer(of, NULL, 1);
+			peer = find_peer(of, NULL, 1, 0);
 		else
 			/* Look for peer based on the IP address we received data from */
 			/* If peer is registered from this IP address or have this as a default
 			   IP address, this call is from the peer 
 			*/
-			peer = find_peer(NULL, &p->recv, 1);
+			peer = find_peer(NULL, &p->recv, 1, 0);
 
 		if (peer) {
 			/* Set Frame packetization */
@@ -10473,7 +10491,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		return RESULT_SHOWUSAGE;
 
 	load_realtime = (argc == 5 && !strcmp(argv[4], "load")) ? TRUE : FALSE;
-	peer = find_peer(argv[3], NULL, load_realtime);
+	peer = find_peer(argv[3], NULL, load_realtime, 0);
 	if (s) { 	/* Manager */
 		if (peer) {
 			const char *id = astman_get_header(m,"ActionID");
@@ -11370,7 +11388,7 @@ static int sip_do_debug_peer(int fd, int argc, char *argv[])
 	struct sip_peer *peer;
 	if (argc != 5)
 		return RESULT_SHOWUSAGE;
-	peer = find_peer(argv[4], NULL, 1);
+	peer = find_peer(argv[4], NULL, 1, 0);
 	if (peer) {
 		if (peer->addr.sin_addr.s_addr) {
 			debugaddr.sin_family = AF_INET;
@@ -11921,7 +11939,7 @@ static int function_sippeer(struct ast_channel *chan, char *cmd, char *data, cha
 	else
 		colname = "ip";
 
-	if (!(peer = find_peer(data, NULL, 1)))
+	if (!(peer = find_peer(data, NULL, 1, 0)))
 		return -1;
 
 	if (!strcasecmp(colname, "ip")) {
@@ -16113,6 +16131,12 @@ restartsearch:
 		}
 		ast_mutex_unlock(&iflock);
 
+		/* XXX TODO The scheduler usage in this module does not have sufficient 
+		 * synchronization being done between running the scheduler and places 
+		 * scheduling tasks.  As it is written, any scheduled item may not run 
+		 * any sooner than about  1 second, regardless of whether a sooner time 
+		 * was asked for. */
+
 		pthread_testcancel();
 		/* Wait for sched or io */
 		res = ast_sched_wait(sched);
@@ -16125,11 +16149,9 @@ restartsearch:
 		if (option_debug && res > 20)
 			ast_log(LOG_DEBUG, "chan_sip: ast_io_wait ran %d all at once\n", res);
 		ast_mutex_lock(&monlock);
-		if (res >= 0)  {
-			res = ast_sched_runq(sched);
-			if (option_debug && res >= 20)
-				ast_log(LOG_DEBUG, "chan_sip: ast_sched_runq ran %d all at once\n", res);
-		}
+		res = ast_sched_runq(sched);
+		if (option_debug && res >= 20)
+			ast_log(LOG_DEBUG, "chan_sip: ast_sched_runq ran %d all at once\n", res);
 
 		/* Send MWI notifications to peers - static and cached realtime peers */
 		t = time(NULL);
@@ -16359,7 +16381,7 @@ static int sip_devicestate(void *data)
 	 * load it BACK into memory, thus defeating the point of trying to trying to
 	 * clear dead hosts out of memory.
 	 */
-	if ((p = find_peer(host, NULL, 0))) {
+	if ((p = find_peer(host, NULL, 0, 1))) {
 		if (p->addr.sin_addr.s_addr || p->defaddr.sin_addr.s_addr) {
 			/* we have an address for the peer */
 		
@@ -17237,6 +17259,12 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	}
 	if (!ast_strlen_zero(fullcontact)) {
 		ast_copy_string(peer->fullcontact, fullcontact, sizeof(peer->fullcontact));
+		/* We have a hostname in the fullcontact, but if we don't have an
+		 * address listed on the entry (or if it's 'dynamic'), then we need to
+		 * parse the entry to obtain the IP address, so a dynamic host can be
+		 * contacted immediately after reload (as opposed to waiting for it to
+		 * register once again). */
+		__set_address_from_contact(fullcontact, &peer->addr);
 	}
 
 	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_IGNOREREGEXPIRE) && ast_test_flag(&peer->flags[1], SIP_PAGE2_DYNAMIC) && realtime) {
@@ -18211,10 +18239,10 @@ static int sip_addheader(struct ast_channel *chan, void *data)
 	/* Check for headers */
 	while (!ok && no <= 50) {
 		no++;
-		snprintf(varbuf, sizeof(varbuf), "_SIPADDHEADER%.2d", no);
+		snprintf(varbuf, sizeof(varbuf), "__SIPADDHEADER%.2d", no);
 
-		/* Compare without the leading underscore */
-		if( (pbx_builtin_getvar_helper(chan, (const char *) varbuf + 1) == (const char *) NULL) )
+		/* Compare without the leading underscores */
+		if( (pbx_builtin_getvar_helper(chan, (const char *) varbuf + 2) == (const char *) NULL) )
 			ok = TRUE;
 	}
 	if (ok) {

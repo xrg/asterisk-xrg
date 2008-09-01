@@ -797,7 +797,7 @@ static int member_hash_fn(const void *obj, const int flags)
 static int member_cmp_fn(void *obj1, void *obj2, int flags)
 {
 	struct member *mem1 = obj1, *mem2 = obj2;
-	return strcmp(mem1->interface, mem2->interface) ? 0 : CMP_MATCH;
+	return strcmp(mem1->interface, mem2->interface) ? 0 : CMP_MATCH | CMP_STOP;
 }
 
 static void init_queue(struct call_queue *q)
@@ -2426,7 +2426,7 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 			break;
 
 		/* If we have timed out, break out */
-		if (qe->expire && (time(NULL) > qe->expire)) {
+		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
 		}
@@ -2455,7 +2455,7 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 			break;
 
 		/* If we have timed out, break out */
-		if (qe->expire && (time(NULL) > qe->expire)) {
+		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
 		}
@@ -2466,7 +2466,7 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 			break;
 
 		/* If we have timed out, break out */
-		if (qe->expire && (time(NULL) > qe->expire)) {
+		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
 		}
@@ -2480,7 +2480,7 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 		}
 		
 		/* If we have timed out, break out */
-		if (qe->expire && (time(NULL) > qe->expire)) {
+		if (qe->expire && (time(NULL) >= qe->expire)) {
 			*reason = QUEUE_TIMEOUT;
 			break;
 		}
@@ -2725,7 +2725,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	 * This should be extremely rare. queue_exec will take care
 	 * of removing the caller and reporting the timeout as the reason.
 	 */
-	if (qe->expire && now > qe->expire) {
+	if (qe->expire && now >= qe->expire) {
 		res = 0;
 		goto out;
 	}
@@ -3941,7 +3941,7 @@ check_turns:
 			enum queue_member_status stat;
 
 			/* Leave if we have exceeded our queuetimeout */
-			if (qe.expire && (time(NULL) > qe.expire)) {
+			if (qe.expire && (time(NULL) >= qe.expire)) {
 				record_abandoned(&qe);
 				reason = QUEUE_TIMEOUT;
 				res = 0;
@@ -3959,7 +3959,7 @@ check_turns:
 			makeannouncement = 1;
 
 			/* Leave if we have exceeded our queuetimeout */
-			if (qe.expire && (time(NULL) > qe.expire)) {
+			if (qe.expire && (time(NULL) >= qe.expire)) {
 				record_abandoned(&qe);
 				reason = QUEUE_TIMEOUT;
 				res = 0;
@@ -3972,7 +3972,7 @@ check_turns:
 					goto stop;
 
 			/* Leave if we have exceeded our queuetimeout */
-			if (qe.expire && (time(NULL) > qe.expire)) {
+			if (qe.expire && (time(NULL) >= qe.expire)) {
 				record_abandoned(&qe);
 				reason = QUEUE_TIMEOUT;
 				res = 0;
@@ -4016,7 +4016,7 @@ check_turns:
 			}
 
 			/* Leave if we have exceeded our queuetimeout */
-			if (qe.expire && (time(NULL) > qe.expire)) {
+			if (qe.expire && (time(NULL) >= qe.expire)) {
 				record_abandoned(&qe);
 				reason = QUEUE_TIMEOUT;
 				res = 0;

@@ -439,7 +439,6 @@ if test "x${host_os}" = "xlinux-gnu" ; then
   AST_EXT_LIB_CHECK([CAP], [cap], [cap_from_text], [sys/capability.h])
 fi
 
-PBX_DAHDI_TRANSCODE=0
 if test "${USE_DAHDI}" != "no" ; then
 	AST_C_DEFINE_CHECK([DAHDI], [DAHDI_CODE], [dahdi/user.h])
 	if test "x${PBX_DAHDI}" = "x1" ; then
@@ -1462,6 +1461,15 @@ if test "${USE_ZAPTEL}" != "no" && test "x${PBX_DAHDI}" != "x1"; then
 	fi
 	PBX_ZAPTEL=1
 	AC_DEFINE([HAVE_ZAPTEL], 1, [Define if your system has the Zaptel headers.])
+	saved_cppflags="${CPPFLAGS}"
+	CPPFLAGS="${CPPFLAGS} ${ZAPTEL_INCLUDE}"
+	AC_CHECK_MEMBER([ZT_PARAMS.chan_alarms],,,[#include <zaptel/zaptel.h>])
+	CPPFLAGS="${saved_cppflags}"
+	if test "${ac_cv_member_ZT_PARAMS_chan_alarms}" = "yes"; then
+	     AC_DEFINE([HAVE_ZAPTEL_CHANALARMS], 1, [Define if your Zaptel drivers have chan_alarms.])
+	else
+	     AC_DEFINE([HAVE_ZAPTEL_CHANALARMS], 0, [Define if your Zaptel drivers have chan_alarms.])
+	fi
    elif test -n "${ZAPTEL_MANDATORY}"; 
    then
       AC_MSG_NOTICE([***])
@@ -1494,6 +1502,28 @@ if test "${PBX_ZAPTEL}" = 1 && test "x${PBX_DAHDI}" != "x1"; then
    CPPFLAGS="${saved_cppflags}"
    if test "${ac_cv_zaptel_vldtmf}" = "yes"; then
 	PBX_ZAPTEL_VLDTMF=1
+   fi
+   AC_MSG_CHECKING(for zt_transcoder_info in zaptel/zaptel.h)
+   saved_cppflags="${CPPFLAGS}"
+   if test "x${ZAPTEL_DIR}" != "x"; then
+      CPPFLAGS="${CPPFLAGS} -I${ZAPTEL_DIR}/include"
+   fi
+   AC_COMPILE_IFELSE(
+	[
+	AC_LANG_PROGRAM(
+	[#include <zaptel/zaptel.h>],
+	[int foo = sizeof(struct zt_transcoder_info);])
+	],
+	[	AC_MSG_RESULT(yes) 
+		ac_cv_zaptel_transcode="yes" 
+	],
+	[	AC_MSG_RESULT(no) 
+		ac_cv_zaptel_transcode="no" 
+	]
+	)
+   CPPFLAGS="${saved_cppflags}"
+   if test "${ac_cv_zaptel_transcode}" = "yes"; then
+	PBX_DAHDI_TRANSCODE=1
    fi
 fi
 AC_SUBST(PBX_ZAPTEL_VLDTMF)

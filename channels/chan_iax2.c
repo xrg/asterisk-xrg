@@ -1120,7 +1120,7 @@ static int peer_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct iax2_peer *peer = obj, *peer2 = arg;
 
-	return !strcmp(peer->name, peer2->name) ? CMP_MATCH : 0;
+	return !strcmp(peer->name, peer2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*!
@@ -1140,7 +1140,7 @@ static int user_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct iax2_user *user = obj, *user2 = arg;
 
-	return !strcmp(user->name, user2->name) ? CMP_MATCH : 0;
+	return !strcmp(user->name, user2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*!
@@ -7863,11 +7863,14 @@ retryowner:
 
 					pbx_builtin_setvar_helper(bridged_chan, "BLINDTRANSFER", iaxs[fr->callno]->owner->name);
 					if (!strcmp(ies.called_number, ast_parking_ext())) {
-						if (iax_park(bridged_chan, iaxs[fr->callno]->owner)) {
+						struct ast_channel *saved_channel = iaxs[fr->callno]->owner;
+						ast_mutex_unlock(&iaxsl[fr->callno]);
+						if (iax_park(bridged_chan, saved_channel)) {
 							ast_log(LOG_WARNING, "Failed to park call on '%s'\n", bridged_chan->name);
 						} else {
 							ast_log(LOG_DEBUG, "Parked call on '%s'\n", bridged_chan->name);
 						}
+						ast_mutex_lock(&iaxsl[fr->callno]);
 					} else {
 						if (ast_async_goto(bridged_chan, iaxs[fr->callno]->context, ies.called_number, 1))
 							ast_log(LOG_WARNING, "Async goto of '%s' to '%s@%s' failed\n", bridged_chan->name, 
@@ -9091,15 +9094,14 @@ static void *sched_thread(void *ignore)
 	struct timespec ts;
 
 	for (;;) {
+		pthread_testcancel();
+		ast_mutex_lock(&sched_lock);
 		res = ast_sched_wait(sched);
 		if ((res > 1000) || (res < 0))
 			res = 1000;
 		tv = ast_tvadd(ast_tvnow(), ast_samp2tv(res, 1000));
 		ts.tv_sec = tv.tv_sec;
 		ts.tv_nsec = tv.tv_usec * 1000;
-
-		pthread_testcancel();
-		ast_mutex_lock(&sched_lock);
 		ast_cond_timedwait(&sched_cond, &sched_lock, &ts);
 		ast_mutex_unlock(&sched_lock);
 		pthread_testcancel();
@@ -11127,7 +11129,7 @@ static int pvt_cmp_cb(void *obj, void *arg, int flags)
 	 * against a full frame or not ... */
 
 	return match(&pvt2->addr, pvt2->peercallno, pvt2->callno, pvt, 
-		pvt2->frames_received) ? CMP_MATCH : 0;
+		pvt2->frames_received) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*! \brief Load IAX2 module, load configuraiton ---*/
