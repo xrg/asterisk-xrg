@@ -6833,8 +6833,14 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 					ast_verbose("Found RTP text format %d\n", codec);
 				ast_rtp_set_m_type(newtextrtp, codec);
 			}
-		} else if (p->udptl && ( (sscanf(m, "image %d udptl t38%n", &x, &len) == 1) || 
-		 (sscanf(m, "image %d UDPTL t38%n", &x, &len) == 1) )) {
+		} else if (p->udptl && 
+			(
+				(sscanf(m, "image %d udptl t38%n", &x, &len) == 1) || 
+				(sscanf(m, "image %d UDPTL t38%n", &x, &len) == 1) ||
+				(sscanf(m, "image %d UDPTL t38", &x) == 1) ||
+				(sscanf(m, "image %d udptl t38", &x) == 1) 
+			) 
+		) {
 			if (debug)
 				ast_verbose("Got T.38 offer in SDP in dialog %s\n", p->callid);
 			udptlportno = x;
