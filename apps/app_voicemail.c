@@ -3399,6 +3399,9 @@ static int last_message_index(struct ast_vm_user *vmu, char *dir)
 	return x - 1;
 }
 
+#endif /* #ifndef IMAP_STORAGE */
+#endif /* #else of #ifdef ODBC_STORAGE */
+#ifndef IMAP_STORAGE
 /*!
  * \brief Utility function to copy a file.
  * \param infile The path to the file to be copied. The file must be readable, it is opened in read only mode.
@@ -3510,10 +3513,6 @@ static void copy_plain_file(char *frompath, char *topath)
 	ast_variables_destroy(var);
 }
 
-#endif /* #ifndef IMAP_STORAGE */
-#endif /* #else of #ifdef ODBC_STORAGE */
-
-#if (!defined(ODBC_STORAGE) && !defined(IMAP_STORAGE))
 /*! 
  * \brief Removes the voicemail sound and information file.
  * \param file The path to the sound file. This will be the the folder and message index, without the extension.
@@ -4397,7 +4396,18 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 	recipmsgnum = last_message_index(recip, todir) + 1;
 	if (recipmsgnum < recip->maxmsg) {
 		make_file(topath, sizeof(topath), todir, recipmsgnum);
-		COPY(fromdir, msgnum, todir, recipmsgnum, recip->mailbox, recip->context, frompath, topath);
+		if (EXISTS(fromdir, msgnum, frompath, chan->language)) {
+			COPY(fromdir, msgnum, todir, recipmsgnum, recip->mailbox, recip->context, frompath, topath);
+		} else {
+			/* For ODBC storage, if the file we want to copy isn't yet in the database, then the SQL
+			 * copy will fail. Instead, we need to create a local copy, store it, and delete the local
+			 * copy. We don't have to #ifdef this because if file storage reaches this point, there's a
+			 * much worse problem happening and IMAP storage doesn't call this function
+			 */
+			copy_plain_file(frompath, topath);
+			STORE(todir, recip->mailbox, recip->context, recipmsgnum, chan, recip, fmt, duration, NULL, NULL);
+			vm_delete(topath);
+		}
 	} else {
 		ast_log(AST_LOG_ERROR, "Recipient mailbox %s@%s is full\n", recip->mailbox, recip->context);
 	}
@@ -5809,7 +5819,6 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 				snprintf(duration_buf, 11, "%ld", *duration);
 				if (!ast_variable_update(msg_cat, "duration", duration_buf, NULL, 0)) {
 					config_text_file_save(textfile, msg_cfg, "app_voicemail");
-					STORE(curdir, vmu->mailbox, context, curmsg, chan, vmu, vmfmts, prepend_duration, vms, NULL);
 				}
 			}
 
@@ -8626,6 +8635,7 @@ static int vm_execmain(struct ast_channel *chan, void *data)
 #ifdef IMAP_STORAGE
 	vms.interactive = 1;
 	vms.updated = 1;
+	ast_copy_string(vms.context, vmu->context, sizeof(vms.context));
 	vmstate_insert(&vms);
 	init_vm_state(&vms);
 #endif

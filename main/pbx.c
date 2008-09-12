@@ -673,7 +673,12 @@ static struct pbx_builtin {
     "category, and you have app_set = 1.6 under that, then the behavior of this\n"
     "app changes, and does not strip surrounding quotes from the right hand side\n"
     "as it did previously in 1.4. The app_set = 1.6 is only inserted if 'make samples'\n"
-	"is executed, or if the users inserts this by hand into the asterisk.conf file.\n"
+	"is executed, or if users insert this by hand into the asterisk.conf file.\n"
+	"/nThe advantages of not stripping out quoting, and not caring about the\n"
+	"separator characters (comma and vertical bar) were sufficient to make these\n"
+	"changes in 1.6. Confusion about how many backslashes would be needed to properly\n"
+	"protect separators and quotes in various database access strings has been greatly\n"
+	"reduced by these changes.\n"
 	},
 
 	{ "MSet", pbx_builtin_setvar_multiple,
@@ -687,7 +692,9 @@ static struct pbx_builtin {
 	"channels.\n\n"
 	"MSet behaves in a similar fashion to the way Set worked in 1.2/1.4 and is thus\n"
 	"prone to doing things that you may not expect. For example, it strips surrounding\n"
-	"double-quotes from the right-hand side (value).  Avoid its use if possible.\n"
+	"double-quotes from the right-hand side (value). If you need to put a separator\n"
+        "character (comma or vert-bar), you will need to escape them by inserting a backslash\n"
+	"before them. Avoid its use if possible.\n"
 	},
 
 	{ "SetAMAFlags", pbx_builtin_setamaflags,
@@ -1407,8 +1414,7 @@ static void insert_in_next_chars_alt_char_list(struct match_char **parent_ptr, s
 				}
 				lcurr = curr;
 			}
-			if (!curr)
-			{
+			if (!curr) {
 				lcurr->alt_char = node;
 			}
 		}
@@ -6567,17 +6573,23 @@ int ast_async_goto(struct ast_channel *chan, const char *context, const char *ex
 				S_OR(context, chan->context), S_OR(exten, chan->exten), priority);
 
 			/* Masquerade into temp channel */
-			ast_channel_masquerade(tmpchan, chan);
-
-			/* Grab the locks and get going */
-			ast_channel_lock(tmpchan);
-			ast_do_masquerade(tmpchan);
-			ast_channel_unlock(tmpchan);
-			/* Start the PBX going on our stolen channel */
-			if (ast_pbx_start(tmpchan)) {
-				ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmpchan->name);
+			if (ast_channel_masquerade(tmpchan, chan)) {
+				/* Failed to set up the masquerade.  It's probably chan_local
+				 * in the middle of optimizing itself out.  Sad. :( */
 				ast_hangup(tmpchan);
+				tmpchan = NULL;
 				res = -1;
+			} else {
+				/* Grab the locks and get going */
+				ast_channel_lock(tmpchan);
+				ast_do_masquerade(tmpchan);
+				ast_channel_unlock(tmpchan);
+				/* Start the PBX going on our stolen channel */
+				if (ast_pbx_start(tmpchan)) {
+					ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmpchan->name);
+					ast_hangup(tmpchan);
+					res = -1;
+				}
 			}
 		}
 	}
@@ -7087,6 +7099,7 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	ast_cdr_end(chan->cdr);
 	ast_cdr_failed(chan->cdr);      /* set the status to failed */
 	ast_cdr_detach(chan->cdr);      /* post and free the record */
+	chan->cdr = NULL;
 	ast_channel_free(chan);         /* free the channel */
 
 	return 0;  /* success */
