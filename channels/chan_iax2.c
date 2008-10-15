@@ -3801,8 +3801,8 @@ static struct ast_channel *ast_iax2_new(int callno, int state, int capability)
 	tmp->tech = &iax2_tech;
 	/* We can support any format by default, until we get restricted */
 	tmp->nativeformats = capability;
-	tmp->readformat = ast_best_codec(capability);
-	tmp->writeformat = ast_best_codec(capability);
+	tmp->readformat = tmp->rawreadformat = ast_best_codec(capability);
+	tmp->writeformat = tmp->rawwriteformat = ast_best_codec(capability);
 	tmp->tech_pvt = CALLNO_TO_PTR(i->callno);
 
 	/* Don't use ast_set_callerid() here because it will
@@ -10127,9 +10127,9 @@ static int set_config(char *config_file, int reload)
 		} else if (!strcasecmp(v->name, "accountcode")) {
 			ast_copy_string(accountcode, v->value, sizeof(accountcode));
 		} else if (!strcasecmp(v->name, "mohinterpret")) {
-			ast_copy_string(mohinterpret, v->value, sizeof(user->mohinterpret));
+			ast_copy_string(mohinterpret, v->value, sizeof(mohinterpret));
 		} else if (!strcasecmp(v->name, "mohsuggest")) {
-			ast_copy_string(mohsuggest, v->value, sizeof(user->mohsuggest));
+			ast_copy_string(mohsuggest, v->value, sizeof(mohsuggest));
 		} else if (!strcasecmp(v->name, "amaflags")) {
 			format = ast_cdr_amaflags2int(v->value);
 			if (format < 0) {
@@ -10707,7 +10707,11 @@ static int function_iaxpeer(struct ast_channel *chan, char *cmd, char *data, cha
 		index = atoi(codecnum);
 		if((codec = ast_codec_pref_index(&peer->prefs, index))) {
 			ast_copy_string(buf, ast_getformatname(codec), len);
+		} else {
+			buf[0] = '\0';
 		}
+	} else {
+		buf[0] = '\0';
 	}
 
 	peer_unref(peer);

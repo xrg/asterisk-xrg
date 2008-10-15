@@ -90,10 +90,10 @@ static void odbc_disconnect(void)
 	connected = 0;
 }
 
-static int odbc_log(struct ast_cdr *cdr)
+static void build_query(struct ast_cdr *cdr, char *timestr, int timesize)
 {
 	int ODBC_res;
-	char sqlcmd[2048] = "", timestr[128];
+	char sqlcmd[2048] = "";
 	int res = 0;
 	struct tm tm;
 
@@ -102,8 +102,7 @@ static int odbc_log(struct ast_cdr *cdr)
 	else
 		ast_localtime(&cdr->start.tv_sec, &tm, NULL);
 
-	ast_mutex_lock(&odbc_lock);
-	strftime(timestr, sizeof(timestr), DATE_FORMAT, &tm);
+	strftime(timestr, timesize, DATE_FORMAT, &tm);
 	memset(sqlcmd,0,2048);
 	if (loguniqueid) {
 		snprintf(sqlcmd,sizeof(sqlcmd),"INSERT INTO %s "
@@ -116,13 +115,12 @@ static int odbc_log(struct ast_cdr *cdr)
 		"duration,billsec,disposition,amaflags,accountcode) "
 		"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", table);
 	}
-
 	if (!connected) {
 		res = odbc_init();
 		if (res < 0) {
 			odbc_disconnect();
 			ast_mutex_unlock(&odbc_lock);
-			return 0;
+			return;
 		}				
 	}
 
@@ -134,7 +132,7 @@ static int odbc_log(struct ast_cdr *cdr)
 		SQLFreeHandle(SQL_HANDLE_STMT, ODBC_stmt);
 		odbc_disconnect();
 		ast_mutex_unlock(&odbc_lock);
-		return 0;
+		return;
 	}
 
 	/* We really should only have to do this once.  But for some
@@ -149,10 +147,10 @@ static int odbc_log(struct ast_cdr *cdr)
 		SQLFreeHandle(SQL_HANDLE_STMT, ODBC_stmt);
 		odbc_disconnect();
 		ast_mutex_unlock(&odbc_lock);
-		return 0;
+		return;
 	}
 
-	SQLBindParameter(ODBC_stmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, sizeof(timestr), 0, &timestr, 0, NULL);
+	SQLBindParameter(ODBC_stmt, 1, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, timesize, 0, timestr, 0, NULL);
 	SQLBindParameter(ODBC_stmt, 2, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, sizeof(cdr->clid), 0, cdr->clid, 0, NULL);
 	SQLBindParameter(ODBC_stmt, 3, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, sizeof(cdr->src), 0, cdr->src, 0, NULL);
 	SQLBindParameter(ODBC_stmt, 4, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, sizeof(cdr->dst), 0, cdr->dst, 0, NULL);
@@ -174,15 +172,22 @@ static int odbc_log(struct ast_cdr *cdr)
 		SQLBindParameter(ODBC_stmt, 15, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, sizeof(cdr->uniqueid), 0, cdr->uniqueid, 0, NULL);
 		SQLBindParameter(ODBC_stmt, 16, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, sizeof(cdr->userfield), 0, cdr->userfield, 0, NULL);
 	}
+}
+
+static int odbc_log(struct ast_cdr *cdr)
+{
+	int res = 0;
+	char timestr[150];
+
+	ast_mutex_lock(&odbc_lock);
+	build_query(cdr, timestr, sizeof(timestr));
 
 	if (connected) {
 		res = odbc_do_query();
 		if (res < 0) {
-			if (option_verbose > 10)		
-				ast_verbose( VERBOSE_PREFIX_4 "cdr_odbc: Query FAILED Call not logged!\n");
 			if (option_verbose > 10)
 				ast_verbose( VERBOSE_PREFIX_4 "cdr_odbc: Reconnecting to dsn %s\n", dsn);
-			SQLDisconnect(ODBC_con);
+			odbc_disconnect();
 			res = odbc_init();
 			if (res < 0) {
 				if (option_verbose > 10)
@@ -191,6 +196,8 @@ static int odbc_log(struct ast_cdr *cdr)
 			} else {
 				if (option_verbose > 10)
 					ast_verbose( VERBOSE_PREFIX_4 "cdr_odbc: Trying Query again!\n");
+				SQLFreeHandle(SQL_HANDLE_STMT, ODBC_stmt);
+				build_query(cdr, timestr, sizeof(timestr)); /* what a waste. If we have to reconnect, we have to build a new query */
 				res = odbc_do_query();
 				if (res < 0) {
 					if (option_verbose > 10)
@@ -374,14 +381,11 @@ out:
 static int odbc_do_query(void)
 {
 	int ODBC_res;
-	
 	ODBC_res = SQLExecute(ODBC_stmt);
 	
 	if ((ODBC_res != SQL_SUCCESS) && (ODBC_res != SQL_SUCCESS_WITH_INFO)) {
 		if (option_verbose > 10)
 			ast_verbose( VERBOSE_PREFIX_4 "cdr_odbc: Error in Query %d\n", ODBC_res);
-		SQLFreeHandle(SQL_HANDLE_STMT, ODBC_stmt);
-		odbc_disconnect();
 		return -1;
 	} else {
 		if (option_verbose > 10)

@@ -25574,7 +25574,7 @@ fi
 
 
 	if test "${HAS_PWLIB:-unset}" != "unset"; then
-		PWLIB_VERSION=`grep "PWLIB_VERSION" ${PWLIB_INCDIR}/ptbuildopts.h | cut -f2 -d ' ' | sed -e 's/"//g'`
+		PWLIB_VERSION=`grep "PWLIB_VERSION" ${PWLIB_INCDIR}/ptbuildopts.h | sed -e 's/[[:space:]]\{1,\}/ /g' | cut -f3 -d ' ' | sed -e 's/"//g'`
 		PWLIB_MAJOR_VERSION=`echo ${PWLIB_VERSION} | cut -f1 -d.`
 		PWLIB_MINOR_VERSION=`echo ${PWLIB_VERSION} | cut -f2 -d.`
 		PWLIB_BUILD_NUMBER=`echo ${PWLIB_VERSION} | cut -f3 -d.`
@@ -26318,7 +26318,7 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 
 	if test "${HAS_OPENH323:-unset}" != "unset"; then
-		OPENH323_VERSION=`grep "OPENH323_VERSION" ${OPENH323_INCDIR}/openh323buildopts.h | cut -f2 -d ' ' | sed -e 's/"//g'`
+		OPENH323_VERSION=`grep "OPENH323_VERSION" ${OPENH323_INCDIR}/openh323buildopts.h | sed -e 's/[[:space:]]\{1,\}/ /g' | cut -f3 -d ' ' | sed -e 's/"//g'`
 		OPENH323_MAJOR_VERSION=`echo ${OPENH323_VERSION} | cut -f1 -d.`
 		OPENH323_MINOR_VERSION=`echo ${OPENH323_VERSION} | cut -f2 -d.`
 		OPENH323_BUILD_NUMBER=`echo ${OPENH323_VERSION} | cut -f3 -d.`
@@ -31108,6 +31108,10 @@ fi
 
 if test "x${PBX_ZAPTEL}" = "x1" ; then
 	PBX_DAHDI=1
+	DAHDI_INCLUDE=${ZAPTEL_INCLUDE}
+	DAHDI_LIB=${ZAPTEL_LIB}
+
+
 
 fi
 

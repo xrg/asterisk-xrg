@@ -10991,8 +10991,9 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 					return -1;
 		} else if (!strcasecmp(v->name, "buffers")) {
 			int res;
-			char policy[8] = "";
-			res = sscanf(v->value, "%d,%s", &confp->chan.buf_no, policy);
+			char policy[21] = "";
+
+			res = sscanf(v->value, "%d,%20s", &confp->chan.buf_no, policy);
 			if (res != 2) {
 				ast_log(LOG_WARNING, "Parsing buffers option data failed, using defaults.\n");
 				confp->chan.buf_no = numbufs;
@@ -11651,14 +11652,13 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 	/*< \todo why check for the pseudo in the per-channel section.
 	 * Any actual use for manual setup of the pseudo channel? */
 	if (!found_pseudo && reload == 0) {
-		/* Make sure pseudo isn't a member of any groups if
-		   we're automatically making it. */	
-		
-		confp->chan.group = 0;
-		confp->chan.callgroup = 0;
-		confp->chan.pickupgroup = 0;
+		/* use the default configuration for a channel, so
+		   that any settings from real configured channels
+		   don't "leak" into the pseudo channel config
+		*/
+		struct dahdi_chan_conf conf = dahdi_chan_conf_default();
 
-		tmp = mkintf(CHAN_PSEUDO, confp, NULL, reload);
+		tmp = mkintf(CHAN_PSEUDO, &conf, NULL, reload);
 
 		if (tmp) {
 			if (option_verbose > 2)
