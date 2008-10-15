@@ -44,7 +44,6 @@
 
 /*LINTLIBRARY*/
 
-
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -1817,6 +1816,18 @@ defcase:	*fptr++ = *tmp;
 #undef strftime
 	res = (int)strftime(buf, len, format, (struct tm *)tm);
 	ast_free(format);
+	return res;
+}
+
+char *ast_strptime(const char *s, const char *format, struct ast_tm *tm)
+{
+	struct tm tm2 = { 0, };
+	char *res = strptime(s, format, &tm2);
+	memcpy(tm, &tm2, sizeof(*tm));
+	tm->tm_usec = 0;
+	/* strptime(3) doesn't set .tm_isdst correctly, so to force ast_mktime(3)
+	 * to deal with it correctly, we set it to -1. */
+	tm->tm_isdst = -1;
 	return res;
 }
 

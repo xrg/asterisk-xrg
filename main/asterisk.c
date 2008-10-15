@@ -2371,15 +2371,17 @@ static int ast_el_initialize(void)
 	return 0;
 }
 
+#define MAX_HISTORY_COMMAND_LENGTH 256
+
 static int ast_el_add_history(char *buf)
 {
 	HistEvent ev;
 
 	if (el_hist == NULL || el == NULL)
 		ast_el_initialize();
-	if (strlen(buf) > 256)
+	if (strlen(buf) > (MAX_HISTORY_COMMAND_LENGTH - 1))
 		return 0;
-	return (history(el_hist, &ev, H_ENTER, buf));
+	return (history(el_hist, &ev, H_ENTER, ast_strip(ast_strdupa(buf))));
 }
 
 static int ast_el_write_history(char *filename)
@@ -2394,7 +2396,7 @@ static int ast_el_write_history(char *filename)
 
 static int ast_el_read_history(char *filename)
 {
-	char buf[256];
+	char buf[MAX_HISTORY_COMMAND_LENGTH];
 	FILE *f;
 	int ret = -1;
 
@@ -2405,7 +2407,8 @@ static int ast_el_read_history(char *filename)
 		return ret;
 
 	while (!feof(f)) {
-		fgets(buf, sizeof(buf), f);
+		if (!fgets(buf, sizeof(buf), f))
+			break;
 		if (!strcmp(buf, "_HiStOrY_V2_\n"))
 			continue;
 		if (ast_all_zeros(buf))
@@ -2596,7 +2599,7 @@ static void ast_readconfig(void)
 
 	if (ast_opt_override_config) {
 		cfg = ast_config_load2(ast_config_AST_CONFIG_FILE, "" /* core, can't reload */, config_flags);
-		if (!cfg)
+		if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID)
 			ast_log(LOG_WARNING, "Unable to open specified master config file '%s', using built-in defaults\n", ast_config_AST_CONFIG_FILE);
 	} else 
 		cfg = ast_config_load2(config, "" /* core, can't reload */, config_flags);
@@ -2619,7 +2622,7 @@ static void ast_readconfig(void)
 	ast_set_default_eid(&g_eid);
 
 	/* no asterisk.conf? no problem, use buildtime config! */
-	if (!cfg) {
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
 		return;
 	}
 
@@ -2792,6 +2795,8 @@ static void ast_readconfig(void)
 				ast_verbose("Invalid Entity ID '%s' provided\n", v->value);
 		} else if (!strcasecmp(v->name, "lightbackground")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_LIGHT_BACKGROUND);
+		} else if (!strcasecmp(v->name, "forceblackbackground")) {
+			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
 		}
 	}
 	for (v = ast_variable_browse(cfg, "compat"); v; v = v->next) {
@@ -2869,6 +2874,9 @@ static void run_startup_commands(void)
 
 	if (!(cfg = ast_config_load2("cli.conf", "" /* core, can't reload */, cfg_flags)))
 		return;
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
+		return;
+	}
 
 	fd = open("/dev/null", O_RDWR);
 	if (fd < 0) {
@@ -2931,7 +2939,7 @@ int main(int argc, char *argv[])
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
 	/* Check for options */
-	while ((c = getopt(argc, argv, "mtThfFdvVqprRgciInx:U:G:C:L:M:e:s:W")) != -1) {
+	while ((c = getopt(argc, argv, "mtThfFdvVqprRgciInx:U:G:C:L:M:e:s:WB")) != -1) {
 		switch (c) {
 #if defined(HAVE_SYSINFO)
 		case 'e':
@@ -3025,6 +3033,11 @@ int main(int argc, char *argv[])
 			break;
 		case 'W': /* White background */
 			ast_set_flag(&ast_options, AST_OPT_FLAG_LIGHT_BACKGROUND);
+			ast_clear_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
+			break;
+		case 'B': /* Force black background */
+			ast_set_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
+			ast_clear_flag(&ast_options, AST_OPT_FLAG_LIGHT_BACKGROUND);
 			break;
 		case '?':
 			exit(1);

@@ -30,8 +30,10 @@
  */
 
 /*** MODULEINFO
-	<depend>unixodbc</depend>
+	<depend>unixodbc_or_iodbc</depend>
 	<depend>ltdl</depend>
+	<use>unixodbc</use>
+	<use>iodbc</use>
  ***/
 
 #include "asterisk.h"
@@ -417,7 +419,7 @@ static int load_odbc_config(void)
 	struct odbc_class *new;
 
 	config = ast_config_load(cfg, config_flags);
-	if (!config) {
+	if (config == CONFIG_STATUS_FILEMISSING || config == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "Unable to load config file res_odbc.conf\n");
 		return -1;
 	}
@@ -756,22 +758,28 @@ static odbc_status odbc_obj_disconnect(struct odbc_obj *obj)
 	int res;
 	SQLINTEGER err;
 	short int mlen;
-	unsigned char msg[200], stat[10];
+	unsigned char msg[200], state[10];
+
+	/* Nothing to disconnect */
+	if (!obj->con) {
+		return ODBC_SUCCESS;
+	}
 
 	ast_mutex_lock(&obj->lock);
 
 	res = SQLDisconnect(obj->con);
 
-	if (res == ODBC_SUCCESS) {
+	if (res == SQL_SUCCESS || res == SQL_SUCCESS_WITH_INFO) {
 		ast_log(LOG_DEBUG, "Disconnected %d from %s [%s]\n", res, obj->parent->name, obj->parent->dsn);
 	} else {
 		ast_log(LOG_DEBUG, "res_odbc: %s [%s] already disconnected\n", obj->parent->name, obj->parent->dsn);
 	}
 
-	if ((res = SQLFreeHandle(SQL_HANDLE_DBC, obj->con) == ODBC_SUCCESS)) {
+	if ((res = SQLFreeHandle(SQL_HANDLE_DBC, obj->con) == SQL_SUCCESS)) {
+		obj->con = NULL;
 		ast_log(LOG_DEBUG, "Database handle deallocated\n");
 	} else {
-		SQLGetDiagRec(SQL_HANDLE_DBC, obj->con, 1, stat, &err, msg, 100, &mlen);
+		SQLGetDiagRec(SQL_HANDLE_DBC, obj->con, 1, state, &err, msg, 100, &mlen);
 		ast_log(LOG_WARNING, "Unable to deallocate database handle? %d errno=%d %s\n", res, (int)err, msg);
 	}
 
@@ -792,6 +800,13 @@ static odbc_status odbc_obj_connect(struct odbc_obj *obj)
 #endif
 	ast_mutex_lock(&obj->lock);
 
+	if (obj->up) {
+		odbc_obj_disconnect(obj);
+		ast_log(LOG_NOTICE, "Re-connecting %s\n", obj->parent->name);
+	} else {
+		ast_log(LOG_NOTICE, "Connecting %s\n", obj->parent->name);
+	}
+
 	res = SQLAllocHandle(SQL_HANDLE_DBC, obj->parent->env, &obj->con);
 
 	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
@@ -805,13 +820,6 @@ static odbc_status odbc_obj_connect(struct odbc_obj *obj)
 	SQLSetConnectAttr(obj->con, SQL_ATTR_TRACE, &enable, SQL_IS_INTEGER);
 	SQLSetConnectAttr(obj->con, SQL_ATTR_TRACEFILE, tracefile, strlen(tracefile));
 #endif
-
-	if (obj->up) {
-		odbc_obj_disconnect(obj);
-		ast_log(LOG_NOTICE, "Re-connecting %s\n", obj->parent->name);
-	} else {
-		ast_log(LOG_NOTICE, "Connecting %s\n", obj->parent->name);
-	}
 
 	res = SQLConnect(obj->con,
 		   (SQLCHAR *) obj->parent->dsn, SQL_NTS,

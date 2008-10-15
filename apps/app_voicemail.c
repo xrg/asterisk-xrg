@@ -47,8 +47,10 @@ c-client (http://www.washington.edu/imap/
 /*** MAKEOPTS
 <category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" remove_on_change="apps/app_voicemail.o apps/app_directory.o">
 	<member name="ODBC_STORAGE" displayname="Storage of Voicemail using ODBC">
-		<depend>unixodbc</depend>
+		<depend>unixodbc_or_iodbc</depend>
 		<depend>ltdl</depend>
+		<use>unixodbc</use>
+		<use>iodbc</use>
 		<conflict>IMAP_STORAGE</conflict>
 		<defaultenabled>no</defaultenabled>
 	</member>
@@ -61,12 +63,8 @@ c-client (http://www.washington.edu/imap/
 </category>
  ***/
 
-/* It is important to include the IMAP_STORAGE related headers
- * before asterisk.h since asterisk.h includes logger.h. logger.h
- * and c-client.h have conflicting definitions for AST_LOG_WARNING and
- * AST_LOG_DEBUG, so it's important that we use Asterisk's definitions
- * here instead of the c-client's 
- */
+#include "asterisk.h"
+
 #ifdef IMAP_STORAGE
 #include <ctype.h>
 #include <signal.h>
@@ -86,8 +84,6 @@ c-client (http://www.washington.edu/imap/
 #endif
 #endif
 
-#include "asterisk.h"
-
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/paths.h"	/* use ast_config_AST_SPOOL_DIR */
@@ -97,6 +93,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <time.h>
 #include <dirent.h>
 
+#include "asterisk/logger.h"
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
 #include "asterisk/channel.h"
@@ -771,7 +768,7 @@ static void apply_option(struct ast_vm_user *vmu, const char *var, const char *v
 #ifdef IMAP_STORAGE
 	} else if (!strcasecmp(var, "imapuser")) {
 		ast_copy_string(vmu->imapuser, value, sizeof(vmu->imapuser));
-	} else if (!strcasecmp(var, "imappassword")) {
+	} else if (!strcasecmp(var, "imappassword") || !strcasecmp(var, "imapsecret")) {
 		ast_copy_string(vmu->imappassword, value, sizeof(vmu->imappassword));
 #endif
 	} else if (!strcasecmp(var, "delete") || !strcasecmp(var, "deletevoicemail")) {
@@ -1003,7 +1000,7 @@ static void apply_options_full(struct ast_vm_user *retval, struct ast_variable *
 #ifdef IMAP_STORAGE
 		} else if (!strcasecmp(tmp->name, "imapuser")) {
 			ast_copy_string(retval->imapuser, tmp->value, sizeof(retval->imapuser));
-		} else if (!strcasecmp(tmp->name, "imappassword")) {
+		} else if (!strcasecmp(tmp->name, "imappassword") || !strcasecmp(tmp->name, "imapsecret")) {
 			ast_copy_string(retval->imappassword, tmp->value, sizeof(retval->imappassword));
 #endif
 		} else
@@ -1157,7 +1154,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 		return;
 
 	/* check voicemail.conf */
-	if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags))) {
+	if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags)) && cfg != CONFIG_STATUS_FILEINVALID) {
 		while ((category = ast_category_browse(cfg, category))) {
 			if (!strcasecmp(category, vmu->context)) {
 				if (!(tmp = ast_variable_retrieve(cfg, category, vmu->mailbox))) {
@@ -1187,7 +1184,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 	var = NULL;
 	/* check users.conf and update the password stored for the mailbox*/
 	/* if no vmsecret entry exists create one. */
-	if ((cfg = ast_config_load("users.conf", config_flags))) {
+	if ((cfg = ast_config_load("users.conf", config_flags)) && cfg != CONFIG_STATUS_FILEINVALID) {
 		ast_debug(4, "we are looking for %s\n", vmu->mailbox);
 		while ((category = ast_category_browse(cfg, category))) {
 			ast_debug(4, "users.conf: %s\n", category);
@@ -1518,9 +1515,9 @@ static int imap_retrieve_file(const char *dir, const int msgnum, const char *mai
 
 	fprintf(text_file_ptr, "%s\n", "[message]");
 
-	get_header_by_tag(header_content, "X-Asterisk-VM-Caller-ID-Num:", buf, sizeof(buf));
-	fprintf(text_file_ptr, "callerid=\"%s\" ", S_OR(buf, ""));
 	get_header_by_tag(header_content, "X-Asterisk-VM-Caller-ID-Name:", buf, sizeof(buf));
+	fprintf(text_file_ptr, "callerid=\"%s\" ", S_OR(buf, ""));
+	get_header_by_tag(header_content, "X-Asterisk-VM-Caller-ID-Num:", buf, sizeof(buf));
 	fprintf(text_file_ptr, "<%s>\n", S_OR(buf, ""));
 	get_header_by_tag(header_content, "X-Asterisk-VM-Context:", buf, sizeof(buf));
 	fprintf(text_file_ptr, "context=%s\n", S_OR(buf, ""));
@@ -1530,6 +1527,8 @@ static int imap_retrieve_file(const char *dir, const int msgnum, const char *mai
 	fprintf(text_file_ptr, "duration=%s\n", S_OR(buf, ""));
 	get_header_by_tag(header_content, "X-Asterisk-VM-Category:", buf, sizeof(buf));
 	fprintf(text_file_ptr, "category=%s\n", S_OR(buf, ""));
+	get_header_by_tag(header_content, "X-Asterisk-VM-Flag:", buf, sizeof(buf));
+	fprintf(text_file_ptr, "flag=%s\n", S_OR(buf, ""));
 	fclose(text_file_ptr);
 
 exit:
@@ -3181,7 +3180,7 @@ static int store_file(char *dir, char *mailboxuser, char *mailboxcontext, int ms
 			res = -1;
 			break;
 		}
-		if (cfg) {
+		if (cfg && cfg != CONFIG_STATUS_FILEINVALID) {
 			if (!(idata.context = ast_variable_retrieve(cfg, "message", "context"))) {
 				idata.context = "";
 			}
@@ -3675,9 +3674,10 @@ static void prep_email_sub_vars(struct ast_channel *ast, struct ast_vm_user *vmu
 	pbx_builtin_setvar_helper(ast, "VM_MSGNUM", passdata);
 	pbx_builtin_setvar_helper(ast, "VM_CONTEXT", context);
 	pbx_builtin_setvar_helper(ast, "VM_MAILBOX", mailbox);
-	pbx_builtin_setvar_helper(ast, "VM_CALLERID", ast_callerid_merge(callerid, sizeof(callerid), cidname, cidnum, "Unknown Caller"));
-	pbx_builtin_setvar_helper(ast, "VM_CIDNAME", (cidname ? cidname : "an unknown caller"));
-	pbx_builtin_setvar_helper(ast, "VM_CIDNUM", (cidnum ? cidnum : "an unknown caller"));
+	pbx_builtin_setvar_helper(ast, "VM_CALLERID", (!ast_strlen_zero(cidname) || !ast_strlen_zero(cidnum)) ?
+		ast_callerid_merge(callerid, sizeof(callerid), cidname, cidnum, NULL) : "an unknown caller");
+	pbx_builtin_setvar_helper(ast, "VM_CIDNAME", (!ast_strlen_zero(cidname) ? cidname : "an unknown caller"));
+	pbx_builtin_setvar_helper(ast, "VM_CIDNUM", (!ast_strlen_zero(cidnum) ? cidnum : "an unknown caller"));
 	pbx_builtin_setvar_helper(ast, "VM_DATE", date);
 	pbx_builtin_setvar_helper(ast, "VM_CATEGORY", category ? ast_strdupa(category) : "no category");
 	pbx_builtin_setvar_helper(ast, "VM_FLAG", flag);
@@ -5756,7 +5756,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 	strncat(textfile, ".txt", sizeof(textfile) - strlen(textfile) - 1);
 	strncat(backup, "-bak", sizeof(backup) - strlen(backup) - 1);
 
-	if ((msg_cfg = ast_config_load(textfile, config_flags)) && (duration_str = ast_variable_retrieve(msg_cfg, "message", "duration"))) {
+	if ((msg_cfg = ast_config_load(textfile, config_flags)) && msg_cfg != CONFIG_STATUS_FILEINVALID && (duration_str = ast_variable_retrieve(msg_cfg, "message", "duration"))) {
 		*duration = atoi(duration_str);
 	} else {
 		*duration = 0;
@@ -6456,7 +6456,7 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 	snprintf(filename, sizeof(filename), "%s.txt", vms->fn);
 	RETRIEVE(vms->curdir, vms->curmsg, vmu->mailbox, vmu->context);
 	msg_cfg = ast_config_load(filename, config_flags);
-	if (!msg_cfg) {
+	if (!msg_cfg || msg_cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "No message attribute file?!! (%s)\n", filename);
 		return 0;
 	}
@@ -7040,7 +7040,7 @@ static int vm_intro_it(struct ast_channel *chan, struct vm_state *vms)
 			ast_play_and_wait(chan, "vm-vecchi") ||
 			ast_play_and_wait(chan, "vm-messages");
 	}
-	return res ? -1 : 0;
+	return res;
 }
 
 /* POLISH syntax */
@@ -7756,8 +7756,11 @@ static int vm_intro(struct ast_channel *chan, struct ast_vm_user *vmu, struct vm
 	/* Notify the user that the temp greeting is set and give them the option to remove it */
 	snprintf(prefile, sizeof(prefile), "%s%s/%s/temp", VM_SPOOL_DIR, vmu->context, vms->username);
 	if (ast_test_flag(vmu, VM_TEMPGREETWARN)) {
-		if (ast_fileexists(prefile, NULL, NULL) > 0)
+		RETRIEVE(prefile, -1, vmu->mailbox, vmu->context);
+		if (ast_fileexists(prefile, NULL, NULL) > 0) {
 			ast_play_and_wait(chan, "vm-tempgreetactive");
+		}
+		DISPOSE(prefile, -1);
 	}
 
 	/* Play voicemail intro - syntax is different for different languages */
@@ -8095,9 +8098,11 @@ static int vm_options(struct ast_channel *chan, struct ast_vm_user *vmu, struct 
 		default: 
 			cmd = 0;
 			snprintf(prefile, sizeof(prefile), "%s%s/%s/temp", VM_SPOOL_DIR, vmu->context, vms->username);
+			RETRIEVE(prefile, -1, vmu->mailbox, vmu->context);
 			if (ast_fileexists(prefile, NULL, NULL)) {
 				cmd = ast_play_and_wait(chan, "vm-tmpexists");
 			}
+			DISPOSE(prefile, -1);
 			if (!cmd) {
 				cmd = ast_play_and_wait(chan, "vm-options");
 			}
@@ -9954,13 +9959,27 @@ static int load_config(int reload)
 	ast_unload_realtime("voicemail_data");
 
 	if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
-		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
 			return 0;
+		} else if (ucfg == CONFIG_STATUS_FILEINVALID) {
+			ast_log(LOG_ERROR, "Config file users.conf is in an invalid format.  Avoiding.\n");
+			ucfg = NULL;
+		}
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags);
+		if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags)) == CONFIG_STATUS_FILEINVALID) {
+			ast_config_destroy(ucfg);
+			ast_log(LOG_ERROR, "Config file " VOICEMAIL_CONFIG " is in an invalid format.  Aborting.\n");
+			return 0;
+		}
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file " VOICEMAIL_CONFIG " is in an invalid format.  Aborting.\n");
+		return 0;
 	} else {
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		ucfg = ast_config_load("users.conf", config_flags);
+		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEINVALID) {
+			ast_log(LOG_ERROR, "Config file users.conf is in an invalid format.  Avoiding.\n");
+			ucfg = NULL;
+		}
 	}
 #ifdef IMAP_STORAGE
 	ast_copy_string(imapparentfolder, "\0", sizeof(imapparentfolder));
@@ -10772,7 +10791,7 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 	RETRIEVE(vms->curdir, vms->curmsg, vmu->mailbox, vmu->context);
 	msg_cfg = ast_config_load(filename, config_flags);
 	DISPOSE(vms->curdir, vms->curmsg);
-	if (!msg_cfg) {
+	if (!msg_cfg || msg_cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(AST_LOG_WARNING, "No message attribute file?!! (%s)\n", filename);
 		return 0;
 	}

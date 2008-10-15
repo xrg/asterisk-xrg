@@ -756,18 +756,18 @@ static char *handle_softhangup(struct ast_cli_entry *e, int cmd, struct ast_cli_
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "soft hangup";
+		e->command = "channel request hangup";
 		e->usage =
-			"Usage: soft hangup <channel>\n"
+			"Usage: channel request hangup <channel>\n"
 			"       Request that a channel be hung up. The hangup takes effect\n"
 			"       the next time the driver reads or writes from the channel\n";
 		return NULL;
 	case CLI_GENERATE:
 		return ast_complete_channels(a->line, a->word, a->pos, a->n, 2);
 	}
-	if (a->argc != 3)
+	if (a->argc != 4)
 		return CLI_SHOWUSAGE;
-	c = ast_get_channel_by_name_locked(a->argv[2]);
+	c = ast_get_channel_by_name_locked(a->argv[3]);
 	if (c) {
 		ast_cli(a->fd, "Requested Hangup on channel '%s'\n", c->name);
 		ast_softhangup(c, AST_SOFTHANGUP_EXPLICIT);
@@ -1255,11 +1255,11 @@ void ast_builtins_init(void)
 
 static struct ast_cli_entry *cli_next(struct ast_cli_entry *e)
 {
-	if (e == NULL)
-		e = AST_LIST_FIRST(&helpers);
-	if (e) 
-		e = AST_LIST_NEXT(e, list);
-	return e;
+	if (e) {
+		return AST_LIST_NEXT(e, list);
+	} else {
+		return AST_LIST_FIRST(&helpers);
+	}
 }
 
 /*!
@@ -1426,7 +1426,7 @@ static int __ast_cli_unregister(struct ast_cli_entry *e, struct ast_cli_entry *e
 		e->_full_cmd = NULL;
 		if (e->handler) {
 			/* this is a new-style entry. Reset fields and free memory. */
-			bzero((char **)(e->cmda), sizeof(e->cmda));
+			memset((char **)(e->cmda), '\0', sizeof(e->cmda));
 			ast_free(e->command);
 			e->command = NULL;
 			e->usage = NULL;
@@ -1444,7 +1444,7 @@ static int __ast_cli_register(struct ast_cli_entry *e, struct ast_cli_entry *ed)
 	char **dst = (char **)e->cmda;	/* need to cast as the entry is readonly */
 	char *s;
 
-	bzero (&a, sizeof(a));
+	memset(&a, '\0', sizeof(a));
 	e->handler(e, CLI_INIT, &a);
 	/* XXX check that usage and command are filled up */
 	s = ast_skip_blanks(e->command);

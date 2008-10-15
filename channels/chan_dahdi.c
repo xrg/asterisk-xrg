@@ -3638,6 +3638,13 @@ static int dahdi_setoption(struct ast_channel *chan, int option, void *data, int
 		break;
 	case AST_OPTION_OPRMODE:  /* Operator services mode */
 		oprmode = (struct oprmode *) data;
+		/* We don't support operator mode across technologies */
+		if (strcasecmp(chan->tech->type, oprmode->peer->tech->type)) {
+			ast_log(LOG_NOTICE, "Operator mode not supported on %s to %s calls.\n",
+					chan->tech->type, oprmode->peer->tech->type);
+			errno = EINVAL;
+			return -1;
+		}
 		pp = oprmode->peer->tech_pvt;
 		p->oprmode = pp->oprmode = 0;
 		/* setup peers */
@@ -8943,7 +8950,12 @@ static inline int available(struct dahdi_pvt *p, int channelmatch, ast_group_t g
 	return 1;
 }
 
-static struct dahdi_pvt *chandup(struct dahdi_pvt *src)
+/* This function can *ONLY* be used for copying pseudo (CHAN_PSEUDO) private
+   structures; it makes no attempt to safely copy regular channel private
+   structures that might contain reference-counted object pointers and other
+   scary bits
+*/
+static struct dahdi_pvt *duplicate_pseudo(struct dahdi_pvt *src)
 {
 	struct dahdi_pvt *p;
 	struct dahdi_bufferinfo bi;
@@ -8953,7 +8965,6 @@ static struct dahdi_pvt *chandup(struct dahdi_pvt *src)
 		memcpy(p, src, sizeof(struct dahdi_pvt));
 		ast_mutex_init(&p->lock);
 		p->subs[SUB_REAL].dfd = dahdi_open("/dev/dahdi/pseudo");
-		/* Allocate a dahdi structure */
 		if (p->subs[SUB_REAL].dfd < 0) {
 			ast_log(LOG_ERROR, "Unable to dup channel: %s\n",  strerror(errno));
 			destroy_dahdi_pvt(&p);
@@ -9155,7 +9166,7 @@ static struct ast_channel *dahdi_request(const char *type, int format, void *dat
 			}
 #endif			
 			if (p->channel == CHAN_PSEUDO) {
-				p = chandup(p);
+				p = duplicate_pseudo(p);
 				if (!p) {
 					break;
 				}
@@ -11600,32 +11611,6 @@ static char *complete_span_4(const char *line, const char *word, int pos, int st
 	return complete_span_helper(line,word,pos,state,3);
 }
 
-static char *complete_span_5(const char *line, const char *word, int pos, int state)
-{
-	return complete_span_helper(line,word,pos,state,4);
-}
-
-static char *handle_pri_unset_debug_file(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "pri unset debug file";
-		e->usage = "Usage: pri unset debug file\n"
-			   "       Stop sending debug output to the previously \n"
-		           "       specified file\n";
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;	
-	}
-	/* Assume it is unset */
-	ast_mutex_lock(&pridebugfdlock);
-	close(pridebugfd);
-	pridebugfd = -1;
-	ast_cli(a->fd, "PRI debug output to file disabled\n");
-	ast_mutex_unlock(&pridebugfdlock);
-	return CLI_SUCCESS;
-}
-
 static char *handle_pri_set_debug_file(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int myfd;
@@ -11666,58 +11651,29 @@ static char *handle_pri_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 {
 	int span;
 	int x;
+	int level = 0;
 	switch (cmd) {
 	case CLI_INIT:	
-		e->command = "pri debug span";
+		e->command = "pri set debug [on|off] span";
 		e->usage = 
-			"Usage: pri debug span <span>\n"
+			"Usage: pri set debug <level|on|off> span <span>\n"
 			"       Enables debugging on a given PRI span\n";
 		return NULL;
 	case CLI_GENERATE:	
 		return complete_span_4(a->line, a->word, a->pos, a->n);
 	}
-	if (a->argc < 4) {
+	if (a->argc < 6) {
 		return CLI_SHOWUSAGE;
 	}
-	span = atoi(a->argv[3]);
-	if ((span < 1) || (span > NUM_SPANS)) {
-		ast_cli(a->fd, "Invalid span %s.  Should be a number %d to %d\n", a->argv[3], 1, NUM_SPANS);
-		return CLI_SUCCESS;
-	}
-	if (!pris[span-1].pri) {
-		ast_cli(a->fd, "No PRI running on span %d\n", span);
-		return CLI_SUCCESS;
-	}
-	for (x = 0; x < NUM_DCHANS; x++) {
-		if (pris[span-1].dchans[x])
-			pri_set_debug(pris[span-1].dchans[x], PRI_DEBUG_APDU |
-			                                      PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q931_STATE |
-			                                      PRI_DEBUG_Q921_STATE);
-	}
-	ast_cli(a->fd, "Enabled debugging on span %d\n", span);
-	return CLI_SUCCESS;
-}
 
-
-
-static char *handle_pri_no_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	int span;
-	int x;
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "pri no debug span";
-		e->usage = 
-			"Usage: pri no debug span <span>\n"
-			"       Disables debugging on a given PRI span\n";
-		return NULL;
-	case CLI_GENERATE:
-		return complete_span_5(a->line, a->word, a->pos, a->n);
+	if (!strcasecmp(a->argv[4], "on")) {
+		level = 1;
+	} else if (!strcasecmp(a->argv[4], "off")) {
+		level = 0;
+	} else {
+		level = atoi(a->argv[4]);
 	}
-	if (a->argc < 5)
-		return CLI_SHOWUSAGE;
-
-	span = atoi(a->argv[4]);
+	span = atoi(a->argv[5]);
 	if ((span < 1) || (span > NUM_SPANS)) {
 		ast_cli(a->fd, "Invalid span %s.  Should be a number %d to %d\n", a->argv[4], 1, NUM_SPANS);
 		return CLI_SUCCESS;
@@ -11727,46 +11683,28 @@ static char *handle_pri_no_debug(struct ast_cli_entry *e, int cmd, struct ast_cl
 		return CLI_SUCCESS;
 	}
 	for (x = 0; x < NUM_DCHANS; x++) {
-		if (pris[span-1].dchans[x])
-			pri_set_debug(pris[span-1].dchans[x], 0);
+		if (pris[span-1].dchans[x]) {
+			if (level == 1) {
+				pri_set_debug(pris[span-1].dchans[x], PRI_DEBUG_APDU |
+				                                      PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q931_STATE |
+				                                      PRI_DEBUG_Q921_STATE);
+				ast_cli(a->fd, "Enabled debugging on span %d\n", span);
+			} else if (level == 0) {
+				pri_set_debug(pris[span-1].dchans[x], 0);
+				//close the file if it's set
+				ast_mutex_lock(&pridebugfdlock);
+				close(pridebugfd);
+				pridebugfd = -1;
+				ast_cli(a->fd, "PRI debug output to file disabled\n");
+				ast_mutex_unlock(&pridebugfdlock);
+			} else {
+				pri_set_debug(pris[span-1].dchans[x], PRI_DEBUG_APDU |
+				                                      PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q931_STATE |
+				                                      PRI_DEBUG_Q921_RAW | PRI_DEBUG_Q921_DUMP | PRI_DEBUG_Q921_STATE);
+				ast_cli(a->fd, "Enabled debugging on span %d\n", span);
+			}
+		}
 	}
-	ast_cli(a->fd, "Disabled debugging on span %d\n", span);
-	return CLI_SUCCESS;
-}
-
-static char *handle_pri_really_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	int span;
-	int x;
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "pri intensive debug span";
-		e->usage = 
-			"Usage: pri intensive debug span <span>\n"
-			"       Enables debugging down to the Q.921 level\n";
-		return NULL;
-	case CLI_GENERATE:
-		return complete_span_5(a->line, a->word, a->pos, a->n);
-	}
-
-	if (a->argc < 5)
-		return CLI_SHOWUSAGE;
-	span = atoi(a->argv[4]);
-	if ((span < 1) || (span > NUM_SPANS)) {
-		ast_cli(a->fd, "Invalid span %s.  Should be a number %d to %d\n", a->argv[4], 1, NUM_SPANS);
-		return CLI_SUCCESS;
-	}
-	if (!pris[span-1].pri) {
-		ast_cli(a->fd, "No PRI running on span %d\n", span);
-		return CLI_SUCCESS;
-	}
-	for (x = 0; x < NUM_DCHANS; x++) {
-		if (pris[span-1].dchans[x])
-			pri_set_debug(pris[span-1].dchans[x], PRI_DEBUG_APDU |
-			                                      PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q931_STATE |
-			                                      PRI_DEBUG_Q921_RAW | PRI_DEBUG_Q921_DUMP | PRI_DEBUG_Q921_STATE);
-	}
-	ast_cli(a->fd, "Enabled EXTENSIVE debugging on span %d\n", span);
 	return CLI_SUCCESS;
 }
 
@@ -11884,6 +11822,7 @@ static char *handle_pri_show_debug(struct ast_cli_entry *e, int cmd, struct ast_
 	switch (cmd) {
 	case CLI_INIT:	
 		e->command = "pri show debug";
+		e->usage = "Show the debug state of pri spans\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;	
@@ -11917,6 +11856,7 @@ static char *handle_pri_version(struct ast_cli_entry *e, int cmd, struct ast_cli
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "pri show version";
+		e->usage = "Show libpri version information\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -11929,13 +11869,10 @@ static char *handle_pri_version(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 static struct ast_cli_entry dahdi_pri_cli[] = {
 	AST_CLI_DEFINE(handle_pri_debug, "Enables PRI debugging on a span"),
-	AST_CLI_DEFINE(handle_pri_no_debug, "Disables PRI debugging on a span"),
-	AST_CLI_DEFINE(handle_pri_really_debug, "Enables REALLY INTENSE PRI debugging"),
 	AST_CLI_DEFINE(handle_pri_show_spans, "Displays PRI Information"),
 	AST_CLI_DEFINE(handle_pri_show_span, "Displays PRI Information"),
 	AST_CLI_DEFINE(handle_pri_show_debug, "Displays current PRI debug settings"),
 	AST_CLI_DEFINE(handle_pri_set_debug_file, "Sends PRI debug output to the specified file"),
-	AST_CLI_DEFINE(handle_pri_unset_debug_file, "Ends PRI debug output to file"),
 	AST_CLI_DEFINE(handle_pri_version, "Displays libpri version"),
 };
 
@@ -13145,65 +13082,40 @@ static int linkset_addsigchan(int sigchan)
 	return 0;
 }
 
-static char *handle_ss7_no_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	int span;
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "ss7 no debug linkset";
-		e->usage = 
-			"Usage: ss7 no debug linkset <span>\n"
-			"       Disables debugging on a given SS7 linkset\n";
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;
-	}
-	if (a->argc < 5)
-		return CLI_SHOWUSAGE;
-	span = atoi(a->argv[4]);
-	if ((span < 1) || (span > NUM_SPANS)) {
-		ast_cli(a->fd, "Invalid linkset %s.  Should be a number from %d to %d\n", a->argv[4], 1, NUM_SPANS);
-		return CLI_SUCCESS;
-	}
-	if (!linksets[span-1].ss7) {
-		ast_cli(a->fd, "No SS7 running on linkset %d\n", span);
-		return CLI_SUCCESS;
-	}
-	if (linksets[span-1].ss7)
-		ss7_set_debug(linksets[span-1].ss7, 0);
-
-	ast_cli(a->fd, "Disabled debugging on linkset %d\n", span);
-	return CLI_SUCCESS;
-}
-
 static char *handle_ss7_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int span;
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "ss7 debug linkset";
+		e->command = "ss7 set debug {on|off} linkset";
 		e->usage = 
-			"Usage: ss7 debug linkset <linkset>\n"
+			"Usage: ss7 set debug {on|off} linkset <linkset>\n"
 			"       Enables debugging on a given SS7 linkset\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
 	}
-	if (a->argc < 4)
+	if (a->argc < 6)
 		return CLI_SHOWUSAGE;
-	span = atoi(a->argv[3]);
+	span = atoi(a->argv[5]);
 	if ((span < 1) || (span > NUM_SPANS)) {
-		ast_cli(a->fd, "Invalid linkset %s.  Should be a number from %d to %d\n", a->argv[3], 1, NUM_SPANS);
+		ast_cli(a->fd, "Invalid linkset %s.  Should be a number from %d to %d\n", a->argv[5], 1, NUM_SPANS);
 		return CLI_SUCCESS;
 	}
 	if (!linksets[span-1].ss7) {
 		ast_cli(a->fd, "No SS7 running on linkset %d\n", span);
 		return CLI_SUCCESS;
 	}
-	if (linksets[span-1].ss7)
-		ss7_set_debug(linksets[span-1].ss7, SS7_DEBUG_MTP2 | SS7_DEBUG_MTP3 | SS7_DEBUG_ISUP);
+	if (linksets[span-1].ss7) {
+		if (strcasecmp(a->argv[4], "on")) {
+			ss7_set_debug(linksets[span-1].ss7, SS7_DEBUG_MTP2 | SS7_DEBUG_MTP3 | SS7_DEBUG_ISUP);
+			ast_cli(a->fd, "Enabled debugging on linkset %d\n", span);
+		} else {
+			ss7_set_debug(linksets[span-1].ss7, 0);
+			ast_cli(a->fd, "Disabled debugging on linkset %d\n", span);
+		}
+	}
 
-	ast_cli(a->fd, "Enabled debugging on linkset %d\n", span);
 	return CLI_SUCCESS;
 }
 
@@ -13451,6 +13363,7 @@ static char *handle_ss7_version(struct ast_cli_entry *e, int cmd, struct ast_cli
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "ss7 show version";
+		e->usage = "Show the libss7 version\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -13463,7 +13376,6 @@ static char *handle_ss7_version(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 static struct ast_cli_entry dahdi_ss7_cli[] = {
 	AST_CLI_DEFINE(handle_ss7_debug, "Enables SS7 debugging on a linkset"), 
-	AST_CLI_DEFINE(handle_ss7_no_debug, "Disables SS7 debugging on a linkset"), 
 	AST_CLI_DEFINE(handle_ss7_block_cic, "Blocks the given CIC"),
 	AST_CLI_DEFINE(handle_ss7_unblock_cic, "Unblocks the given CIC"),
 	AST_CLI_DEFINE(handle_ss7_block_linkset, "Blocks all CICs on a linkset"),
@@ -13743,8 +13655,9 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
  					return -1;
 		} else if (!strcasecmp(v->name, "buffers")) {
 			int res;
-			char policy[8] = "";
-			res = sscanf(v->value, "%d,%s", &confp->chan.buf_no, policy);
+			char policy[21] = "";
+
+			res = sscanf(v->value, "%d,%20s", &confp->chan.buf_no, policy);
 			if (res != 2) {
 				ast_log(LOG_WARNING, "Parsing buffers option data failed, using defaults.\n");
 				confp->chan.buf_no = numbufs;
@@ -14522,14 +14435,13 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 	/*< \todo why check for the pseudo in the per-channel section.
 	 * Any actual use for manual setup of the pseudo channel? */
 	if (!found_pseudo && reload == 0) {
-		/* Make sure pseudo isn't a member of any groups if
-		   we're automatically making it. */	
-		
-		confp->chan.group = 0;
-		confp->chan.callgroup = 0;
-		confp->chan.pickupgroup = 0;
+		/* use the default configuration for a channel, so
+		   that any settings from real configured channels
+		   don't "leak" into the pseudo channel config
+		*/
+		struct dahdi_chan_conf conf = dahdi_chan_conf_default();
 
-		tmp = mkintf(CHAN_PSEUDO, confp, NULL, reload);
+		tmp = mkintf(CHAN_PSEUDO, &conf, NULL, reload);
 
 		if (tmp) {
 			ast_verb(3, "Automatically generated pseudo channel\n");
@@ -14567,13 +14479,28 @@ static int setup_dahdi(int reload)
 		return 0;
 	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
 		ucfg = ast_config_load("users.conf", config_flags);
-		if (ucfg == CONFIG_STATUS_FILEUNCHANGED)
+		if (ucfg == CONFIG_STATUS_FILEUNCHANGED) {
 			return 0;
+		} else if (ucfg == CONFIG_STATUS_FILEINVALID) {
+			ast_log(LOG_ERROR, "File users.conf cannot be parsed.  Aborting.\n");
+			return 0;
+		}
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		cfg = ast_config_load(config, config_flags);
+		if ((cfg = ast_config_load(config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
+			ast_log(LOG_ERROR, "File %s cannot be parsed.  Aborting.\n", config);
+			ast_config_destroy(ucfg);
+			return 0;
+		}
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "File %s cannot be parsed.  Aborting.\n", config);
+		return 0;
 	} else {
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		ucfg = ast_config_load("users.conf", config_flags);
+		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEINVALID) {
+			ast_log(LOG_ERROR, "File users.conf cannot be parsed.  Aborting.\n");
+			ast_config_destroy(cfg);
+			return 0;
+		}
 	}
 
 	/* It's a little silly to lock it, but we mind as well just to be sure */

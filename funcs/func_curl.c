@@ -53,6 +53,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define CURLVERSION_ATLEAST(a,b,c) \
 	((LIBCURL_VERSION_MAJOR > (a)) || ((LIBCURL_VERSION_MAJOR == (a)) && (LIBCURL_VERSION_MINOR > (b))) || ((LIBCURL_VERSION_MAJOR == (a)) && (LIBCURL_VERSION_MINOR == (b)) && (LIBCURL_VERSION_PATCH >= (c))))
 
+#define CURLOPT_SPECIAL_HASHCOMPAT -500
+
 static void curlds_free(void *data);
 
 static struct ast_datastore_info curl_info = {
@@ -71,12 +73,12 @@ AST_LIST_HEAD_STATIC(global_curl_info, curl_settings);
 static void curlds_free(void *data)
 {
 	AST_LIST_HEAD(global_curl_info, curl_settings) *list = data;
-	struct curl_settings *cur;
+	struct curl_settings *setting;
 	if (!list) {
 		return;
 	}
-	while ((cur = AST_LIST_REMOVE_HEAD(list, list))) {
-		free(cur);
+	while ((setting = AST_LIST_REMOVE_HEAD(list, list))) {
+		free(setting);
 	}
 	AST_LIST_HEAD_DESTROY(list);
 }
@@ -145,6 +147,9 @@ static int parse_curlopt_key(const char *name, CURLoption *key, enum optiontype 
 #endif
 	} else if (!strcasecmp(name, "ftptext")) {
 		*key = CURLOPT_TRANSFERTEXT;
+		*ot = OT_BOOLEAN;
+	} else if (!strcasecmp(name, "hashcompat")) {
+		*key = CURLOPT_SPECIAL_HASHCOMPAT;
 		*ot = OT_BOOLEAN;
 	} else {
 		return -1;
@@ -351,7 +356,7 @@ static size_t WriteMemoryCallback(void *ptr, size_t size, size_t nmemb, void *da
 
 	ast_debug(3, "Called with data=%p, str=%p, realsize=%d, len=%zu, used=%zu\n", data, *pstr, realsize, (*pstr)->len, (*pstr)->used);
 
-	if (ast_str_make_space(pstr, (((*pstr)->used + realsize + 1) / 512 + 1) * 512 + 470) == 0) {
+	if (ast_str_make_space(pstr, (((*pstr)->used + realsize + 1) / 512 + 1) * 512 + 230) == 0) {
 		memcpy(&((*pstr)->str[(*pstr)->used]), ptr, realsize);
 		(*pstr)->used += realsize;
 	}
@@ -392,6 +397,7 @@ AST_THREADSTORAGE_CUSTOM(curl_instance, curl_instance_init, curl_instance_cleanu
 static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, char *buf, size_t len)
 {
 	struct ast_str *str = ast_str_create(16);
+	int ret = -1;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(url);
 		AST_APP_ARG(postdata);
@@ -399,6 +405,7 @@ static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, 
 	CURL **curl;
 	struct curl_settings *cur;
 	struct ast_datastore *store = NULL;
+	int hashcompat = 0;
 	AST_LIST_HEAD(global_curl_info, curl_settings) *list = NULL;
 
 	*buf = '\0';
@@ -422,14 +429,22 @@ static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, 
 
 	AST_LIST_LOCK(&global_curl_info);
 	AST_LIST_TRAVERSE(&global_curl_info, cur, list) {
-		curl_easy_setopt(*curl, cur->key, cur->value);
+		if (cur->key == CURLOPT_SPECIAL_HASHCOMPAT) {
+			hashcompat = (cur->value != NULL) ? 1 : 0;
+		} else {
+			curl_easy_setopt(*curl, cur->key, cur->value);
+		}
 	}
 
 	if (chan && (store = ast_channel_datastore_find(chan, &curl_info, NULL))) {
 		list = store->data;
 		AST_LIST_LOCK(list);
 		AST_LIST_TRAVERSE(list, cur, list) {
-			curl_easy_setopt(*curl, cur->key, cur->value);
+			if (cur->key == CURLOPT_SPECIAL_HASHCOMPAT) {
+				hashcompat = (cur->value != NULL) ? 1 : 0;
+			} else {
+				curl_easy_setopt(*curl, cur->key, cur->value);
+			}
 		}
 	}
 
@@ -458,14 +473,36 @@ static int acf_curl_exec(struct ast_channel *chan, const char *cmd, char *info, 
 			str->str[str->used - 1] = '\0';
 		}
 
-		ast_copy_string(buf, str->str, len);
+		ast_log(LOG_NOTICE, "str='%s'\n", str->str);
+		if (hashcompat) {
+			char *remainder = str->str;
+			char *piece;
+			struct ast_str *fields = ast_str_create(str->used / 2);
+			struct ast_str *values = ast_str_create(str->used / 2);
+			int rowcount = 0;
+			while ((piece = strsep(&remainder, "&"))) {
+				char *name = strsep(&piece, "=");
+				ast_uri_decode(piece);
+				ast_uri_decode(name);
+				ast_str_append(&fields, 0, "%s%s", rowcount ? "," : "", name);
+				ast_str_append(&values, 0, "%s%s", rowcount ? "," : "", piece);
+				rowcount++;
+			}
+			pbx_builtin_setvar_helper(chan, "~ODBCFIELDS~", fields->str);
+			ast_copy_string(buf, values->str, len);
+			ast_free(fields);
+			ast_free(values);
+		} else {
+			ast_copy_string(buf, str->str, len);
+		}
+		ret = 0;
 	}
 	ast_free(str);
 
 	if (chan)
 		ast_autoservice_stop(chan);
 	
-	return 0;
+	return ret;
 }
 
 struct ast_custom_function acf_curl = {
@@ -498,6 +535,7 @@ struct ast_custom_function acf_curlopt = {
 "  referer      - Referer URL to use for the request\n"
 "  useragent    - UserAgent string to use\n"
 "  userpwd      - A <user>:<pass> to use for authentication\n"
+"  hashcompat   - Result data will be compatible for use with HASH()\n"
 "",
 	.read = acf_curlopt_read,
 	.write = acf_curlopt_write,

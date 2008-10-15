@@ -577,6 +577,15 @@ static int update_pgsql(const char *database, const char *tablename, const char 
 	return -1;
 }
 
+#define ESCAPE_STRING(buffer, stringname) \
+	do { \
+		int len; \
+		if ((len = strlen(stringname)) > (buffer->len - 1) / 2) { \
+			ast_str_make_space(&buffer, len * 2 + 1); \
+		} \
+		PQescapeStringConn(pgsqlConn, buffer->str, stringname, len, &pgresult); \
+	} while (0)
+
 static int store_pgsql(const char *database, const char *table, va_list ap)
 {
 	PGresult *result = NULL;
@@ -630,7 +639,7 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
 		if (pgsqlConn) {
 			PQfinish(pgsqlConn);
 			pgsqlConn = NULL;
-		};
+		}
 		return -1;
 	}
 	
@@ -694,8 +703,8 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 	PGresult *result = NULL;
 	int numrows = 0;
 	int pgresult;
-	char sql[256];
-	char buf[256], buf2[256];
+	struct ast_str *sql = ast_str_create(256);
+	struct ast_str *buf1 = ast_str_create(60), *buf2 = ast_str_create(60);
 	const char *newparam, *newval;
  
 	if (!table) {
@@ -728,26 +737,29 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 	/* Create the first part of the query using the first parameter/value pairs we just extracted
 	   If there is only 1 set, then we have our query. Otherwise, loop thru the list and concat */
 
-	PQescapeStringConn(pgsqlConn, buf, keyfield, sizeof(keyfield), &pgresult);
-	PQescapeStringConn(pgsqlConn, buf2, lookup, sizeof(lookup), &pgresult);
-	snprintf(sql, sizeof(sql), "DELETE FROM %s WHERE %s = '%s'", table, buf, buf2);
+	ESCAPE_STRING(buf1, keyfield);
+	ESCAPE_STRING(buf2, lookup);
+	ast_str_set(&sql, 0, "DELETE FROM %s WHERE %s = '%s'", table, buf1->str, buf2->str);
 	while ((newparam = va_arg(ap, const char *))) {
 		newval = va_arg(ap, const char *);
-		PQescapeStringConn(pgsqlConn, buf, newparam, sizeof(newparam), &pgresult);
-		PQescapeStringConn(pgsqlConn, buf2, newval, sizeof(newval), &pgresult);
-		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " AND %s = '%s'", buf, buf2);
+		ESCAPE_STRING(buf1, newparam);
+		ESCAPE_STRING(buf2, newval);
+		ast_str_append(&sql, 0, " AND %s = '%s'", buf1->str, buf2->str);
 	}
 	va_end(ap);
 
-	ast_debug(1, "PostgreSQL RealTime: Delete SQL: %s\n", sql);
+	ast_debug(1, "PostgreSQL RealTime: Delete SQL: %s\n", sql->str);
 
-	if (!(result = PQexec(pgsqlConn, sql))) {
+	if (!(result = PQexec(pgsqlConn, sql->str))) {
 //	if (!(result = PQexecParams(pgsqlConn, sql, nparams,NULL, sparams, NULL, NULL,0))) {
 		ast_log(LOG_WARNING,
 				"PostgreSQL RealTime: Failed to query database. Check debug for more info.\n");
-		ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql);
+		ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql->str);
 		ast_debug(1, "PostgreSQL RealTime: Query Failed because: %s\n", PQerrorMessage(pgsqlConn));
 		ast_mutex_unlock(&pgsql_lock);
+		ast_free(buf1);
+		ast_free(buf2);
+		ast_free(sql);
 		return -1;
 	} else {
 		ExecStatusType result_status = PQresultStatus(result);
@@ -756,16 +768,22 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 			&& result_status != PGRES_NONFATAL_ERROR) {
 			ast_log(LOG_WARNING,
 					"PostgreSQL RealTime: Failed to query database. Check debug for more info.\n");
-			ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql);
+			ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql->str);
 			ast_debug(1, "PostgreSQL RealTime: Query Failed because: %s (%s)\n",
 						PQresultErrorMessage(result), PQresStatus(result_status));
 			ast_mutex_unlock(&pgsql_lock);
+			ast_free(buf1);
+			ast_free(buf2);
+			ast_free(sql);
 			return -1;
 		}
 	}
 
 	numrows = atoi(PQcmdTuples(result));
 	ast_mutex_unlock(&pgsql_lock);
+	ast_free(buf1);
+	ast_free(buf2);
+	ast_free(sql);
  
 	ast_debug(1, "PostgreSQL RealTime: Deleted %d rows on table: %s\n", numrows, table);
  
@@ -1086,10 +1104,12 @@ static int parse_config(int is_reload)
 	const char *s;
 	struct ast_flags config_flags = { is_reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if ((config = ast_config_load(RES_CONFIG_PGSQL_CONF, config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+	config = ast_config_load(RES_CONFIG_PGSQL_CONF, config_flags);
+	if (config == CONFIG_STATUS_FILEUNCHANGED) {
 		return 0;
+	}
 
-	if (!config) {
+	if (config == CONFIG_STATUS_FILEMISSING || config == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "Unable to load config %s\n", RES_CONFIG_PGSQL_CONF);
 		return 0;
 	}
@@ -1259,13 +1279,13 @@ static char *handle_cli_realtime_pgsql_cache(struct ast_cli_entry *e, int cmd, s
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "realtime pgsql cache";
+		e->command = "realtime show pgsql cache";
 		e->usage =
-			"Usage: realtime pgsql cache [<table>]\n"
+			"Usage: realtime show pgsql cache [<table>]\n"
 			"       Shows table cache for the PostgreSQL RealTime driver\n";
 		return NULL;
 	case CLI_GENERATE:
-		if (a->argc != 3) {
+		if (a->argc != 4) {
 			return NULL;
 		}
 		l = strlen(a->word);
@@ -1281,25 +1301,25 @@ static char *handle_cli_realtime_pgsql_cache(struct ast_cli_entry *e, int cmd, s
 		return ret;
 	}
 
-	if (a->argc == 3) {
+	if (a->argc == 4) {
 		/* List of tables */
 		AST_LIST_LOCK(&psql_tables);
 		AST_LIST_TRAVERSE(&psql_tables, cur, list) {
 			ast_cli(a->fd, "%s\n", cur->name);
 		}
 		AST_LIST_UNLOCK(&psql_tables);
-	} else if (a->argc == 4) {
+	} else if (a->argc == 5) {
 		/* List of columns */
-		if ((cur = find_table(a->argv[3]))) {
+		if ((cur = find_table(a->argv[4]))) {
 			struct columns *col;
-			ast_cli(a->fd, "Columns for Table Cache '%s':\n", a->argv[3]);
+			ast_cli(a->fd, "Columns for Table Cache '%s':\n", a->argv[4]);
 			ast_cli(a->fd, "%-20.20s %-20.20s %-3.3s %-8.8s\n", "Name", "Type", "Len", "Nullable");
 			AST_LIST_TRAVERSE(&cur->columns, col, list) {
 				ast_cli(a->fd, "%-20.20s %-20.20s %3d %-8.8s\n", col->name, col->type, col->len, col->notnull ? "NOT NULL" : "");
 			}
 			ast_mutex_unlock(&cur->lock);
 		} else {
-			ast_cli(a->fd, "No such table '%s'\n", a->argv[3]);
+			ast_cli(a->fd, "No such table '%s'\n", a->argv[4]);
 		}
 	}
 	return 0;
@@ -1312,16 +1332,16 @@ static char *handle_cli_realtime_pgsql_status(struct ast_cli_entry *e, int cmd, 
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "realtime pgsql status";
+		e->command = "realtime show pgsql status";
 		e->usage =
-			"Usage: realtime pgsql status\n"
+			"Usage: realtime show pgsql status\n"
 			"       Shows connection information for the PostgreSQL RealTime driver\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
 	}
 
-	if (a->argc != 3)
+	if (a->argc != 4)
 		return CLI_SHOWUSAGE;
 
 	if (pgsqlConn && PQstatus(pgsqlConn) == CONNECTION_OK) {

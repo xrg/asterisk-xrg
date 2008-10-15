@@ -1851,7 +1851,7 @@ static int transmit_response(struct skinny_device *d, struct skinny_req *req)
 	memcpy(s->outbuf+skinny_header_size, &req->data, letohl(req->len));
 
 	res = write(s->fd, s->outbuf, letohl(req->len)+8);
-
+	
 	if (res != letohl(req->len)+8) {
 		ast_log(LOG_WARNING, "Transmit: write only sent %d out of %d bytes: %s\n", res, letohl(req->len)+8, strerror(errno));
 		if (res == -1) {
@@ -1862,6 +1862,7 @@ static int transmit_response(struct skinny_device *d, struct skinny_req *req)
 		
 	}
 	
+	ast_free(req);
 	ast_mutex_unlock(&s->lock);
 	return 1;
 }
@@ -1963,9 +1964,11 @@ static void transmit_tone(struct skinny_device *d, int tone, int instance, int r
 		req->data.stoptone.reference = htolel(reference);
 	}
 
-	if (tone > 0) {
-		req->data.starttone.tone = htolel(tone);
-	}
+	//Bad, tone is already set so this is redundant and a change to the if above
+	//may lead to issues where we try to set a tone to a stop_tone_message
+	//if (tone > 0) {
+	//	req->data.starttone.tone = htolel(tone);
+	//}
 	transmit_response(d, req);
 }
 
@@ -2029,8 +2032,10 @@ static void transmit_displaymessage(struct skinny_device *d, const char *text, i
 		if (!(req = req_alloc(0, CLEAR_DISPLAY_MESSAGE)))
 			return;
 
-		req->data.clearpromptstatus.lineInstance = instance;
-		req->data.clearpromptstatus.callReference = reference;
+		//what do we want hear CLEAR_DISPLAY_MESSAGE or CLEAR_PROMPT_STATUS???
+		//if we are clearing the display, it appears there is no instance and refernece info (size 0)
+		//req->data.clearpromptstatus.lineInstance = instance;
+		//req->data.clearpromptstatus.callReference = reference;
 
 		if (skinnydebug)
 			ast_verb(1, "Clearing Display\n");
@@ -3549,6 +3554,8 @@ static int skinny_hangup(struct ast_channel *ast)
 		sub->rtp = NULL;
 	}
 	ast_mutex_unlock(&sub->lock);
+	ast_free(sub);
+	ast_module_unref(ast_module_info->self);
 	return 0;
 }
 
@@ -6059,7 +6066,6 @@ static void *accept_thread(void *ignore)
 	struct skinnysession *s;
 	struct protoent *p;
 	int arg = 1;
-	pthread_t tcp_thread;
 
 	for (;;) {
 		sinlen = sizeof(sin);
@@ -6084,7 +6090,7 @@ static void *accept_thread(void *ignore)
 		AST_LIST_INSERT_HEAD(&sessions, s, list);
 		AST_LIST_UNLOCK(&sessions);
 
-		if (ast_pthread_create_detached(&tcp_thread, NULL, skinny_session, s)) {
+		if (ast_pthread_create_detached(&s->t, NULL, skinny_session, s)) {
 			destroy_session(s);
 		}
 	}
@@ -6210,7 +6216,10 @@ static int reload_config(void)
 		ast_log(LOG_WARNING, "Unable to get hostname, Skinny disabled\n");
 		return 0;
 	}
-	cfg = ast_config_load(config, config_flags);
+	if ((cfg = ast_config_load(config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config);
+		return 0;
+	}
 
 	/* We *must* have a config file otherwise stop immediately */
 	if (!cfg) {
@@ -6456,6 +6465,10 @@ static int unload_module(void)
 	struct skinny_subchannel *sub;
 	struct ast_context *con;
 
+	ast_rtp_proto_unregister(&skinny_rtp);
+	ast_channel_unregister(&skinny_tech);
+	ast_cli_unregister_multiple(cli_skinny, sizeof(cli_skinny) / sizeof(struct ast_cli_entry));
+	
 	AST_LIST_LOCK(&sessions);
 	/* Destroy all the interfaces and free their memory */
 	while((s = AST_LIST_REMOVE_HEAD(&sessions, list))) {
@@ -6473,9 +6486,13 @@ static int unload_module(void)
 			if (l->mwi_event_sub)
 				ast_event_unsubscribe(l->mwi_event_sub);
 			ast_mutex_unlock(&l->lock);
+			unregister_exten(l);
 		}
 		if (s->fd > -1)
 			close(s->fd);
+		pthread_cancel(s->t);
+		pthread_kill(s->t, SIGURG);
+		pthread_join(s->t, NULL);
 		free(s);
 	}
 	AST_LIST_UNLOCK(&sessions);
@@ -6499,10 +6516,6 @@ static int unload_module(void)
 	}
 	accept_t = AST_PTHREADT_STOP;
 	ast_mutex_unlock(&netlock);
-
-	ast_rtp_proto_unregister(&skinny_rtp);
-	ast_channel_unregister(&skinny_tech);
-	ast_cli_unregister_multiple(cli_skinny, sizeof(cli_skinny) / sizeof(struct ast_cli_entry));
 
 	close(skinnysock);
 	if (sched)

@@ -28,6 +28,7 @@
 
 #include "asterisk.h"
 
+#include <ctype.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <net/if.h>
@@ -287,15 +288,22 @@ static struct http_route *unref_route(struct http_route *route)
 static int routes_hash_fn(const void *obj, const int flags)
 {
 	const struct http_route *route = obj;
-	
-	return ast_str_hash(route->uri);
+	char *tmp,  *uri;
+   
+	uri = tmp = ast_strdupa(route->uri);
+
+	while (*tmp++) {
+		*tmp = tolower(*tmp);
+	}
+
+	return ast_str_hash(uri);
 }
 
 static int routes_cmp_fn(void *obj, void *arg, int flags)
 {
 	const struct http_route *route1 = obj, *route2 = arg;
 
-	return !strcmp(route1->uri, route2->uri) ? CMP_MATCH | CMP_STOP : 0;
+	return !strcasecmp(route1->uri, route2->uri) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static void route_destructor(void *obj)
@@ -526,7 +534,7 @@ out404:
 	*status = 404;
 	*title = strdup("Not Found");
 	*contentlength = 0;
-	return ast_http_error(404, "Not Found", NULL, "Nothing to see here.  Move along.");
+	return ast_http_error(404, "Not Found", NULL, "The requested URL was not found on this server.");
 
 out500:
 	route = unref_route(route);
@@ -776,8 +784,15 @@ static struct user *find_user(const char *macaddress)
 static int users_hash_fn(const void *obj, const int flags)
 {
 	const struct user *user = obj;
+	char *tmp, *mac;
+
+	mac = tmp = ast_strdupa(user->macaddress);
+
+	while (*tmp++) {
+		*tmp = tolower(*tmp);
+	}
 	
-	return ast_str_hash(user->macaddress);
+	return ast_str_hash(mac);
 }
 
 static int users_cmp_fn(void *obj, void *arg, int flags)
@@ -821,7 +836,6 @@ static void delete_users(void)
 static struct user *build_user(const char *mac, struct phone_profile *profile)
 {
 	struct user *user;
-
 		
 	if (!(user = ao2_alloc(sizeof(*user), user_destructor))) {
 		profile = unref_profile(profile);
@@ -903,12 +917,12 @@ static int set_config(void)
 
 	/* Try to grab the port from sip.conf.  If we don't get it here, we'll set it
 	 * to whatever is set in phoneprov.conf or default to 5060 */
-	if ((cfg = ast_config_load("sip.conf", config_flags))) {
+	if ((cfg = ast_config_load("sip.conf", config_flags)) && cfg != CONFIG_STATUS_FILEINVALID) {
 		ast_copy_string(global_serverport, S_OR(ast_variable_retrieve(cfg, "general", "bindport"), "5060"), sizeof(global_serverport));
 		ast_config_destroy(cfg);
 	}
 
-	if (!(cfg = ast_config_load("users.conf", config_flags))) {
+	if (!(cfg = ast_config_load("users.conf", config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "Unable to load users.cfg\n");
 		return 0;
 	}
@@ -930,7 +944,7 @@ static int set_config(void)
 		}
 	}
 
-	if (!(phoneprov_cfg = ast_config_load("phoneprov.conf", config_flags))) {
+	if (!(phoneprov_cfg = ast_config_load("phoneprov.conf", config_flags)) || phoneprov_cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Unable to load config phoneprov.conf\n");
 		return -1;
 	}

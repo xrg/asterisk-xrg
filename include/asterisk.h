@@ -18,18 +18,13 @@
 #ifndef _ASTERISK_H
 #define _ASTERISK_H
 
-/* The include of 'autoconfig.h' is not necessary for any modules that
-   are part of the Asterisk source tree, because the top-level Makefile
-   will forcibly include that header in all compilations before all
-   other headers (even system headers). However, leaving this here will
-   help out-of-tree module builders, and doesn't cause any harm for the
-   in-tree modules.
-*/
 #include "asterisk/autoconfig.h"
 
-#include "asterisk/compat.h"
+#if !defined(NO_MALLOC_DEBUG) && !defined(STANDALONE) && defined(MALLOC_DEBUG)
+#include "asterisk/astmm.h"
+#endif
 
-#include "asterisk/logger.h"
+#include "asterisk/compat.h"
 
 /* Default to allowing the umask or filesystem ACLs to determine actual file
  * creation permissions
@@ -180,5 +175,8 @@ struct ast_frame;
 struct ast_module;
 struct ast_variable;
 struct ast_str;
+
+#define bzero  0x__dont_use_bzero__use_memset_instead""
+#define bcopy  0x__dont_use_bcopy__use_memmove_instead()
 
 #endif /* _ASTERISK_H */

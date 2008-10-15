@@ -145,6 +145,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; and subscriptions (seconds)
 ;minexpiry=60                   ; Minimum length of registrations/subscriptions (default 60)
 ;defaultexpiry=120              ; Default length of incoming/outgoing registration
+;mwiexpiry=3600                 ; Expiry time for outgoing MWI subscriptions
 ;qualifyfreq=60                 ; Qualification: How often to check for the 
                                 ; host to be up in seconds
                                 ; Set to low value if you use low timeout for
@@ -248,6 +249,16 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;matchexterniplocally = yes     ; Only substitute the externip or externhost setting if it matches
                                 ; your localnet setting. Unless you have some sort of strange network
                                 ; setup you will not need to enable this.
+
+;dynamic_exclude_static = yes   ; Disallow all dynamic hosts from registering
+                                ; as any IP address used for staticly defined
+                                ; hosts.  This helps avoid the configuration
+                                ; error of allowing your users to register at
+                                ; the same address as a SIP provider.
+
+;contactdeny=0.0.0.0/0.0.0.0           ; Use contactpermit and contactdeny to
+;contactpermit=172.16.0.0/255.255.0.0  ; restrict at what IPs your users may
+                                       ; register their phones.
 
 ;
 ; If regcontext is specified, Asterisk will dynamically create and destroy a
@@ -435,7 +446,17 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; 0 = continue forever, hammering the other server
                                 ; until it accepts the registration
                                 ; Default is 0 tries, continue forever
-
+;----------------------------------------- OUTBOUND MWI SUBSCRIPTIONS -------------------------
+; Asterisk can subscribe to receive the MWI from another SIP server and store it locally for retrieval
+; by other phones.
+; Format for the mwi register statement is:
+;       mwi => user[:secret[:authuser]]@host[:port][/mailbox]
+;
+; Examples:
+;mwi => 1234:password@mysipprovider.com/1234
+;
+; MWI received will be stored in the 1234 mailbox of the SIP_Remote context. It can be used by other phones by following the below:
+; mailbox=1234@SIP_Remote
 ;----------------------------------------- NAT SUPPORT ------------------------
 ;
 ; WARNING: SIP operation behind a NAT is tricky and you really need
@@ -746,6 +767,10 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;                             timerb
 ;                             qualifyfreq
 ;                             t38pt_usertpsource
+;                             contactpermit         ; Limit what a host may register as (a neat trick
+;                             contactdeny           ; is to register at the same IP as a SIP provider,
+;                                                   ; then call oneself, and get redirected to that
+;                                                   ; same location).
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)

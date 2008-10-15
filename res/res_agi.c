@@ -56,6 +56,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/ast_version.h"
 #include "asterisk/speech.h"
 #include "asterisk/manager.h"
+#include "asterisk/features.h"
 
 #define MAX_ARGS 128
 #define AGI_NANDFS_RETRY 3
@@ -86,7 +87,7 @@ static char *descrip =
 "AGISIGHUP channel variable to \"no\" before executing the AGI application.\n"
 "  Using 'EAGI' provides enhanced AGI, with incoming audio available out of band\n"
 "on file descriptor 3.\n\n"
-"  Use the CLI command 'agi show' to list available agi commands.\n"
+"  Use the CLI command 'agi show commnands' to list available agi commands.\n"
 "  This application sets the following channel variable upon completion:\n"
 "     AGISTATUS      The status of the attempt to the run the AGI script\n"
 "                    text string, one of SUCCESS | FAILURE | NOTFOUND | HANGUP\n";
@@ -1457,6 +1458,9 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 	ast_verb(3, "AGI Script Executing Application: (%s) Options: (%s)\n", argv[1], argv[2]);
 
 	if ((app_to_exec = pbx_findapp(argv[1]))) {
+		if(!strcasecmp(argv[1], PARK_APP_NAME)) {
+			ast_masq_park_call(chan, NULL, 0, NULL);
+		}
 		if (ast_compat_res_agi && !ast_strlen_zero(argv[2])) {
 			char *compat = alloca(strlen(argv[2]) * 2 + 1), *cptr, *vptr;
 			for (cptr = compat, vptr = argv[2]; *vptr; vptr++) {
@@ -2727,18 +2731,18 @@ static char *handle_cli_agi_show(struct ast_cli_entry *e, int cmd, struct ast_cl
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "agi show";
+		e->command = "agi show commands [topic]";
 		e->usage =
-			"Usage: agi show [topic]\n"
+			"Usage: agi show commands [topic]\n"
 			"       When called with a topic as an argument, displays usage\n"
 			"       information on the given command.  If called without a\n"
 			"       topic, it provides a list of AGI commands.\n";
 	case CLI_GENERATE:
 		return NULL;
 	}
-	if (a->argc < e->args)
+	if (a->argc < e->args - 1 || (a->argc >= e->args && strcasecmp(a->argv[e->args - 1], "topic")))
 		return CLI_SHOWUSAGE;
-	if (a->argc > e->args) {
+	if (a->argc > e->args - 1) {
 		command = find_command(a->argv + e->args, 1);
 		if (command) {
 			ast_cli(a->fd, "%s", command->usage);

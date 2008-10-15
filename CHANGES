@@ -2,17 +2,37 @@
 --- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------
 ------------------------------------------------------------------------------
 
+SIP Changes
+-----------
+ * Added support for SUBSCRIBE/NOTIFY with dialog-info based call pickups.
+   Snom phones use this for call pickup of extensions that the phone is
+   subscribed to.
+ * Added support for subscribing to a voice mailbox on a remote server and
+   making the new/old message count available to local devices.
+
 Dialplan Functions
 ------------------
  * Added a new dialplan function, CURLOPT, which permits setting various
    options that may be useful with the CURL dialplan function, such as
    cookies, proxies, connection timeouts, passwords, etc.
+ * Permit the syntax and synopsis fields of the corresponding dialplan
+   functions to be individually set from func_odbc.conf.
+
+Applications
+------------
+ * Scheduled meetme conferences may now have their end times extended by
+   using MeetMeAdmin.
 
 Miscellaneous
 -------------
  * res_jabber: autoprune has been disabled by default, to avoid misconfiguration 
    that would end up being interpreted as a bug once Asterisk started removing 
    the contacts from a user list.
+ * extensions.conf now allows you to use keyword "same" to define an extension
+   without actually specifying an extension.  It uses exactly the same pattern
+   as previously used on the last "exten" line.  For example:
+     exten => 123,1,NoOp(something)
+     same  =>     n,SomethingElse()
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.0 to Asterisk 1.6.1  -------------
@@ -104,6 +124,8 @@ Application Changes
  * ExternalIVR now takes several options that affect the way it performs, as
    well as having several new commands.  Please see doc/externalivr.txt for the
    complete documentation.
+ * Added ability to communicate over a TCP socket instead of forking a child process for the 
+   ExternalIVR application.
  * ChanIsAvail has a new option, 'a', which will return all available channels instead
    of just the first one if you give the function more then one channel to check.
  * PrivacyManager now takes an option where you can specify a context where the 
@@ -336,6 +358,8 @@ CLI Changes
     currently scheduled for each. Gives you a feel for how busy the sip channel
     driver is.
   * Added 'skinny show lines verbose' CLI command. This will show the subs for every channel.
+  * Cleanup another bunch of CLI commands. Now all modules follow the same schema.
+    (Done by lmadsen, junky and mvanbaak during the devcon 2008)
 
 SIP changes
 -----------
@@ -446,8 +470,8 @@ Agent channel changes
 ----------------------
   * The ackcall and endcall options are now supplemented with options acceptdtmf
     and enddtmf. These allow for the DTMF keypress to be configurable. The options
-	default to their old hard-coded values ('#' and '*' respectively) so this should
-	not break any existing agent installations.
+    default to their old hard-coded values ('#' and '*' respectively) so this should
+    not break any existing agent installations.
 
 DAHDI channel driver (chan_dahdi) Changes
 ----------------------------------------
@@ -590,6 +614,10 @@ Queue changes
     when a realtime queue member is removed. Since there is no calling channel associated
     with these events, the string "REALTIME" is placed where the channel's unique id
     is typically placed.
+  * The configuration method for the "joinempty" and "leavewhenempty" options has
+    changed to a comma-separated list of methods of determining member availability
+	instead of vague terms such as "yes," "loose," "no," and "strict." These old four
+	values are still accepted for backwards-compatibility, though.
 
 MeetMe Changes
 --------------
@@ -634,7 +662,7 @@ Other Dialplan Application Changes
      WaitForRing() now takes floating pt timeout arg.
      SpeechBackground() -- clarified in the docstrings that the timeout is an integer seconds.
   * Added 's' option to Page application.
-  * Added 'E' and 'V' commands to ExternalIVR.
+  * Added 'E', 'V', and 'P' commands to ExternalIVR.
   * Added 'o' and 'X' options to Chanspy.
   * Added a new dialplan application, Bridge, which allows you to bridge the
      calling channel to any other active channel on the system.
@@ -654,8 +682,6 @@ Other Dialplan Application Changes
      or NOCHANNEL if the given channel was not found.
   * The silencethreshold setting that was previously configurable in multiple
      applications is now settable globally via dsp.conf.
-  * Added ability to communicate over a TCP socket instead of forking a child process for the 
-    ExternalIVR application.
 
 Music On Hold Changes
 ---------------------
@@ -867,7 +893,7 @@ Miscellaneous
     allocation of additional extensions which will reach the specified user.
   * A new option for the configure script, --enable-internal-poll, has been added
     for use with systems which may have a buggy implementation of the poll system
-	call. If you notice odd behavior such as the CLI being unresponsive on remote
-	consoles, you may want to try using this option. This option is enabled by default
-	on Darwin systems since it is known that the Darwin poll() implementation has
-	odd issues.
+    call. If you notice odd behavior such as the CLI being unresponsive on remote
+    consoles, you may want to try using this option. This option is enabled by default
+    on Darwin systems since it is known that the Darwin poll() implementation has
+    odd issues.

@@ -25,7 +25,9 @@
  */
 
 /*** MODULEINFO
-	<depend>unixodbc</depend>
+	<depend>unixodbc_or_iodbc</depend>
+	<use>unixodbc</use>
+	<use>iodbc</use>
  ***/
 
 #include "asterisk.h"
@@ -371,9 +373,9 @@ static int odbc_log(struct ast_cdr *cdr)
 
 			/* Check if we have a similarly named variable */
 			if (datefield && tableptr->usegmtime) {
-				struct timeval tv = (datefield == 1) ? cdr->start : (datefield == 2) ? cdr->answer : cdr->end;
+				struct timeval date_tv = (datefield == 1) ? cdr->start : (datefield == 2) ? cdr->answer : cdr->end;
 				struct ast_tm tm = { 0, };
-				ast_localtime(&tv, &tm, "UTC");
+				ast_localtime(&date_tv, &tm, "UTC");
 				ast_strftime(colbuf, sizeof(colbuf), "%Y-%m-%d %H:%M:%S", &tm);
 			} else {
 				ast_cdr_getvar(cdr, entry->cdrname, &colptr, colbuf, sizeof(colbuf), 0, datefield ? 0 : 1);

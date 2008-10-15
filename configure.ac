@@ -32,7 +32,19 @@ case "${host_os}" in
      CPPFLAGS=-I/usr/local/include
      LDFLAGS=-L/usr/local/lib
      ;;
-
+     openbsd*)
+     ac_default_prefix=/usr/local
+     if test ${prefix} = '/usr/local' || test ${prefix} = 'NONE'; then
+        if test ${sysconfdir} = '${prefix}/etc'; then
+           sysconfdir=/etc
+        fi
+        if test ${mandir} = '${prefix}/man'; then
+           mandir=/usr/share/man
+        fi
+     fi
+     CPPFLAGS=-I/usr/local/include
+     LDFLAGS=-L/usr/local/lib
+     ;;
      *)
      ac_default_prefix=/usr
      if test ${prefix} = '/usr' || test ${prefix} = 'NONE'; then
@@ -181,8 +193,9 @@ ACX_PTHREAD
 
 AC_LANG(C)
 
-AC_ARG_ENABLE(dev-mode,
-	[  --enable-dev-mode    Turn on developer mode],
+AC_ARG_ENABLE([dev-mode],
+	[AS_HELP_STRING([--enable-dev-mode],
+		[Turn on developer mode])],
 	[case "${enableval}" in
 	      y|ye|yes) AST_DEVMODE=yes ;;
 	      n|no)  AST_DEVMODE=no ;;
@@ -219,6 +232,7 @@ AST_EXT_LIB_SETUP([HOARD], [Hoard Memory Allocator], [hoard])
 AST_EXT_LIB_SETUP([ICONV], [Iconv Library], [iconv])
 AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
 AST_EXT_LIB_SETUP([IMAP_TK], [UW IMAP Toolkit], [imap])
+AST_EXT_LIB_SETUP([IODBC], [iODBC], [iodbc])
 AST_EXT_LIB_SETUP([ISDNNET], [ISDN4Linux Library], [isdnnet])
 AST_EXT_LIB_SETUP([JACK], [Jack Audio Connection Kit], [jack])
 AST_EXT_LIB_SETUP([LDAP], [OpenLDAP], [ldap])
@@ -229,7 +243,6 @@ AST_EXT_LIB_SETUP([NBS], [Network Broadcast Sound], [nbs])
 AST_EXT_LIB_SETUP([NCURSES], [ncurses], [ncurses])
 AST_EXT_LIB_SETUP([NETSNMP], [Net-SNMP], [netsnmp])
 AST_EXT_LIB_SETUP([NEWT], [newt], [newt])
-AST_EXT_LIB_SETUP([UNIXODBC], [unixODBC], [odbc])
 AST_EXT_LIB_SETUP([OGG], [OGG], [ogg])
 AST_EXT_LIB_SETUP([OSPTK], [OSP Toolkit], [osptk])
 AST_EXT_LIB_SETUP([OSS], [Open Sound System], [oss])
@@ -256,6 +269,7 @@ AST_EXT_LIB_SETUP([FREETDS], [FreeTDS], [tds_mssql])
 AST_EXT_LIB_SETUP([TERMCAP], [Termcap], [termcap])
 AST_EXT_LIB_SETUP([TINFO], [Term Info], [tinfo])
 AST_EXT_LIB_SETUP([TONEZONE], [tonezone], [tonezone])
+AST_EXT_LIB_SETUP([UNIXODBC], [unixODBC], [unixodbc])
 AST_EXT_LIB_SETUP([USB], [usb], [usb])
 AST_EXT_LIB_SETUP([VORBIS], [Vorbis], [vorbis])
 AST_EXT_LIB_SETUP([VPB], [Voicetronix API], [vpb])
@@ -313,7 +327,7 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit bzero dup2 endpwent ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
+AC_CHECK_FUNCS([asprintf atexit dup2 endpwent ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
 
 AC_CHECK_FUNCS([glob])
 
@@ -331,8 +345,9 @@ AC_CHECK_HEADER([sys/poll.h],
    AC_DEFINE([HAVE_SYS_POLL_H], 1, [Define to 1 if your system has working sys/poll.h]),
    )
 
-AC_ARG_ENABLE(internal-poll,
-	[  --enable-internal-poll	Use Asterisk's poll implementation],
+AC_ARG_ENABLE([internal-poll],
+	[AS_HELP_STRING([--enable-internal-poll],
+		[Use Asterisk's poll implementation])],
 	[case "${enableval}" in
 		y|ye|yes) HAS_POLL="";;
 		n|no) HAS_POLL="${HAS_POLL}" ;;
@@ -1224,6 +1239,8 @@ if test "${USE_IMAP_TK}" != "no"; then
 	LIBS="${saved_libs}"
 fi
 
+AST_EXT_LIB_CHECK([IODBC], [iodbc], [SQLConnect], [sql.h], [-lpthread])
+
 AST_EXT_LIB_CHECK([JACK], [jack], [jack_activate], [jack/jack.h])
 
 # Needed by unixodbc
@@ -1254,6 +1271,12 @@ AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp], , [--agent-libs],
 AST_EXT_LIB_CHECK([NEWT], [newt], [newtBell], [newt.h])
 
 AST_EXT_LIB_CHECK([UNIXODBC], [odbc], [SQLConnect], [sql.h], [])
+
+PBX_ODBC=0
+if test "$PBX_IODBC" = "1" -o "$PBX_UNIXODBC" = "1"; then
+   PBX_ODBC=1
+fi
+AC_SUBST(PBX_ODBC)
 
 AST_EXT_LIB_CHECK([OGG], [ogg], [ogg_sync_init], [])
 
@@ -1435,7 +1458,7 @@ then
     AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
 fi
 
-AST_EXT_TOOL_CHECK([GMIME], [gmime])
+AST_EXT_TOOL_CHECK([GMIME], [gmime], [], [], [#include <gmime/gmime.h>], [gboolean q = g_mime_check_version(0,0,0);])
 
 AST_EXT_LIB_CHECK([HOARD], [hoard], [malloc], [])
 
@@ -1453,7 +1476,12 @@ AST_EXT_LIB_CHECK([TONEZONE], [tonezone], [tone_zone_find], [dahdi/tonezone.h], 
 
 AST_EXT_LIB_CHECK([USB], [usb], [usb_init], [usb.h], [])
 
-AST_EXT_LIB_CHECK([VORBIS], [vorbis], [vorbis_info_init], [vorbis/codec.h], [-lm -lvorbisenc])
+if test "${OSARCH}" = "OpenBSD";
+then
+	AST_EXT_LIB_CHECK([VORBIS], [vorbis], [vorbis_info_init], [vorbis/codec.h], [-lm -lvorbisenc -logg])
+else
+	AST_EXT_LIB_CHECK([VORBIS], [vorbis], [vorbis_info_init], [vorbis/codec.h], [-lm -lvorbisenc])
+fi
 
 AC_LANG_PUSH(C++)
 

@@ -655,7 +655,10 @@ struct chan_iax2_pvt {
 	int calling_pres;
 	int amaflags;
 	AST_LIST_HEAD_NOLOCK(, iax2_dpcache) dpentries;
+	/*! variables inherited from the user definition */
 	struct ast_variable *vars;
+	/*! variables transmitted in a NEW packet */
+	struct ast_variable *iaxvars;
 	/*! last received remote rr */
 	struct iax_rr remote_rr;
 	/*! Current base time: (just for stats) */
@@ -3749,10 +3752,12 @@ static int iax2_call(struct ast_channel *c, char *dest, int timeout)
 	/* Add remote vars */
 	if (variablestore) {
 		AST_LIST_HEAD(, ast_var_t) *variablelist = variablestore->data;
+		ast_debug(1, "Found an IAX variable store on this channel\n");
 		AST_LIST_LOCK(variablelist);
 		AST_LIST_TRAVERSE(variablelist, var, entries) {
 			char tmp[256];
 			int i;
+			ast_debug(1, "Found IAXVAR '%s' with value '%s' (to transmit)\n", ast_var_name(var), ast_var_value(var));
 			/* Automatically divide the value up into sized chunks */
 			for (i = 0; i < strlen(ast_var_value(var)); i += 255 - (strlen(ast_var_name(var)) + 1)) {
 				snprintf(tmp, sizeof(tmp), "%s=%s", ast_var_name(var), ast_var_value(var) + i);
@@ -3817,6 +3822,9 @@ static int iax2_setoption(struct ast_channel *c, int option, void *data, int dat
 	case AST_OPTION_RXGAIN:
 		/* these two cannot be sent, because they require a result */
 		errno = ENOSYS;
+		return -1;
+	case AST_OPTION_OPRMODE:
+		errno = EINVAL;
 		return -1;
 	default:
 		if (!(h = ast_malloc(datalen + sizeof(*h))))
@@ -4221,8 +4229,8 @@ static struct ast_channel *ast_iax2_new(int callno, int state, int capability)
 	tmp->tech = &iax2_tech;
 	/* We can support any format by default, until we get restricted */
 	tmp->nativeformats = capability;
-	tmp->readformat = ast_best_codec(capability);
-	tmp->writeformat = ast_best_codec(capability);
+	tmp->readformat = tmp->rawreadformat = ast_best_codec(capability);
+	tmp->writeformat = tmp->rawwriteformat = ast_best_codec(capability);
 	tmp->tech_pvt = CALLNO_TO_PTR(i->callno);
 
 	if (!ast_strlen_zero(i->parkinglot))
@@ -4257,6 +4265,42 @@ static struct ast_channel *ast_iax2_new(int callno, int state, int capability)
 	if (i->vars) {
 		for (v = i->vars ; v ; v = v->next)
 			pbx_builtin_setvar_helper(tmp, v->name, v->value);
+	}
+	if (i->iaxvars) {
+		struct ast_datastore *variablestore;
+		struct ast_variable *var, *prev = NULL;
+		AST_LIST_HEAD(, ast_var_t) *varlist;
+		ast_debug(1, "Loading up the channel with IAXVARs\n");
+		varlist = ast_calloc(1, sizeof(*varlist));
+		variablestore = ast_datastore_alloc(&iax2_variable_datastore_info, NULL);
+		if (variablestore && varlist) {
+			variablestore->data = varlist;
+			variablestore->inheritance = DATASTORE_INHERIT_FOREVER;
+			AST_LIST_HEAD_INIT(varlist);
+			for (var = i->iaxvars; var; var = var->next) {
+				struct ast_var_t *newvar = ast_var_assign(var->name, var->value);
+				if (prev)
+					ast_free(prev);
+				prev = var;
+				if (!newvar) {
+					/* Don't abort list traversal, as this would leave i->iaxvars in an inconsistent state. */
+					ast_log(LOG_ERROR, "Memory allocation error while processing IAX2 variables\n");
+				} else {
+					AST_LIST_INSERT_TAIL(varlist, newvar, entries);
+				}
+			}
+			if (prev)
+				ast_free(prev);
+			i->iaxvars = NULL;
+			ast_channel_datastore_add(i->owner, variablestore);
+		} else {
+			if (variablestore) {
+				ast_datastore_free(variablestore);
+			}
+			if (varlist) {
+				ast_free(varlist);
+			}
+		}
 	}
 
 	if (state != AST_STATE_DOWN) {
@@ -6553,7 +6597,7 @@ static int try_transfer(struct chan_iax2_pvt *pvt, struct iax_ies *ies)
 	
 	memset(&ied, 0, sizeof(ied));
 	if (ies->apparent_addr)
-		bcopy(ies->apparent_addr, &new, sizeof(new));
+		memmove(&new, ies->apparent_addr, sizeof(new));
 	if (ies->callno)
 		newcall = ies->callno;
 	if (!newcall || !new.sin_addr.s_addr || !new.sin_port) {
@@ -6691,7 +6735,7 @@ static int iax2_ack_registry(struct iax_ies *ies, struct sockaddr_in *sin, int c
 
 	memset(&us, 0, sizeof(us));
 	if (ies->apparent_addr)
-		bcopy(ies->apparent_addr, &us, sizeof(us));
+		memmove(&us, ies->apparent_addr, sizeof(us));
 	if (ies->username)
 		ast_copy_string(peer, ies->username, sizeof(peer));
 	if (ies->refresh)
@@ -8353,8 +8397,10 @@ static int socket_process(struct iax2_thread *thread)
 				}
 				f.data.ptr = NULL;
 				f.datalen = 0;
-			} else
+			} else {
 				f.data.ptr = thread->buf + sizeof(*fh);
+				memset(&ies, 0, sizeof(ies));
+			}
 		} else {
 			if (f.frametype == AST_FRAME_IAX)
 				f.data.ptr = NULL;
@@ -8374,20 +8420,27 @@ static int socket_process(struct iax2_thread *thread)
 				if (!ast_iax2_new(fr->callno, AST_STATE_RING, iaxs[fr->callno]->chosenformat)) {
 					ast_mutex_unlock(&iaxsl[fr->callno]);
 					return 1;
-				} else if (ies.vars) {
-					struct ast_datastore *variablestore;
-					struct ast_variable *var, *prev = NULL;
-					AST_LIST_HEAD(, ast_var_t) *varlist;
+				}
+			}
+
+			if (ies.vars) {
+				struct ast_datastore *variablestore = NULL;
+				struct ast_variable *var, *prev = NULL;
+				AST_LIST_HEAD(, ast_var_t) *varlist;
+				if ((c = iaxs[fr->callno]->owner)) {
 					varlist = ast_calloc(1, sizeof(*varlist));
 					variablestore = ast_datastore_alloc(&iax2_variable_datastore_info, NULL);
+
 					if (variablestore && varlist) {
 						variablestore->data = varlist;
 						variablestore->inheritance = DATASTORE_INHERIT_FOREVER;
 						AST_LIST_HEAD_INIT(varlist);
+						ast_debug(1, "I can haz IAX vars?\n");
 						for (var = ies.vars; var; var = var->next) {
 							struct ast_var_t *newvar = ast_var_assign(var->name, var->value);
-							if (prev)
+							if (prev) {
 								ast_free(prev);
+							}
 							prev = var;
 							if (!newvar) {
 								/* Don't abort list traversal, as this would leave ies.vars in an inconsistent state. */
@@ -8396,18 +8449,35 @@ static int socket_process(struct iax2_thread *thread)
 								AST_LIST_INSERT_TAIL(varlist, newvar, entries);
 							}
 						}
-						if (prev)
+						if (prev) {
 							ast_free(prev);
+						}
 						ies.vars = NULL;
 						ast_channel_datastore_add(c, variablestore);
 					} else {
 						ast_log(LOG_ERROR, "Memory allocation error while processing IAX2 variables\n");
-						if (variablestore)
+						if (variablestore) {
 							ast_datastore_free(variablestore);
-						if (varlist)
+						}
+						if (varlist) {
 							ast_free(varlist);
+						}
+					}
+				} else {
+					/* No channel yet, so transfer the variables directly over to the pvt,
+					 * for later inheritance. */
+					ast_debug(1, "No channel, so populating IAXVARs to the pvt, as an intermediate step.\n");
+					for (var = ies.vars; var && var->next; var = var->next);
+					if (var) {
+						var->next = iaxs[fr->callno]->iaxvars;
+						iaxs[fr->callno]->iaxvars = ies.vars;
+						ies.vars = NULL;
 					}
 				}
+			}
+
+			if (ies.vars) {
+				ast_debug(1, "I have IAX variables, but they were not processed\n");
 			}
 		}
 
@@ -8434,8 +8504,11 @@ retryowner:
 						} else {
 							ast_debug(1, "Neat, somebody took away the channel at a magical time but i found it!\n");
 							/* Free remote variables (if any) */
-							if (ies.vars)
+							if (ies.vars) {
 								ast_variables_destroy(ies.vars);
+								ast_debug(1, "I can haz iaxvars, but they is no good.  :-(\n");
+								ies.vars = NULL;
+							}
 							ast_mutex_unlock(&iaxsl[fr->callno]);
 							return 1;
 						}
@@ -9164,6 +9237,7 @@ retryowner2:
 									variablestore->data = varlist;
 									variablestore->inheritance = DATASTORE_INHERIT_FOREVER;
 									AST_LIST_HEAD_INIT(varlist);
+									ast_debug(1, "I can haz IAX vars? w00t\n");
 									for (var = ies.vars; var; var = var->next) {
 										struct ast_var_t *newvar = ast_var_assign(var->name, var->value);
 										if (prev)
@@ -9224,6 +9298,7 @@ retryowner2:
 							AST_LIST_HEAD(, ast_var_t) *varlist;
 							varlist = ast_calloc(1, sizeof(*varlist));
 							variablestore = ast_datastore_alloc(&iax2_variable_datastore_info, NULL);
+							ast_debug(1, "I can haz IAX vars? w00t\n");
 							if (variablestore && varlist) {
 								variablestore->data = varlist;
 								variablestore->inheritance = DATASTORE_INHERIT_FOREVER;
@@ -9541,8 +9616,11 @@ retryowner2:
 				send_command(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_UNSUPPORT, 0, ied0.buf, ied0.pos, -1);
 			}
 			/* Free remote variables (if any) */
-			if (ies.vars)
+			if (ies.vars) {
 				ast_variables_destroy(ies.vars);
+				ast_debug(1, "I can haz IAX vars, but they is no good :-(\n");
+				ies.vars = NULL;
+			}
 
 			/* Don't actually pass these frames along */
 			if ((f.subclass != IAX_COMMAND_ACK) && 
@@ -11019,10 +11097,21 @@ static int set_config(char *config_file, int reload)
 			return 0;
 		/* Otherwise we need to reread both files */
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		cfg = ast_config_load(config_file, config_flags);
+		if ((cfg = ast_config_load(config_file, config_flags)) == CONFIG_STATUS_FILEINVALID) {
+			ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config_file);
+			ast_config_destroy(ucfg);
+			return 0;
+		}
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config_file);
+		return 0;
 	} else { /* iax.conf changed, gotta reread users.conf, too */
 		ast_clear_flag(&config_flags, CONFIG_FLAG_FILEUNCHANGED);
-		ucfg = ast_config_load("users.conf", config_flags);
+		if ((ucfg = ast_config_load("users.conf", config_flags)) == CONFIG_STATUS_FILEINVALID) {
+			ast_log(LOG_ERROR, "Config file users.conf is in an invalid format.  Aborting.\n");
+			ast_config_destroy(cfg);
+			return 0;
+		}
 	}
 
 	if (reload) {
@@ -11822,7 +11911,11 @@ static int function_iaxpeer(struct ast_channel *chan, const char *cmd, char *dat
 		}
 		if((codec = ast_codec_pref_index(&peer->prefs, atoi(codecnum)))) {
 			ast_copy_string(buf, ast_getformatname(codec), len);
+		} else {
+			buf[0] = '\0';
 		}
+	} else {
+		buf[0] = '\0';
 	}
 
 	peer_unref(peer);

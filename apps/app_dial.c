@@ -1492,6 +1492,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		
 		/* Inherit specially named variables from parent channel */
 		ast_channel_inherit_variables(chan, tc);
+		ast_channel_datastore_inherit(chan, tc);
 
 		tc->appl = "AppDial";
 		tc->data = "(Outgoing Line)";
@@ -1905,6 +1906,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				ast_set_flag(&(config.features_callee), AST_FEATURE_AUTOMIXMON);
 			if (ast_test_flag64(peerflags, OPT_CALLER_MIXMONITOR))
 				ast_set_flag(&(config.features_caller), AST_FEATURE_AUTOMIXMON);
+			if (ast_test_flag64(peerflags, OPT_GO_ON))
+				ast_set_flag(&(config.features_caller), AST_FEATURE_NO_H_EXTEN);
 
 			if (moh) {
 				moh = 0;
@@ -1923,11 +1926,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				res = -1;
 				goto done;
 			}
-			if (opermode && !strncmp(chan->tech->type, "DAHDI", 3) && !strncmp(peer->name, "DAHDI", 3)) {
-				/* what's this special handling for dahdi <-> dahdi ?
-				 * A: dahdi to dahdi calls are natively bridged at the kernel driver
-				 * level, so we need to ensure that this mode gets propagated
-				 * all the way down. */
+			if (opermode) {
 				struct oprmode oprmode;
 
 				oprmode.peer = peer;

@@ -675,7 +675,7 @@ int ast_stun_request(int s, struct sockaddr_in *dst,
 		res = ast_select(s + 1, &rfds, NULL, NULL, &to);
 		if (res <= 0)	/* timeout or error */
 			continue;
-		bzero(&src, sizeof(src));
+		memset(&src, '\0', sizeof(src));
 		srclen = sizeof(src);
 		/* XXX pass -1 in the size, because stun_handle_packet might
 		 * write past the end of the buffer.
@@ -687,7 +687,7 @@ int ast_stun_request(int s, struct sockaddr_in *dst,
 				retry, res);
 			continue;
 		}
-		bzero(answer, sizeof(struct sockaddr_in));
+		memset(answer, '\0', sizeof(struct sockaddr_in));
 		stun_handle_packet(s, &src, reply_buf, res,
 			stun_get_mapped, answer);
 		res = 0; /* signal regular exit */
@@ -1867,6 +1867,7 @@ static struct {
 	{{1, AST_FORMAT_LPC10}, "audio", "LPC"},
 	{{1, AST_FORMAT_G729A}, "audio", "G729"},
 	{{1, AST_FORMAT_G729A}, "audio", "G729A"},
+	{{1, AST_FORMAT_G729A}, "audio", "G.729"},
 	{{1, AST_FORMAT_SPEEX}, "audio", "speex"},
 	{{1, AST_FORMAT_ILBC}, "audio", "iLBC"},
 	{{1, AST_FORMAT_G722}, "audio", "G722"},
@@ -4696,8 +4697,10 @@ static int __ast_rtp_reload(int reload)
 	const char *s;
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if ((cfg = ast_config_load2("rtp.conf", "rtp", config_flags)) == CONFIG_STATUS_FILEUNCHANGED)
+	cfg = ast_config_load2("rtp.conf", "rtp", config_flags);
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
 		return 0;
+	}
 
 	rtpstart = 5000;
 	rtpend = 31000;

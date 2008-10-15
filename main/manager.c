@@ -519,18 +519,18 @@ static char *handle_mandebug(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 {
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "manager debug [on|off]";
-		e->usage = "Usage: manager debug [on|off]\n	Show, enable, disable debugging of the manager code.\n";
+		e->command = "manager set debug [on|off]";
+		e->usage = "Usage: manager set debug [on|off]\n	Show, enable, disable debugging of the manager code.\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;	
 	}
-	if (a->argc == 2)
+	if (a->argc == 3)
 		ast_cli(a->fd, "manager debug is %s\n", manager_debug? "on" : "off");
-	else if (a->argc == 3) {
-		if (!strcasecmp(a->argv[2], "on"))
+	else if (a->argc == 4) {
+		if (!strcasecmp(a->argv[3], "on"))
 			manager_debug = 1;
-		else if (!strcasecmp(a->argv[2], "off"))
+		else if (!strcasecmp(a->argv[3], "off"))
 			manager_debug = 0;
 		else
 			return CLI_SHOWUSAGE;
@@ -1132,7 +1132,8 @@ static int action_getconfig(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Filename not specified");
 		return 0;
 	}
-	if (!(cfg = ast_config_load2(fn, "manager", config_flags))) {
+	cfg = ast_config_load2(fn, "manager", config_flags);
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEINVALID) {
 		astman_send_error(s, m, "Config file not found");
 		return 0;
 	}
@@ -2087,11 +2088,9 @@ static int action_atxfer(struct mansession *s, const struct message *m)
 	const char *name = astman_get_header(m, "Channel");
 	const char *exten = astman_get_header(m, "Exten");
 	const char *context = astman_get_header(m, "Context");
-	const char *priority = astman_get_header(m, "Priority");
 	struct ast_channel *chan = NULL;
 	struct ast_call_feature *atxfer_feature = NULL;
 	char *feature_code = NULL;
-	int priority_int = 0;
 
 	if (ast_strlen_zero(name)) { 
 		astman_send_error(s, m, "No channel specified");
@@ -2099,19 +2098,6 @@ static int action_atxfer(struct mansession *s, const struct message *m)
 	}
 	if (ast_strlen_zero(exten)) {
 		astman_send_error(s, m, "No extension specified");
-		return 0;
-	}
-	if (ast_strlen_zero(context)) {
-		astman_send_error(s, m, "No context specified");
-		return 0;
-	}
-	if (ast_strlen_zero(priority)) {
-		astman_send_error(s, m, "No priority specified");
-		return 0;
-	}
-
-	if (sscanf(priority, "%d", &priority_int) != 1 && (priority_int = ast_findlabel_extension(NULL, context, exten, priority, NULL)) < 1) {
-		astman_send_error(s, m, "Invalid Priority");
 		return 0;
 	}
 
@@ -2123,6 +2109,10 @@ static int action_atxfer(struct mansession *s, const struct message *m)
 	if (!(chan = ast_get_channel_by_name_locked(name))) {
 		astman_send_error(s, m, "Channel specified does not exist");
 		return 0;
+	}
+
+	if (!ast_strlen_zero(context)) {
+		pbx_builtin_setvar_helper(chan, "TRANSFER_CONTEXT", context);
 	}
 
 	for (feature_code = atxfer_feature->exten; feature_code && *feature_code; ++feature_code) {

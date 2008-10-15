@@ -701,7 +701,7 @@ static struct ast_frame *oss_read(struct ast_channel *c)
 
 	/* XXX can be simplified returning &ast_null_frame */
 	/* prepare a NULL frame in case we don't have enough data to return */
-	bzero(f, sizeof(struct ast_frame));
+	memset(f, '\0', sizeof(struct ast_frame));
 	f->frametype = AST_FRAME_NULL;
 	f->src = oss_tech.type;
 
@@ -911,9 +911,9 @@ static char *console_autoanswer(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console autoanswer [on|off]";
+		e->command = "console {set|show} autoanswer [on|off]";
 		e->usage =
-			"Usage: console autoanswer [on|off]\n"
+			"Usage: console {set|show} autoanswer [on|off]\n"
 			"       Enables or disables autoanswer feature.  If used without\n"
 			"       argument, displays the current on/off status of autoanswer.\n"
 			"       The default value of autoanswer is in 'oss.conf'.\n";
@@ -1200,7 +1200,7 @@ static char *console_active(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 {
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console active";
+		e->command = "console {set|show} active [<device>]";
 		e->usage =
 			"Usage: console active [device]\n"
 			"       If used without a parameter, displays which device is the current\n"
@@ -1211,20 +1211,20 @@ static char *console_active(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 		return NULL;
 	}
 
-	if (a->argc == 2)
+	if (a->argc == 3)
 		ast_cli(a->fd, "active console is [%s]\n", oss_active);
-	else if (a->argc != 3)
+	else if (a->argc != 4)
 		return CLI_SHOWUSAGE;
 	else {
 		struct chan_oss_pvt *o;
-		if (strcmp(a->argv[2], "show") == 0) {
+		if (strcmp(a->argv[3], "show") == 0) {
 			for (o = oss_default.next; o; o = o->next)
 				ast_cli(a->fd, "device [%s] exists\n", o->name);
 			return CLI_SUCCESS;
 		}
-		o = find_desc(a->argv[2]);
+		o = find_desc(a->argv[3]);
 		if (o == NULL)
-			ast_cli(a->fd, "No device [%s] exists\n", a->argv[2]);
+			ast_cli(a->fd, "No device [%s] exists\n", a->argv[3]);
 		else
 			oss_active = o->name;
 	}
@@ -1299,7 +1299,7 @@ static void store_mixer(struct chan_oss_pvt *o, const char *s)
 	int i;
 
 	for (i = 0; i < strlen(s); i++) {
-		if (!isalnum(s[i]) && index(" \t-/", s[i]) == NULL) {
+		if (!isalnum(s[i]) && strchr(" \t-/", s[i]) == NULL) {
 			ast_log(LOG_WARNING, "Suspect char %c in mixer cmd, ignoring:\n\t%s\n", s[i], s);
 			return;
 		}
@@ -1433,6 +1433,9 @@ static int load_module(void)
 	/* load config file */
 	if (!(cfg = ast_config_load(config, config_flags))) {
 		ast_log(LOG_NOTICE, "Unable to load config %s\n", config);
+		return AST_MODULE_LOAD_DECLINE;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config);
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
