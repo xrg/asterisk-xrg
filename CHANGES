@@ -203,10 +203,11 @@ Changes since Asterisk 1.2:
                            1. mohinterpret
                            2. mohsuggest
                2. agents.conf
+                      o multiplelogin variable added
                       o maxlogintries variable added
                       o autologoffunavail variable added
                       o endcall variable added
-                      o agentgoodbye variable added
+                      o goodbye variable added
                       o createlink variable REMOVED
                3. alsa.conf
                       o mohinterpret variable added
@@ -229,6 +230,7 @@ Changes since Asterisk 1.2:
                       o atxfernoanswertimeout variable added
                       o parkcall variable added (one step parking)
                       o improved documentation for dynamic feature declarations!
+                      o added parkedcallltransfers option to control builtin transfers with parking
                9. iax.conf
                       o adsi variable added
                       o mohinterpret variable added

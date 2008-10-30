@@ -126,15 +126,19 @@ static char *descrip =
 "           Optionally, an extension, or extension and context may be specified. \n"
 "           Otherwise, the current extension is used. You cannot use any additional\n"
 "           action post answer options in conjunction with this option.\n" 
-"    h    - Allow the called party to hang up by sending the '*' DTMF digit.\n"
-"    H    - Allow the calling party to hang up by hitting the '*' DTMF digit.\n"
+"    h    - Allow the called party to hang up by sending the '*' DTMF digit, or\n"
+"           whatever sequence was defined in the featuremap section for\n"
+"           'disconnect' in features.conf\n"
+"    H    - Allow the calling party to hang up by hitting the '*' DTMF digit, or\n"
+"           whatever sequence was defined in the featuremap section for\n"
+"           'disconnect' in features.conf\n"
 "    i    - Asterisk will ignore any forwarding requests it may receive on this\n"
 "           dial attempt.\n"
 "    j    - Jump to priority n+101 if all of the requested channels were busy.\n"
 "    k    - Allow the called party to enable parking of the call by sending\n"
-"           the DTMF sequence defined for call parking in features.conf.\n"
+"           the DTMF sequence defined for call parking in the featuremap section of features.conf.\n"
 "    K    - Allow the calling party to enable parking of the call by sending\n"
-"           the DTMF sequence defined for call parking in features.conf.\n"
+"           the DTMF sequence defined for call parking in the featuremap section of features.conf.\n"
 "    L(x[:y][:z]) - Limit the call to 'x' ms. Play a warning when 'y' ms are\n"
 "           left. Repeat the warning every 'z' ms. The following special\n"
 "           variables can be used with this option:\n"
@@ -195,13 +199,17 @@ static char *descrip =
 "    S(x) - Hang up the call after 'x' seconds *after* the called party has\n"
 "           answered the call.\n"  	
 "    t    - Allow the called party to transfer the calling party by sending the\n"
-"           DTMF sequence defined in features.conf.\n"
+"           DTMF sequence defined in the blindxfer setting in the featuremap section\n"
+"           of features.conf.\n"
 "    T    - Allow the calling party to transfer the called party by sending the\n"
-"           DTMF sequence defined in features.conf.\n"
+"           DTMF sequence defined in the blindxfer setting in the featuremap section\n"
+"           of features.conf.\n"
 "    w    - Allow the called party to enable recording of the call by sending\n"
-"           the DTMF sequence defined for one-touch recording in features.conf.\n"
+"           the DTMF sequence defined in the automon setting in the featuremap section\n"
+"           of features.conf.\n"
 "    W    - Allow the calling party to enable recording of the call by sending\n"
-"           the DTMF sequence defined for one-touch recording in features.conf.\n";
+"           the DTMF sequence defined in the automon setting in the featuremap section\n"
+"           of features.conf.\n";
 
 /* RetryDial App by Anthony Minessale II <anthmct@yahoo.com> Jan/2005 */
 static char *rapp = "RetryDial";
@@ -876,6 +884,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		return -1;
 	}
+
+	/* Reset all DIAL variables back to blank, to prevent confusion (in case we don't reset all of them). */
+	pbx_builtin_setvar_helper(chan, "DIALSTATUS", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDPEERNUMBER", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDPEERNAME", "");
+	pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", "");
+	pbx_builtin_setvar_helper(chan, "DIALEDTIME", "");
 
 	u = ast_module_user_add(chan);
 
@@ -1781,7 +1796,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			}
 			res = ast_bridge_call(chan,peer,&config);
 			time(&end_time);
-			{
+			if (res != AST_PBX_KEEPALIVE) { /* if keepalive is set, don't even think about accessing chan! */
 				char toast[80];
 				snprintf(toast, sizeof(toast), "%ld", (long)(end_time - answer_time));
 				pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", toast);
@@ -1790,36 +1805,40 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			time(&end_time);
 			res = -1;
 		}
-		{
+		if (res != AST_PBX_KEEPALIVE) { /* if keepalive is set, don't even think about accessing chan! */
 			char toast[80];
 			snprintf(toast, sizeof(toast), "%ld", (long)(end_time - start_time));
 			pbx_builtin_setvar_helper(chan, "DIALEDTIME", toast);
 		}
-		
-		if (res != AST_PBX_NO_HANGUP_PEER) {
-			if (!chan->_softhangup)
+		if (res != AST_PBX_NO_HANGUP_PEER && res != AST_PBX_NO_HANGUP_PEER_PARKED) {
+			if (res != AST_PBX_KEEPALIVE && !chan->_softhangup)
 				chan->hangupcause = peer->hangupcause;
 			ast_hangup(peer);
 		}
 	}	
 out:
-	if (moh) {
-		moh = 0;
-		ast_moh_stop(chan);
-	} else if (sentringing) {
-		sentringing = 0;
-		ast_indicate(chan, -1);
-	}
-	ast_rtp_early_bridge(chan, NULL);
-	hanguptree(outgoing, NULL);
-	pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Exiting with DIALSTATUS=%s.\n", status);
-	
-	if ((ast_test_flag(peerflags, OPT_GO_ON)) && (!chan->_softhangup) && (res != AST_PBX_KEEPALIVE)) {
-		if (calldurationlimit)
-			chan->whentohangup = 0;
-		res = 0;
+	/* cleaning up chan is not a good idea here if AST_PBX_KEEPALIVE
+	   is returned; chan will get the love it needs from another
+	   thread */
+	if (res != AST_PBX_KEEPALIVE) {
+		if (moh) {
+			moh = 0;
+			ast_moh_stop(chan);
+		} else if (sentringing) {
+			sentringing = 0;
+			ast_indicate(chan, -1);
+		}
+		ast_rtp_early_bridge(chan, NULL);
+		hanguptree(outgoing, NULL);
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
+		if (option_debug)
+			ast_log(LOG_DEBUG, "Exiting with DIALSTATUS=%s.\n", status);
+		
+		if ((ast_test_flag(peerflags, OPT_GO_ON)) && (!chan->_softhangup) && (res != AST_PBX_KEEPALIVE)) {
+			if (calldurationlimit)
+				chan->whentohangup = 0;
+			res = 0;
+		}
 	}
 
 done:

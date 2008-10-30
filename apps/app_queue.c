@@ -156,19 +156,29 @@ static char *descrip =
 "any of the join options cause the caller to not enter the queue.\n"
 "The option string may contain zero or more of the following characters:\n"
 "      'd' -- data-quality (modem) call (minimum delay).\n"
-"      'h' -- allow callee to hang up by hitting *.\n"
-"      'H' -- allow caller to hang up by hitting *.\n"
+"      'h' -- allow callee to hang up by hitting '*', or whatver disconnect sequence\n"
+"             defined in the featuremap section in features.conf.\n"
+"      'H' -- allow caller to hang up by hitting '*', or whatever disconnect sequence\n"
+"             defined in the featuremap section in features.conf.\n"
 "      'n' -- no retries on the timeout; will exit this application and \n"
 "             go to the next step.\n"
 "      'i' -- ignore call forward requests from queue members and do nothing\n"
 "             when they are requested.\n"
 "      'r' -- ring instead of playing MOH\n"
-"      't' -- allow the called user transfer the calling user\n"
-"      'T' -- to allow the calling user to transfer the call.\n"
+"      't' -- allow the called user transfer the calling user by pressing '#' or\n"
+"             whatever blindxfer sequence defined in the featuremap section in\n"
+"             features.conf\n"
+"      'T' -- to allow the calling user to transfer the call by pressing '#' or\n"
+"             whatever blindxfer sequence defined in the featuremap section in\n"
+"             features.conf\n"
 "      'w' -- allow the called user to write the conversation to disk via Monitor\n"
+"             by pressing the automon sequence defined in the featuremap section in\n"
+"             features.conf\n"
 "      'W' -- allow the calling user to write the conversation to disk via Monitor\n"
+"             by pressing the automon sequence defined in the featuremap section in\n"
+"             features.conf\n"
 "  In addition to transferring the call, a call may be parked and then picked\n"
-"up by another user.\n"
+"up by another user, by transferring to the parking lot extension. See features.conf.\n"
 "  The optional URL will be sent to the called party if the channel supports\n"
 "it.\n"
 "  The optional AGI parameter will setup an AGI script to be executed on the \n"
@@ -3143,7 +3153,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		setup_transfer_datastore(qe, member, callstart, callcompletedinsl);
 		bridge = ast_bridge_call(qe->chan,peer, &bridge_config);
 
-		if (!attended_transfer_occurred(qe->chan)) {
+		if (bridge != AST_PBX_KEEPALIVE && !attended_transfer_occurred(qe->chan)) {
 			struct ast_datastore *transfer_ds;
 			if (strcasecmp(oldcontext, qe->chan->context) || strcasecmp(oldexten, qe->chan->exten)) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld",
@@ -3152,7 +3162,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			} else if (qe->chan->_softhangup) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETECALLER", "%ld|%ld|%d",
 					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
-				if (qe->parent->eventwhencalled)
+				if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED && qe->parent->eventwhencalled)
 					manager_event(EVENT_FLAG_AGENT, "AgentComplete",
 							"Queue: %s\r\n"
 							"Uniqueid: %s\r\n"
@@ -3169,7 +3179,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			} else {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETEAGENT", "%ld|%ld|%d",
 					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
-				if (qe->parent->eventwhencalled)
+				if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED && qe->parent->eventwhencalled)
 					manager_event(EVENT_FLAG_AGENT, "AgentComplete",
 							"Queue: %s\r\n"
 							"Uniqueid: %s\r\n"
@@ -3193,7 +3203,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			update_queue(qe->parent, member, callcompletedinsl);
 		}
 
-		if (bridge != AST_PBX_NO_HANGUP_PEER)
+		if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
 			ast_hangup(peer);
 		res = bridge ? bridge : 1;
 		ao2_ref(member, -1);

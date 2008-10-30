@@ -1258,7 +1258,7 @@ if test "${USE_PWLIB}" != "no"; then
 	AST_CHECK_PWLIB_VERSION([PWLib], [PWLIB], [ptbuildopts.h], [1], [9], [2])
 		
 	if test "${HAS_PWLIB:-unset}" != "unset"; then
-		AST_CHECK_OPENH323_PLATFORM()
+		AST_CHECK_PWLIB_PLATFORM()
 
 		PLATFORM_PWLIB="pt_${PWLIB_PLATFORM}_r"
 
@@ -1467,8 +1467,6 @@ if test "${USE_ZAPTEL}" != "no" && test "x${PBX_DAHDI}" != "x1"; then
 	CPPFLAGS="${saved_cppflags}"
 	if test "${ac_cv_member_ZT_PARAMS_chan_alarms}" = "yes"; then
 	     AC_DEFINE([HAVE_ZAPTEL_CHANALARMS], 1, [Define if your Zaptel drivers have chan_alarms.])
-	else
-	     AC_DEFINE([HAVE_ZAPTEL_CHANALARMS], 0, [Define if your Zaptel drivers have chan_alarms.])
 	fi
    elif test -n "${ZAPTEL_MANDATORY}"; 
    then

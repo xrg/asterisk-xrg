@@ -30958,12 +30958,6 @@ cat >>confdefs.h <<\_ACEOF
 #define HAVE_ZAPTEL_CHANALARMS 1
 _ACEOF
 
-	else
-
-cat >>confdefs.h <<\_ACEOF
-#define HAVE_ZAPTEL_CHANALARMS 0
-_ACEOF
-
 	fi
    elif test -n "${ZAPTEL_MANDATORY}";
    then
