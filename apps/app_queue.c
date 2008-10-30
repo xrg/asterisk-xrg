@@ -160,26 +160,37 @@ static char *descrip =
 "The option string may contain zero or more of the following characters:\n"
 "      'c' -- continue in the dialplan if the callee hangs up.\n"
 "      'd' -- data-quality (modem) call (minimum delay).\n"
-"      'h' -- allow callee to hang up by pressing *.\n"
-"      'H' -- allow caller to hang up by pressing *.\n"
+"      'h' -- allow callee to hang up by hitting '*', or whatver disconnect sequence\n"
+"             that is defined in the featuremap section in features.conf.\n"
+"      'H' -- allow caller to hang up by hitting '*', or whatever disconnect sequence\n"
+"             that is defined in the featuremap section in features.conf.\n"
 "      'n' -- no retries on the timeout; will exit this application and \n"
 "             go to the next step.\n"
 "      'i' -- ignore call forward requests from queue members and do nothing\n"
 "             when they are requested.\n"
 "      'r' -- ring instead of playing MOH. Periodic Announcements are still made, if applicable.\n"
-"      't' -- allow the called user to transfer the calling user.\n"
-"      'T' -- allow the calling user to transfer the call.\n"
-"      'w' -- allow the called user to write the conversation to disk via Monitor.\n"
-"      'W' -- allow the calling user to write the conversation to disk via Monitor.\n"
+"      't' -- allow the called user transfer the calling user by pressing '#' or\n"
+"             whatever blindxfer sequence defined in the featuremap section in\n"
+"             features.conf\n"
+"      'T' -- to allow the calling user to transfer the call by pressing '#' or\n"
+"             whatever blindxfer sequence defined in the featuremap section in\n"
+"             features.conf\n"
+"      'w' -- allow the called user to write the conversation to disk via Monitor\n"
+"             by pressing the automon sequence defined in the featuremap section in\n"
+"             features.conf\n"
+"      'W' -- allow the calling user to write the conversation to disk via Monitor\n"
+"             by pressing the automon sequence defined in the featuremap section in\n"
+"             features.conf\n"
 "      'k' -- Allow the called party to enable parking of the call by sending\n"
 "             the DTMF sequence defined for call parking in features.conf.\n"
 "      'K' -- Allow the calling party to enable parking of the call by sending\n"
 "             the DTMF sequence defined for call parking in features.conf.\n"
 "      'x' -- allow the called user to write the conversation to disk via MixMonitor\n"
+"             by pressing the automixmon sequence defined in the featuremap section in\n"
+"             features.conf\n"
 "      'X' -- allow the calling user to write the conversation to disk via MixMonitor\n"
- 
-"  In addition to transferring the call, a call may be parked and then picked\n"
-"up by another user.\n"
+"             by pressing the automixmon sequence defined in the featuremap section in\n"
+"             features.conf\n"
 "  The optional URL will be sent to the called party if the channel supports\n"
 "it.\n"
 "  The optional AGI parameter will setup an AGI script to be executed on the \n"
@@ -3014,6 +3025,7 @@ struct queue_transfer_ds {
 	struct queue_ent *qe;
 	struct member *member;
 	int starttime;
+	int callcompletedinsl;
 };
 
 static void queue_transfer_destroy(void *data)
@@ -3045,11 +3057,14 @@ static void queue_transfer_fixup(void *data, struct ast_channel *old_chan, struc
 	struct queue_ent *qe = qtds->qe;
 	struct member *member = qtds->member;
 	int callstart = qtds->starttime;
+	int callcompletedinsl = qtds->callcompletedinsl;
 	struct ast_datastore *datastore;
 
 	ast_queue_log(qe->parent->name, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld|%d",
 				new_chan->exten, new_chan->context, (long) (callstart - qe->start),
 				(long) (time(NULL) - callstart), qe->opos);
+
+	update_queue(qe->parent, member, callcompletedinsl);
 	
 	if (!(datastore = ast_channel_datastore_find(new_chan, &queue_transfer_info, NULL))) {
 		ast_log(LOG_WARNING, "Can't find the queue_transfer datastore.\n");
@@ -3073,7 +3088,7 @@ static int attended_transfer_occurred(struct ast_channel *chan)
 
 /*! \brief create a datastore for storing relevant info to log attended transfers in the queue_log
  */
-static void setup_transfer_datastore(struct queue_ent *qe, struct member *member, int starttime)
+static void setup_transfer_datastore(struct queue_ent *qe, struct member *member, int starttime, int callcompletedinsl)
 {
 	struct ast_datastore *ds;
 	struct queue_transfer_ds *qtds = ast_calloc(1, sizeof(*qtds));
@@ -3094,6 +3109,7 @@ static void setup_transfer_datastore(struct queue_ent *qe, struct member *member
 	/* This member is refcounted in try_calling, so no need to add it here, too */
 	qtds->member = member;
 	qtds->starttime = starttime;
+	qtds->callcompletedinsl = callcompletedinsl;
 	ds->data = qtds;
 	ast_channel_datastore_add(qe->chan, ds);
 	ast_channel_unlock(qe->chan);
@@ -3769,27 +3785,30 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		ast_copy_string(oldcontext, qe->chan->context, sizeof(oldcontext));
 		ast_copy_string(oldexten, qe->chan->exten, sizeof(oldexten));
 		time(&callstart);
-		setup_transfer_datastore(qe, member, callstart);
+		setup_transfer_datastore(qe, member, callstart, callcompletedinsl);
 		bridge = ast_bridge_call(qe->chan,peer, &bridge_config);
 
 		/* If the queue member did an attended transfer, then the TRANSFER already was logged in the queue_log
 		 * when the masquerade occurred. These other "ending" queue_log messages are unnecessary
 		 */
-		if (!attended_transfer_occurred(qe->chan)) {
+		if (bridge != AST_PBX_KEEPALIVE && !attended_transfer_occurred(qe->chan)) {
 			struct ast_datastore *transfer_ds;
 			if (strcasecmp(oldcontext, qe->chan->context) || strcasecmp(oldexten, qe->chan->exten)) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld|%d",
 					qe->chan->exten, qe->chan->context, (long) (callstart - qe->start),
 					(long) (time(NULL) - callstart), qe->opos);
-				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), TRANSFER);
+				if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
+					send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), TRANSFER);
 			} else if (ast_check_hangup(qe->chan)) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETECALLER", "%ld|%ld|%d",
 					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
-				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), CALLER);
+				if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
+					send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), CALLER);
 			} else {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETEAGENT", "%ld|%ld|%d",
 					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
-				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), AGENT);
+				if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
+					send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), AGENT);
 			}
 			ast_channel_lock(qe->chan);
 			transfer_ds = ast_channel_datastore_find(qe->chan, &queue_transfer_info, NULL);
@@ -3798,11 +3817,11 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				ast_datastore_free(transfer_ds);
 			}
 			ast_channel_unlock(qe->chan);
+			update_queue(qe->parent, member, callcompletedinsl);
 		}
 
-		if (bridge != AST_PBX_NO_HANGUP_PEER)
+		if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
 			ast_hangup(peer);
-		update_queue(qe->parent, member, callcompletedinsl);
 		res = bridge ? bridge : 1;
 		ao2_ref(member, -1);
 	}
@@ -5768,12 +5787,13 @@ static int manager_queues_status(struct mansession *s, const struct message *m)
 					"Queue: %s\r\n"
 					"Position: %d\r\n"
 					"Channel: %s\r\n"
+					"Uniqueid: %s\r\n"
 					"CallerIDNum: %s\r\n"
 					"CallerIDName: %s\r\n"
 					"Wait: %ld\r\n"
 					"%s"
 					"\r\n",
-					q->name, pos++, qe->chan->name,
+					q->name, pos++, qe->chan->name, qe->chan->uniqueid,
 					S_OR(qe->chan->cid.cid_num, "unknown"),
 					S_OR(qe->chan->cid.cid_name, "unknown"),
 					(long) (now - qe->start), idText);

@@ -9,6 +9,14 @@ SIP Changes
    subscribed to.
  * Added support for subscribing to a voice mailbox on a remote server and
    making the new/old message count available to local devices.
+ * Added support for setting the domain in the URI for caller of an
+   outbound call by using the SIPFROMDOMAIN channel variable.
+
+Skinny Changes
+--------------
+ * The configuration file now holds seperate sections for devices and lines.
+   Please have a look at configs/skinny.conf.sample and change your skinny.conf
+   accordingly.
 
 Dialplan Functions
 ------------------
@@ -17,11 +25,17 @@ Dialplan Functions
    cookies, proxies, connection timeouts, passwords, etc.
  * Permit the syntax and synopsis fields of the corresponding dialplan
    functions to be individually set from func_odbc.conf.
+ * Added debugging CLI functions to func_odbc, 'odbc read' and 'odbc write'.
 
 Applications
 ------------
  * Scheduled meetme conferences may now have their end times extended by
    using MeetMeAdmin.
+ * app_authenticate now gives the ability to select a prompt other than
+   the default.
+ * app_directory now pays attention to the searchcontexts setting in
+   voicemail.conf and will look through all contexts, if no context is
+   specified in the initial argument.
 
 Miscellaneous
 -------------
@@ -33,6 +47,8 @@ Miscellaneous
    as previously used on the last "exten" line.  For example:
      exten => 123,1,NoOp(something)
      same  =>     n,SomethingElse()
+ * musiconhold.conf classes of type 'files' can now use relative directory paths,
+   which are interpreted as relative to the astvarlibdir setting in asterisk.conf.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.0 to Asterisk 1.6.1  -------------
@@ -145,6 +161,8 @@ Application Changes
    'UNSUPPORTED'.  This change makes SendImage() more consistent with other
    applications.
  * Park has a new option, 's', which silences the announcement of the parking space number.
+ * A non-numeric, zero, or negative timeout specified to Dial() will now be interpreted as
+   invalid input and will be assumed to mean that no timeout is desired.
 
 SIP Changes
 -----------
@@ -206,6 +224,7 @@ AMI - The manager (TCP/TLS/HTTP)
 --------------------------------
   * The Status command now takes an optional list of variables to display
     along with channel status.
+  * The QueueEntry event now also includes the channel's uniqueid
 
 ODBC Changes
 ------------
@@ -304,6 +323,8 @@ AMI - The manager (TCP/TLS/HTTP)
   * Originate now accepts codec settings with "Codecs: alaw, ulaw, h264" 
   * New command: Atxfer. See doc/manager_1_1.txt for more details or 
     manager show command Atxfer from the CLI
+  * New command: IAXregistry. See doc/manager_1_1.txt for more details or
+    manager show command IAXregistry from the CLI
 
 Dialplan functions
 ------------------

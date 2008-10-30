@@ -43,6 +43,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 
 AST_MUTEX_DEFINE_STATIC(pgsql_lock);
+AST_THREADSTORAGE(sql_buf);
+AST_THREADSTORAGE(findtable_buf);
+AST_THREADSTORAGE(where_buf);
+AST_THREADSTORAGE(escapebuf_buf);
 
 #define RES_CONFIG_PGSQL_CONF "res_pgsql.conf"
 
@@ -60,7 +64,7 @@ struct columns {
 };
 
 struct tables {
-	ast_mutex_t lock;
+	ast_rwlock_t lock;
 	AST_LIST_HEAD_NOLOCK(psql_columns, columns) columns;
 	AST_LIST_ENTRY(tables) list;
 	char name[0];
@@ -88,15 +92,24 @@ static struct ast_cli_entry cli_realtime[] = {
 	AST_CLI_DEFINE(handle_cli_realtime_pgsql_cache, "Shows cached tables within the PostgreSQL realtime driver"),
 };
 
+#define ESCAPE_STRING(buffer, stringname) \
+	do { \
+		int len; \
+		if ((len = strlen(stringname)) > (buffer->len - 1) / 2) { \
+			ast_str_make_space(&buffer, len * 2 + 1); \
+		} \
+		PQescapeStringConn(pgsqlConn, buffer->str, stringname, len, &pgresult); \
+	} while (0)
+
 static void destroy_table(struct tables *table)
 {
 	struct columns *column;
-	ast_mutex_lock(&table->lock);
+	ast_rwlock_wrlock(&table->lock);
 	while ((column = AST_LIST_REMOVE_HEAD(&table->columns, list))) {
 		ast_free(column);
 	}
-	ast_mutex_unlock(&table->lock);
-	ast_mutex_destroy(&table->lock);
+	ast_rwlock_unlock(&table->lock);
+	ast_rwlock_destroy(&table->lock);
 	ast_free(table);
 }
 
@@ -104,7 +117,7 @@ static struct tables *find_table(const char *tablename)
 {
 	struct columns *column;
 	struct tables *table;
-	struct ast_str *sql = ast_str_create(330);
+	struct ast_str *sql = ast_str_thread_get(&findtable_buf, 330);
 	char *pgerror;
 	PGresult *result;
 	char *fname, *ftype, *flen, *fnotnull, *fdef;
@@ -114,7 +127,7 @@ static struct tables *find_table(const char *tablename)
 	AST_LIST_TRAVERSE(&psql_tables, table, list) {
 		if (!strcasecmp(table->name, tablename)) {
 			ast_debug(1, "Found table in cache; now locking\n");
-			ast_mutex_lock(&table->lock);
+			ast_rwlock_rdlock(&table->lock);
 			ast_debug(1, "Lock cached table; now returning\n");
 			AST_LIST_UNLOCK(&psql_tables);
 			return table;
@@ -141,9 +154,9 @@ static struct tables *find_table(const char *tablename)
 		return NULL;
 	}
 	strcpy(table->name, tablename); /* SAFE */
-	ast_mutex_init(&table->lock);
+	ast_rwlock_init(&table->lock);
 	AST_LIST_HEAD_INIT_NOLOCK(&table->columns);
-	
+
 	rows = PQntuples(result);
 	for (i = 0; i < rows; i++) {
 		fname = PQgetvalue(result, i, 0);
@@ -187,12 +200,27 @@ static struct tables *find_table(const char *tablename)
 	PQclear(result);
 
 	AST_LIST_INSERT_TAIL(&psql_tables, table, list);
-	ast_mutex_lock(&table->lock);
+	ast_rwlock_rdlock(&table->lock);
 	AST_LIST_UNLOCK(&psql_tables);
 	return table;
 }
 
-static struct ast_variable *realtime_pgsql(const char *database, const char *table, va_list ap)
+#define release_table(table) ast_rwlock_unlock(&(table)->lock);
+
+static struct columns *find_column(struct tables *t, const char *colname)
+{
+	struct columns *column;
+
+	/* Check that the column exists in the table */
+	AST_LIST_TRAVERSE(&t->columns, column, list) {
+		if (strcmp(column->name, colname) == 0) {
+			return column;
+		}
+	}
+	return NULL;
+}
+
+static struct ast_variable *realtime_pgsql(const char *database, const char *tablename, va_list ap)
 {
 	PGresult *result = NULL;
 	int num_rows = 0;
@@ -205,7 +233,7 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 	const char *newparam, *newval;
 	struct ast_variable *var = NULL, *prev = NULL;
 
-	if (!table) {
+	if (!tablename) {
 		ast_log(LOG_WARNING, "PostgreSQL RealTime: No table specified.\n");
 		return NULL;
 	}
@@ -228,7 +256,7 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 	op = strchr(newparam, ' ') ? "" : " =";
 
 	sparams[nparams++]=newval;
-	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s $%d", table, newparam, op,
+	snprintf(sql, sizeof(sql), "SELECT * FROM %s WHERE %s%s $%d", tablename, newparam, op,
 			 nparams);
 	while ((newparam = va_arg(ap, const char *))) {
 		if (nparams >= sizeof(sparams) ) {
@@ -314,7 +342,7 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 		ast_free(fieldnames);
 	} else {
 		int i=0;
-		ast_debug(1, "Postgresql RealTime: Could not find any rows in table %s.\n", table);
+		ast_debug(1, "Postgresql RealTime: Could not find any rows in table %s.\n", tablename);
 		for (i=0;i<nparams;i++)
 			ast_debug(2, "Query param $%d =\"%s\"\n",i,sparams[i]);
 	}
@@ -577,14 +605,137 @@ static int update_pgsql(const char *database, const char *tablename, const char 
 	return -1;
 }
 
-#define ESCAPE_STRING(buffer, stringname) \
-	do { \
-		int len; \
-		if ((len = strlen(stringname)) > (buffer->len - 1) / 2) { \
-			ast_str_make_space(&buffer, len * 2 + 1); \
-		} \
-		PQescapeStringConn(pgsqlConn, buffer->str, stringname, len, &pgresult); \
-	} while (0)
+static int update2_pgsql(const char *database, const char *tablename, va_list ap)
+{
+	PGresult *result = NULL;
+	int numrows = 0, pgresult, first = 1;
+	struct ast_str *escapebuf = ast_str_thread_get(&escapebuf_buf, 16);
+	const char *newparam, *newval;
+	struct ast_str *sql = ast_str_thread_get(&sql_buf, 100);
+	struct ast_str *where = ast_str_thread_get(&where_buf, 100);
+	struct tables *table;
+
+	if (!tablename) {
+		ast_log(LOG_WARNING, "PostgreSQL RealTime: No table specified.\n");
+		return -1;
+	}
+
+	if (!escapebuf || !sql || !where) {
+		/* Memory error, already handled */
+		return -1;
+	}
+
+	if (!(table = find_table(tablename))) {
+		ast_log(LOG_ERROR, "Table '%s' does not exist!!\n", tablename);
+		return -1;
+	}
+
+	ast_str_set(&sql, 0, "UPDATE %s SET ", tablename);
+	ast_str_set(&where, 0, "WHERE");
+
+	while ((newparam = va_arg(ap, const char *))) {
+		if (!find_column(table, newparam)) {
+			ast_log(LOG_ERROR, "Attempted to update based on criteria column '%s' (%s@%s), but that column does not exist!\n", newparam, tablename, database);
+			release_table(table);
+			return -1;
+		}
+			
+		newval = va_arg(ap, const char *);
+		ESCAPE_STRING(escapebuf, newval);
+		if (pgresult) {
+			ast_log(LOG_ERROR, "Postgres detected invalid input: '%s'\n", newval);
+			release_table(table);
+			ast_free(sql);
+			return -1;
+		}
+		ast_str_append(&where, 0, "%s %s='%s'", first ? "" : " AND", newparam, escapebuf->str);
+		first = 0;
+	}
+
+	if (first) {
+		ast_log(LOG_WARNING,
+				"PostgreSQL RealTime: Realtime update requires at least 1 parameter and 1 value to search on.\n");
+		if (pgsqlConn) {
+			PQfinish(pgsqlConn);
+			pgsqlConn = NULL;
+		}
+		release_table(table);
+		return -1;
+	}
+
+	/* Now retrieve the columns to update */
+	first = 1;
+	while ((newparam = va_arg(ap, const char *))) {
+		newval = va_arg(ap, const char *);
+
+		/* If the column is not within the table, then skip it */
+		if (!find_column(table, newparam)) {
+			ast_log(LOG_NOTICE, "Attempted to update column '%s' in table '%s@%s', but column does not exist!\n", newparam, tablename, database);
+			continue;
+		}
+
+		ESCAPE_STRING(escapebuf, newval);
+		if (pgresult) {
+			ast_log(LOG_ERROR, "Postgres detected invalid input: '%s'\n", newval);
+			release_table(table);
+			ast_free(sql);
+			return -1;
+		}
+
+		ast_str_append(&sql, 0, "%s %s='%s'", first ? "" : ",", newparam, escapebuf->str);
+	}
+	release_table(table);
+
+	ast_str_append(&sql, 0, " %s", where->str);
+
+	ast_debug(1, "PostgreSQL RealTime: Update SQL: %s\n", sql->str);
+
+	/* We now have our complete statement; connect to the server and execute it. */
+	ast_mutex_lock(&pgsql_lock);
+	if (!pgsql_reconnect(database)) {
+		ast_mutex_unlock(&pgsql_lock);
+		return -1;
+	}
+
+	if (!(result = PQexec(pgsqlConn, sql->str))) {
+		ast_log(LOG_WARNING,
+				"PostgreSQL RealTime: Failed to query database. Check debug for more info.\n");
+		ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql->str);
+		ast_debug(1, "PostgreSQL RealTime: Query Failed because: %s\n", PQerrorMessage(pgsqlConn));
+		ast_mutex_unlock(&pgsql_lock);
+		return -1;
+	} else {
+		ExecStatusType result_status = PQresultStatus(result);
+		if (result_status != PGRES_COMMAND_OK
+			&& result_status != PGRES_TUPLES_OK
+			&& result_status != PGRES_NONFATAL_ERROR) {
+			ast_log(LOG_WARNING,
+					"PostgreSQL RealTime: Failed to query database. Check debug for more info.\n");
+			ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql->str);
+			ast_debug(1, "PostgreSQL RealTime: Query Failed because: %s (%s)\n",
+						PQresultErrorMessage(result), PQresStatus(result_status));
+			ast_mutex_unlock(&pgsql_lock);
+			return -1;
+		}
+	}
+
+	numrows = atoi(PQcmdTuples(result));
+	ast_mutex_unlock(&pgsql_lock);
+
+	ast_debug(1, "PostgreSQL RealTime: Updated %d rows on table: %s\n", numrows, tablename);
+
+	/* From http://dev.pgsql.com/doc/pgsql/en/pgsql-affected-rows.html
+	 * An integer greater than zero indicates the number of rows affected
+	 * Zero indicates that no records were updated
+	 * -1 indicates that the query returned an error (although, if the query failed, it should have been caught above.)
+	 */
+
+	if (numrows >= 0) {
+		return (int) numrows;
+	}
+
+	return -1;
+}
 
 static int store_pgsql(const char *database, const char *table, va_list ap)
 {
@@ -694,7 +845,7 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
 
 	if (insertid >= 0)
 		return (int) insertid;
- 
+
 	return -1;
 }
 
@@ -703,10 +854,10 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 	PGresult *result = NULL;
 	int numrows = 0;
 	int pgresult;
-	struct ast_str *sql = ast_str_create(256);
-	struct ast_str *buf1 = ast_str_create(60), *buf2 = ast_str_create(60);
+	struct ast_str *sql = ast_str_thread_get(&sql_buf, 256);
+	struct ast_str *buf1 = ast_str_thread_get(&where_buf, 60), *buf2 = ast_str_thread_get(&escapebuf_buf, 60);
 	const char *newparam, *newval;
- 
+
 	if (!table) {
 		ast_log(LOG_WARNING, "PostgreSQL RealTime: No table specified.\n");
 		return -1;
@@ -732,7 +883,7 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 		ast_mutex_unlock(&pgsql_lock);
 		return -1;
 	}
- 
+
 
 	/* Create the first part of the query using the first parameter/value pairs we just extracted
 	   If there is only 1 set, then we have our query. Otherwise, loop thru the list and concat */
@@ -757,9 +908,6 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 		ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql->str);
 		ast_debug(1, "PostgreSQL RealTime: Query Failed because: %s\n", PQerrorMessage(pgsqlConn));
 		ast_mutex_unlock(&pgsql_lock);
-		ast_free(buf1);
-		ast_free(buf2);
-		ast_free(sql);
 		return -1;
 	} else {
 		ExecStatusType result_status = PQresultStatus(result);
@@ -772,18 +920,12 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 			ast_debug(1, "PostgreSQL RealTime: Query Failed because: %s (%s)\n",
 						PQresultErrorMessage(result), PQresStatus(result_status));
 			ast_mutex_unlock(&pgsql_lock);
-			ast_free(buf1);
-			ast_free(buf2);
-			ast_free(sql);
 			return -1;
 		}
 	}
 
 	numrows = atoi(PQcmdTuples(result));
 	ast_mutex_unlock(&pgsql_lock);
-	ast_free(buf1);
-	ast_free(buf2);
-	ast_free(sql);
  
 	ast_debug(1, "PostgreSQL RealTime: Deleted %d rows on table: %s\n", numrows, table);
  
@@ -808,9 +950,7 @@ static struct ast_config *config_pgsql(const char *database, const char *table,
 	long num_rows;
 	struct ast_variable *new_v;
 	struct ast_category *cur_cat = NULL;
-	char sqlbuf[1024] = "";
-	char *sql = sqlbuf;
-	size_t sqlleft = sizeof(sqlbuf);
+	struct ast_str *sql = ast_str_thread_get(&sql_buf, 100);
 	char last[80] = "";
 	int last_cat_metric = 0;
 
@@ -821,11 +961,11 @@ static struct ast_config *config_pgsql(const char *database, const char *table,
 		return NULL;
 	}
 
-	ast_build_string(&sql, &sqlleft, "SELECT category, var_name, var_val, cat_metric FROM %s ", table);
-	ast_build_string(&sql, &sqlleft, "WHERE filename='%s' and commented=0", file);
-	ast_build_string(&sql, &sqlleft, "ORDER BY cat_metric DESC, var_metric ASC, category, var_name ");
+	ast_str_set(&sql, 0, "SELECT category, var_name, var_val, cat_metric FROM %s "
+			"WHERE filename='%s' and commented=0"
+			"ORDER BY cat_metric DESC, var_metric ASC, category, var_name ", table, file);
 
-	ast_debug(1, "PostgreSQL RealTime: Static SQL: %s\n", sqlbuf);
+	ast_debug(1, "PostgreSQL RealTime: Static SQL: %s\n", sql->str);
 
 	/* We now have our complete statement; Lets connect to the server and execute it. */
 	ast_mutex_lock(&pgsql_lock);
@@ -834,10 +974,10 @@ static struct ast_config *config_pgsql(const char *database, const char *table,
 		return NULL;
 	}
 
-	if (!(result = PQexec(pgsqlConn, sqlbuf))) {
+	if (!(result = PQexec(pgsqlConn, sql->str))) {
 		ast_log(LOG_WARNING,
-				"PostgreSQL RealTime: Failed to query database. Check debug for more info.\n");
-		ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql);
+				"PostgreSQL RealTime: Failed to query '%s@%s'. Check debug for more info.\n", table, database);
+		ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql->str);
 		ast_debug(1, "PostgreSQL RealTime: Query Failed because: %s\n", PQerrorMessage(pgsqlConn));
 		ast_mutex_unlock(&pgsql_lock);
 		return NULL;
@@ -848,7 +988,7 @@ static struct ast_config *config_pgsql(const char *database, const char *table,
 			&& result_status != PGRES_NONFATAL_ERROR) {
 			ast_log(LOG_WARNING,
 					"PostgreSQL RealTime: Failed to query database. Check debug for more info.\n");
-			ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql);
+			ast_debug(1, "PostgreSQL RealTime: Query: %s\n", sql->str);
 			ast_debug(1, "PostgreSQL RealTime: Query Failed because: %s (%s)\n",
 						PQresultErrorMessage(result), PQresStatus(result_status));
 			ast_mutex_unlock(&pgsql_lock);
@@ -1014,7 +1154,7 @@ static int require_pgsql(const char *database, const char *tablename, va_list ap
 			}
 		}
 	}
-	ast_mutex_unlock(&table->lock);
+	release_table(table);
 	return res;
 }
 
@@ -1048,6 +1188,7 @@ static struct ast_config_engine pgsql_engine = {
 	.store_func = store_pgsql,
 	.destroy_func = destroy_pgsql,
 	.update_func = update_pgsql,
+	.update2_func = update2_pgsql,
 	.require_func = require_pgsql,
 	.unload_func = unload_pgsql,
 };
@@ -1317,7 +1458,7 @@ static char *handle_cli_realtime_pgsql_cache(struct ast_cli_entry *e, int cmd, s
 			AST_LIST_TRAVERSE(&cur->columns, col, list) {
 				ast_cli(a->fd, "%-20.20s %-20.20s %3d %-8.8s\n", col->name, col->type, col->len, col->notnull ? "NOT NULL" : "");
 			}
-			ast_mutex_unlock(&cur->lock);
+			release_table(cur);
 		} else {
 			ast_cli(a->fd, "No such table '%s'\n", a->argv[4]);
 		}

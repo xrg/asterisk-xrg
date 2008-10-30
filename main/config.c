@@ -230,14 +230,22 @@ struct ast_config_include {
 	struct ast_config_include *next; /*!< ptr to next inclusion in the list */
 };
 
+#ifdef MALLOC_DEBUG
+struct ast_variable *_ast_variable_new(const char *name, const char *value, const char *filename, const char *file, const char *func, int lineno) 
+#else
 struct ast_variable *ast_variable_new(const char *name, const char *value, const char *filename) 
+#endif
 {
 	struct ast_variable *variable;
 	int name_len = strlen(name) + 1;	
 	int val_len = strlen(value) + 1;	
 	int fn_len = strlen(filename) + 1;	
 
+#ifdef MALLOC_DEBUG
+	if ((variable = __ast_calloc(1, name_len + val_len + fn_len + sizeof(*variable), file, lineno, func))) {
+#else
 	if ((variable = ast_calloc(1, name_len + val_len + fn_len + sizeof(*variable)))) {
+#endif
 		char *dst = variable->stuff;	/* writable space starts here */
 		variable->name = strcpy(dst, name);
 		dst += name_len;
@@ -2042,9 +2050,9 @@ struct ast_config *ast_config_internal_load(const char *filename, struct ast_con
 
 	result = loader->load_func(db, table, filename, cfg, flags, suggested_include_file, who_asked);
 
-	if (result && result != CONFIG_STATUS_FILEUNCHANGED)
+	if (result && result != CONFIG_STATUS_FILEINVALID && result != CONFIG_STATUS_FILEUNCHANGED)
 		result->include_level--;
-	else
+	else if (result != CONFIG_STATUS_FILEINVALID)
 		cfg->include_level--;
 
 	return result;
@@ -2069,8 +2077,8 @@ struct ast_config *ast_config_load2(const char *filename, const char *who_asked,
 static struct ast_variable *ast_load_realtime_helper(const char *family, va_list ap)
 {
 	struct ast_config_engine *eng;
-	char db[256]="";
-	char table[256]="";
+	char db[256];
+	char table[256];
 	struct ast_variable *res=NULL;
 
 	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
@@ -2141,8 +2149,8 @@ int ast_realtime_enabled()
 int ast_realtime_require_field(const char *family, ...)
 {
 	struct ast_config_engine *eng;
-	char db[256] = "";
-	char table[256] = "";
+	char db[256];
+	char table[256];
 	va_list ap;
 	int res = -1;
 
@@ -2159,8 +2167,8 @@ int ast_realtime_require_field(const char *family, ...)
 int ast_unload_realtime(const char *family)
 {
 	struct ast_config_engine *eng;
-	char db[256] = "";
-	char table[256] = "";
+	char db[256];
+	char table[256];
 	int res = -1;
 
 	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
@@ -2173,9 +2181,9 @@ int ast_unload_realtime(const char *family)
 struct ast_config *ast_load_realtime_multientry(const char *family, ...)
 {
 	struct ast_config_engine *eng;
-	char db[256]="";
-	char table[256]="";
-	struct ast_config *res=NULL;
+	char db[256];
+	char table[256];
+	struct ast_config *res = NULL;
 	va_list ap;
 
 	va_start(ap, family);
@@ -2191,8 +2199,8 @@ int ast_update_realtime(const char *family, const char *keyfield, const char *lo
 {
 	struct ast_config_engine *eng;
 	int res = -1;
-	char db[256]="";
-	char table[256]="";
+	char db[256];
+	char table[256];
 	va_list ap;
 
 	va_start(ap, lookup);
@@ -2204,12 +2212,29 @@ int ast_update_realtime(const char *family, const char *keyfield, const char *lo
 	return res;
 }
 
+int ast_update2_realtime(const char *family, ...)
+{
+	struct ast_config_engine *eng;
+	int res = -1;
+	char db[256];
+	char table[256];
+	va_list ap;
+
+	va_start(ap, family);
+	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
+	if (eng && eng->update2_func) 
+		res = eng->update2_func(db, table, ap);
+	va_end(ap);
+
+	return res;
+}
+
 int ast_store_realtime(const char *family, ...)
 {
 	struct ast_config_engine *eng;
 	int res = -1;
-	char db[256]="";
-	char table[256]="";
+	char db[256];
+	char table[256];
 	va_list ap;
 
 	va_start(ap, family);
@@ -2225,8 +2250,8 @@ int ast_destroy_realtime(const char *family, const char *keyfield, const char *l
 {
 	struct ast_config_engine *eng;
 	int res = -1;
-	char db[256]="";
-	char table[256]="";
+	char db[256];
+	char table[256];
 	va_list ap;
 
 	va_start(ap, lookup);

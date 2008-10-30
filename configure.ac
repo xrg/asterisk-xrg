@@ -1340,7 +1340,7 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
 AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
-AST_EXT_LIB_CHECK([PRI], [pri], [pri_get_version], [libpri.h])
+AST_EXT_LIB_CHECK([PRI], [pri], [pri_progress_with_cause], [libpri.h])
 
 AST_EXT_LIB_CHECK([PRI_INBANDDISCONNECT], [pri], [pri_set_inbanddisconnect], [libpri.h])
 
@@ -1369,7 +1369,7 @@ if test "${USE_PWLIB}" != "no"; then
 	AST_CHECK_PWLIB_VERSION([PWLib], [PWLIB], [ptbuildopts.h], [1], [9], [2])
 		
 	if test "${HAS_PWLIB:-unset}" != "unset"; then
-		AST_CHECK_OPENH323_PLATFORM()
+		AST_CHECK_PWLIB_PLATFORM()
 
 		PLATFORM_PWLIB="pt_${PWLIB_PLATFORM}_r"
 
@@ -1410,7 +1410,7 @@ PBX_AIS=0
 
 # OpenAIS installs its libraries into /usr/lib/openais by default, so check there
 
-AST_EXT_LIB_CHECK([OPENAIS], [SaClm], [saClmInitialize], [openais/saClm.h], [-L/usr/lib/openais])
+AST_EXT_LIB_CHECK([OPENAIS], [SaClm], [saClmInitialize], [openais/saClm.h], [-L/usr/lib/openais -L/usr/lib64/openais])
 
 if test "${PBX_OPENAIS}" = 1; then
    PBX_AIS=1
@@ -1419,7 +1419,7 @@ if test "${PBX_OPENAIS}" = 1; then
       AIS_LIB="-lSaEvt ${OPENAIS_LIB}"
    else
       AIS_INCLUDE="-I/usr/include/openais"
-      AIS_LIB="-lSaClm -lSaEvt -L/usr/lib/openais"
+      AIS_LIB="-lSaClm -lSaEvt -L/usr/lib/openais -L/usr/lib64/openais"
    fi
 fi
 
