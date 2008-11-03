@@ -685,6 +685,9 @@ fi
 %attr(0644,root,root)					%{astvardir}/phoneprov/*.cfg
 %attr(0644,root,root)					%{astvardir}/phoneprov/*.xml
 
+%attr(0755,asterisk,asterisk)	%dir			%{astvardir}/documentation
+%attr(-,asterisk,asterisk)				%{astvardir}/documentation/*
+
 							%{_mandir}/man8/asterisk.8*
 							%{_mandir}/man8/astgenkey.8*
 							%{_mandir}/man8/autosupport.8*
