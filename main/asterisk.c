@@ -117,6 +117,8 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/devicestate.h"
 #include "asterisk/module.h"
 #include "asterisk/dsp.h"
+#include "asterisk/xml.h"
+#include "asterisk/buildinfo.h"
 
 #include "asterisk/doxyref.h"		/* Doxygen documentation */
 
@@ -245,13 +247,6 @@ static char ast_config_AST_CTL_PERMISSIONS[PATH_MAX];
 static char ast_config_AST_CTL_OWNER[PATH_MAX] = "\0";
 static char ast_config_AST_CTL_GROUP[PATH_MAX] = "\0";
 static char ast_config_AST_CTL[PATH_MAX] = "asterisk.ctl";
-
-extern const char *ast_build_hostname;
-extern const char *ast_build_kernel;
-extern const char *ast_build_machine;
-extern const char *ast_build_os;
-extern const char *ast_build_date;
-extern const char *ast_build_user;
 
 static char *_argv[256];
 static int shuttingdown;
@@ -1223,8 +1218,11 @@ static void hup_handler(int num)
 	if (restartnow)
 		execvp(_argv[0], _argv);
 	sig_flags.need_reload = 1;
-	if (sig_alert_pipe[1] != -1)
-		write(sig_alert_pipe[1], &a, sizeof(a));
+	if (sig_alert_pipe[1] != -1) {
+		if (write(sig_alert_pipe[1], &a, sizeof(a)) < 0) {
+			fprintf(stderr, "hup_handler: write() failed: %s\n", strerror(errno));
+		}
+	}
 	signal(num, hup_handler);
 }
 
@@ -1439,8 +1437,11 @@ static void __quit_handler(int num)
 {
 	int a = 0;
 	sig_flags.need_quit = 1;
-	if (sig_alert_pipe[1] != -1)
-		write(sig_alert_pipe[1], &a, sizeof(a));
+	if (sig_alert_pipe[1] != -1) {
+		if (write(sig_alert_pipe[1], &a, sizeof(a)) < 0) {
+			fprintf(stderr, "hup_handler: write() failed: %s\n", strerror(errno));
+		}
+	}
 	/* There is no need to restore the signal handler here, since the app
 	 * is going to exit */
 }
@@ -1819,7 +1820,7 @@ static char *show_warranty(struct ast_cli_entry *e, int cmd, struct ast_cli_args
 		return NULL;
 	}
 
-	ast_cli(a->fd, warranty_lines);
+	ast_cli(a->fd, "%s", warranty_lines);
 
 	return CLI_SUCCESS;
 }
@@ -1856,7 +1857,7 @@ static char *show_license(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 		return NULL;
 	}
 
-	ast_cli(a->fd, license_lines);
+	ast_cli(a->fd, "%s", license_lines);
 
 	return CLI_SUCCESS;
 }
@@ -1976,9 +1977,12 @@ static int ast_el_read_char(EditLine *editline, char *cp)
 			}
 
 			/* Write over the CLI prompt */
-			if (!ast_opt_exec && !lastpos)
-				write(STDOUT_FILENO, "\r", 1);
-			write(STDOUT_FILENO, buf, res);
+			if (!ast_opt_exec && !lastpos) {
+				if (write(STDOUT_FILENO, "\r", 1) < 0) {
+				}
+			}
+			if (write(STDOUT_FILENO, buf, res) < 0) {
+			}
 			if ((res < EL_BUF_SIZE - 1) && ((buf[res-1] == '\n') || (buf[res-2] == '\n'))) {
 				*cp = CC_REFRESH;
 				return(1);
@@ -2421,7 +2425,7 @@ static int ast_el_read_history(char *filename)
 	return ret;
 }
 
-static void ast_remotecontrol(char * data)
+static void ast_remotecontrol(char *data)
 {
 	char buf[80];
 	int res;
@@ -2435,12 +2439,17 @@ static void ast_remotecontrol(char * data)
 	char *ebuf;
 	int num = 0;
 
-	read(ast_consock, buf, sizeof(buf));
+	if (read(ast_consock, buf, sizeof(buf)) < 0) {
+		ast_log(LOG_ERROR, "read() failed: %s\n", strerror(errno));
+		return;
+	}
 	if (data) {
 		char prefix[] = "cli quit after ";
 		char *tmp = alloca(strlen(data) + strlen(prefix) + 1);
 		sprintf(tmp, "%s%s", prefix, data);
-		write(ast_consock, tmp, strlen(tmp) + 1);
+		if (write(ast_consock, tmp, strlen(tmp) + 1) < 0) {
+			ast_log(LOG_ERROR, "write() failed: %s\n", strerror(errno));
+		}
 	}
 	stringp = buf;
 	hostname = strsep(&stringp, "/");
@@ -2500,7 +2509,9 @@ static void ast_remotecontrol(char * data)
 				/* Skip verbose lines */
 				if (*curline != 127) {
 					not_written = 0;
-					write(STDOUT_FILENO, curline, nextline - curline);
+					if (write(STDOUT_FILENO, curline, nextline - curline) < 0) {
+						ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+					}
 				}
 				curline = nextline;
 			} while (!ast_strlen_zero(curline));
@@ -2830,7 +2841,8 @@ static void *monitor_sig_flags(void *unused)
 			sig_flags.need_quit = 0;
 			quit_handler(0, 0, 1, 0);
 		}
-		read(sig_alert_pipe[0], &a, sizeof(a));
+		if (read(sig_alert_pipe[0], &a, sizeof(a)) != sizeof(a)) {
+		}
 	}
 
 	return NULL;
@@ -3270,7 +3282,9 @@ int main(int argc, char *argv[])
 #if HAVE_WORKING_FORK
 	if (ast_opt_always_fork || !ast_opt_no_fork) {
 #ifndef HAVE_SBIN_LAUNCHD
-		daemon(1, 0);
+		if (daemon(1, 0) < 0) {
+			ast_log(LOG_ERROR, "daemon() failed: %s\n", strerror(errno));
+		}
 		ast_mainpid = getpid();
 		/* Blindly re-write pid file since we are forking */
 		unlink(ast_config_AST_PID);
@@ -3327,6 +3341,11 @@ int main(int argc, char *argv[])
 		printf("%s", term_quit());
 		exit(1);
 	}
+
+#ifdef AST_XML_DOCS
+	/* Load XML documentation. */
+	ast_load_documentation();
+#endif
 
 	if (load_modules(1)) {		/* Load modules, pre-load only */
 		printf("%s", term_quit());

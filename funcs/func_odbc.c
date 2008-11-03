@@ -47,6 +47,58 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/cli.h"
 
+/*** DOCUMENTATION
+	<function name="ODBC_FETCH" language="en_US">
+		<synopsis>
+			Fetch a row from a multirow query.
+		</synopsis>
+		<syntax>
+			<parameter name="result-id" required="true" />
+		</syntax>
+		<description>
+			<para>For queries which are marked as mode=multirow, the original 
+			query returns a <replaceable>result-id</replaceable> from which results 
+			may be fetched.  This function implements the actual fetch of the results.</para>
+			<para>This also sets <variable>ODBC_FETCH_STATUS</variable>.</para>
+			<variablelist>
+				<variable name="ODBC_FETCH_STATUS">
+					<value name="SUCESS">
+						If rows are available.
+					</value>
+					<value name="FAILURE">
+						If no rows are available.
+					</value>
+				</variable>
+			</variablelist>
+		</description>
+	</function>
+	<application name="ODBCFinish" language="en_US">
+		<synopsis>
+			Clear the resultset of a sucessful multirow query.
+		</synopsis>
+		<syntax>
+			<parameter name="result-id" required="true" />
+		</syntax>
+		<description>
+			<para>For queries which are marked as mode=multirow, this will clear 
+			any remaining rows of the specified resultset.</para>
+		</description>
+	</application>
+	<function name="SQL_ESC" language="en_US">
+		<synopsis>
+			Escapes single ticks for use in SQL statements.
+		</synopsis>
+		<syntax>
+			<parameter name="string" required="true" />
+		</syntax>
+		<description>
+			<para>Used in SQL templates to escape data which may contain single ticks 
+			<literal>'</literal> which are otherwise used to delimit data.</para>
+		  	<para>Example: SELECT foo FROM bar WHERE baz='${SQL_ESC(${ARG1})}'</para>
+		</description>
+	</function>
+ ***/
+
 static char *config = "func_odbc.conf";
 
 enum {
@@ -60,6 +112,7 @@ struct acf_odbc_query {
 	char writehandle[5][30];
 	char sql_read[2048];
 	char sql_write[2048];
+	char sql_insert[2048];
 	unsigned int flags;
 	int rowlimit;
 	struct ast_custom_function *acf;
@@ -89,6 +142,7 @@ AST_RWLIST_HEAD_STATIC(queries, acf_odbc_query);
 static int resultcount = 0;
 
 AST_THREADSTORAGE(sql_buf);
+AST_THREADSTORAGE(sql2_buf);
 AST_THREADSTORAGE(coldata_buf);
 AST_THREADSTORAGE(colnames_buf);
 
@@ -113,15 +167,32 @@ static SQLHSTMT generic_execute(struct odbc_obj *obj, void *data)
 
 	res = SQLAllocHandle (SQL_HANDLE_STMT, obj->con, &stmt);
 	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-		ast_log(LOG_WARNING, "SQL Alloc Handle failed!\n");
+		ast_log(LOG_WARNING, "SQL Alloc Handle failed (%d)!\n", res);
 		return NULL;
 	}
 
 	res = SQLExecDirect(stmt, (unsigned char *)sql, SQL_NTS);
 	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-		ast_log(LOG_WARNING, "SQL Exec Direct failed![%s]\n", sql);
+		if (res == SQL_ERROR) {
+			int i;
+			SQLINTEGER nativeerror=0, numfields=0;
+			SQLSMALLINT diagbytes=0;
+			unsigned char state[10], diagnostic[256];
+
+			SQLGetDiagField(SQL_HANDLE_STMT, stmt, 1, SQL_DIAG_NUMBER, &numfields, SQL_IS_INTEGER, &diagbytes);
+			for (i = 0; i < numfields; i++) {
+				SQLGetDiagRec(SQL_HANDLE_STMT, stmt, i + 1, state, &nativeerror, diagnostic, sizeof(diagnostic), &diagbytes);
+				ast_log(LOG_WARNING, "SQL Execute returned an error %d: %s: %s (%d)\n", res, state, diagnostic, diagbytes);
+				if (i > 10) {
+					ast_log(LOG_WARNING, "Oh, that was good.  There are really %d diagnostics?\n", (int)numfields);
+					break;
+				}
+			}
+		}
+
+		ast_log(LOG_WARNING, "SQL Exec Direct failed (%d)![%s]\n", res, sql);
 		SQLCloseCursor(stmt);
-		SQLFreeHandle (SQL_HANDLE_STMT, stmt);
+		SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 		return NULL;
 	}
 
@@ -146,6 +217,8 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 	SQLHSTMT stmt = NULL;
 	SQLLEN rows=0;
 	struct ast_str *buf = ast_str_thread_get(&sql_buf, 16);
+	struct ast_str *insertbuf = ast_str_thread_get(&sql2_buf, 16);
+	const char *status = "FAILURE";
 
 	if (!buf) {
 		return -1;
@@ -161,7 +234,7 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 	if (!query) {
 		ast_log(LOG_ERROR, "No such function '%s'\n", cmd);
 		AST_RWLIST_UNLOCK(&queries);
-		ast_free(buf);
+		pbx_builtin_setvar_helper(chan, "ODBCSTATUS", status);
 		return -1;
 	}
 
@@ -174,6 +247,7 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 		ast_autoservice_start(chan);
 
 	ast_str_make_space(&buf, strlen(query->sql_write) * 2 + 300);
+	ast_str_make_space(&insertbuf, strlen(query->sql_insert) * 2 + 300);
 
 	/* Parse our arguments */
 	t = value ? ast_strdupa(value) : "";
@@ -183,9 +257,11 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 		AST_RWLIST_UNLOCK(&queries);
 		if (chan)
 			ast_autoservice_stop(chan);
-		if (bogus_chan)
+		if (bogus_chan) {
 			ast_channel_free(chan);
-		ast_free(buf);
+		} else {
+			pbx_builtin_setvar_helper(chan, "ODBCSTATUS", status);
+		}
 		return -1;
 	}
 
@@ -206,6 +282,7 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 	pbx_builtin_pushvar_helper(chan, "VALUE", value ? value : "");
 
 	pbx_substitute_variables_helper(chan, query->sql_write, buf->str, buf->len - 1);
+	pbx_substitute_variables_helper(chan, query->sql_insert, insertbuf->str, insertbuf->len - 1);
 
 	/* Restore prior values */
 	for (i = 0; i < args.argc; i++) {
@@ -225,16 +302,32 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 			if (obj)
 				stmt = ast_odbc_direct_execute(obj, generic_execute, buf);
 		}
-		if (stmt)
+		if (stmt) {
+			status = "SUCCESS";
+			SQLRowCount(stmt, &rows);
 			break;
+		}
+	}
+
+	if (stmt && rows == 0 && !ast_strlen_zero(insertbuf->str)) {
+		SQLCloseCursor(stmt);
+		SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+		for (dsn = 0; dsn < 5; dsn++) {
+			if (!ast_strlen_zero(query->writehandle[dsn])) {
+				obj = ast_odbc_request_obj(query->writehandle[dsn], 0);
+				if (obj) {
+					stmt = ast_odbc_direct_execute(obj, generic_execute, insertbuf);
+				}
+			}
+			if (stmt) {
+				status = "FAILOVER";
+				SQLRowCount(stmt, &rows);
+				break;
+			}
+		}
 	}
 
 	AST_RWLIST_UNLOCK(&queries);
-
-	if (stmt) {
-		/* Rows affected */
-		SQLRowCount(stmt, &rows);
-	}
 
 	/* Output the affected rows, for all cases.  In the event of failure, we
 	 * flag this as -1 rows.  Note that this is different from 0 affected rows
@@ -242,6 +335,7 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 	 * not change. */
 	snprintf(varname, sizeof(varname), "%d", (int)rows);
 	pbx_builtin_setvar_helper(chan, "ODBCROWS", varname);
+	pbx_builtin_setvar_helper(chan, "ODBCSTATUS", status);
 
 	if (stmt) {
 		SQLCloseCursor(stmt);
@@ -254,7 +348,6 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 		ast_autoservice_stop(chan);
 	if (bogus_chan)
 		ast_channel_free(chan);
-	ast_free(buf);
 
 	return 0;
 }
@@ -276,8 +369,10 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 	struct odbc_datastore *resultset = NULL;
 	struct odbc_datastore_row *row = NULL;
 	struct ast_str *sql = ast_str_thread_get(&sql_buf, 16);
+	const char *status = "FAILURE";
 
 	if (!sql) {
+		pbx_builtin_setvar_helper(chan, "ODBCSTATUS", status);
 		return -1;
 	}
 
@@ -292,7 +387,7 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 		ast_log(LOG_ERROR, "No such function '%s'\n", cmd);
 		AST_RWLIST_UNLOCK(&queries);
 		pbx_builtin_setvar_helper(chan, "ODBCROWS", rowcount);
-		ast_free(sql);
+		pbx_builtin_setvar_helper(chan, "ODBCSTATUS", status);
 		return -1;
 	}
 
@@ -358,7 +453,6 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 		if (bogus_chan) {
 			ast_channel_free(chan);
 		}
-		ast_free(sql);
 		return -1;
 	}
 
@@ -375,7 +469,6 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 		if (bogus_chan) {
 			ast_channel_free(chan);
 		}
-		ast_free(sql);
 		return -1;
 	}
 
@@ -387,20 +480,24 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 			res1 = 0;
 			buf[0] = '\0';
 			ast_copy_string(rowcount, "0", sizeof(rowcount));
+			status = "NODATA";
 		} else {
 			ast_log(LOG_WARNING, "Error %d in FETCH [%s]\n", res, sql->str);
+			status = "FETCHERROR";
 		}
 		SQLCloseCursor(stmt);
 		SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 		ast_odbc_release_obj(obj);
 		pbx_builtin_setvar_helper(chan, "ODBCROWS", rowcount);
+		pbx_builtin_setvar_helper(chan, "ODBCSTATUS", status);
 		if (chan)
 			ast_autoservice_stop(chan);
 		if (bogus_chan)
 			ast_channel_free(chan);
-		ast_free(sql);
 		return res1;
 	}
+
+	status = "SUCCESS";
 
 	for (y = 0; y < rowlimit; y++) {
 		for (x = 0; x < colcount; x++) {
@@ -447,11 +544,11 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 						SQLFreeHandle(SQL_HANDLE_STMT, stmt);
 						ast_odbc_release_obj(obj);
 						pbx_builtin_setvar_helper(chan, "ODBCROWS", rowcount);
+						pbx_builtin_setvar_helper(chan, "ODBCSTATUS", "MEMERROR");
 						if (chan)
 							ast_autoservice_stop(chan);
 						if (bogus_chan)
 							ast_channel_free(chan);
-						ast_free(sql);
 						return -1;
 					}
 					resultset = tmp;
@@ -503,6 +600,7 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 			row = ast_calloc(1, sizeof(*row) + buflen);
 			if (!row) {
 				ast_log(LOG_ERROR, "Unable to allocate space for more rows in this resultset.\n");
+				status = "MEMERROR";
 				goto end_acf_read;
 			}
 			strcpy((char *)row + sizeof(*row), buf);
@@ -522,6 +620,7 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 end_acf_read:
 	snprintf(rowcount, sizeof(rowcount), "%d", y);
 	pbx_builtin_setvar_helper(chan, "ODBCROWS", rowcount);
+	pbx_builtin_setvar_helper(chan, "ODBCSTATUS", status);
 	pbx_builtin_setvar_helper(chan, "~ODBCFIELDS~", colnames->str);
 	if (resultset) {
 		int uid;
@@ -531,6 +630,7 @@ end_acf_read:
 		odbc_store = ast_datastore_alloc(&odbc_info, buf);
 		if (!odbc_store) {
 			ast_log(LOG_ERROR, "Rows retrieved, but unable to store it in the channel.  Results fail.\n");
+			pbx_builtin_setvar_helper(chan, "ODBCSTATUS", "MEMERROR");
 			odbc_datastore_free(resultset);
 			SQLCloseCursor(stmt);
 			SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -539,7 +639,6 @@ end_acf_read:
 				ast_autoservice_stop(chan);
 			if (bogus_chan)
 				ast_channel_free(chan);
-			ast_free(sql);
 			return -1;
 		}
 		odbc_store->data = resultset;
@@ -552,7 +651,6 @@ end_acf_read:
 		ast_autoservice_stop(chan);
 	if (bogus_chan)
 		ast_channel_free(chan);
-	ast_free(sql);
 	return 0;
 }
 
@@ -574,12 +672,6 @@ static int acf_escape(struct ast_channel *chan, const char *cmd, char *data, cha
 
 static struct ast_custom_function escape_function = {
 	.name = "SQL_ESC",
-	.synopsis = "Escapes single ticks for use in SQL statements",
-	.syntax = "SQL_ESC(<string>)",
-	.desc =
-"Used in SQL templates to escape data which may contain single ticks (') which\n"
-"are otherwise used to delimit data.  For example:\n"
-"SELECT foo FROM bar WHERE baz='${SQL_ESC(${ARG1})}'\n",
 	.read = acf_escape,
 	.write = NULL,
 };
@@ -614,24 +706,11 @@ static int acf_fetch(struct ast_channel *chan, const char *cmd, char *data, char
 
 static struct ast_custom_function fetch_function = {
 	.name = "ODBC_FETCH",
-	.synopsis = "Fetch a row from a multirow query",
-	.syntax = "ODBC_FETCH(<result-id>)",
-	.desc =
-"For queries which are marked as mode=multirow, the original query returns a\n"
-"result-id from which results may be fetched.  This function implements the\n"
-"actual fetch of the results.\n"
-"This function also sets ODBC_FETCH_STATUS to one of \"SUCCESS\" or \"FAILURE\",\n"
-"depending upon whether there were rows available or not.\n",
 	.read = acf_fetch,
 	.write = NULL,
 };
 
 static char *app_odbcfinish = "ODBCFinish";
-static char *syn_odbcfinish = "Clear the resultset of a successful multirow query";
-static char *desc_odbcfinish =
-"ODBCFinish(<result-id>)\n"
-"  Clears any remaining rows of the specified resultset\n";
-
 
 static int exec_odbcfinish(struct ast_channel *chan, void *data)
 {
@@ -714,6 +793,10 @@ static int init_acf_query(struct ast_config *cfg, char *catg, struct acf_odbc_qu
 		return EINVAL;
 	}
 
+	if ((tmp = ast_variable_retrieve(cfg, catg, "insertsql"))) {
+		ast_copy_string((*query)->sql_insert, tmp, sizeof((*query)->sql_insert));
+	}
+
 	/* Allow escaping of embedded commas in fields to be turned off */
 	ast_set_flag((*query), OPT_ESCAPECOMMAS);
 	if ((tmp = ast_variable_retrieve(cfg, catg, "escapecommas"))) {
@@ -734,14 +817,25 @@ static int init_acf_query(struct ast_config *cfg, char *catg, struct acf_odbc_qu
 		*query = NULL;
 		return ENOMEM;
 	}
+	if (ast_string_field_init((*query)->acf, 128)) {
+		ast_free((*query)->acf);
+		ast_free(*query);
+		*query = NULL;
+		return ENOMEM;
+	}
 
 	if ((tmp = ast_variable_retrieve(cfg, catg, "prefix")) && !ast_strlen_zero(tmp)) {
-		asprintf((char **)&((*query)->acf->name), "%s_%s", tmp, catg);
+		if (asprintf((char **)&((*query)->acf->name), "%s_%s", tmp, catg) < 0) {
+			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+		}
 	} else {
-		asprintf((char **)&((*query)->acf->name), "ODBC_%s", catg);
+		if (asprintf((char **)&((*query)->acf->name), "ODBC_%s", catg) < 0) {
+			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+		}
 	}
 
 	if (!((*query)->acf->name)) {
+		ast_string_field_free_memory((*query)->acf);
 		ast_free((*query)->acf);
 		ast_free(*query);
 		*query = NULL;
@@ -749,13 +843,14 @@ static int init_acf_query(struct ast_config *cfg, char *catg, struct acf_odbc_qu
 	}
 
 	if ((tmp = ast_variable_retrieve(cfg, catg, "syntax")) && !ast_strlen_zero(tmp)) {
-		asprintf((char **)&((*query)->acf->syntax), "%s(%s)", (*query)->acf->name, tmp);
+		ast_string_field_build((*query)->acf, syntax, "%s(%s)", (*query)->acf->name, tmp);
 	} else {
-		asprintf((char **)&((*query)->acf->syntax), "%s(<arg1>[...[,<argN>]])", (*query)->acf->name);
+		ast_string_field_build((*query)->acf, syntax, "%s(<arg1>[...[,<argN>]])", (*query)->acf->name);
 	}
 
-	if (!((*query)->acf->syntax)) {
+	if (ast_strlen_zero((*query)->acf->syntax)) {
 		ast_free((char *)(*query)->acf->name);
+		ast_string_field_free_memory((*query)->acf);
 		ast_free((*query)->acf);
 		ast_free(*query);
 		*query = NULL;
@@ -763,14 +858,14 @@ static int init_acf_query(struct ast_config *cfg, char *catg, struct acf_odbc_qu
 	}
 
 	if ((tmp = ast_variable_retrieve(cfg, catg, "synopsis")) && !ast_strlen_zero(tmp)) {
-		(*query)->acf->synopsis = ast_strdup(tmp);
+		ast_string_field_set((*query)->acf, synopsis, tmp);
 	} else {
-		(*query)->acf->synopsis = ast_strdup("Runs the referenced query with the specified arguments");
+		ast_string_field_set((*query)->acf, synopsis, "Runs the referenced query with the specified arguments");
 	}
 
-	if (!((*query)->acf->synopsis)) {
+	if (ast_strlen_zero((*query)->acf->synopsis)) {
 		ast_free((char *)(*query)->acf->name);
-		ast_free((char *)(*query)->acf->syntax);
+		ast_string_field_free_memory((*query)->acf);
 		ast_free((*query)->acf);
 		ast_free(*query);
 		*query = NULL;
@@ -778,41 +873,52 @@ static int init_acf_query(struct ast_config *cfg, char *catg, struct acf_odbc_qu
 	}
 
 	if (!ast_strlen_zero((*query)->sql_read) && !ast_strlen_zero((*query)->sql_write)) {
-		asprintf((char **)&((*query)->acf->desc),
+		ast_string_field_build((*query)->acf, desc,
 					"Runs the following query, as defined in func_odbc.conf, performing\n"
 				   	"substitution of the arguments into the query as specified by ${ARG1},\n"
 					"${ARG2}, ... ${ARGn}.  When setting the function, the values are provided\n"
 					"either in whole as ${VALUE} or parsed as ${VAL1}, ${VAL2}, ... ${VALn}.\n"
-					"\nRead:\n%s\n\nWrite:\n%s\n",
+					"%s"
+					"\nRead:\n%s\n\nWrite:\n%s\n%s%s%s",
+					ast_strlen_zero((*query)->sql_insert) ? "" :
+						"If the write query affects no rows, the insert query will be\n"
+						"performed.\n",
 					(*query)->sql_read,
-					(*query)->sql_write);
+					(*query)->sql_write,
+					ast_strlen_zero((*query)->sql_insert) ? "" : "Insert:\n",
+					ast_strlen_zero((*query)->sql_insert) ? "" : (*query)->sql_insert,
+					ast_strlen_zero((*query)->sql_insert) ? "" : "\n");
 	} else if (!ast_strlen_zero((*query)->sql_read)) {
-		asprintf((char **)&((*query)->acf->desc),
-					"Runs the following query, as defined in func_odbc.conf, performing\n"
-				   	"substitution of the arguments into the query as specified by ${ARG1},\n"
-					"${ARG2}, ... ${ARGn}.  This function may only be read, not set.\n\nSQL:\n%s\n",
-					(*query)->sql_read);
+		ast_string_field_build((*query)->acf, desc,
+						"Runs the following query, as defined in func_odbc.conf, performing\n"
+					   	"substitution of the arguments into the query as specified by ${ARG1},\n"
+						"${ARG2}, ... ${ARGn}.  This function may only be read, not set.\n\nSQL:\n%s\n",
+						(*query)->sql_read);
 	} else if (!ast_strlen_zero((*query)->sql_write)) {
-		asprintf((char **)&((*query)->acf->desc),
+		ast_string_field_build((*query)->acf, desc,	
 					"Runs the following query, as defined in func_odbc.conf, performing\n"
 				   	"substitution of the arguments into the query as specified by ${ARG1},\n"
 					"${ARG2}, ... ${ARGn}.  The values are provided either in whole as\n"
 					"${VALUE} or parsed as ${VAL1}, ${VAL2}, ... ${VALn}.\n"
-					"This function may only be set.\nSQL:\n%s\n",
-					(*query)->sql_write);
+					"This function may only be set.\n%sSQL:\n%s\n%s%s%s",
+					ast_strlen_zero((*query)->sql_insert) ? "" :
+						"If the write query affects no rows, the insert query will be\n"
+						"performed.\n",
+					(*query)->sql_write,
+					ast_strlen_zero((*query)->sql_insert) ? "" : "Insert:\n",
+					ast_strlen_zero((*query)->sql_insert) ? "" : (*query)->sql_insert,
+					ast_strlen_zero((*query)->sql_insert) ? "" : "\n");
 	} else {
-		ast_free((char *)(*query)->acf->synopsis);
-		ast_free((char *)(*query)->acf->syntax);
+		ast_string_field_free_memory((*query)->acf);
 		ast_free((char *)(*query)->acf->name);
 		ast_free((*query)->acf);
 		ast_free(*query);
-		ast_log(LOG_WARNING, "Section %s was found, but there was no SQL to execute.  Ignoring.\n", catg);
+		ast_log(LOG_WARNING, "Section '%s' was found, but there was no SQL to execute.  Ignoring.\n", catg);
 		return EINVAL;
 	}
 
-	if (! ((*query)->acf->desc)) {
-		ast_free((char *)(*query)->acf->synopsis);
-		ast_free((char *)(*query)->acf->syntax);
+	if (ast_strlen_zero((*query)->acf->desc)) {
+		ast_string_field_free_memory((*query)->acf);
 		ast_free((char *)(*query)->acf->name);
 		ast_free((*query)->acf);
 		ast_free(*query);
@@ -841,12 +947,7 @@ static int free_acf_query(struct acf_odbc_query *query)
 		if (query->acf) {
 			if (query->acf->name)
 				ast_free((char *)query->acf->name);
-			if (query->acf->syntax)
-				ast_free((char *)query->acf->syntax);
-			if (query->acf->synopsis)
-				ast_free((char *)query->acf->synopsis);
-			if (query->acf->desc)
-				ast_free((char *)query->acf->desc);
+			ast_string_field_free_memory(query->acf);
 			ast_free(query->acf);
 		}
 		ast_free(query);
@@ -1191,7 +1292,7 @@ static int load_module(void)
 	struct ast_flags config_flags = { 0 };
 
 	res |= ast_custom_function_register(&fetch_function);
-	res |= ast_register_application(app_odbcfinish, exec_odbcfinish, syn_odbcfinish, desc_odbcfinish);
+	res |= ast_register_application_xml(app_odbcfinish, exec_odbcfinish);
 	AST_RWLIST_WRLOCK(&queries);
 
 	cfg = ast_config_load(config, config_flags);

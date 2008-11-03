@@ -59,7 +59,7 @@
  * Asterisk itself.
  */
 
-const char explanation[] =
+static const char explanation[] =
 "This file is created when Asterisk is run with a realtime priority (-p).  It\n"
 "must continue to exist, and the astcanary process must be allowed to continue\n"
 "running, or else the Asterisk process will, within a short period of time,\n"
@@ -82,7 +82,9 @@ int main(int argc, char *argv[])
 		if (utime(argv[1], NULL)) {
 			/* Recreate the file if it doesn't exist */
 			if ((fd = open(argv[1], O_RDWR | O_TRUNC | O_CREAT, 0777)) > -1) {
-				write(fd, explanation, strlen(explanation));
+				if (write(fd, explanation, strlen(explanation)) < 0) {
+					exit(1);
+				}
 				close(fd);
 			} else {
 				exit(1);

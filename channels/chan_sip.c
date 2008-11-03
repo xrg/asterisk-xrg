@@ -1658,7 +1658,9 @@ struct sip_peer {
 };
 
 
-/*! \brief Registrations with other SIP proxies
+/*! 
+ * \brief Registrations with other SIP proxies
+ *
  * Created by sip_register(), the entry is linked in the 'regl' list,
  * and never deleted (other than at 'sip reload' or module unload times).
  * The entry always has a pending timeout, either waiting for an ACK to
@@ -1667,11 +1669,12 @@ struct sip_peer {
  * or once the previously completed registration one expires).
  * The registration can be in one of many states, though at the moment
  * the handling is a bit mixed.
- * Note that the entire evolution of sip_registry (transmissions,
- * incoming packets and timeouts) is driven by one single thread,
- * do_monitor(), so there is almost no synchronization issue.
- * The only exception  is the sip_pvt creation/lookup,
- * as the dialoglist is also manipulated by other threads.
+ *
+ * XXX \todo Reference count handling for this object has some problems with
+ * respect to scheduler entries.  The ref count is handled in some places,
+ * but not all of them.  There are some places where references get leaked
+ * when this scheduler entry gets cancelled.  At worst, this would cause
+ * memory leaks on reloads if registrations get removed from configuration.
  */
 struct sip_registry {
 	ASTOBJ_COMPONENTS_FULL(struct sip_registry,1,1);
@@ -4002,15 +4005,6 @@ static void sip_destroy_peer(struct sip_peer *peer)
 		peer->chanvars = NULL;
 	}
 	
-	/* If the schedule delete fails, that means the schedule is currently
-	 * running, which means we should wait for that thread to complete.
-	 * Otherwise, there's a crashable race condition.
-	 *
-	 * NOTE: once peer is refcounted, this probably is no longer necessary.
-	 */
-	AST_SCHED_DEL(sched, peer->expire);
-	AST_SCHED_DEL(sched, peer->pokeexpire);
-
 	register_peer_exten(peer, FALSE);
 	ast_free_ha(peer->ha);
 	if (peer->selfdestruct)
@@ -4238,9 +4232,10 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 		/* Cache peer */
 		ast_copy_flags(&peer->flags[1], &global_flags[1], SIP_PAGE2_RTAUTOCLEAR|SIP_PAGE2_RTCACHEFRIENDS);
 		if (ast_test_flag(&global_flags[1], SIP_PAGE2_RTAUTOCLEAR)) {
-			AST_SCHED_REPLACE(peer->expire, sched, sip_cfg.rtautoclear * 1000, expire_register, (void *) peer);
-			/* we could be incr. its refcount right here, but I guess, since
-			   peers hang around until module unload time anyway, it's not worth the trouble */
+			AST_SCHED_REPLACE_UNREF(peer->expire, sched, sip_cfg.rtautoclear * 1000, expire_register, peer,
+					unref_peer(_data, "remove registration ref"),
+					unref_peer(peer, "remove registration ref"),
+					ref_peer(peer, "add registration ref"));
 		}
 		ao2_t_link(peers, peer, "link peer into peers table");
 		if (peer->addr.sin_addr.s_addr) {
@@ -4772,7 +4767,6 @@ static void sip_registry_destroy(struct sip_registry *reg)
 	ast_atomic_fetchadd_int(&regobjs, -1);
 	ast_dnsmgr_release(reg->dnsmgr);
 	ast_free(reg);
-	
 }
 
 /*! \brief Destroy MWI subscription object */
@@ -4865,8 +4859,10 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 
 	/* Destroy Session-Timers if allocated */
 	if (p->stimer) {
-		if (p->stimer->st_active == TRUE && p->stimer->st_schedid > -1)
-			AST_SCHED_DEL(sched, p->stimer->st_schedid);
+		if (p->stimer->st_active == TRUE && p->stimer->st_schedid > -1) {
+			AST_SCHED_DEL_UNREF(sched, p->stimer->st_schedid,
+					dialog_unref(p, "removing session timer ref"));
+		}
 		ast_free(p->stimer);
 		p->stimer = NULL;
 	}
@@ -10641,8 +10637,9 @@ static int expire_register(const void *data)
 		if (peer->addr.sin_addr.s_addr) {
 			ao2_t_unlink(peers_by_ip, peer, "ao2_unlink of peer from peers_by_ip table");
 		}
-		
 	}
+
+	unref_peer(peer, "removing peer ref for expire_register");
 
 	return 0;
 }
@@ -10653,7 +10650,11 @@ static int sip_poke_peer_s(const void *data)
 	struct sip_peer *peer = (struct sip_peer *)data;
 
 	peer->pokeexpire = -1;
+
 	sip_poke_peer(peer, 0);
+
+	unref_peer(peer, "removing poke peer ref");
+
 	return 0;
 }
 
@@ -10705,11 +10706,17 @@ static void reg_source_db(struct sip_peer *peer)
 	peer->addr.sin_port = htons(port);
 	if (sipsock < 0) {
 		/* SIP isn't up yet, so schedule a poke only, pretty soon */
-		AST_SCHED_REPLACE(peer->pokeexpire, sched, ast_random() % 5000 + 1, sip_poke_peer_s, peer);
+		AST_SCHED_REPLACE_UNREF(peer->pokeexpire, sched, ast_random() % 5000 + 1, sip_poke_peer_s, peer,
+				unref_peer(_data, "removing poke peer ref"),
+				unref_peer(peer, "removing poke peer ref"),
+				ref_peer(peer, "adding poke peer ref"));
 	} else {
 		sip_poke_peer(peer, 0);
 	}
-	AST_SCHED_REPLACE(peer->expire, sched, (expire + 10) * 1000, expire_register, peer);
+	AST_SCHED_REPLACE_UNREF(peer->expire, sched, (expire + 10) * 1000, expire_register, peer,
+			unref_peer(_data, "remove registration ref"),
+			unref_peer(peer, "remove registration ref"),
+			ref_peer(peer, "add registration ref"));
 	register_peer_exten(peer, TRUE);
 }
 
@@ -10860,7 +10867,9 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	} else if (!strcasecmp(curi, "*") || !expire) {	/* Unregister this peer */
 		/* This means remove all registrations and return OK */
 		memset(&peer->addr, 0, sizeof(peer->addr));
-		AST_SCHED_DEL(sched, peer->expire);
+
+		AST_SCHED_DEL_UNREF(sched, peer->expire,
+				unref_peer(peer, "remove register expire ref"));
 
 		destroy_association(peer);
 		
@@ -10940,13 +10949,22 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	if (!ast_strlen_zero(curi) && ast_strlen_zero(peer->username))
 		ast_copy_string(peer->username, curi, sizeof(peer->username));
 
-	AST_SCHED_DEL(sched, peer->expire);
+	AST_SCHED_DEL_UNREF(sched, peer->expire,
+			unref_peer(peer, "remove register expire ref"));
+
 	if (expire > max_expiry)
 		expire = max_expiry;
 	if (expire < min_expiry)
 		expire = min_expiry;
-	peer->expire = peer->is_realtime && !ast_test_flag(&peer->flags[1], SIP_PAGE2_RTCACHEFRIENDS) ? -1 :
-		ast_sched_add(sched, (expire + 10) * 1000, expire_register, peer);
+	if (peer->is_realtime && !ast_test_flag(&peer->flags[1], SIP_PAGE2_RTCACHEFRIENDS)) {
+		peer->expire = -1;
+	} else {
+		peer->expire = ast_sched_add(sched, (expire + 10) * 1000, expire_register, 
+				ref_peer(peer, "add registration ref"));
+		if (peer->expire == -1) {
+			unref_peer(peer, "remote registration ref");
+		}
+	}
 	pvt->expiry = expire;
 	snprintf(data, sizeof(data), "%s:%d:%d:%s:%s", ast_inet_ntoa(peer->addr.sin_addr), ntohs(peer->addr.sin_port), expire, peer->username, peer->fullcontact);
 	/* Saving TCP connections is useless, we won't be able to reconnect 
@@ -12370,7 +12388,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 
 		/* Then find devices based on IP */
 		if (!peer) {
-			find_peer(NULL, &p->recv, TRUE, FINDALLDEVICES, FALSE);
+			peer = find_peer(NULL, &p->recv, TRUE, FINDALLDEVICES, FALSE);
 		}
 	}
 
@@ -14137,7 +14155,7 @@ static char *sip_unregister(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 	
 	if ((peer = find_peer(a->argv[2], NULL, load_realtime, FINDALLDEVICES, TRUE))) {
 		if (peer->expire > 0) {
-			expire_register(peer);
+			expire_register(ref_peer(peer, "ref for expire_register"));
 			ast_cli(a->fd, "Unregistered peer \'%s\'\n\n", a->argv[2]);
 		} else {
 			ast_cli(a->fd, "Peer %s not registered\n", a->argv[2]);
@@ -16658,10 +16676,12 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 	pvt_set_needdestroy(p, "got OPTIONS response");
 
 	/* Try again eventually */
-	AST_SCHED_REPLACE(peer->pokeexpire, sched,
-		is_reachable ? peer->qualifyfreq : DEFAULT_FREQ_NOTOK,
-		sip_poke_peer_s, peer);
-	/* unref_peer(peer, "unref relatedpeer ptr var at end of handle_response_peerpoke"); */
+	AST_SCHED_REPLACE_UNREF(peer->pokeexpire, sched,
+			is_reachable ? peer->qualifyfreq : DEFAULT_FREQ_NOTOK,
+			sip_poke_peer_s, peer,
+			unref_peer(_data, "removing poke peer ref"),
+			unref_peer(peer, "removing poke peer ref"),
+			ref_peer(peer, "adding poke peer ref"));
 }
 
 /*! \brief Immediately stop RTP, VRTP and UDPTL as applicable */
@@ -16734,18 +16754,9 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 		switch(resp) {
 		case 100:	/* 100 Trying */
 		case 101:	/* 101 Dialog establishment */
-			if (sipmethod == SIP_INVITE) 
-				handle_response_invite(p, resp, rest, req, seqno);
-			break;
 		case 183:	/* 183 Session Progress */
-			if (sipmethod == SIP_INVITE) 
-				handle_response_invite(p, resp, rest, req, seqno);
-			break;
 		case 180:	/* 180 Ringing */
-			if (sipmethod == SIP_INVITE) 
-				handle_response_invite(p, resp, rest, req, seqno);
-			break;
-		case 182:       /* 182 Queued */
+		case 182:	/* 182 Queued */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			break;
@@ -20641,7 +20652,8 @@ static void restart_session_timer(struct sip_pvt *p)
 	}
 
 	if (p->stimer->st_active == TRUE) {
-		AST_SCHED_DEL(sched, p->stimer->st_schedid);
+		AST_SCHED_DEL_UNREF(sched, p->stimer->st_schedid,
+				dialog_unref(p, "Removing session timer ref"));
 		ast_debug(2, "Session timer stopped: %d - %s\n", p->stimer->st_schedid, p->callid);
 		start_session_timer(p);
 	}
@@ -20658,7 +20670,8 @@ static void stop_session_timer(struct sip_pvt *p)
 
 	if (p->stimer->st_active == TRUE) {
 		p->stimer->st_active = FALSE;
-		AST_SCHED_DEL(sched, p->stimer->st_schedid);
+		AST_SCHED_DEL_UNREF(sched, p->stimer->st_schedid,
+				dialog_unref(p, "removing session timer ref"));
 		ast_debug(2, "Session timer stopped: %d - %s\n", p->stimer->st_schedid, p->callid);
 	}
 }
@@ -20672,8 +20685,10 @@ static void start_session_timer(struct sip_pvt *p)
 		return;
 	}
 
-	p->stimer->st_schedid  = ast_sched_add(sched, p->stimer->st_interval * 1000 / 2, proc_session_timer, p);
+	p->stimer->st_schedid  = ast_sched_add(sched, p->stimer->st_interval * 1000 / 2, proc_session_timer, 
+			dialog_ref(p, "adding session timer ref"));
 	if (p->stimer->st_schedid < 0) {
+		dialog_unref(p, "removing session timer ref");
 		ast_log(LOG_ERROR, "ast_sched_add failed.\n");
 	}
 	ast_debug(2, "Session timer started: %d - %s\n", p->stimer->st_schedid, p->callid);
@@ -20685,23 +20700,21 @@ static int proc_session_timer(const void *vp)
 {
 	struct sip_pvt *p = (struct sip_pvt *) vp;
 	int sendreinv = FALSE;
+	int res = 0;
 
 	if (!p->stimer) {
 		ast_log(LOG_WARNING, "Null stimer in proc_session_timer - %s\n", p->callid);
-		return 0;
+		goto return_unref;
 	}
 
 	ast_debug(2, "Session timer expired: %d - %s\n", p->stimer->st_schedid, p->callid);
 
 	if (!p->owner) {
-		if (p->stimer->st_active == TRUE) {
-			stop_session_timer(p);
-		}
-		return 0;
+		goto return_unref;
 	}
 
 	if ((p->stimer->st_active != TRUE) || (p->owner->_state != AST_STATE_UP)) {
-		return 0;
+		goto return_unref;
 	}
 
 	switch (p->stimer->st_ref) {
@@ -20717,28 +20730,40 @@ static int proc_session_timer(const void *vp)
 		break;
 	default:
 		ast_log(LOG_ERROR, "Unknown session refresher %d\n", p->stimer->st_ref);
-		return -1;
+		goto return_unref;
 	}
 
 	if (sendreinv == TRUE) {
+		res = 1;
 		transmit_reinvite_with_sdp(p, FALSE, TRUE);
 	} else {
 		p->stimer->st_expirys++;
 		if (p->stimer->st_expirys >= 2) {
 			ast_log(LOG_WARNING, "Session-Timer expired - %s\n", p->callid);
-			stop_session_timer(p);
 
 			while (p->owner && ast_channel_trylock(p->owner)) {
 				sip_pvt_unlock(p);
 				usleep(1);
 				sip_pvt_lock(p);
-          		}
+			}
 
-           		ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
-           		ast_channel_unlock(p->owner);
+			ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
+			ast_channel_unlock(p->owner);
 		}
 	}
-	return 1;
+
+return_unref:
+	if (!res) {
+		/* An error occurred.  Stop session timer processing */
+		p->stimer->st_schedid = -1;
+		stop_session_timer(p);
+		
+		/* If we are not asking to be rescheduled, then we need to release our
+		 * reference to the dialog. */
+		dialog_unref(p, "removing session timer ref");
+	}
+
+	return res;
 }
 
 
@@ -20931,12 +20956,14 @@ static int sip_poke_noanswer(const void *data)
 	struct sip_peer *peer = (struct sip_peer *)data;
 	
 	peer->pokeexpire = -1;
+
 	if (peer->lastms > -1) {
 		ast_log(LOG_NOTICE, "Peer '%s' is now UNREACHABLE!  Last qualify: %d\n", peer->name, peer->lastms);
 		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: SIP\r\nPeer: SIP/%s\r\nPeerStatus: Unreachable\r\nTime: %d\r\n", peer->name, -1);
 		if (sip_cfg.regextenonqualify)
 			register_peer_exten(peer, FALSE);
 	}
+
 	if (peer->call) {
 		dialog_unlink_all(peer->call, TRUE, TRUE);
 		peer->call = dialog_unref(peer->call, "unref dialog peer->call");
@@ -20945,9 +20972,17 @@ static int sip_poke_noanswer(const void *data)
 	
 	peer->lastms = -1;
 	ast_devstate_changed(AST_DEVICE_UNAVAILABLE, "SIP/%s", peer->name);
+
 	/* Try again quickly */
-	AST_SCHED_REPLACE(peer->pokeexpire, sched, 
-		DEFAULT_FREQ_NOTOK, sip_poke_peer_s, peer);
+	AST_SCHED_REPLACE_UNREF(peer->pokeexpire, sched, 
+			DEFAULT_FREQ_NOTOK, sip_poke_peer_s, peer,
+			unref_peer(_data, "removing poke peer ref"),
+			unref_peer(peer, "removing poke peer ref"),
+			ref_peer(peer, "adding poke peer ref"));
+
+	/* Release the ref held by the running scheduler entry */
+	unref_peer(peer, "release peer poke noanswer ref");
+
 	return 0;
 }
 
@@ -20964,7 +20999,8 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 	if ((!peer->maxms && !force) || !peer->addr.sin_addr.s_addr) {
 		/* IF we have no IP, or this isn't to be monitored, return
 		  immediately after clearing things out */
-		AST_SCHED_DEL(sched, peer->pokeexpire);
+		AST_SCHED_DEL_UNREF(sched, peer->pokeexpire,
+				unref_peer(peer, "removing poke peer ref"));
 		
 		peer->lastms = 0;
 		if (peer->call) {
@@ -21007,7 +21043,8 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 	build_callid_pvt(p);
 	ao2_t_link(dialogs, p, "Linking in under new name");
 
-	AST_SCHED_DEL(sched, peer->pokeexpire);
+	AST_SCHED_DEL_UNREF(sched, peer->pokeexpire,
+			unref_peer(peer, "removing poke peer ref"));
 	
 	if (p->relatedpeer)
 		p->relatedpeer = unref_peer(p->relatedpeer,"unsetting the relatedpeer field in the dialog, before it is set to something else.");
@@ -21023,7 +21060,10 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 	if (xmitres == XMIT_ERROR) {
 		sip_poke_noanswer(peer);	/* Immediately unreachable, network problems */
 	} else if (!force) {
-		AST_SCHED_REPLACE(peer->pokeexpire, sched, peer->maxms * 2, sip_poke_noanswer, peer);
+		AST_SCHED_REPLACE_UNREF(peer->pokeexpire, sched, peer->maxms * 2, sip_poke_noanswer, peer,
+				unref_peer(_data, "removing poke peer ref"),
+				unref_peer(peer, "removing poke peer ref"),
+				ref_peer(peer, "adding poke peer ref"));
 	}
 	dialog_unref(p, "unref dialog at end of sip_poke_peer, obtained from sip_alloc, just before it goes out of scope");
 	return 0;
@@ -21882,7 +21922,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				peer->host_dynamic = TRUE;
 			} else {
 				/* Non-dynamic.  Make sure we become that way if we're not */
-				AST_SCHED_DEL(sched, peer->expire);
+				AST_SCHED_DEL_UNREF(sched, peer->expire,
+						unref_peer(peer, "removing register expire ref"));
 				peer->host_dynamic = FALSE;
 				srvlookup = v->value;
 				if (global_dynamic_exclude_static) {
@@ -22036,6 +22077,14 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				ast_log(LOG_WARNING, "Qualification of peer '%s' should be 'yes', 'no', or a number of milliseconds at line %d of sip.conf\n", peer->name, v->lineno);
 				peer->maxms = 0;
 			}
+			if (realtime && !ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && peer->maxms > 0) {
+				/* This would otherwise cause a network storm, where the
+				 * qualify response refreshes the peer from the database,
+				 * which in turn causes another qualify to be sent, ad
+				 * infinitum. */
+				ast_log(LOG_WARNING, "Qualify is incompatible with dynamic uncached realtime.  Please either turn rtcachefriends on or turn qualify off on peer '%s'\n", peer->name);
+				peer->maxms = 0;
+			}
 		} else if (!strcasecmp(v->name, "qualifyfreq")) {
 			int i;
 			if (sscanf(v->value, "%d", &i) == 1)
@@ -22159,8 +22208,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	if (!ast_strlen_zero(callback)) { /* build string from peer info */
 		char *reg_string;
 
-		asprintf(&reg_string, "%s:%s@%s/%s", peer->username, peer->secret, peer->tohost, callback);
-		if (reg_string) {
+		if (asprintf(&reg_string, "%s:%s@%s/%s", peer->username, peer->secret, peer->tohost, callback) < 0) {
+			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+		} else	if (reg_string) {
 			sip_register(reg_string, 0); /* XXX TODO: count in registry_count */
 			ast_free(reg_string);
 		}
@@ -23525,7 +23575,10 @@ static void sip_poke_all_peers(void)
 	while ((peer = ao2_t_iterator_next(&i, "iterate thru peers table"))) {
 		ao2_lock(peer);
 		ms += 100;
-		AST_SCHED_REPLACE(peer->pokeexpire, sched, ms, sip_poke_peer_s, peer);
+		AST_SCHED_REPLACE_UNREF(peer->pokeexpire, sched, ms, sip_poke_peer_s, peer,
+				unref_peer(_data, "removing poke peer ref"),
+				unref_peer(peer, "removing poke peer ref"),
+				ref_peer(peer, "adding poke peer ref"));
 		ao2_unlock(peer);
 		unref_peer(peer, "toss iterator peer ptr");
 	}

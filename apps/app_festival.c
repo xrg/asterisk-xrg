@@ -38,6 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <signal.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <errno.h>
 
 #include "asterisk/file.h"
 #include "asterisk/channel.h"
@@ -53,15 +54,24 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MAXLEN 180
 #define MAXFESTLEN 2048
 
+/*** DOCUMENTATION
+	<application name="Festival" language="en_US">
+		<synopsis>
+			Say text to the user.
+		</synopsis>
+		<syntax>
+			<parameter name="text" required="true" />
+			<parameter name="intkeys" />
+		</syntax>
+		<description>
+			<para>Connect to Festival, send the argument, get back the waveform, play it to the user,
+			allowing any given interrupt keys to immediately terminate and return the value, or
+			<literal>any</literal> to allow any number back (useful in dialplan).</para>
+		</description>
+	</application>
+ ***/
+
 static char *app = "Festival";
-
-static char *synopsis = "Say text to the user";
-
-static char *descrip = 
-"  Festival(text[,intkeys]):  Connect to Festival, send the argument, get back the waveform,\n"
-"play it to the user, allowing any given interrupt keys to immediately terminate and return\n"
-"the value, or 'any' to allow any number back (useful in dialplan)\n";
-
 
 static char *socket_receive_file_to_buff(int fd, int *size)
 {
@@ -138,7 +148,11 @@ static int send_waveform_to_fd(char *waveform, int length, int fd)
 		*(waveform + x) = c;
 	}
 #endif
-	write(fd, waveform, length);
+	
+	if (write(fd, waveform, length) < 0) {
+		ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+	}
+
 	close(fd);
 	exit(0);
 }
@@ -415,17 +429,25 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
 				writecache = 1;
 				strln = strlen(args.text);
 				ast_debug(1, "line length : %d\n", strln);
-				write(fdesc, &strln, sizeof(strln));
-				write(fdesc, args.text, strln);
+    				if (write(fdesc,&strln,sizeof(int)) < 0) {
+					ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+				}
+    				if (write(fdesc,data,strln) < 0) {
+					ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+				}
 				seekpos = lseek(fdesc, 0, SEEK_CUR);
 				ast_debug(1, "Seek position : %d\n", seekpos);
 			}
 		} else {
-			read(fdesc, &strln, sizeof(strln));
+    			if (read(fdesc,&strln,sizeof(int)) != sizeof(int)) {
+				ast_log(LOG_WARNING, "read() failed: %s\n", strerror(errno));
+			}
 			ast_debug(1, "Cache file exists, strln=%d, strlen=%d\n", strln, (int)strlen(args.text));
 			if (strlen(args.text) == strln) {
 				ast_debug(1, "Size OK\n");
-				read(fdesc, &bigstring, strln);
+    				if (read(fdesc,&bigstring,strln) != strln) {
+					ast_log(LOG_WARNING, "read() failed: %s\n", strerror(errno));
+				}
 				bigstring[strln] = 0;
 				if (strcmp(bigstring, args.text) == 0) { 
 					readcache = 1;
@@ -455,7 +477,9 @@ static int festival_exec(struct ast_channel *chan, void *vdata)
 	if (writecache == 1) {
 		ast_debug(1, "Writing result to cache...\n");
 		while ((strln = read(fd, buffer, 16384)) != 0) {
-			write(fdesc, buffer, strln);
+			if (write(fdesc,buffer,strln) < 0) {
+				ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+			}
 		}
 		close(fd);
 		close(fdesc);
@@ -526,7 +550,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_config_destroy(cfg);
-	return ast_register_application(app, festival_exec, synopsis, descrip);
+	return ast_register_application_xml(app, festival_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Simple Festival Interface");

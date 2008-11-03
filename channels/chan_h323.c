@@ -1246,7 +1246,7 @@ static struct oh323_alias *realtime_alias(const char *alias)
 
 static int update_common_options(struct ast_variable *v, struct call_options *options)
 {
-	int tmp;
+	int tmp = 0;
 	char *val, *opt;
 
 	if (!strcasecmp(v->name, "allow")) {
@@ -3316,11 +3316,12 @@ static int unload_module(void)
 	}
 	if (!ast_mutex_lock(&monlock)) {
 		if ((monitor_thread != AST_PTHREADT_STOP) && (monitor_thread != AST_PTHREADT_NULL)) {
-			/* this causes a seg, anyone know why? */
-			if (monitor_thread != pthread_self())
+			if (monitor_thread != pthread_self()) {
 				pthread_cancel(monitor_thread);
+			}
 			pthread_kill(monitor_thread, SIGURG);
-			pthread_join(monitor_thread, NULL);
+			/* Cannot join detached threads */
+			/* pthread_join(monitor_thread, NULL); */
 		}
 		monitor_thread = AST_PTHREADT_STOP;
 		ast_mutex_unlock(&monlock);

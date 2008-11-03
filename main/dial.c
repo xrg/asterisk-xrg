@@ -53,15 +53,15 @@ struct ast_dial {
 
 /*! \brief Dialing channel structure. Contains per-channel dialing options, asterisk channel, and more! */
 struct ast_dial_channel {
-	int num;                               /*!< Unique number for dialed channel */
-	int timeout;                           /*!< Maximum time allowed for attempt */
-	char *tech;                            /*!< Technology being dialed */
-	char *device;                          /*!< Device being dialed */
-	void *options[AST_DIAL_OPTION_MAX];    /*!< Channel specific options */
-	int cause;                             /*!< Cause code in case of failure */
-	int is_running_app:1;                  /*!< Is this running an application? */
-	struct ast_channel *owner;             /*!< Asterisk channel */
-	AST_LIST_ENTRY(ast_dial_channel) list; /*!< Linked list information */
+	int num;				/*!< Unique number for dialed channel */
+	int timeout;				/*!< Maximum time allowed for attempt */
+	char *tech;				/*!< Technology being dialed */
+	char *device;				/*!< Device being dialed */
+	void *options[AST_DIAL_OPTION_MAX];	/*!< Channel specific options */
+	int cause;				/*!< Cause code in case of failure */
+	unsigned int is_running_app:1;		/*!< Is this running an application? */
+	struct ast_channel *owner;		/*!< Asterisk channel */
+	AST_LIST_ENTRY(ast_dial_channel) list;	/*!< Linked list information */
 };
 
 /*! \brief Typedef for dial option enable */
@@ -1038,7 +1038,7 @@ void ast_dial_set_global_timeout(struct ast_dial *dial, int timeout)
 {
 	dial->timeout = timeout;
 
-	if (dial->timeout > 0 && dial->actual_timeout > dial->timeout)
+	if (dial->timeout > 0 && (dial->actual_timeout > dial->timeout || dial->actual_timeout == -1))
 		dial->actual_timeout = dial->timeout;
 
 	return;
@@ -1059,7 +1059,7 @@ void ast_dial_set_timeout(struct ast_dial *dial, int num, int timeout)
 
 	channel->timeout = timeout;
 
-	if (channel->timeout > 0 && dial->actual_timeout > channel->timeout)
+	if (channel->timeout > 0 && (dial->actual_timeout > channel->timeout || dial->actual_timeout == -1))
 		dial->actual_timeout = channel->timeout;
 
 	return;
