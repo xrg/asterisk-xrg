@@ -450,8 +450,9 @@ install -m0644 asterisk.sysconfig %{buildroot}%{_sysconfdir}/sysconfig/asterisk
 # fix logrotation
 install -d %{buildroot}%{_sysconfdir}/logrotate.d
 cat > %{buildroot}%{_sysconfdir}/logrotate.d/asterisk << EOF
-/var/log/asterisk/console /var/log/asterisk/debug /var/log/asterisk/messages /var/log/asterisk/queue_log /var/log/asterisk/event_log /var/log/asterisk/cdr-csv/Master.csv {
+/var/log/asterisk/console /var/log/asterisk/debug /var/log/asterisk/messages /var/log/asterisk/full /var/log/asterisk/queue_log /var/log/asterisk/event_log /var/log/asterisk/cdr-custom/*.csv /var/log/asterisk/cdr-csv/*.csv {
     weekly
+    size 10M
     rotate 5
     copytruncate
     compress
