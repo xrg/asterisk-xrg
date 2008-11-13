@@ -81,6 +81,7 @@ enum error_type {
 	UNSPECIFIED_CATEGORY,
 	UNSPECIFIED_ARGUMENT,
 	FAILURE_ALLOCATION,
+	FAILURE_NEWCAT,
 	FAILURE_DELCAT,
 	FAILURE_EMPTYCAT,
 	FAILURE_UPDATE,
@@ -1286,17 +1287,24 @@ static enum error_type handle_updates(struct mansession *s, const struct message
 	struct ast_str *str1 = ast_str_create(16), *str2 = ast_str_create(16);
 	enum error_type result = 0;
 
-	for (x = 0; x < 100000; x++) {
+	for (x = 0; x < 100000; x++) {	/* 100000 = the max number of allowed updates + 1 */
 		unsigned int object = 0;
 
 		snprintf(hdr, sizeof(hdr), "Action-%06d", x);
 		action = astman_get_header(m, hdr);
-		if (ast_strlen_zero(action))
-			break;
+		if (ast_strlen_zero(action))		/* breaks the for loop if no action header */
+			break;                      	/* this could cause problems if actions come in misnumbered */
+
 		snprintf(hdr, sizeof(hdr), "Cat-%06d", x);
 		cat = astman_get_header(m, hdr);
+		if (ast_strlen_zero(cat)) {		/* every action needs a category */
+			result =  UNSPECIFIED_CATEGORY;
+			break;
+		}
+
 		snprintf(hdr, sizeof(hdr), "Var-%06d", x);
 		var = astman_get_header(m, hdr);
+
 		snprintf(hdr, sizeof(hdr), "Value-%06d", x);
 		value = astman_get_header(m, hdr);
 
@@ -1304,13 +1312,16 @@ static enum error_type handle_updates(struct mansession *s, const struct message
 			object = 1;
 			value++;
 		}
+	
 		snprintf(hdr, sizeof(hdr), "Match-%06d", x);
 		match = astman_get_header(m, hdr);
+
 		snprintf(hdr, sizeof(hdr), "Line-%06d", x);
 		line = astman_get_header(m, hdr);
+
 		if (!strcasecmp(action, "newcat")) {
-			if (ast_strlen_zero(cat)) {
-				result = UNSPECIFIED_CATEGORY;
+			if (ast_category_get(cfg,cat)) {	/* check to make sure the cat doesn't */
+				result = FAILURE_NEWCAT;	/* already exist */
 				break;
 			}
 			if (!(category = ast_category_new(cat, dfn, -1))) {
@@ -1322,7 +1333,7 @@ static enum error_type handle_updates(struct mansession *s, const struct message
 			} else
 				ast_category_insert(cfg, category, match);
 		} else if (!strcasecmp(action, "renamecat")) {
-			if (ast_strlen_zero(cat) || ast_strlen_zero(value)) {
+			if (ast_strlen_zero(value)) {
 				result = UNSPECIFIED_ARGUMENT;
 				break;
 			}
@@ -1332,25 +1343,17 @@ static enum error_type handle_updates(struct mansession *s, const struct message
 			}
 			ast_category_rename(category, value);
 		} else if (!strcasecmp(action, "delcat")) {
-			if (ast_strlen_zero(cat)) {
-				result = UNSPECIFIED_CATEGORY;
-				break;
-			}
 			if (ast_category_delete(cfg, cat)) {
 				result = FAILURE_DELCAT;
 				break;
 			}
 		} else if (!strcasecmp(action, "emptycat")) {
-			if (ast_strlen_zero(cat)) {
-				result = UNSPECIFIED_CATEGORY;
-				break;
-			}
 			if (ast_category_empty(cfg, cat)) {
 				result = FAILURE_EMPTYCAT;
 				break;
 			}
 		} else if (!strcasecmp(action, "update")) {
-			if (ast_strlen_zero(cat) || ast_strlen_zero(var)) {
+			if (ast_strlen_zero(var)) {
 				result = UNSPECIFIED_ARGUMENT;
 				break;
 			}
@@ -1363,7 +1366,7 @@ static enum error_type handle_updates(struct mansession *s, const struct message
 				break;
 			}
 		} else if (!strcasecmp(action, "delete")) {
-			if (ast_strlen_zero(cat) || (ast_strlen_zero(var) && ast_strlen_zero(line))) {
+			if ((ast_strlen_zero(var) && ast_strlen_zero(line))) {
 				result = UNSPECIFIED_ARGUMENT;
 				break;
 			}
@@ -1376,7 +1379,7 @@ static enum error_type handle_updates(struct mansession *s, const struct message
 				break;
 			}
 		} else if (!strcasecmp(action, "append")) {
-			if (ast_strlen_zero(cat) || ast_strlen_zero(var)) {
+			if (ast_strlen_zero(var)) {
 				result = UNSPECIFIED_ARGUMENT;
 				break;
 			}
@@ -1392,7 +1395,7 @@ static enum error_type handle_updates(struct mansession *s, const struct message
 				v->object = 1;
 			ast_variable_append(category, v);
 		} else if (!strcasecmp(action, "insert")) {
-			if (ast_strlen_zero(cat) || ast_strlen_zero(var) || ast_strlen_zero(line)) {
+			if (ast_strlen_zero(var) || ast_strlen_zero(line)) {
 				result = UNSPECIFIED_ARGUMENT;
 				break;
 			}
@@ -1452,7 +1455,7 @@ static int action_updateconfig(struct mansession *s, const struct message *m)
 	result = handle_updates(s, m, cfg, dfn);
 	if (!result) {
 		ast_include_rename(cfg, sfn, dfn); /* change the include references from dfn to sfn, so things match up */
-		res = config_text_file_save(dfn, cfg, "Manager");
+		res = ast_config_text_file_save(dfn, cfg, "Manager");
 		ast_config_destroy(cfg);
 		if (res) {
 			astman_send_error(s, m, "Save of config failed");
@@ -1481,6 +1484,9 @@ static int action_updateconfig(struct mansession *s, const struct message *m)
 			break;
 		case FAILURE_ALLOCATION:
 			astman_send_error(s, m, "Memory allocation failure, this should not happen");
+			break;
+		case FAILURE_NEWCAT:
+			astman_send_error(s, m, "Create category did not complete successfully");
 			break;
 		case FAILURE_DELCAT:
 			astman_send_error(s, m, "Delete category did not complete successfully");
@@ -3558,7 +3564,7 @@ static int variable_count_hash_fn(const void *vvc, const int flags)
 	return res;
 }
 
-static int variable_count_cmp_fn(void *obj, void *vstr, int flags)
+static int variable_count_cmp_fn(void *obj, void *vstr, void *data, int flags)
 {
 	/* Due to the simplicity of struct variable_count, it makes no difference
 	 * if you pass in objects or strings, the same operation applies. This is
@@ -3667,7 +3673,7 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *v
 
 		if (!in_data) {	/* build appropriate line start */
 			ast_str_append(out, 0, xml ? " " : "<tr><td>");
-			if ((vc = ao2_find(vco, var, 0)))
+			if ((vc = ao2_find(vco, var, NULL, 0)))
 				vc->count++;
 			else {
 				/* Create a new entry for this one */

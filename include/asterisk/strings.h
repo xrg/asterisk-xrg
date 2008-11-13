@@ -52,13 +52,13 @@ static force_inline int ast_strlen_zero(const char *s)
 /*! \brief returns the equivalent of logic or for strings:
  * first one if not empty, otherwise second one.
  */
-#define S_OR(a, b)           (!ast_strlen_zero(a) ? (a) : (b))
+#define S_OR(a, b) ({typeof(&((a)[0])) __x = (a); ast_strlen_zero(__x) ? (b) : __x;})
 
 /*! \brief returns the equivalent of logic or for strings, with an additional boolean check:
  * second one if not empty and first one is true, otherwise third one.
  * example: S_COR(usewidget, widget, "<no widget>")
  */
-#define S_COR(a, b, c)   ((a && !ast_strlen_zero(b)) ? (b) : (c))
+#define S_COR(a, b, c) ({typeof(&((b)[0])) __x = (b); (a) && !ast_strlen_zero(__x) ? (__x) : (c);})
 
 /*!
   \brief Gets a pointer to the first non-whitespace character in a string.
@@ -563,7 +563,7 @@ struct ast_str *__ast_str_thread_get(struct ast_threadstorage *ts,
  * interface simplified).
  */
 enum {
-	/*! An error has occured and the contents of the dynamic string
+	/*! An error has occurred and the contents of the dynamic string
 	 *  are undefined */
 	AST_DYNSTR_BUILD_FAILED = -1,
 	/*! The buffer size for the dynamic string had to be increased, and

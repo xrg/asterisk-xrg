@@ -80,6 +80,7 @@ enum pp_variables {
 	PP_CALLERID,
 	PP_TIMEZONE,
 	PP_LINENUMBER,
+	PP_LINEKEYS,
 	PP_VAR_LIST_LENGTH,	/* This entry must always be the last in the list */
 };
 
@@ -98,6 +99,7 @@ static const struct pp_variable_lookup {
 	{ PP_CALLERID, "cid_number", "CALLERID" },
 	{ PP_TIMEZONE, "timezone", "TIMEZONE" },
 	{ PP_LINENUMBER, "linenumber", "LINE" },
+ 	{ PP_LINEKEYS, "linekeys", "LINEKEYS" },
 };
 
 /*! \brief structure to hold file data */
@@ -236,7 +238,7 @@ static struct phone_profile *find_profile(const char *name)
 		.name = name,
 	};
 
-	return ao2_find(profiles, &tmp, OBJ_POINTER);
+	return ao2_find(profiles, &tmp, NULL, OBJ_POINTER);
 }
 
 static int profile_hash_fn(const void *obj, const int flags)
@@ -246,7 +248,7 @@ static int profile_hash_fn(const void *obj, const int flags)
 	return ast_str_hash(profile->name);
 }
 
-static int profile_cmp_fn(void *obj, void *arg, int flags)
+static int profile_cmp_fn(void *obj, void *arg, void *data, int flags)
 {
 	const struct phone_profile *profile1 = obj, *profile2 = arg;
 
@@ -299,7 +301,7 @@ static int routes_hash_fn(const void *obj, const int flags)
 	return ast_str_hash(uri);
 }
 
-static int routes_cmp_fn(void *obj, void *arg, int flags)
+static int routes_cmp_fn(void *obj, void *arg, void *data, int flags)
 {
 	const struct http_route *route1 = obj, *route2 = arg;
 
@@ -419,7 +421,7 @@ static struct ast_str *phoneprov_callback(struct ast_tcptls_session_instance *se
 	struct timeval now = ast_tvnow();
 	struct ast_tm tm;
 
-	if (!(route = ao2_find(http_routes, &search_route, OBJ_POINTER))) {
+	if (!(route = ao2_find(http_routes, &search_route, NULL, OBJ_POINTER))) {
 		goto out404;
 	}
 
@@ -746,6 +748,10 @@ static struct extension *build_extension(struct ast_config *cfg, const char *nam
 				tmp = "1";
 			}
 			exten->index = atoi(tmp);
+		} else if (i == PP_LINEKEYS) {
+			if (!tmp) {
+				tmp = "1";
+			}
 		}
 
 		if (tmp && (var = ast_var_assign(pp_variable_list[i].template_var, tmp))) {
@@ -780,7 +786,7 @@ static struct user *find_user(const char *macaddress)
 		.macaddress = macaddress,
 	};
 
-	return ao2_find(users, &tmp, OBJ_POINTER);
+	return ao2_find(users, &tmp, NULL, OBJ_POINTER);
 }
 
 static int users_hash_fn(const void *obj, const int flags)
@@ -797,7 +803,7 @@ static int users_hash_fn(const void *obj, const int flags)
 	return ast_str_hash(mac);
 }
 
-static int users_cmp_fn(void *obj, void *arg, int flags)
+static int users_cmp_fn(void *obj, void *arg, void *data, int flags)
 {
 	const struct user *user1 = obj, *user2 = arg;
 

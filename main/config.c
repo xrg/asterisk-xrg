@@ -149,7 +149,7 @@ static int hash_string(const void *obj, const int flags)
 	return total;
 }
 
-static int hashtab_compare_strings(void *a, void *b, int flags)
+static int hashtab_compare_strings(void *a, void *b, void *data, int flags)
 {
 	const struct inclfile *ae = a, *be = b;
 	return !strcmp(ae->fname, be->fname) ? CMP_MATCH | CMP_STOP : 0;
@@ -1509,7 +1509,7 @@ static void set_fn(char *fn, int fn_size, const char *file, const char *configfi
 	else
 		snprintf(fn, fn_size, "%s/%s", ast_config_AST_CONFIG_DIR, file);
 	lookup.fname = fn;
-	*fi = ao2_find(fileset, &lookup, OBJ_POINTER);
+	*fi = ao2_find(fileset, &lookup, NULL, OBJ_POINTER);
 	if (!(*fi)) {
 		/* set up a file scratch pad */
 		struct inclfile *fx = ao2_alloc(sizeof(struct inclfile), inclfile_destroy);
@@ -1559,6 +1559,11 @@ static void insert_leading_blank_lines(FILE *fp, struct inclfile *fi, struct ast
 }
 
 int config_text_file_save(const char *configfile, const struct ast_config *cfg, const char *generator)
+{
+	return ast_config_text_file_save(configfile, cfg, generator);
+}
+
+int ast_config_text_file_save(const char *configfile, const struct ast_config *cfg, const char *generator)
 {
 	FILE *f;
 	char fn[256];

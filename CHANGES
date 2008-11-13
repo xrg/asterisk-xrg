@@ -11,6 +11,10 @@ SIP Changes
    making the new/old message count available to local devices.
  * Added support for setting the domain in the URI for caller of an
    outbound call by using the SIPFROMDOMAIN channel variable.
+ * Added a new configuration option "remotesecret" for authentication to
+   remote services. For backwards compatibility, "secret" still has the
+   same function as before, but now you can configure both a remote secret and a
+   local secret for mutual authentication.
 
 Skinny Changes
 --------------
@@ -28,6 +32,9 @@ Dialplan Functions
  * Added debugging CLI functions to func_odbc, 'odbc read' and 'odbc write'.
  * func_odbc now may specify an insert query to execute, when the write query
    affects 0 rows (usually indicating that no such row exists).
+ * Added a new dialplan function, LISTFILTER, which permits removing elements
+   from a set list, by name.  Uses the same general syntax as the existing CUT
+   and FIELDQTY dialplan functions, which also manage lists.
 
 Applications
 ------------
@@ -51,6 +58,8 @@ Miscellaneous
      same  =>     n,SomethingElse()
  * musiconhold.conf classes of type 'files' can now use relative directory paths,
    which are interpreted as relative to the astvarlibdir setting in asterisk.conf.
+ * All deprecated CLI commands are removed from the sourcecode. They are now handled
+   by the new clialiases module. See cli_aliases.conf.sample file.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.0 to Asterisk 1.6.1  -------------

@@ -82,7 +82,7 @@ AC_SUBST(HOST_CPU)
 AC_SUBST(HOST_VENDOR)
 AC_SUBST(HOST_OS)
 
-WINARCH=0
+PBX_WINARCH=0
 
 case "${host_os}" in
      freebsd*)
@@ -99,11 +99,11 @@ case "${host_os}" in
      ;;
      mingw32)
      OSARCH=mingw32
-     WINARCH=1
+     PBX_WINARCH=1
      ;;
      cygwin)
      OSARCH=cygwin
-     WINARCH=1
+     PBX_WINARCH=1
      ;;
      *)
      OSARCH=${host_os}
@@ -111,7 +111,7 @@ case "${host_os}" in
 esac
 
 AC_SUBST(OSARCH)
-AC_SUBST(WINARCH)
+AC_SUBST(PBX_WINARCH)
 
 #  check for uname
 AC_PATH_TOOL([UNAME], [uname], No)
@@ -1365,7 +1365,9 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
 AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
-AST_EXT_LIB_CHECK([PRI], [pri], [pri_progress_with_cause], [libpri.h])
+AST_EXT_LIB_CHECK([PRI], [pri], [pri_new_bri], [libpri.h])
+
+AST_EXT_LIB_CHECK([PRI_PROG_W_CAUSE], [pri], [pri_progress_with_cause], [libpri.h])
 
 AST_EXT_LIB_CHECK([PRI_INBANDDISCONNECT], [pri], [pri_set_inbanddisconnect], [libpri.h])
 
@@ -1648,6 +1650,16 @@ fi
 
 AC_CONFIG_FILES([build_tools/menuselect-deps makeopts channels/h323/Makefile])
 AST_CHECK_MANDATORY
+
+if test -f build_tools/menuselect-deps; then
+    # extract old values of all PBX_ variables from menuselect-deps
+    # and preserve them so that menuselect can determine whether
+    # any previously-met dependencies are no longer met and warn
+    # the user appropriately
+    while IFS="=:" read var val old_val; do
+        eval "PBX_${var}=\${PBX_${var}}:${val}"
+    done < build_tools/menuselect-deps
+fi
 
 AC_OUTPUT
 

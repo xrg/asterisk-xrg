@@ -57,8 +57,197 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/speech.h"
 #include "asterisk/manager.h"
 #include "asterisk/features.h"
+#include "asterisk/term.h"
+#include "asterisk/xmldoc.h"
+
+/*** DOCUMENTATION
+	<agi name="answer" language="en_US">
+		<synopsis>
+			Answer channel
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Answers channel if not already in answer state. Returns <literal>-1</literal> on
+			channel failure, or <literal>0</literal> if successful.</para>
+		</description>
+		<see-also>
+			<ref type="agi">hangup</ref>
+		</see-also>
+	</agi>
+	<agi name="channel status" language="en_US">
+		<synopsis>
+			Returns status of the connected channel.
+		</synopsis>
+		<syntax>
+			<parameter name="channelname" />
+		</syntax>
+		<description>
+			<para>Returns the status of the specified <replaceable>channelname</replaceable>.
+			If no channel name is given then returns the status of the current channel.</para>
+			<para>Return values:</para>
+			<enumlist>
+				<enum name="0">
+					<para>Channel is down and available.</para>
+				</enum>
+				<enum name="1">
+					<para>Channel is down, but reserved.</para>
+				</enum>
+				<enum name="2">
+					<para>Channel is off hook.</para>
+				</enum>
+				<enum name="3">
+					<para>Digits (or equivalent) have been dialed.</para>
+				</enum>
+				<enum name="4">
+					<para>Line is ringing.</para>
+				</enum>
+				<enum name="5">
+					<para>Remote end is ringing.</para>
+				</enum>
+				<enum name="6">
+					<para>Line is up.</para>
+				</enum>
+				<enum name="7">
+					<para>Line is busy.</para>
+				</enum>
+			</enumlist>
+		</description>
+	</agi>
+	<agi name="database del" language="en_US">
+		<synopsis>
+			Removes database key/value
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="key" required="true" />
+		</syntax>
+		<description>
+			<para>Deletes an entry in the Asterisk database for a given
+			<replaceable>family</replaceable> and <replaceable>key</replaceable>.</para>
+			<para>Returns <literal>1</literal> if successful, <literal>0</literal>
+			otherwise.</para>
+		</description>
+	</agi>
+	<agi name="database deltree" language="en_US">
+		<synopsis>
+			Removes database keytree/value
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="keytree" />
+		</syntax>
+		<description>
+			<para>Deletes a <replaceable>family</replaceable> or specific <replaceable>keytree</replaceable>
+			within a <replaceable>family</replaceable> in the Asterisk database.</para>
+			<para>Returns <literal>1</literal> if successful, <literal>0</literal> otherwise.</para>
+		</description>
+	</agi>
+	<agi name="database get" language="en_US">
+		<synopsis>
+			Gets database value
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="key" required="true" />
+		</syntax>
+		<description>
+			<para>Retrieves an entry in the Asterisk database for a given <replaceable>family</replaceable>
+			and <replaceable>key</replaceable>.</para>
+			<para>Returns <literal>0</literal> if <replaceable>key</replaceable> is not set.
+			Returns <literal>1</literal> if <replaceable>key</replaceable> is set and returns the variable
+			in parenthesis.</para>
+			<para>Example return code: 200 result=1 (testvariable)</para>
+		</description>
+	</agi>
+	<agi name="database put" language="en_US">
+		<synopsis>
+			Adds/updates database value
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+			<parameter name="key" required="true" />
+			<parameter name="value" required="true" />
+		</syntax>
+		<description>
+			<para>Adds or updates an entry in the Asterisk database for a given
+			<replaceable>family</replaceable>, <replaceable>key</replaceable>, and
+			<replaceable>value</replaceable>.</para>
+			<para>Returns <literal>1</literal> if successful, <literal>0</literal> otherwise.</para>
+		</description>
+	</agi>
+	<agi name="exec" language="en_US">
+		<synopsis>
+			Executes a given Application
+		</synopsis>
+		<syntax>
+			<parameter name="application" required="true" />
+			<parameter name="options" required="true" />
+		</syntax>
+		<description>
+			<para>Executes <replaceable>application</replaceable> with given
+			<replaceable>options</replaceable>.</para>
+			<para>Returns whatever the <replaceable>application</replaceable> returns, or
+			<literal>-2</literal> on failure to find <replaceable>application</replaceable>.</para>
+		</description>
+	</agi>
+	<agi name="get data" language="en_US">
+		<synopsis>
+			Prompts for DTMF on a channel
+		</synopsis>
+		<syntax>
+			<parameter name="file" required="true" />
+			<parameter name="timeout" />
+			<parameter name="maxdigits" />
+		</syntax>
+		<description>
+			<para>Stream the given <replaceable>file</replaceable>, and recieve DTMF data.</para>
+			<para>Returns the digits received from the channel at the other end.</para>
+		</description>
+	</agi>
+	<agi name="get full variable" language="en_US">
+		<synopsis>
+			Evaluates a channel expression
+		</synopsis>
+		<syntax>
+			<parameter name="variablename" required="true" />
+			<parameter name="channel name" />
+		</syntax>
+		<description>
+			<para>Returns <literal>0</literal> if <replaceable>variablename</replaceable> is not set
+			or channel does not exist. Returns <literal>1</literal> if <replaceable>variablename</replaceable>
+			is set and returns the variable in parenthesis. Understands complex variable names and builtin
+			variables, unlike GET VARIABLE.</para>
+			<para>Example return code: 200 result=1 (testvariable)</para>
+		</description>
+	</agi>
+	<agi name="set music" language="en_US">
+		<synopsis>
+			Enable/Disable Music on hold generator
+		</synopsis>
+		<syntax>
+			<parameter required="true">
+				<enumlist>
+					<enum>
+						<parameter name="on" literal="true" required="true" />
+					</enum>
+					<enum>
+						<parameter name="off" literal="true" required="true" />
+					</enum>
+				</enumlist>
+			</parameter>
+			<parameter name="class" required="true" />
+		</syntax>
+		<description>
+			<para>Enables/Disables the music on hold generator. If <replaceable>class</replaceable>
+			is not specified, then the <literal>default</literal> music on hold class will be
+			used.</para>
+			<para>Always returns <literal>0</literal>.</para>
+		</description>
+	</agi>
+ ***/
 
 #define MAX_ARGS 128
+#define MAX_CMD_LEN 80
 #define AGI_NANDFS_RETRY 3
 #define AGI_BUF_LEN 2048
 
@@ -1993,38 +2182,6 @@ static int handle_asyncagi_break(struct ast_channel *chan, AGI *agi, int argc, c
 	return AST_PBX_KEEPALIVE;
 }
 
-static char usage_setmusic[] =
-" Usage: SET MUSIC ON <on|off> <class>\n"
-"	Enables/Disables the music on hold generator.  If <class> is\n"
-" not specified, then the default music on hold class will be used.\n"
-" Always returns 0.\n";
-
-static char usage_dbput[] =
-" Usage: DATABASE PUT <family> <key> <value>\n"
-"	Adds or updates an entry in the Asterisk database for a\n"
-" given family, key, and value.\n"
-" Returns 1 if successful, 0 otherwise.\n";
-
-static char usage_dbget[] =
-" Usage: DATABASE GET <family> <key>\n"
-"	Retrieves an entry in the Asterisk database for a\n"
-" given family and key.\n"
-" Returns 0 if <key> is not set.  Returns 1 if <key>\n"
-" is set and returns the variable in parentheses.\n"
-" Example return code: 200 result=1 (testvariable)\n";
-
-static char usage_dbdel[] =
-" Usage: DATABASE DEL <family> <key>\n"
-"	Deletes an entry in the Asterisk database for a\n"
-" given family and key.\n"
-" Returns 1 if successful, 0 otherwise.\n";
-
-static char usage_dbdeltree[] =
-" Usage: DATABASE DELTREE <family> [keytree]\n"
-"	Deletes a family or specific keytree within a family\n"
-" in the Asterisk database.\n"
-" Returns 1 if successful, 0 otherwise.\n";
-
 static char usage_verbose[] =
 " Usage: VERBOSE <message> <level>\n"
 "	Sends <message> to the console via verbose message system.\n"
@@ -2037,48 +2194,17 @@ static char usage_getvariable[] =
 " is set and returns the variable in parentheses.\n"
 " example return code: 200 result=1 (testvariable)\n";
 
-static char usage_getvariablefull[] =
-" Usage: GET FULL VARIABLE <variablename> [<channel name>]\n"
-"	Returns 0 if <variablename> is not set or channel does not exist.  Returns 1\n"
-"if <variablename>  is set and returns the variable in parenthesis.  Understands\n"
-"complex variable names and builtin variables, unlike GET VARIABLE.\n"
-" example return code: 200 result=1 (testvariable)\n";
-
 static char usage_setvariable[] =
 " Usage: SET VARIABLE <variablename> <value>\n";
-
-static char usage_channelstatus[] =
-" Usage: CHANNEL STATUS [<channelname>]\n"
-"	Returns the status of the specified channel.\n"
-" If no channel name is given the returns the status of the\n"
-" current channel.  Return values:\n"
-"  0 Channel is down and available\n"
-"  1 Channel is down, but reserved\n"
-"  2 Channel is off hook\n"
-"  3 Digits (or equivalent) have been dialed\n"
-"  4 Line is ringing\n"
-"  5 Remote end is ringing\n"
-"  6 Line is up\n"
-"  7 Line is busy\n";
 
 static char usage_setcallerid[] =
 " Usage: SET CALLERID <number>\n"
 "	Changes the callerid of the current channel.\n";
 
-static char usage_exec[] =
-" Usage: EXEC <application> <options>\n"
-"	Executes <application> with given <options>.\n"
-" Returns whatever the application returns, or -2 on failure to find application\n";
-
 static char usage_hangup[] =
 " Usage: HANGUP [<channelname>]\n"
 "	Hangs up the specified channel.\n"
 " If no channel name is given, hangs up the current channel\n";
-
-static char usage_answer[] =
-" Usage: ANSWER\n"
-"	Answers channel if not already in answer state. Returns -1 on\n"
-" channel failure, or 0 if successful.\n";
 
 static char usage_waitfordigit[] =
 " Usage: WAIT FOR DIGIT <timeout>\n"
@@ -2200,11 +2326,6 @@ static char usage_sayphonetic[] =
 " completes without a digit pressed, the ASCII numerical value of the digit\n"
 " if one was pressed, or -1 on error/hangup.\n";
 
-static char usage_getdata[] =
-" Usage: GET DATA <file to be streamed> [timeout] [max digits]\n"
-"	Stream the given file, and recieve DTMF data. Returns the digits received\n"
-"from the channel at the other end.\n";
-
 static char usage_setcontext[] =
 " Usage: SET CONTEXT <desired context>\n"
 "	Sets the context for continuation upon exiting the application.\n";
@@ -2280,15 +2401,15 @@ static char usage_speechrecognize[] =
  * \brief AGI commands list
  */
 static struct agi_command commands[] = {
-	{ { "answer", NULL }, handle_answer, "Answer channel", usage_answer , 0 },
-	{ { "channel", "status", NULL }, handle_channelstatus, "Returns status of the connected channel", usage_channelstatus , 0 },
-	{ { "database", "del", NULL }, handle_dbdel, "Removes database key/value", usage_dbdel , 1 },
-	{ { "database", "deltree", NULL }, handle_dbdeltree, "Removes database keytree/value", usage_dbdeltree , 1 },
-	{ { "database", "get", NULL }, handle_dbget, "Gets database value", usage_dbget , 1 },
-	{ { "database", "put", NULL }, handle_dbput, "Adds/updates database value", usage_dbput , 1 },
-	{ { "exec", NULL }, handle_exec, "Executes a given Application", usage_exec , 1 },
-	{ { "get", "data", NULL }, handle_getdata, "Prompts for DTMF on a channel", usage_getdata , 0 },
-	{ { "get", "full", "variable", NULL }, handle_getvariablefull, "Evaluates a channel expression", usage_getvariablefull , 1 },
+	{ { "answer", NULL }, handle_answer, NULL, NULL, 0 },
+	{ { "channel", "status", NULL }, handle_channelstatus, NULL, NULL, 0 },
+	{ { "database", "del", NULL }, handle_dbdel, NULL, NULL, 1 },
+	{ { "database", "deltree", NULL }, handle_dbdeltree, NULL, NULL, 1 },
+	{ { "database", "get", NULL }, handle_dbget, NULL, NULL, 1 },
+	{ { "database", "put", NULL }, handle_dbput, NULL, NULL, 1 },
+	{ { "exec", NULL }, handle_exec, NULL, NULL, 1 },
+	{ { "get", "data", NULL }, handle_getdata, NULL, NULL, 0 },
+	{ { "get", "full", "variable", NULL }, handle_getvariablefull, NULL, NULL, 1 },
 	{ { "get", "option", NULL }, handle_getoption, "Stream file, prompt for DTMF, with timeout", usage_getoption , 0 },
 	{ { "get", "variable", NULL }, handle_getvariable, "Gets a channel variable", usage_getvariable , 1 },
 	{ { "hangup", NULL }, handle_hangup, "Hangup the current channel", usage_hangup , 0 },
@@ -2309,7 +2430,7 @@ static struct agi_command commands[] = {
 	{ { "set", "callerid", NULL }, handle_setcallerid, "Sets callerid for the current channel", usage_setcallerid , 0 },
 	{ { "set", "context", NULL }, handle_setcontext, "Sets channel context", usage_setcontext , 0 },
 	{ { "set", "extension", NULL }, handle_setextension, "Changes channel extension", usage_setextension , 0 },
-	{ { "set", "music", NULL }, handle_setmusic, "Enable/Disable Music on hold generator", usage_setmusic , 0 },
+	{ { "set", "music", NULL }, handle_setmusic, NULL, NULL, 0 },
 	{ { "set", "priority", NULL }, handle_setpriority, "Set channel dialplan priority", usage_setpriority , 0 },
 	{ { "set", "variable", NULL }, handle_setvariable, "Sets a channel variable", usage_setvariable , 1 },
 	{ { "stream", "file", NULL }, handle_streamfile, "Sends audio file on channel", usage_streamfile , 0 },
@@ -2332,7 +2453,7 @@ static AST_RWLIST_HEAD_STATIC(agi_commands, agi_command);
 
 static char *help_workhorse(int fd, char *match[])
 {
-	char fullcmd[80], matchstr[80];
+	char fullcmd[MAX_CMD_LEN], matchstr[MAX_CMD_LEN];
 	struct agi_command *e;
 
 	if (match)
@@ -2358,11 +2479,21 @@ static char *help_workhorse(int fd, char *match[])
 
 int ast_agi_register(struct ast_module *mod, agi_command *cmd)
 {
-	char fullcmd[80];
+	char fullcmd[MAX_CMD_LEN];
 
 	ast_join(fullcmd, sizeof(fullcmd), cmd->cmda);
 
- 	if (!find_command(cmd->cmda,1)) {
+	if (!find_command(cmd->cmda,1)) {
+		cmd->docsrc = AST_STATIC_DOC;
+#ifdef AST_XML_DOCS
+		if (ast_strlen_zero(cmd->summary) && ast_strlen_zero(cmd->usage)) {
+			cmd->summary = ast_xmldoc_build_synopsis("agi", fullcmd);
+			cmd->usage = ast_xmldoc_build_description("agi", fullcmd);
+			cmd->syntax = ast_xmldoc_build_syntax("agi", fullcmd);
+			cmd->seealso = ast_xmldoc_build_seealso("agi", fullcmd);
+			cmd->docsrc = AST_XML_DOC;
+		}
+#endif
 		cmd->mod = mod;
 		AST_RWLIST_WRLOCK(&agi_commands);
 		AST_LIST_INSERT_TAIL(&agi_commands, cmd, list);
@@ -2381,7 +2512,7 @@ int ast_agi_unregister(struct ast_module *mod, agi_command *cmd)
 {
 	struct agi_command *e;
 	int unregistered = 0;
-	char fullcmd[80];
+	char fullcmd[MAX_CMD_LEN];
 
 	ast_join(fullcmd, sizeof(fullcmd), cmd->cmda);
 
@@ -2391,6 +2522,16 @@ int ast_agi_unregister(struct ast_module *mod, agi_command *cmd)
 			AST_RWLIST_REMOVE_CURRENT(list);
 			if (mod != ast_module_info->self)
 				ast_module_unref(ast_module_info->self);
+#ifdef AST_XML_DOCS
+			if (e->docsrc == AST_XML_DOC) {
+				ast_free(e->summary);
+				ast_free(e->usage);
+				ast_free(e->syntax);
+				ast_free(e->seealso);
+				e->summary = NULL, e->usage = NULL;
+				e->syntax = NULL, e->seealso = NULL;
+			}
+#endif
 			unregistered=1;
 			break;
 		}
@@ -2728,7 +2869,8 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 static char *handle_cli_agi_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct agi_command *command;
-	char fullcmd[80];
+	char fullcmd[MAX_CMD_LEN];
+	int error = 0;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -2746,8 +2888,73 @@ static char *handle_cli_agi_show(struct ast_cli_entry *e, int cmd, struct ast_cl
 	if (a->argc > e->args - 1) {
 		command = find_command(a->argv + e->args, 1);
 		if (command) {
-			ast_cli(a->fd, "%s", command->usage);
-			ast_cli(a->fd, " Runs Dead : %s\n", command->dead ? "Yes" : "No");
+			char *synopsis = NULL, *description = NULL, *syntax = NULL, *seealso = NULL;
+			char info[30 + MAX_CMD_LEN];					/* '-= Info about...' */
+			char infotitle[30 + MAX_CMD_LEN + AST_TERM_MAX_ESCAPE_CHARS];	/* '-= Info about...' with colors */
+			char syntitle[11 + AST_TERM_MAX_ESCAPE_CHARS];			/* [Syntax]\n with colors */
+			char desctitle[15 + AST_TERM_MAX_ESCAPE_CHARS];			/* [Description]\n with colors */
+			char deadtitle[13 + AST_TERM_MAX_ESCAPE_CHARS];			/* [Runs Dead]\n with colors */
+			char deadcontent[3 + AST_TERM_MAX_ESCAPE_CHARS];		/* 'Yes' or 'No' with colors */
+			char seealsotitle[12 + AST_TERM_MAX_ESCAPE_CHARS];		/* [See Also]\n with colors */
+			char stxtitle[10 + AST_TERM_MAX_ESCAPE_CHARS];			/* [Syntax]\n with colors */
+			size_t synlen, desclen, seealsolen, stxlen;
+
+			term_color(syntitle, "[Synopsis]\n", COLOR_MAGENTA, 0, sizeof(syntitle));
+			term_color(desctitle, "[Description]\n", COLOR_MAGENTA, 0, sizeof(desctitle));
+			term_color(deadtitle, "[Runs Dead]\n", COLOR_MAGENTA, 0, sizeof(deadtitle));
+			term_color(seealsotitle, "[See Also]\n", COLOR_MAGENTA, 0, sizeof(seealsotitle));
+			term_color(stxtitle, "[Syntax]\n", COLOR_MAGENTA, 0, sizeof(stxtitle));
+			term_color(deadcontent, command->dead ? "Yes" : "No", COLOR_CYAN, 0, sizeof(deadcontent));
+
+			ast_join(fullcmd, sizeof(fullcmd), a->argv + e->args);
+			snprintf(info, sizeof(info), "\n  -= Info about agi '%s' =- ", fullcmd);
+			term_color(infotitle, info, COLOR_CYAN, 0, sizeof(infotitle));
+#ifdef AST_XML_DOCS
+			if (command->docsrc == AST_XML_DOC) {
+				synopsis = ast_xmldoc_printable(S_OR(command->summary, "Not available"), 1);
+				description = ast_xmldoc_printable(S_OR(command->usage, "Not available"), 1);
+				seealso = ast_xmldoc_printable(S_OR(command->seealso, "Not available"), 1);
+				if (!seealso || !description || !synopsis) {
+					error = 1;
+					goto return_cleanup;
+				}
+			} else
+#endif
+			{
+				synlen = strlen(S_OR(command->summary, "Not available")) + AST_TERM_MAX_ESCAPE_CHARS;
+				synopsis = ast_malloc(synlen);
+
+				desclen = strlen(S_OR(command->usage, "Not available")) + AST_TERM_MAX_ESCAPE_CHARS;
+				description = ast_malloc(desclen);
+
+				seealsolen = strlen(S_OR(command->seealso, "Not available")) + AST_TERM_MAX_ESCAPE_CHARS;
+				seealso = ast_malloc(seealsolen);
+
+				if (!synopsis || !description || !seealso) {
+					error = 1;
+					goto return_cleanup;
+				}
+				term_color(synopsis, S_OR(command->summary, "Not available"), COLOR_CYAN, 0, synlen);
+				term_color(description, S_OR(command->usage, "Not available"), COLOR_CYAN, 0, desclen);
+				term_color(seealso, S_OR(command->seealso, "Not available"), COLOR_CYAN, 0, seealsolen);
+			}
+
+			stxlen = strlen(S_OR(command->syntax, "Not available")) + AST_TERM_MAX_ESCAPE_CHARS;
+			syntax = ast_malloc(stxlen);
+			if (!syntax) {
+				error = 1;
+				goto return_cleanup;
+			}
+			term_color(syntax, S_OR(command->syntax, "Not available"), COLOR_CYAN, 0, stxlen);
+
+			ast_cli(a->fd, "%s\n\n%s%s\n\n%s%s\n\n%s%s\n\n%s%s\n\n%s%s\n\n", infotitle, stxtitle, syntax,
+					desctitle, description, syntitle, synopsis, deadtitle, deadcontent,
+					seealsotitle, seealso);
+return_cleanup:
+			ast_free(synopsis);
+			ast_free(description);
+			ast_free(syntax);
+			ast_free(seealso);
 		} else {
 			if (find_command(a->argv + e->args, -1)) {
 				return help_workhorse(a->fd, a->argv + e->args);
@@ -2759,7 +2966,7 @@ static char *handle_cli_agi_show(struct ast_cli_entry *e, int cmd, struct ast_cl
 	} else {
 		return help_workhorse(a->fd, NULL);
 	}
-	return CLI_SUCCESS;
+	return (error ? CLI_FAILURE : CLI_SUCCESS);
 }
 
 /*! \brief Convert string to use HTML escaped characters
@@ -2796,7 +3003,7 @@ static void write_html_escaped(FILE *htmlfile, char *str)
 static int write_htmldump(char *filename)
 {
 	struct agi_command *command;
-	char fullcmd[80];
+	char fullcmd[MAX_CMD_LEN];
 	FILE *htmlfile;
 
 	if (!(htmlfile = fopen(filename, "wt")))
@@ -2808,7 +3015,10 @@ static int write_htmldump(char *filename)
 
 	AST_RWLIST_RDLOCK(&agi_commands);
 	AST_RWLIST_TRAVERSE(&agi_commands, command, list) {
-		char *stringp, *tempstr;
+#ifdef AST_XML_DOCS
+		char *stringptmp;
+#endif
+		char *tempstr, *stringp;
 
 		if (!command->cmda[0])	/* end ? */
 			break;
@@ -2819,8 +3029,12 @@ static int write_htmldump(char *filename)
 
 		fprintf(htmlfile, "<TR><TD><TABLE BORDER=\"1\" CELLPADDING=\"5\" WIDTH=\"100%%\">\n");
 		fprintf(htmlfile, "<TR><TH ALIGN=\"CENTER\"><B>%s - %s</B></TH></TR>\n", fullcmd, command->summary);
-
+#ifdef AST_XML_DOCS
+		stringptmp = ast_xmldoc_printable(command->usage, 0);
+		stringp = stringptmp;
+#else
 		stringp = command->usage;
+#endif
 		tempstr = strsep(&stringp, "\n");
 
 		fprintf(htmlfile, "<TR><TD ALIGN=\"CENTER\">");
@@ -2834,35 +3048,14 @@ static int write_htmldump(char *filename)
 		}
 		fprintf(htmlfile, "</TD></TR>\n");
 		fprintf(htmlfile, "</TABLE></TD></TR>\n\n");
+#ifdef AST_XML_DOCS
+		ast_free(stringptmp);
+#endif
 	}
 	AST_RWLIST_UNLOCK(&agi_commands);
 	fprintf(htmlfile, "</TABLE>\n</BODY>\n</HTML>\n");
 	fclose(htmlfile);
 	return 0;
-}
-
-static char *handle_cli_agi_dumphtml_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "agi dumphtml";
-		e->usage =
-			"Usage: agi dumphtml <filename>\n"
-			"       Dumps the AGI command list in HTML format to the given\n"
-			"       file.\n";
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;
-	}
-	if (a->argc < e->args + 1)
-		return CLI_SHOWUSAGE;
-
-	if (write_htmldump(a->argv[2]) < 0) {
-		ast_cli(a->fd, "Could not create file '%s'\n", a->argv[2]);
-		return CLI_SHOWUSAGE;
-	}
-	ast_cli(a->fd, "AGI HTML commands dumped to: %s\n", a->argv[2]);
-	return CLI_SUCCESS;
 }
 
 static char *handle_cli_agi_dump_html(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -2992,13 +3185,11 @@ static int deadagi_exec(struct ast_channel *chan, void *data)
 	return agi_exec(chan, data);
 }
 
-static struct ast_cli_entry cli_agi_dumphtml_deprecated = AST_CLI_DEFINE(handle_cli_agi_dumphtml_deprecated, "Dumps a list of AGI commands in HTML format");
-
 static struct ast_cli_entry cli_agi[] = {
 	AST_CLI_DEFINE(handle_cli_agi_add_cmd,   "Add AGI command to a channel in Async AGI"),
 	AST_CLI_DEFINE(handle_cli_agi_debug,     "Enable/Disable AGI debugging"),
 	AST_CLI_DEFINE(handle_cli_agi_show,      "List AGI commands or specific help"),
-	AST_CLI_DEFINE(handle_cli_agi_dump_html, "Dumps a list of AGI commands in HTML format", .deprecate_cmd = &cli_agi_dumphtml_deprecated)
+	AST_CLI_DEFINE(handle_cli_agi_dump_html, "Dumps a list of AGI commands in HTML format")
 };
 
 static int unload_module(void)

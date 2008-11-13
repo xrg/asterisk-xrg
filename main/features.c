@@ -102,6 +102,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			context. If no extension is provided, then the first available
 			parked call will be acquired.</para>
 		</description>
+		<see-also>
+			<ref type="application">Park</ref>
+			<ref type="application">ParkAndAnnounce</ref>
+		</see-also>
 	</application>
 	<application name="Park" language="en_US">
 		<synopsis>
@@ -145,6 +149,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			parking context, Park() will park the call on that extension, unless
 			it already exists. In that case, execution will continue at next priority.</para>
 		</description>
+		<see-also>
+			<ref type="application">ParkAndAnnounce</ref>
+			<ref type="application">ParkedCall</ref>
+		</see-also>
 	</application>
  ***/
 
@@ -287,7 +295,7 @@ static int parkinglot_hash_cb(const void *obj, const int flags)
 	return ast_str_hash(parkinglot->name);
 }
 
-static int parkinglot_cmp_cb(void *obj, void *arg, int flags)
+static int parkinglot_cmp_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct ast_parkinglot *parkinglot = obj, *parkinglot2 = arg;
 	return !strcasecmp(parkinglot->name, parkinglot2->name) ? CMP_MATCH | CMP_STOP : 0;
@@ -459,7 +467,7 @@ static const char *findparkinglotname(struct ast_channel *chan)
 static void notify_metermaids(const char *exten, char *context, enum ast_device_state state)
 {
 	ast_debug(4, "Notification of state change to metermaids %s@%s\n to state '%s'", 
-		exten, context, devstate2str(state));
+		exten, context, ast_devstate2str(state));
 
 	ast_devstate_changed(state, "park:%s@%s", exten, context);
 }
@@ -2440,7 +2448,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	}
    before_you_go:
 	if (res != AST_PBX_KEEPALIVE && config->end_bridge_callback) {
-		config->end_bridge_callback();
+		config->end_bridge_callback(config->end_bridge_callback_data);
 	}
 
 	/* run the hangup exten on the chan object IFF it was NOT involved in a parking situation 
@@ -2830,7 +2838,7 @@ struct ast_parkinglot *find_parkinglot(const char *name)
 
 	ast_copy_string(tmp_parkinglot.name, name, sizeof(tmp_parkinglot.name));
 
-	parkinglot = ao2_find(parkinglots, &tmp_parkinglot, OBJ_POINTER);
+	parkinglot = ao2_find(parkinglots, &tmp_parkinglot, NULL, OBJ_POINTER);
 
 	if (parkinglot && option_debug)
 		ast_log(LOG_DEBUG, "Found Parkinglot: %s\n", parkinglot->name);
@@ -3979,6 +3987,18 @@ static int manager_park(struct mansession *s, const struct message *m)
 	return 0;
 }
 
+static int find_channel_by_group(struct ast_channel *c, void *data) {
+	struct ast_channel *chan = data;
+
+	return !c->pbx &&
+		/* Accessing 'chan' here is safe without locking, because there is no way for
+		   the channel do disappear from under us at this point.  pickupgroup *could*
+		   change while we're here, but that isn't a problem. */
+		(c != chan) &&
+		(chan->pickupgroup & c->callgroup) &&
+		((c->_state == AST_STATE_RINGING) || (c->_state == AST_STATE_RING));
+}
+
 /*!
  * \brief Pickup a call
  * \param chan channel that initiated pickup.
@@ -3989,20 +4009,10 @@ static int manager_park(struct mansession *s, const struct message *m)
 */
 int ast_pickup_call(struct ast_channel *chan)
 {
-	struct ast_channel *cur = NULL;
-	int res = -1;
+	struct ast_channel *cur = ast_channel_search_locked(find_channel_by_group, chan);
 
-	while ((cur = ast_channel_walk_locked(cur)) != NULL) {
-		if (!cur->pbx && 
-			(cur != chan) &&
-			(chan->pickupgroup & cur->callgroup) &&
-			((cur->_state == AST_STATE_RINGING) ||
-			 (cur->_state == AST_STATE_RING))) {
-			 	break;
-		}
-		ast_channel_unlock(cur);
-	}
 	if (cur) {
+		int res = -1;
 		ast_debug(1, "Call pickup on chan '%s' by '%s'\n",cur->name, chan->name);
 		res = ast_answer(chan);
 		if (res)
@@ -4014,10 +4024,11 @@ int ast_pickup_call(struct ast_channel *chan)
 		if (res)
 			ast_log(LOG_WARNING, "Unable to masquerade '%s' into '%s'\n", chan->name, cur->name);		/* Done */
 		ast_channel_unlock(cur);
+		return res;
 	} else	{
 		ast_debug(1, "No call pickup possible...\n");
 	}
-	return res;
+	return -1;
 }
 
 static char *app_bridge = "Bridge";

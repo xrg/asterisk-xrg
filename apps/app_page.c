@@ -91,6 +91,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			caller is dumped into the conference as a speaker and the room is
 			destroyed when the original callers leaves.</para>
 		</description>
+		<see-also>
+			<ref type="application">MeetMe</ref>
+		</see-also>
 	</application>
  ***/
 static const char *app_page= "Page";
@@ -178,9 +181,9 @@ static int page_exec(struct ast_channel *chan, void *data)
 		if (ast_test_flag(&flags, PAGE_SKIP)) {
 			state = ast_device_state(tech);
 			if (state == AST_DEVICE_UNKNOWN) {
-				ast_log(LOG_WARNING, "Destination '%s' has device state '%s'. Paging anyway.\n", tech, devstate2str(state));
+				ast_log(LOG_WARNING, "Destination '%s' has device state '%s'. Paging anyway.\n", tech, ast_devstate2str(state));
 			} else if (state != AST_DEVICE_NOT_INUSE) {
-				ast_log(LOG_WARNING, "Destination '%s' has device state '%s'.\n", tech, devstate2str(state));
+				ast_log(LOG_WARNING, "Destination '%s' has device state '%s'.\n", tech, ast_devstate2str(state));
 				continue;
 			}
 		}

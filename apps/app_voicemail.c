@@ -47,7 +47,7 @@ c-client (http://www.washington.edu/imap/
 /*** MAKEOPTS
 <category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" remove_on_change="apps/app_voicemail.o apps/app_directory.o">
 	<member name="ODBC_STORAGE" displayname="Storage of Voicemail using ODBC">
-		<depend>unixodbc_or_iodbc</depend>
+		<depend>odbc</depend>
 		<depend>ltdl</depend>
 		<use>unixodbc</use>
 		<use>iodbc</use>
@@ -57,7 +57,7 @@ c-client (http://www.washington.edu/imap/
 	<member name="IMAP_STORAGE" displayname="Storage of Voicemail using IMAP4">
 		<depend>imap_tk</depend>
 		<conflict>ODBC_STORAGE</conflict>
-		<use>ssl</use>
+		<use>openssl</use>
 		<defaultenabled>no</defaultenabled>
 	</member>
 </category>
@@ -1177,7 +1177,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 		/* save the results */
 		reset_user_pw(vmu->context, vmu->mailbox, newpassword);
 		ast_copy_string(vmu->password, newpassword, sizeof(vmu->password));
-		config_text_file_save(VOICEMAIL_CONFIG, cfg, "AppVoicemail");
+		ast_config_text_file_save(VOICEMAIL_CONFIG, cfg, "AppVoicemail");
 	}
 	category = NULL;
 	var = NULL;
@@ -1207,7 +1207,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 		/* save the results and clean things up */
 		reset_user_pw(vmu->context, vmu->mailbox, newpassword);	
 		ast_copy_string(vmu->password, newpassword, sizeof(vmu->password));
-		config_text_file_save("users.conf", cfg, "AppVoicemail");
+		ast_config_text_file_save("users.conf", cfg, "AppVoicemail");
 	}
 }
 
@@ -5928,7 +5928,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 				msg_cat = ast_category_get(msg_cfg, "message");
 				snprintf(duration_buf, 11, "%ld", *duration);
 				if (!ast_variable_update(msg_cat, "duration", duration_buf, NULL, 0)) {
-					config_text_file_save(textfile, msg_cfg, "app_voicemail");
+					ast_config_text_file_save(textfile, msg_cfg, "app_voicemail");
 				}
 			}
 
@@ -9296,7 +9296,7 @@ out:
 #ifdef IMAP_STORAGE
 	/* expunge message - use UID Expunge if supported on IMAP server*/
 	ast_debug(3, "*** Checking if we can expunge, deleted set to %d, expungeonhangup set to %d\n",deleted,expungeonhangup);
-	if (vmu && deleted == 1 && expungeonhangup == 1) {
+	if (vmu && deleted == 1 && expungeonhangup == 1 && vms.mailstream != NULL) {
 #ifdef HAVE_IMAP_TK2006
 		if (LEVELUIDPLUS (vms.mailstream)) {
 			mail_expunge_full(vms.mailstream,NIL,EX_UID);

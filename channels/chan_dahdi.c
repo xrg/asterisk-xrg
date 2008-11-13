@@ -101,6 +101,41 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/event.h"
 #include "asterisk/devicestate.h"
 
+/*** DOCUMENTATION
+	<application name="DAHDISendKeypadFacility" language="en_US">
+		<synopsis>
+			Send digits out of band over a PRI.
+		</synopsis>
+		<syntax>
+			<parameter name="digits" required="true" />
+		</syntax>
+		<description>
+			<para>This application will send the given string of digits in a Keypad
+			Facility IE over the current channel.</para>
+		</description>
+	</application>
+	<application name="DAHDISendCallreroutingFacility" language="en_US">
+		<synopsis>
+			Send QSIG call rerouting facility over a PRI.
+		</synopsis>
+		<syntax argsep="|">
+			<parameter name="destination" required="true">
+				<para>Destination number.</para>	
+			</parameter>
+			<parameter name="original">
+				<para>Original called number.</para>
+			</parameter>
+			<parameter name="reason">
+				<para>Diversion reason, if not specified defaults to <literal>unknown</literal></para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will send a Callrerouting Facility IE over the
+			current channel.</para>
+		</description>
+	</application>
+ ***/
+
 #define SMDI_MD_WAIT_TIMEOUT 1500 /* 1.5 seconds */
 
 static const char *lbostr[] = {
@@ -2913,12 +2948,6 @@ static void destroy_all_channels(void)
 #ifdef HAVE_PRI
 static char *dahdi_send_keypad_facility_app = "DAHDISendKeypadFacility";
 
-static char *dahdi_send_keypad_facility_synopsis = "Send digits out of band over a PRI";
-
-static char *dahdi_send_keypad_facility_descrip = 
-"  DAHDISendKeypadFacility(): This application will send the given string of digits in a Keypad Facility\n"
-"  IE over the current channel.\n";
-
 static int dahdi_send_keypad_facility_exec(struct ast_channel *chan, void *data)
 {
 	/* Data will be our digit string */
@@ -2959,13 +2988,9 @@ static int dahdi_send_keypad_facility_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
+#ifdef HAVE_PRI_PROG_W_CAUSE
+
 static char *dahdi_send_callrerouting_facility_app = "DAHDISendCallreroutingFacility";
-
-static char *dahdi_send_callrerouting_facility_synopsis = "Send QSIG call rerouting facility over a PRI";
-
-static char *dahdi_send_callrerouting_facility_descrip =
-"  DAHDISendCallreroutingFacility(): This application will send a Callrerouting Facility\n"
-"  IE over the current channel.\n";
 
 static int dahdi_send_callrerouting_facility_exec(struct ast_channel *chan, void *data)
 {
@@ -3039,6 +3064,8 @@ static int dahdi_send_callrerouting_facility_exec(struct ast_channel *chan, void
 
 	return res;
 }
+
+#endif
 
 static int pri_is_up(struct dahdi_pri *pri)
 {
@@ -5783,7 +5810,11 @@ static int dahdi_indicate(struct ast_channel *chan, int condition, const void *d
 					&& p->pri && !p->outgoing) {
 				if (p->pri->pri) {		
 					if (!pri_grab(p, p->pri)) {
+#ifdef HAVE_PRI_PROG_W_CAUSE
 						pri_progress_with_cause(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1, PRI_CAUSE_USER_BUSY); /* cause = 17 */
+#else
+						pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
+#endif
 						pri_rel(p->pri);
 					}
 					else
@@ -5880,7 +5911,11 @@ static int dahdi_indicate(struct ast_channel *chan, int condition, const void *d
 					&& p->pri && !p->outgoing) {
 				if (p->pri->pri) {		
 					if (!pri_grab(p, p->pri)) {
+#ifdef HAVE_PRI_PROG_W_CAUSE
 						pri_progress_with_cause(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1, -1);  /* no cause at all */
+#else
+						pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
+#endif
 						pri_rel(p->pri);
 					}
 					else
@@ -5916,7 +5951,11 @@ static int dahdi_indicate(struct ast_channel *chan, int condition, const void *d
 					&& p->pri && !p->outgoing) {
 				if (p->pri) {		
 					if (!pri_grab(p, p->pri)) {
+#ifdef HAVE_PRI_PROG_W_CAUSE
 						pri_progress_with_cause(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1, PRI_CAUSE_SWITCH_CONGESTION); /* cause = 42 */
+#else
+						pri_progress(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 1);
+#endif
 						pri_rel(p->pri);
 					} else
 						ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->span);
@@ -9866,7 +9905,8 @@ static void *ss7_linkset(void *data)
 						ss7_start_call(p, linkset);
 				} else {
 					ast_debug(1, "Call on CIC for unconfigured extension %s\n", p->exten);
-					isup_rel(ss7, e->iam.call, -1);
+					p->alreadyhungup = 1;
+					isup_rel(ss7, e->iam.call, AST_CAUSE_UNALLOCATED);
 				}
 				ast_mutex_unlock(&p->lock);
 				break;
@@ -11649,7 +11689,7 @@ static int start_pri(struct dahdi_pri *pri)
 		if (pri->switchtype == PRI_SWITCH_GR303_TMC)
 			pri->overlapdial |= DAHDI_OVERLAPDIAL_BOTH;
 		pri_set_overlapdial(pri->dchans[i],(pri->overlapdial & DAHDI_OVERLAPDIAL_OUTGOING)?1:0);
-#ifdef PRI_SET_CHAN_MAPPING_LOGICAL
+#ifdef HAVE_PRI_PROG_W_CAUSE
 		pri_set_chan_mapping_logical(pri->dchans[i], pri->qsigchannelmapping == DAHDI_CHAN_MAPPING_LOGICAL);
 #endif
 #ifdef HAVE_PRI_INBANDDISCONNECT
@@ -13499,7 +13539,9 @@ static int __unload_module(void)
 	}
 	ast_cli_unregister_multiple(dahdi_pri_cli, ARRAY_LEN(dahdi_pri_cli));
 	ast_unregister_application(dahdi_send_keypad_facility_app);
+#ifdef HAVE_PRI_PROG_W_CAUSE
 	ast_unregister_application(dahdi_send_callrerouting_facility_app);
+#endif
 #endif
 #if defined(HAVE_SS7)
 	for (i = 0; i < NUM_SPANS; i++) {
@@ -14289,7 +14331,7 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 				} else {
 					confp->pri.overlapdial = DAHDI_OVERLAPDIAL_NONE;
 				}
-#ifdef HAVE_PRI_INBANDDISCONNECT
+#ifdef HAVE_PRI_PROG_W_CAUSE
 			} else if (!strcasecmp(v->name, "qsigchannelmapping")) {
 				if (!strcasecmp(v->value, "logical")) {
 					confp->pri.qsigchannelmapping = DAHDI_CHAN_MAPPING_LOGICAL;
@@ -14298,8 +14340,10 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 				} else {
 					confp->pri.qsigchannelmapping = DAHDI_CHAN_MAPPING_PHYSICAL;
 				}
+#endif
 			} else if (!strcasecmp(v->name, "discardremoteholdretrieval")) {
 				confp->pri.discardremoteholdretrieval = ast_true(v->value);
+#ifdef HAVE_PRI_INBANDDISCONNECT
 			} else if (!strcasecmp(v->name, "inbanddisconnect")) {
 				confp->pri.inbanddisconnect = ast_true(v->value);
 #endif
@@ -14798,10 +14842,10 @@ static int load_module(void)
 	}
 	pri_set_error(dahdi_pri_error);
 	pri_set_message(dahdi_pri_message);
-	ast_register_application(dahdi_send_keypad_facility_app, dahdi_send_keypad_facility_exec,
-			dahdi_send_keypad_facility_synopsis, dahdi_send_keypad_facility_descrip);
-	ast_register_application(dahdi_send_callrerouting_facility_app, dahdi_send_callrerouting_facility_exec,
-		dahdi_send_callrerouting_facility_synopsis, dahdi_send_callrerouting_facility_descrip);
+	ast_register_application_xml(dahdi_send_keypad_facility_app, dahdi_send_keypad_facility_exec);
+#ifdef HAVE_PRI_PROG_W_CAUSE
+	ast_register_application_xml(dahdi_send_callrerouting_facility_app, dahdi_send_callrerouting_facility_exec);
+#endif
 #endif
 #ifdef HAVE_SS7
 	memset(linksets, 0, sizeof(linksets));

@@ -87,18 +87,9 @@
  * the sip_hangup() function
  */
 
-/*!  \page sip_tcp_tls SIP TCP and TLS support
- * The TCP and TLS support is unfortunately implemented in a way that is not 
- * SIP compliant and tested in a SIP infrastructure. We hope to fix this for 
- * at least release 1.6.2. This code was new in 1.6.0 and won't be fixed for
- * that release, due to the current release policy. Only bugs compared with
- * the working functionality in 1.4 will be fixed. Bugs in new features will
- * be fixed in the next release. As 1.6.1 is already in release
- * candidate mode, there will be a buggy SIP channel in that release too.
- *
- * If you have opinions about this release policy, send mail to the asterisk-dev
- * mailing list.
- *
+/*!  
+ * \page sip_tcp_tls SIP TCP and TLS support
+ * 
  * \par tcpfixes TCP implementation changes needed
  * \todo Fix TCP/TLS handling in dialplan, SRV records, transfers and much more
  * \todo Save TCP/TLS sessions in registry
@@ -273,6 +264,182 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/ast_version.h"
 #include "asterisk/event.h"
 #include "asterisk/tcptls.h"
+
+/*** DOCUMENTATION
+	<application name="SIPDtmfMode" language="en_US">
+		<synopsis>
+			Change the dtmfmode for a SIP call.
+		</synopsis>
+		<syntax>
+			<parameter name="mode" required="true">
+				<enumlist>
+					<enum name="inband" />
+					<enum name="info" />
+					<enum name="rfc2833" />
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Changes the dtmfmode for a SIP call.</para>
+		</description>
+	</application>
+	<application name="SIPAddHeader" language="en_US">
+		<synopsis>
+			Add a SIP header to the outbound call.
+		</synopsis>
+		<syntax argsep=":">
+			<parameter name="Header" required="true" />
+			<parameter name="Content" required="true" />
+		</syntax>
+		<description>
+			<para>Adds a header to a SIP call placed with DIAL.</para>
+			<para>Remember to use the X-header if you are adding non-standard SIP
+			headers, like <literal>X-Asterisk-Accountcode:</literal>. Use this with care.
+			Adding the wrong headers may jeopardize the SIP dialog.</para>
+			<para>Always returns <literal>0</literal>.</para>
+		</description>
+	</application>
+	<function name="SIP_HEADER" language="en_US">
+		<synopsis>
+			Gets the specified SIP header.
+		</synopsis>
+		<syntax>
+			<parameter name="name" required="true" />
+			<parameter name="number">
+				<para>If not specified, defaults to <literal>1</literal>.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Since there are several headers (such as Via) which can occur multiple
+			times, SIP_HEADER takes an optional second argument to specify which header with
+			that name to retrieve. Headers start at offset <literal>1</literal>.</para>
+		</description>
+	</function>
+	<function name="SIPPEER" language="en_US">
+		<synopsis>
+			Gets SIP peer information.
+		</synopsis>
+		<syntax>
+			<parameter name="peername" required="true" />
+			<parameter name="item">
+				<enumlist>
+					<enum name="ip">
+						<para>(default) The ip address.</para>
+					</enum>
+					<enum name="port">
+						<para>The port number.</para>
+					</enum>
+					<enum name="mailbox">
+						<para>The configured mailbox.</para>
+					</enum>
+					<enum name="context">
+						<para>The configured context.</para>
+					</enum>
+					<enum name="expire">
+						<para>The epoch time of the next expire.</para>
+					</enum>
+					<enum name="dynamic">
+						<para>Is it dynamic? (yes/no).</para>
+					</enum>
+					<enum name="callerid_name">
+						<para>The configured Caller ID name.</para>
+					</enum>
+					<enum name="callerid_num">
+						<para>The configured Caller ID number.</para>
+					</enum>
+					<enum name="callgroup">
+						<para>The configured Callgroup.</para>
+					</enum>
+					<enum name="pickupgroup">
+						<para>The configured Pickupgroup.</para>
+					</enum>
+					<enum name="codecs">
+						<para>The configured codecs.</para>
+					</enum>
+					<enum name="status">
+						<para>Status (if qualify=yes).</para>
+					</enum>
+					<enum name="regexten">
+						<para>Registration extension.</para>
+					</enum>
+					<enum name="limit">
+						<para>Call limit (call-limit).</para>
+					</enum>
+					<enum name="busylevel">
+						<para>Configured call level for signalling busy.</para>
+					</enum>
+					<enum name="curcalls">
+						<para>Current amount of calls. Only available if call-limit is set.</para>
+					</enum>
+					<enum name="language">
+						<para>Default language for peer.</para>
+					</enum>
+					<enum name="accountcode">
+						<para>Account code for this peer.</para>
+					</enum>
+					<enum name="useragent">
+						<para>Current user agent id for peer.</para>
+					</enum>
+					<enum name="chanvar[name]">
+						<para>A channel variable configured with setvar for this peer.</para>
+					</enum>
+					<enum name="codec[x]">
+						<para>Preferred codec index number <replaceable>x</replaceable> (beginning with zero).</para>
+					</enum>
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description />
+	</function>
+	<function name="SIPCHANINFO" language="en_US">
+		<synopsis>
+			Gets the specified SIP parameter from the current channel.
+		</synopsis>
+		<syntax>
+			<parameter name="item" required="true">
+				<enumlist>
+					<enum name="peerip">
+						<para>The IP address of the peer.</para>
+					</enum>
+					<enum name="recvip">
+						<para>The source IP address of the peer.</para>
+					</enum>
+					<enum name="from">
+						<para>The URI from the <literal>From:</literal> header.</para>
+					</enum>
+					<enum name="uri">
+						<para>The URI from the <literal>Contact:</literal> header.</para>
+					</enum>
+					<enum name="useragent">
+						<para>The useragent.</para>
+					</enum>
+					<enum name="peername">
+						<para>The name of the peer.</para>
+					</enum>
+					<enum name="t38passthrough">
+						<para><literal>1</literal> if T38 is offered or enabled in this channel,
+						otherwise <literal>0</literal>.</para>
+					</enum>
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description />
+	</function>
+	<function name="CHECKSIPDOMAIN" language="en_US">
+		<synopsis>
+			Checks if domain is a local domain.
+		</synopsis>
+		<syntax>
+			<parameter name="domain" required="true" />
+		</syntax>
+		<description>
+			<para>This function checks if the <replaceable>domain</replaceable> in the argument is configured
+			as a local SIP domain that this Asterisk server is configured to handle.
+			Returns the domain name if it is locally handled, otherwise an empty string.
+			Check the <literal>domain=</literal> configuration in <filename>sip.conf</filename>.</para>
+		</description>
+	</function>
+ ***/
 
 #ifndef FALSE
 #define FALSE    0
@@ -785,6 +952,7 @@ static const struct cfsip_options {
 #define DEFAULT_ALLOW_EXT_DOM	TRUE		/*!< Allow external domains */
 #define DEFAULT_REALM		"asterisk"	/*!< Realm for HTTP digest authentication */
 #define DEFAULT_NOTIFYRINGING	TRUE		/*!< Notify devicestate system on ringing state */
+#define DEFAULT_NOTIFYCID		FALSE	/*!< Include CID with ringing notifications */
 #define DEFAULT_PEDANTIC	FALSE		/*!< Avoid following SIP standards for dialog matching */
 #define DEFAULT_AUTOCREATEPEER	FALSE		/*!< Don't create peers automagically */
 #define	DEFAULT_MATCHEXTERNIPLOCALLY FALSE	/*!< Match extern IP locally default setting */
@@ -855,6 +1023,7 @@ static struct sip_settings sip_cfg;
 
 static int global_notifyringing;	/*!< Send notifications on ringing */
 static int global_notifyhold;		/*!< Send notifications on hold */
+static int global_notifycid;        /*!< Send CID with ringing notifications */
 static int global_match_auth_username;		/*!< Match auth username if available instead of From: Default off. */
 
 static int global_relaxdtmf;		/*!< Relax DTMF */
@@ -1576,27 +1745,37 @@ struct sip_mailbox {
 	AST_LIST_ENTRY(sip_mailbox) entry;
 };
 
-/*! \brief Structure for SIP peer data, we place calls to peers if registered  or fixed IP address (host) */
-/* XXX field 'name' must be first otherwise sip_addrcmp() will fail */
+/*! \brief Structure for SIP peer data, we place calls to peers if registered  or fixed IP address (host) 
+*/
+/* XXX field 'name' must be first otherwise sip_addrcmp() will fail, as will astobj2 hashing of the structure */
 struct sip_peer {
-	char name[80];			/*!< peer->name is the unique name of this object */
+	char name[80];					/*!< the unique name of this object */
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(secret);		/*!< Password for inbound auth */
+		AST_STRING_FIELD(md5secret);		/*!< Password in MD5 */
+		AST_STRING_FIELD(remotesecret);		/*!< Remote secret (trunks, remote devices) */
+		AST_STRING_FIELD(context);		/*!< Default context for incoming calls */
+		AST_STRING_FIELD(subscribecontext);	/*!< Default context for subscriptions */
+		AST_STRING_FIELD(username);		/*!< Temporary username until registration */ 
+		AST_STRING_FIELD(accountcode);		/*!< Account code */
+		AST_STRING_FIELD(tohost);		/*!< If not dynamic, IP address */
+		AST_STRING_FIELD(regexten); 		/*!< Extension to register (if regcontext is used) */
+		AST_STRING_FIELD(fromuser);		/*!< From: user when calling this peer */
+		AST_STRING_FIELD(fromdomain);		/*!< From: domain when calling this peer */
+		AST_STRING_FIELD(fullcontact);		/*!< Contact registered with us (not in sip.conf) */
+		AST_STRING_FIELD(cid_num);		/*!< Caller ID num */
+		AST_STRING_FIELD(cid_name);		/*!< Caller ID name */
+		AST_STRING_FIELD(vmexten); 		/*!< Dialplan extension for MWI notify message*/
+		AST_STRING_FIELD(language);		/*!<  Default language for prompts */
+		AST_STRING_FIELD(mohinterpret);		/*!<  Music on Hold class */
+		AST_STRING_FIELD(mohsuggest);		/*!<  Music on Hold class */
+		AST_STRING_FIELD(parkinglot);		/*!<  Parkinglot */
+		AST_STRING_FIELD(useragent);		/*!<  User agent in SIP request (saved from registration) */
+		);
 	struct sip_socket socket;	/*!< Socket used for this peer */
 	unsigned int transports:3;      /*!< Transports (enum sip_transport) that are acceptable for this peer */
-	char secret[80];		/*!< Password */
-	char md5secret[80];		/*!< Password in MD5 */
 	struct sip_auth *auth;		/*!< Realm authentication list */
-	char context[AST_MAX_CONTEXT];	/*!< Default context for incoming calls */
-	char subscribecontext[AST_MAX_CONTEXT];	/*!< Default context for subscriptions */
-	char username[80];		/*!< Temporary username until registration */ 
-	char accountcode[AST_MAX_ACCOUNT_CODE];	/*!< Account code */
 	int amaflags;			/*!< AMA Flags (for billing) */
-	char tohost[MAXHOSTNAMELEN];	/*!< If not dynamic, IP address */
-	char regexten[AST_MAX_EXTENSION]; /*!< Extension to register (if regcontext is used) */
-	char fromuser[80];		/*!< From: user when calling this peer */
-	char fromdomain[MAXHOSTNAMELEN];	/*!< From: domain when calling this peer */
-	char fullcontact[256];		/*!< Contact registered with us (not in sip.conf) */
-	char cid_num[80];		/*!< Caller ID num */
-	char cid_name[80];		/*!< Caller ID name */
 	int callingpres;		/*!< Calling id presentation */
 	int inUse;			/*!< Number of calls in use */
 	int inRinging;			/*!< Number of calls ringing */
@@ -1604,12 +1783,6 @@ struct sip_peer {
 	int call_limit;			/*!< Limit of concurrent calls */
 	int busy_level;			/*!< Level of active channels where we signal busy */
 	enum transfermodes allowtransfer;	/*! SIP Refer restriction scheme */
-	char vmexten[AST_MAX_EXTENSION]; /*!< Dialplan extension for MWI notify message*/
-	char language[MAX_LANGUAGE];	/*!<  Default language for prompts */
-	char mohinterpret[MAX_MUSICCLASS];/*!<  Music on Hold class */
-	char mohsuggest[MAX_MUSICCLASS];/*!<  Music on Hold class */
-	char parkinglot[AST_MAX_CONTEXT];/*!<  Parkinglot */
-	char useragent[256];		/*!<  User agent in SIP request (saved from registration) */
 	struct ast_codec_pref prefs;	/*!<  codec prefs */
 	int lastmsgssent;
 	unsigned int sipoptions;	/*!<  Supported SIP options */
@@ -1782,7 +1955,7 @@ static int peer_hash_cb(const void *obj, const int flags)
 /*!
  * \note The only member of the peer used here is the name field
  */
-static int peer_cmp_cb(void *obj, void *arg, int flags)
+static int peer_cmp_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct sip_peer *peer = obj, *peer2 = arg;
 
@@ -1809,7 +1982,7 @@ static int peer_iphash_cb(const void *obj, const int flags)
 /*!
  * \note the peer's addr struct provides to fields combined to make a key: the sin_addr.s_addr and sin_port fields.
  */
-static int peer_ipcmp_cb(void *obj, void *arg, int flags)
+static int peer_ipcmp_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct sip_peer *peer = obj, *peer2 = arg;
 
@@ -1838,7 +2011,7 @@ static int dialog_hash_cb(const void *obj, const int flags)
 /*!
  * \note The only member of the dialog used here callid string
  */
-static int dialog_cmp_cb(void *obj, void *arg, int flags)
+static int dialog_cmp_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct sip_pvt *pvt = obj, *pvt2 = arg;
 	
@@ -1996,7 +2169,7 @@ static int transmit_info_with_digit(struct sip_pvt *p, const char digit, unsigne
 static int transmit_info_with_vidupdate(struct sip_pvt *p);
 static int transmit_message_with_text(struct sip_pvt *p, const char *text);
 static int transmit_refer(struct sip_pvt *p, const char *dest);
-static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs, char *vmexten);
+static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs, const char *vmexten);
 static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *message, int terminate);
 static int transmit_notify_custom(struct sip_pvt *p, struct ast_variable *vars);
 static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
@@ -2174,7 +2347,6 @@ static char *sip_do_debug_ip(int fd, char *arg);
 static char *sip_do_debug_peer(int fd, char *arg);
 static char *sip_do_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_cli_notify(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
-static char *sip_do_history_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_set_history(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static int sip_dtmfmode(struct ast_channel *chan, void *data);
 static int sip_addheader(struct ast_channel *chan, void *data);
@@ -4024,6 +4196,8 @@ static void sip_destroy_peer(struct sip_peer *peer)
 		ao2_ref(peer->socket.ser, -1);
 		peer->socket.ser = NULL;
 	}
+
+	ast_string_field_free_memory(peer);
 }
 
 /*! \brief Update peer data in database (if used) */
@@ -4253,6 +4427,26 @@ static struct sip_peer *realtime_peer(const char *newpeername, struct sockaddr_i
 	return peer;
 }
 
+/* Function to assist finding peers by name only */
+static int find_by_name(void *obj, void *arg, void *data, int flags)
+{
+	struct sip_peer *search = obj, *match = arg;
+	int *forcenamematch = data;
+
+	/* Usernames in SIP uri's are case sensitive. Domains are not */
+	if (strcmp(search->name, match->name)) {
+		return 0;
+	}
+
+	/* If we're only looking for name matches, we should avoid type=peer devices,
+	   since these should not match on any name-based search */
+	if (*forcenamematch && search->onlymatchonip) {
+		return 0;
+	}
+
+	return CMP_MATCH | CMP_STOP;
+}
+
 /*! \brief Locate device by name or ip address 
  *	This is used on find matching device on name or ip/port.
 	If the device was declared as type=peer, we don't match on peer name on incoming INVITEs.
@@ -4265,39 +4459,18 @@ static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int
 {
 	struct sip_peer *p = NULL;
 	struct sip_peer tmp_peer;
-	
-	/* Inline function to assist finding peers by name only */
-	auto int find_by_name(void *obj, void *arg, int flags);
-
-	int find_by_name(void *obj, void *arg, int flags)
-	{
-		struct sip_peer *search = obj, *match = arg;
-
-		/* Usernames in SIP uri's are case sensitive. Domains are not */
-		if (strcmp(search->name, match->name)) {
-			return 0;
-		}
-
-		/* If we're only looking for name matches, we should avoid type=peer devices,
-		   since these should not match on any name-based search */
-		if (forcenamematch && search->onlymatchonip) {
-			return 0;
-		}
-
-		return CMP_MATCH | CMP_STOP;
-	}
 
 	if (peer) {
 		ast_copy_string(tmp_peer.name, peer, sizeof(tmp_peer.name));
-		p = ao2_t_callback(peers, OBJ_POINTER, find_by_name, &tmp_peer, "ao2_find in peers table");
+		p = ao2_t_callback(peers, OBJ_POINTER, find_by_name, &tmp_peer, &forcenamematch, "ao2_find in peers table");
 	} else if (sin) { /* search by addr? */
 		tmp_peer.addr.sin_addr.s_addr = sin->sin_addr.s_addr;
 		tmp_peer.addr.sin_port = sin->sin_port;
 		tmp_peer.flags[0].flags = 0;
-		p = ao2_t_find(peers_by_ip, &tmp_peer, OBJ_POINTER, "ao2_find in peers_by_ip table"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
+		p = ao2_t_find(peers_by_ip, &tmp_peer, NULL, OBJ_POINTER, "ao2_find in peers_by_ip table"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
 		if (!p) {
 			ast_set_flag(&tmp_peer.flags[0], SIP_INSECURE_PORT);
-			p = ao2_t_find(peers_by_ip, &tmp_peer, OBJ_POINTER, "ao2_find in peers_by_ip table 2"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
+			p = ao2_t_find(peers_by_ip, &tmp_peer, NULL, OBJ_POINTER, "ao2_find in peers_by_ip table 2"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
 			if (p) {
 				return p;
 			}
@@ -5272,7 +5445,6 @@ static int sip_hangup(struct ast_channel *ast)
 			if (ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 				/* stop retransmitting an INVITE that has not received a response */
 				__sip_pretend_ack(p);
-				p->invitestate = INV_CANCELLED;
 
 				/* if we can't send right now, mark it pending */
 				if (p->invitestate == INV_CALLING) {
@@ -5282,6 +5454,7 @@ static int sip_hangup(struct ast_channel *ast)
 					sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 					append_history(p, "DELAY", "Not sending cancel, waiting for timeout");
 				} else {
+					p->invitestate = INV_CANCELLED;
 					/* Send a new request: CANCEL */
 					transmit_request(p, SIP_CANCEL, p->lastinvite, XMIT_RELIABLE, FALSE);
 					/* Actually don't destroy us yet, wait for the 487 on our original 
@@ -6261,7 +6434,6 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 
 	if (ast_string_field_init(p, 512)) {
 		ao2_t_ref(p, -1, "failed to string_field_init, drop p");
-		ast_free(p);
 		return NULL;
 	}
 
@@ -6399,7 +6571,7 @@ struct find_call_cb_arg {
  * code to determine whether this is the pvt that we are looking for.
  * Return FALSE if not found, true otherwise. p is unlocked.
  */
-static int find_call_cb(void *__pvt, void *__arg, int flags)
+static int find_call_cb(void *__pvt, void *__arg, void *data, int flags)
 {
 	struct sip_pvt *p = __pvt;
 	struct find_call_cb_arg *arg = __arg;
@@ -6497,7 +6669,7 @@ restartsearch:
 		struct sip_pvt tmp_dialog = {
 			.callid = callid,
 		};			
-		sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, OBJ_POINTER, "ao2_find in dialogs");
+		sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, NULL, OBJ_POINTER, "ao2_find in dialogs");
 		if (sip_pvt_ptr) {  /* well, if we don't find it-- what IS in there? */
 			/* Found the call */
 			sip_pvt_lock(sip_pvt_ptr);
@@ -6505,7 +6677,7 @@ restartsearch:
 		}
 	} else { /* in pedantic mode! -- do the fancy linear search */
 		ao2_lock(dialogs);
-		p = ao2_t_callback(dialogs, 0 /* single, data */, find_call_cb, &arg, "pedantic linear search for dialog");
+		p = ao2_t_callback(dialogs, 0 /* single, data */, find_call_cb, &arg, NULL, "pedantic linear search for dialog");
 		if (p) {
 			if (sip_pvt_trylock(p)) {
 				ao2_unlock(dialogs);
@@ -9711,8 +9883,21 @@ static int __sip_subscribe_mwi_do(struct sip_subscription_mwi *mwi)
 	
 	/* Actually send the packet */
 	transmit_invite(mwi->call, SIP_SUBSCRIBE, 0, 2);
-	
+
 	return 0;
+}
+
+struct caller_criteria {
+	const char *exten;
+	const char *context;
+};
+
+static int find_calling_channel(struct ast_channel *c, void *data) {
+	struct caller_criteria *info = data;
+
+	return (c->pbx &&
+			(!strcasecmp(c->macroexten, info->exten) || !strcasecmp(c->exten, info->exten)) &&
+			!strcasecmp(c->context, info->context));
 }
 
 /*! \brief Used in the SUBSCRIBE notification subsystem (RFC3265) */
@@ -9874,23 +10059,43 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 		ast_str_append(&tmp, 0, "<?xml version=\"1.0\"?>\n");
 		ast_str_append(&tmp, 0, "<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"%d\" state=\"%s\" entity=\"%s\">\n", p->dialogver++, full ? "full" : "partial", mto);
 		if ((state & AST_EXTENSION_RINGING) && global_notifyringing) {
+			const char *local_display = p->exten, *local_target = mto;
+
+			/* There are some limitations to how this works.  The primary one is that the
+			   callee must be dialing the same extension that is being monitored.  Simply dialing
+			   the hint'd device is not sufficient. */
+			if (global_notifycid) {
+				struct ast_channel *caller = NULL;
+				struct caller_criteria data = {
+					.exten = p->exten,
+					.context = p->context,
+				};
+
+				caller = ast_channel_search_locked(find_calling_channel, &data);
+
+				if (caller) {
+					local_display = ast_strdupa(caller->cid.cid_name);
+					local_target = ast_strdupa(caller->cid.cid_num);
+					ast_channel_unlock(caller);
+					caller = NULL;
+				}
+			}
+
 			/* We create a fake call-id which the phone will send back in an INVITE
 			   Replaces header which we can grab and do some magic with. */
 			ast_str_append(&tmp, 0, 
 					"<dialog id=\"%s\" call-id=\"pickup-%s\" direction=\"recipient\">\n"
 					"<remote>\n"
-					/* Note that the identity and target elements for the local participant are currently
-					   (and may forever be) incorrect since we have no reliable way to get at that information 
-					   at the moment.  Luckily the phone seems to still live happily without it being correct */
-					"<identity>%s</identity>\n"
+					/* See the limitations of this above.  Luckily the phone seems to still be
+					   happy when these values are not correct. */
+					"<identity display=\"%s\">%s</identity>\n"
 					"<target uri=\"%s\"/>\n"
 					"</remote>\n"
 					"<local>\n"
 					"<identity>%s</identity>\n"
 					"<target uri=\"%s\"/>\n"
 					"</local>\n",
-					p->exten, p->callid,
-					mto, mto, mto, mto);
+					p->exten, p->callid, local_display, local_target, local_target, mto, mto);
 		} else {
 			ast_str_append(&tmp, 0, "<dialog id=\"%s\">\n", p->exten);
 		}
@@ -9921,7 +10126,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 	- We use the SIP Event package message-summary
 	 MIME type defaults to  "application/simple-message-summary";
  */
-static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs, char *vmexten)
+static int transmit_notify_with_mwi(struct sip_pvt *p, int newmsgs, int oldmsgs, const char *vmexten)
 {
 	struct sip_request req;
 	struct ast_str *out = ast_str_alloca(500);
@@ -10268,8 +10473,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		ast_set_flag(&p->flags[0], SIP_OUTGOING);	/* Registration is outgoing call */
 		r->call = dialog_ref(p, "copying dialog into registry r->call");		/* Save pointer to SIP dialog */
 		p->registry = registry_addref(r, "transmit_register: addref to p->registry in transmit_register");	/* Add pointer to registry in packet */
-		if (!ast_strlen_zero(r->secret))	/* Secret (password) */
+		if (!ast_strlen_zero(r->secret)) {	/* Secret (password) */
 			ast_string_field_set(p, peersecret, r->secret);
+		}
 		if (!ast_strlen_zero(r->md5secret))
 			ast_string_field_set(p, peermd5secret, r->md5secret);
 		/* User name in this realm  
@@ -10693,9 +10899,9 @@ static void reg_source_db(struct sip_peer *peer)
 		return;
 
 	if (username)
-		ast_copy_string(peer->username, username, sizeof(peer->username));
+		ast_string_field_set(peer, username, username);
 	if (contact)
-		ast_copy_string(peer->fullcontact, contact, sizeof(peer->fullcontact));
+		ast_string_field_set(peer, fullcontact, contact);
 
 	ast_debug(2, "SIP Seeding peer from astdb: '%s' at %s@%s:%d for %d\n",
 	    peer->name, peer->username, ast_inet_ntoa(in), port, expire);
@@ -10874,8 +11080,8 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		destroy_association(peer);
 		
 		register_peer_exten(peer, FALSE);	/* Remove extension from regexten= setting in sip.conf */
-		peer->fullcontact[0] = '\0';
-		peer->useragent[0] = '\0';
+		ast_string_field_set(peer, fullcontact, "");
+		ast_string_field_set(peer, useragent, "");
 		peer->sipoptions = 0;
 		peer->lastms = 0;
 
@@ -10886,7 +11092,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	}
 
 	/* Store whatever we got as a contact from the client */
-	ast_copy_string(peer->fullcontact, curi, sizeof(peer->fullcontact));
+	ast_string_field_set(peer, fullcontact, curi);
 
 	/* For the 200 OK, we should use the received contact */
 	ast_string_field_build(pvt, our_contact, "<%s>", curi);
@@ -10918,7 +11124,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	hp = ast_gethostbyname(host, &ahp);
 	if (!hp)  {
 		ast_log(LOG_WARNING, "Invalid host '%s'\n", host);
-		*peer->fullcontact = '\0';
+		ast_string_field_set(peer, fullcontact, "");
 		ast_string_field_set(pvt, our_contact, "");
 		return PARSE_REGISTER_FAILED;
 	}
@@ -10926,7 +11132,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	if (ast_apply_ha(global_contact_ha, &testsin) != AST_SENSE_ALLOW ||
 			ast_apply_ha(peer->contactha, &testsin) != AST_SENSE_ALLOW) {
 		ast_log(LOG_WARNING, "Host '%s' disallowed by rule\n", host);
-		*peer->fullcontact = '\0';
+		ast_string_field_set(peer, fullcontact, "");
 		ast_string_field_set(pvt, our_contact, "");
 		return PARSE_REGISTER_FAILED;
 	}
@@ -10947,7 +11153,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	peer->sipoptions = pvt->sipoptions;
 
 	if (!ast_strlen_zero(curi) && ast_strlen_zero(peer->username))
-		ast_copy_string(peer->username, curi, sizeof(peer->username));
+		ast_string_field_set(peer, username, curi);
 
 	AST_SCHED_DEL_UNREF(sched, peer->expire,
 			unref_peer(peer, "remove register expire ref"));
@@ -10984,8 +11190,8 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	
 	/* Save User agent */
 	useragent = get_header(req, "User-Agent");
-	if (strcasecmp(useragent, peer->useragent)) {	/* XXX copy if they are different ? */
-		ast_copy_string(peer->useragent, useragent, sizeof(peer->useragent));
+	if (strcasecmp(useragent, peer->useragent)) {
+		ast_string_field_set(peer, useragent, useragent);
 		ast_verb(4, "Saved useragent \"%s\" for peer %s\n", peer->useragent, peer->name);
 	}
 	return PARSE_REGISTER_UPDATE;
@@ -11852,7 +12058,7 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 
 	/* Search dialogs and find the match */
 	
-	sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, OBJ_POINTER, "ao2_find of dialog in dialogs table");
+	sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, NULL, OBJ_POINTER, "ao2_find of dialog in dialogs table");
 	if (sip_pvt_ptr) {
 		/* Go ahead and lock it (and its owner) before returning */
 		sip_pvt_lock(sip_pvt_ptr);
@@ -13195,7 +13401,7 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 #undef FORMAT2
 }
 
-static int peer_dump_func(void *userobj, void *arg, int flags)
+static int peer_dump_func(void *userobj, void *arg, void *data, int flags)
 {
 	struct sip_peer *peer = userobj;
 	int refc = ao2_t_ref(userobj, 0, "");
@@ -13206,7 +13412,7 @@ static int peer_dump_func(void *userobj, void *arg, int flags)
 	return 0;
 }
 
-static int dialog_dump_func(void *userobj, void *arg, int flags)
+static int dialog_dump_func(void *userobj, void *arg, void *data, int flags)
 {
 	struct sip_pvt *pvt = userobj;
 	int refc = ao2_t_ref(userobj, 0, "");
@@ -13237,11 +13443,11 @@ static char *sip_show_objects(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 	if (a->argc != 3)
 		return CLI_SHOWUSAGE;
 	ast_cli(a->fd, "-= Peer objects: %d static, %d realtime, %d autocreate =-\n\n", speerobjs, rpeerobjs, apeerobjs);
-	ao2_t_callback(peers, OBJ_NODATA, peer_dump_func, &a->fd, "initiate ao2_callback to dump peers");
+	ao2_t_callback(peers, OBJ_NODATA, peer_dump_func, &a->fd, NULL, "initiate ao2_callback to dump peers");
 	ast_cli(a->fd, "-= Registry objects: %d =-\n\n", regobjs);
 	ASTOBJ_CONTAINER_DUMP(a->fd, tmp, sizeof(tmp), &regl);
 	ast_cli(a->fd, "-= Dialog objects:\n\n");
-	ao2_t_callback(dialogs, OBJ_NODATA, dialog_dump_func, &a->fd, "initiate ao2_callback to dump dialogs");
+	ao2_t_callback(dialogs, OBJ_NODATA, dialog_dump_func, &a->fd, NULL, "initiate ao2_callback to dump dialogs");
 	return CLI_SUCCESS;
 }
 /*! \brief Print call group and pickup group */
@@ -13321,7 +13527,7 @@ static void cleanup_stale_contexts(char *new, char *old)
    to be destroyed, toss it into the queue. Have a separate
    thread do the locking and destruction */
 
-static int dialog_needdestroy(void *dialogobj, void *arg, int flags) 
+static int dialog_needdestroy(void *dialogobj, void *arg, void *data, int flags) 
 {
 	struct sip_pvt *dialog = dialogobj;
 	time_t *t = arg;
@@ -13385,7 +13591,7 @@ static int dialog_needdestroy(void *dialogobj, void *arg, int flags)
 
 /* this func is used with ao2_callback to unlink/delete all marked
    peers */
-static int peer_is_marked(void *peerobj, void *arg, int flags) 
+static int peer_is_marked(void *peerobj, void *arg, void *data, int flags)
 {
 	struct sip_peer *peer = peerobj;
 	return peer->the_mark ? CMP_MATCH : 0;
@@ -13492,7 +13698,8 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 				unref_peer(pi, "toss iterator peer ptr");
 			}
 			if (pruned) {
-				ao2_t_callback(peers, OBJ_NODATA|OBJ_UNLINK, peer_is_marked, 0, "initiating callback to remove marked peers");
+				ao2_t_callback(peers, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, peer_is_marked, NULL, NULL,
+						"initiating callback to remove marked peers");
 				ast_cli(a->fd, "%d peers pruned.\n", pruned);
 			} else
 				ast_cli(a->fd, "No peers found to prune.\n");
@@ -13501,7 +13708,7 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 		if (prunepeer) {
 			struct sip_peer tmp;
 			ast_copy_string(tmp.name, name, sizeof(tmp.name));
-			if ((peer = ao2_t_find(peers, &tmp, OBJ_POINTER|OBJ_UNLINK, "finding to unlink from peers"))) {
+			if ((peer = ao2_t_find(peers, &tmp, NULL, OBJ_POINTER | OBJ_UNLINK, "finding to unlink from peers"))) {
 				if (peer->addr.sin_addr.s_addr) {
 					ao2_t_unlink(peers_by_ip, peer, "unlinking peer from peers_by_ip also");
 				}
@@ -13748,6 +13955,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		}
 		ast_cli(fd, "  Secret       : %s\n", ast_strlen_zero(peer->secret)?"<Not set>":"<Set>");
 		ast_cli(fd, "  MD5Secret    : %s\n", ast_strlen_zero(peer->md5secret)?"<Not set>":"<Set>");
+		ast_cli(fd, "  Remote Secret: %s\n", ast_strlen_zero(peer->remotesecret)?"<Not set>":"<Set>");
 		for (auth = peer->auth; auth; auth = auth->next) {
 			ast_cli(fd, "  Realm-auth   : Realm %-15.15s User %-10.20s ", auth->realm, auth->username);
 			ast_cli(fd, "%s\n", !ast_strlen_zero(auth->secret)?"<Secret set>":(!ast_strlen_zero(auth->md5secret)?"<MD5secret set>" : "<Not set>"));
@@ -13860,6 +14068,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		astman_append(s, "ObjectName: %s\r\n", peer->name);
 		astman_append(s, "ChanObjectType: peer\r\n");
 		astman_append(s, "SecretExist: %s\r\n", ast_strlen_zero(peer->secret)?"N":"Y");
+		astman_append(s, "RemoteSecretExist: %s\r\n", ast_strlen_zero(peer->remotesecret)?"N":"Y");
 		astman_append(s, "MD5SecretExist: %s\r\n", ast_strlen_zero(peer->md5secret)?"N":"Y");
 		astman_append(s, "Context: %s\r\n", peer->context);
 		astman_append(s, "Language: %s\r\n", peer->language);
@@ -14169,7 +14378,7 @@ static char *sip_unregister(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 }
 
 /*! \brief Callback for show_chanstats */
-static int show_chanstats_cb(void *__cur, void *__arg, int flags)
+static int show_chanstats_cb(void *__cur, void *__arg, void *data, int flags)
 {
 #define FORMAT2 "%-15.15s  %-11.11s  %-8.8s %-10.10s  %-10.10s (%-2.2s) %-6.6s %-10.10s  %-10.10s ( %%) %-6.6s\n"
 #define FORMAT  "%-15.15s  %-11.11s  %-8.8s %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u\n"
@@ -14248,7 +14457,7 @@ static char *sip_show_channelstats(struct ast_cli_entry *e, int cmd, struct ast_
 
 	ast_cli(a->fd, FORMAT2, "Peer", "Call ID", "Duration", "Recv: Pack", "Lost", "%", "Jitter", "Send: Pack", "Lost", "Jitter");
 	/* iterate on the container and invoke the callback on each item */
-	ao2_t_callback(dialogs, OBJ_NODATA, show_chanstats_cb, &arg, "callback to sip show chanstats");
+	ao2_t_callback(dialogs, OBJ_NODATA, show_chanstats_cb, &arg, NULL, "callback to sip show chanstats");
 	ast_cli(a->fd, "%d active SIP channel%s\n", arg.numchans, (arg.numchans != 1) ? "s" : ""); 
 	return CLI_SUCCESS;
 }
@@ -14406,6 +14615,9 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Outbound reg. timeout:  %d secs\n", global_reg_timeout);
 	ast_cli(a->fd, "  Outbound reg. attempts: %d\n", global_regattempts_max);
 	ast_cli(a->fd, "  Notify ringing state:   %s\n", cli_yesno(global_notifyringing));
+	if (global_notifyringing) {
+		ast_cli(a->fd, "    Include CID:          %s\n", cli_yesno(global_notifycid));
+	}
 	ast_cli(a->fd, "  Notify hold state:      %s\n", cli_yesno(global_notifyhold));
 	ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(global_allowtransfer));
 	ast_cli(a->fd, "  Max Call Bitrate:       %d kbps\n", default_maxcallbitrate);
@@ -14521,7 +14733,7 @@ static const struct cfsubscription_types *find_subscription_type(enum subscripti
 #define FORMAT  "%-15.15s  %-10.10s  %-15.15s  %-15.15s  %-3.3s %-3.3s  %-15.15s %-10.10s\n"
 
 /*! \brief callback for show channel|subscription */
-static int show_channels_cb(void *__cur, void *__arg, int flags)
+static int show_channels_cb(void *__cur, void *__arg, void *data, int flags)
 {
 	struct sip_pvt *cur = __cur;
 	struct __show_chan_arg *arg = __arg;
@@ -14593,7 +14805,7 @@ static char *sip_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(arg.fd, FORMAT3, "Peer", "User", "Call ID", "Extension", "Last state", "Type", "Mailbox", "Expiry");
 
 	/* iterate on the container and invoke the callback on each item */
-	ao2_t_callback(dialogs, OBJ_NODATA, show_channels_cb, &arg, "callback to show channels");
+	ao2_t_callback(dialogs, OBJ_NODATA, show_channels_cb, &arg, NULL, "callback to show channels");
 	
 	/* print summary information */
 	ast_cli(arg.fd, "%d active SIP %s%s\n", arg.numchans,
@@ -15287,36 +15499,6 @@ static char *sip_cli_notify(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 	return CLI_SUCCESS;
 }
 
-/*! \brief Enable/Disable SIP History logging (CLI) - deprecated. use sip_set_history instead */
-static char *sip_do_history_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "sip history [off]";
-		e->usage =
-			"Usage: sip history [off]\n"
-			"       Enables/Disables recording of SIP dialog history for debugging purposes.\n"
-			"       Use 'sip show history' to view the history of a call number.\n";
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;
-	}
-
-	if (a->argc < 2 || a->argc > 3) {
-		return CLI_SHOWUSAGE;
-	}
-	if (a->argc == 2) {
-		recordhistory = TRUE;
-		ast_cli(a->fd, "SIP History Recording Enabled (use 'sip show history')\n");
-	} else {
-		if (strncasecmp(a->argv[2], "off", 3))
-			return CLI_SHOWUSAGE;
-		recordhistory = FALSE;
-		ast_cli(a->fd, "SIP History Recording Disabled\n");
-	}
-	return CLI_SUCCESS;
-}
-
 /*! \brief Enable/Disable SIP History logging (CLI) */
 static char *sip_set_history(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
@@ -15605,11 +15787,6 @@ static int func_header_read(struct ast_channel *chan, const char *function, char
 
 static struct ast_custom_function sip_header_function = {
 	.name = "SIP_HEADER",
-	.synopsis = "Gets the specified SIP header",
-	.syntax = "SIP_HEADER(<name>[,<number>])",
-	.desc = "Since there are several headers (such as Via) which can occur multiple\n"
-	"times, SIP_HEADER takes an optional second argument to specify which header with\n"
-	"that name to retrieve. Headers start at offset 1.\n",
 	.read = func_header_read,
 };
 
@@ -15629,13 +15806,7 @@ static int func_check_sipdomain(struct ast_channel *chan, const char *cmd, char 
 
 static struct ast_custom_function checksipdomain_function = {
 	.name = "CHECKSIPDOMAIN",
-	.synopsis = "Checks if domain is a local domain",
-	.syntax = "CHECKSIPDOMAIN(<domain|IP>)",
 	.read = func_check_sipdomain,
-	.desc = "This function checks if the domain in the argument is configured\n"
-		"as a local SIP domain that this Asterisk server is configured to handle.\n"
-		"Returns the domain name if it is locally handled, otherwise an empty string.\n"
-		"Check the domain= configuration in sip.conf\n",
 };
 
 /*! \brief  ${SIPPEER()} Dialplan function - reads peer data */
@@ -15728,33 +15899,7 @@ static int function_sippeer(struct ast_channel *chan, const char *cmd, char *dat
 /*! \brief Structure to declare a dialplan function: SIPPEER */
 static struct ast_custom_function sippeer_function = {
 	.name = "SIPPEER",
-	.synopsis = "Gets SIP peer information",
-	.syntax = "SIPPEER(<peername>[,item])",
 	.read = function_sippeer,
-	.desc = "Valid items are:\n"
-	"- ip (default)          The IP address.\n"
-	"- port                  The port number\n"
-	"- mailbox               The configured mailbox.\n"
-	"- context               The configured context.\n"
-	"- expire                The epoch time of the next expire.\n"
-	"- dynamic               Is it dynamic? (yes/no).\n"
-	"- callerid_name         The configured Caller ID name.\n"
-	"- callerid_num          The configured Caller ID number.\n"
-	"- callgroup             The configured Callgroup.\n"
-	"- pickupgroup           The configured Pickupgroup.\n"
-	"- codecs                The configured codecs.\n"
-	"- status                Status (if qualify=yes).\n"
-	"- regexten              Registration extension\n"
-	"- limit                 Call limit (call-limit)\n"
-	"- busylevel             Configured call level for signalling busy\n"
-	"- curcalls              Current amount of calls \n"
-	"                        Only available if call-limit is set\n"
-	"- language              Default language for peer\n"
-	"- accountcode           Account code for this peer\n"
-	"- useragent             Current user agent id for peer\n"
-	"- chanvar[name]         A channel variable configured with setvar for this peer.\n"
-	"- codec[x]              Preferred codec index number 'x' (beginning with zero).\n"
-	"\n"
 };
 
 /*! \brief ${SIPCHANINFO()} Dialplan function - reads sip channel data */
@@ -15819,17 +15964,7 @@ static int function_sipchaninfo_read(struct ast_channel *chan, const char *cmd, 
 /*! \brief Structure to declare a dialplan function: SIPCHANINFO */
 static struct ast_custom_function sipchaninfo_function = {
 	.name = "SIPCHANINFO",
-	.synopsis = "Gets the specified SIP parameter from the current channel",
-	.syntax = "SIPCHANINFO(item)",
 	.read = function_sipchaninfo_read,
-	.desc = "Valid items are:\n"
-	"- peerip                The IP address of the peer.\n"
-	"- recvip                The source IP address of the peer.\n"
-	"- from                  The URI from the From: header.\n"
-	"- uri                   The URI from the Contact: header.\n"
-	"- useragent             The useragent.\n"
-	"- peername              The name of the peer.\n"
-	"- t38passthrough        1 if T38 is offered or enabled in this channel, otherwise 0\n"
 };
 
 /*! \brief Parse 302 Moved temporalily response 
@@ -16555,7 +16690,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		break;
 	case 200:	/* 200 OK */
 		if (!r) {
-			ast_log(LOG_WARNING, "Got 200 OK on REGISTER that isn't a register\n");
+			ast_log(LOG_WARNING, "Got 200 OK on REGISTER, but there isn't a registry entry for '%s' (we probably already got the OK)\n", S_OR(p->peername, p->username));
 			pvt_set_needdestroy(p, "received erroneous 200 response");
 			return 0;
 		}
@@ -20100,16 +20235,16 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 			ast_log(LOG_WARNING, "Recv error: %s\n", strerror(errno));
 		return 1;
 	}
+
 	readbuf[res] = '\0';
-	if (!(req.data = ast_str_create(SIP_MIN_PACKET)))
+
+	if (!(req.data = ast_str_create(SIP_MIN_PACKET))) {
 		return 1;
-	ast_str_set(&req.data, 0, "%s", readbuf);
-	if (res == sizeof(req.data) - 1) {
-		ast_debug(1, "Received packet exceeds buffer. Data is possibly lost\n");
-		req.data->str[sizeof(req.data) - 1] = '\0';
- 	} else
-		req.data->str[res] = '\0';
-	req.len = res;
+	}
+
+	if (ast_str_set(&req.data, 0, "%s", readbuf) == AST_DYNSTR_BUILD_FAILED) {
+		return -1;
+	}
 
 	req.socket.fd 	= sipsock;
 	req.socket.type = SIP_TRANSPORT_UDP;
@@ -20584,7 +20719,8 @@ static void *do_monitor(void *data)
 		   of time since the last time we did it (when MWI is being sent, we can
 		   get back to this point every millisecond or less)
 		*/
-		ao2_t_callback(dialogs, OBJ_UNLINK|OBJ_NODATA, dialog_needdestroy, &t, "callback to remove dialogs w/needdestroy");
+		ao2_t_callback(dialogs, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, dialog_needdestroy, &t, NULL,
+				"callback to remove dialogs w/needdestroy");
 
 		/* the old methodology would be to restart the search for dialogs to delete with every 
 		   dialog that was found and destroyed, probably because the list contents would change,
@@ -21679,11 +21815,11 @@ static void set_peer_defaults(struct sip_peer *peer)
 	}
 	ast_copy_flags(&peer->flags[0], &global_flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&peer->flags[1], &global_flags[1], SIP_PAGE2_FLAGS_TO_COPY);
-	strcpy(peer->context, default_context);
-	strcpy(peer->subscribecontext, default_subscribecontext);
-	strcpy(peer->language, default_language);
-	strcpy(peer->mohinterpret, default_mohinterpret);
-	strcpy(peer->mohsuggest, default_mohsuggest);
+	ast_string_field_set(peer, context, default_context);
+	ast_string_field_set(peer, subscribecontext, default_subscribecontext);
+	ast_string_field_set(peer, language, default_language);
+	ast_string_field_set(peer, mohinterpret, default_mohinterpret);
+	ast_string_field_set(peer, mohsuggest, default_mohsuggest);
 	peer->addr.sin_family = AF_INET;
 	peer->defaddr.sin_family = AF_INET;
 	peer->capability = global_capability;
@@ -21696,14 +21832,15 @@ static void set_peer_defaults(struct sip_peer *peer)
 	peer->qualifyfreq = global_qualifyfreq;
 	if (global_callcounter)
 		peer->call_limit=999;
-	strcpy(peer->vmexten, default_vmexten);
-	peer->secret[0] = '\0';
-	peer->md5secret[0] = '\0';
-	peer->cid_num[0] = '\0';
-	peer->cid_name[0] = '\0';
-	peer->fromdomain[0] = '\0';
-	peer->fromuser[0] = '\0';
-	peer->regexten[0] = '\0';
+	ast_string_field_set(peer, vmexten, default_vmexten);
+	ast_string_field_set(peer, secret, "");
+	ast_string_field_set(peer, remotesecret, "");
+	ast_string_field_set(peer, md5secret, "");
+	ast_string_field_set(peer, cid_num, "");
+	ast_string_field_set(peer, cid_name, "");
+	ast_string_field_set(peer, fromdomain, "");
+	ast_string_field_set(peer, fromuser, "");
+	ast_string_field_set(peer, regexten, "");
 	peer->callgroup = 0;
 	peer->pickupgroup = 0;
 	peer->maxms = default_qualify;
@@ -21724,6 +21861,11 @@ static struct sip_peer *temp_peer(const char *name)
 
 	if (!(peer = ao2_t_alloc(sizeof(*peer), sip_destroy_peer_fn, "allocate a peer struct")))
 		return NULL;
+
+	if (ast_string_field_init(peer, 512)) {
+		ao2_t_ref(peer, -1, "failed to string_field_init, drop peer");
+		return NULL;
+	}
 
 	ast_atomic_fetchadd_int(&apeerobjs, 1);
 	set_peer_defaults(peer);
@@ -21787,7 +21929,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		   during reload
 		*/
 		ast_copy_string(tmp_peer.name, name, sizeof(tmp_peer.name));
-		peer = ao2_t_find(peers, &tmp_peer, OBJ_POINTER|OBJ_UNLINK, "find and unlink peer from peers table");
+		peer = ao2_t_find(peers, &tmp_peer, NULL, OBJ_POINTER | OBJ_UNLINK, "find and unlink peer from peers table");
 	}
 	
 	if (peer) {
@@ -21798,6 +21940,11 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
  	} else {
 		if (!(peer = ao2_t_alloc(sizeof(*peer), sip_destroy_peer_fn, "allocate a peer struct")))
 			return NULL;
+
+		if (ast_string_field_init(peer, 512)) {
+			ao2_t_ref(peer, -1, "failed to string_field_init, drop peer");
+			return NULL;
+		}
 
 		if (realtime && !ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS)) {
 			ast_atomic_fetchadd_int(&rpeerobjs, 1);
@@ -21869,28 +22016,34 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		} else if (!strcasecmp(v->name, "type")) {
 			if (!strcasecmp(v->value, "peer")) 
 				peer->onlymatchonip = TRUE;		/* For realtime support, add type=peer in the table */
-		} else if (!strcasecmp(v->name, "secret")) 
-			ast_copy_string(peer->secret, v->value, sizeof(peer->secret));
-		else if (!strcasecmp(v->name, "md5secret")) 
-			ast_copy_string(peer->md5secret, v->value, sizeof(peer->md5secret));
+		} else if (!strcasecmp(v->name, "remotesecret")) {
+			ast_string_field_set(peer, remotesecret, v->value);
+		} else if (!strcasecmp(v->name, "secret")) {
+			ast_string_field_set(peer, secret, v->value);
+		} else if (!strcasecmp(v->name, "md5secret")) 
+			ast_string_field_set(peer, md5secret, v->value);
 		else if (!strcasecmp(v->name, "auth"))
 			peer->auth = add_realm_authentication(peer->auth, v->value, v->lineno);
 		else if (!strcasecmp(v->name, "callerid")) {
-			ast_callerid_split(v->value, peer->cid_name, sizeof(peer->cid_name), peer->cid_num, sizeof(peer->cid_num));
+			char cid_name[80] = { '\0' }, cid_num[80] = { '\0' };
+
+			ast_callerid_split(v->value, cid_name, sizeof(cid_name), cid_num, sizeof(cid_num));
+			ast_string_field_set(peer, cid_name, cid_name);
+			ast_string_field_set(peer, cid_num, cid_num);
 		} else if (!strcasecmp(v->name, "fullname")) {
-			ast_copy_string(peer->cid_name, v->value, sizeof(peer->cid_name));
+			ast_string_field_set(peer, cid_name, v->value);
 		} else if (!strcasecmp(v->name, "cid_number")) {
-			ast_copy_string(peer->cid_num, v->value, sizeof(peer->cid_num));
+			ast_string_field_set(peer, cid_num, v->value);
 		} else if (!strcasecmp(v->name, "context")) {
-			ast_copy_string(peer->context, v->value, sizeof(peer->context));
+			ast_string_field_set(peer, context, v->value);
 		} else if (!strcasecmp(v->name, "subscribecontext")) {
-			ast_copy_string(peer->subscribecontext, v->value, sizeof(peer->subscribecontext));
+			ast_string_field_set(peer, subscribecontext, v->value);
 		} else if (!strcasecmp(v->name, "fromdomain")) {
-			ast_copy_string(peer->fromdomain, v->value, sizeof(peer->fromdomain));
+			ast_string_field_set(peer, fromdomain, v->value);
 		} else if (!strcasecmp(v->name, "usereqphone")) {
 			ast_set2_flag(&peer->flags[0], ast_true(v->value), SIP_USEREQPHONE);
 		} else if (!strcasecmp(v->name, "fromuser")) {
-			ast_copy_string(peer->fromuser, v->value, sizeof(peer->fromuser));
+			ast_string_field_set(peer, fromuser, v->value);
 		} else if (!strcasecmp(v->name, "outboundproxy")) {
 			char *port, *next, *force, *proxyname;
 			int forceopt = FALSE;
@@ -21961,7 +22114,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			if (peer->callingpres == -1)
 				peer->callingpres = atoi(v->value);
 		} else if (!strcasecmp(v->name, "username") || !strcmp(v->name, "defaultuser")) {	/* "username" is deprecated */
-			ast_copy_string(peer->username, v->value, sizeof(peer->username));
+			ast_string_field_set(peer, username, v->value);
 			if (!strcasecmp(v->name, "username")) {
 				if (deprecation_warning) {
 					ast_log(LOG_NOTICE, "The 'username' field for sip peers has been deprecated in favor of the term 'defaultuser'\n");
@@ -21970,9 +22123,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				peer->deprecated_username = 1;
 			}
 		} else if (!strcasecmp(v->name, "language")) {
-			ast_copy_string(peer->language, v->value, sizeof(peer->language));
+			ast_string_field_set(peer, language, v->value);
 		} else if (!strcasecmp(v->name, "regexten")) {
-			ast_copy_string(peer->regexten, v->value, sizeof(peer->regexten));
+			ast_string_field_set(peer, regexten, v->value);
 		} else if (!strcasecmp(v->name, "callbackextension")) {
 			ast_copy_string(callback, v->value, sizeof(callback));
 		} else if (!strcasecmp(v->name, "callcounter")) {
@@ -21993,13 +22146,13 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				peer->amaflags = format;
 			}
 		} else if (!strcasecmp(v->name, "accountcode")) {
-			ast_copy_string(peer->accountcode, v->value, sizeof(peer->accountcode));
+			ast_string_field_set(peer, accountcode, v->value);
 		} else if (!strcasecmp(v->name, "mohinterpret")) {
-			ast_copy_string(peer->mohinterpret, v->value, sizeof(peer->mohinterpret));
+			ast_string_field_set(peer, mohinterpret, v->value);
 		} else if (!strcasecmp(v->name, "mohsuggest")) {
-			ast_copy_string(peer->mohsuggest, v->value, sizeof(peer->mohsuggest));
+			ast_string_field_set(peer, mohsuggest, v->value);
 		} else if (!strcasecmp(v->name, "parkinglot")) {
-			ast_copy_string(peer->parkinglot, v->value, sizeof(peer->parkinglot));
+			ast_string_field_set(peer, parkinglot, v->value);
 		} else if (!strcasecmp(v->name, "mailbox")) {
 			add_peer_mailboxes(peer, v->value);
 		} else if (!strcasecmp(v->name, "hasvoicemail")) {
@@ -22011,7 +22164,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		} else if (!strcasecmp(v->name, "subscribemwi")) {
 			ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_SUBSCRIBEMWIONLY);
 		} else if (!strcasecmp(v->name, "vmexten")) {
-			ast_copy_string(peer->vmexten, v->value, sizeof(peer->vmexten));
+			ast_string_field_set(peer, vmexten, v->value);
 		} else if (!strcasecmp(v->name, "callgroup")) {
 			peer->callgroup = ast_get_group(v->value);
 		} else if (!strcasecmp(v->name, "allowtransfer")) {
@@ -22138,7 +22291,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	}
 
 	if (fullcontact->used > 0) {
-		ast_copy_string(peer->fullcontact, fullcontact->str, sizeof(peer->fullcontact));
+		ast_string_field_set(peer, fullcontact, fullcontact->str);
 		peer->rt_fromcontact = TRUE;
 		/* We have a hostname in the fullcontact, but if we don't have an
 		 * address listed on the entry (or if it's 'dynamic'), then we need to
@@ -22167,7 +22320,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			return NULL;
 		}
 
-		ast_copy_string(peer->tohost, srvlookup, sizeof(peer->tohost));
+		ast_string_field_set(peer, tohost, srvlookup);
 	}
 
 	if (!peer->addr.sin_port)
@@ -22208,7 +22361,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	if (!ast_strlen_zero(callback)) { /* build string from peer info */
 		char *reg_string;
 
-		if (asprintf(&reg_string, "%s:%s@%s/%s", peer->username, peer->secret, peer->tohost, callback) < 0) {
+		if (asprintf(&reg_string, "%s:%s@%s/%s", peer->username, peer->remotesecret ? peer->remotesecret : peer->secret, peer->tohost, callback) < 0) {
 			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
 		} else	if (reg_string) {
 			sip_register(reg_string, 0); /* XXX TODO: count in registry_count */
@@ -22218,7 +22371,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	return peer;
 }
 
-static int peer_markall_func(void *device, void *arg, int flags)
+static int peer_markall_func(void *device, void *arg, void *data, int flags)
 {
 	struct sip_peer *peer = device;
 	peer->the_mark = 1;
@@ -22323,7 +22476,7 @@ static int reload_config(enum channelreloadreason reason)
 		/* Then, actually destroy users and registry */
 		ASTOBJ_CONTAINER_DESTROYALL(&regl, sip_registry_destroy);
 		ast_debug(4, "--------------- Done destroying registry list\n");
-		ao2_t_callback(peers, OBJ_NODATA, peer_markall_func, 0, "callback to mark all peers");
+		ao2_t_callback(peers, OBJ_NODATA, peer_markall_func, NULL, NULL, "callback to mark all peers");
 	}
 	
 	/* Reset certificate handling for TLS sessions */
@@ -22387,6 +22540,7 @@ static int reload_config(enum channelreloadreason reason)
 	global_regcontext[0] = '\0';
 	sip_cfg.regextenonqualify = DEFAULT_REGEXTENONQUALIFY;
 	global_notifyringing = DEFAULT_NOTIFYRINGING;
+	global_notifycid = DEFAULT_NOTIFYCID;
 	global_notifyhold = FALSE;		/*!< Keep track of hold status for a peer */
 	sip_cfg.directrtpsetup = FALSE;		/* Experimental feature, disabled by default */
 	sip_cfg.alwaysauthreject = DEFAULT_ALWAYSAUTHREJECT;
@@ -22604,6 +22758,8 @@ static int reload_config(enum channelreloadreason reason)
 			global_notifyringing = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifyhold")) {
 			global_notifyhold = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "notifycid")) {
+			global_notifycid = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "alwaysauthreject")) {
 			sip_cfg.alwaysauthreject = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "mohinterpret")) {
@@ -23382,21 +23538,8 @@ static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp *rtp, struc
 	return 0;
 }
 
-static char *synopsis_dtmfmode = "Change the dtmfmode for a SIP call";
-static char *descrip_dtmfmode = "  SIPDtmfMode(inband|info|rfc2833): Changes the dtmfmode for a SIP call\n";
 static char *app_dtmfmode = "SIPDtmfMode";
-
 static char *app_sipaddheader = "SIPAddHeader";
-static char *synopsis_sipaddheader = "Add a SIP header to the outbound call";
-
-static char *descrip_sipaddheader = ""
-"  SIPAddHeader(Header: Content):\n"
-"Adds a header to a SIP call placed with DIAL.\n"
-"Remember to user the X-header if you are adding non-standard SIP\n"
-"headers, like \"X-Asterisk-Accountcode:\". Use this with care.\n"
-"Adding the wrong headers may jeopardize the SIP dialog.\n"
-"Always returns 0\n";
-
 
 /*! \brief Set the DTMFmode for an outbound SIP call (application) */
 static int sip_dtmfmode(struct ast_channel *chan, void *data)
@@ -23630,7 +23773,8 @@ static int sip_do_reload(enum channelreloadreason reason)
 
 	start_poke = time(0);
 	/* Prune peers who still are supposed to be deleted */
-	ao2_t_callback(peers, OBJ_NODATA|OBJ_UNLINK, peer_is_marked, 0, "callback to remove marked peers");
+	ao2_t_callback(peers, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, peer_is_marked, NULL, NULL,
+			"callback to remove marked peers");
 	
 	ast_debug(4, "--------------- Done destroying pruned peers\n");
 
@@ -23687,7 +23831,6 @@ static int reload(void)
 	return 1;
 }
 
-static struct ast_cli_entry cli_sip_do_history_deprecated = AST_CLI_DEFINE(sip_do_history_deprecated, "Enable/Disable SIP history");
 /*! \brief SIP Cli commands definition */
 static struct ast_cli_entry cli_sip[] = {
 	AST_CLI_DEFINE(sip_show_channels, "List active SIP channels or subscriptions"),
@@ -23711,7 +23854,7 @@ static struct ast_cli_entry cli_sip[] = {
 	AST_CLI_DEFINE(sip_show_sched, "Present a report on the status of the sched queue"),
 	AST_CLI_DEFINE(sip_prune_realtime, "Prune cached Realtime users/peers"),
 	AST_CLI_DEFINE(sip_do_debug, "Enable/Disable SIP debugging"),
-	AST_CLI_DEFINE(sip_set_history, "Enable/Disable SIP history", .deprecate_cmd = &cli_sip_do_history_deprecated),
+	AST_CLI_DEFINE(sip_set_history, "Enable/Disable SIP history"),
 	AST_CLI_DEFINE(sip_reload, "Reload SIP configuration"),
 	AST_CLI_DEFINE(sip_show_tcp, "List TCP Connections")
 };
@@ -23770,8 +23913,8 @@ static int load_module(void)
 	ast_udptl_proto_register(&sip_udptl);
 
 	/* Register dialplan applications */
-	ast_register_application(app_dtmfmode, sip_dtmfmode, synopsis_dtmfmode, descrip_dtmfmode);
-	ast_register_application(app_sipaddheader, sip_addheader, synopsis_sipaddheader, descrip_sipaddheader);
+	ast_register_application_xml(app_dtmfmode, sip_dtmfmode);
+	ast_register_application_xml(app_sipaddheader, sip_addheader);
 
 	/* Register dialplan functions */
 	ast_custom_function_register(&sip_header_function);

@@ -169,45 +169,64 @@ static int pickup_by_channel(struct ast_channel *chan, char *pickup)
 	return res;
 }
 
+struct pickup_criteria {
+	const char *exten;
+	const char *context;
+};
+
+static int find_by_exten(struct ast_channel *c, void *data)
+{
+	struct pickup_criteria *info = data;
+
+	return (!strcasecmp(c->macroexten, info->exten) || !strcasecmp(c->exten, info->exten)) &&
+		!strcasecmp(c->dialcontext, info->context) &&
+		can_pickup(c);
+}
+
 /* Attempt to pick up specified extension with context */
 static int pickup_by_exten(struct ast_channel *chan, const char *exten, const char *context)
 {
-	int res = -1;
 	struct ast_channel *target = NULL;
+	struct pickup_criteria search = {
+		.exten = exten,
+		.context = context,
+	};
 
-	while ((target = ast_channel_walk_locked(target))) {
-		if ((!strcasecmp(target->macroexten, exten) || !strcasecmp(target->exten, exten)) &&
-			!strcasecmp(target->dialcontext, context) &&
-			can_pickup(target)) {
-			res = pickup_do(chan, target);
-			ast_channel_unlock(target);
-			break;
-		}
+	target = ast_channel_search_locked(find_by_exten, &search);
+
+	if (target) {
+		int res = pickup_do(chan, target);
 		ast_channel_unlock(target);
+		target = NULL;
+		return res;
 	}
 
-	return res;
+	return -1;
+}
+
+static int find_by_mark(struct ast_channel *c, void *data)
+{
+	const char *mark = data;
+	const char *tmp;
+
+	return (tmp = pbx_builtin_getvar_helper(c, PICKUPMARK)) &&
+		!strcasecmp(tmp, mark) &&
+		can_pickup(c);
 }
 
 /* Attempt to pick up specified mark */
 static int pickup_by_mark(struct ast_channel *chan, const char *mark)
 {
-	int res = -1;
-	const char *tmp = NULL;
-	struct ast_channel *target = NULL;
+	struct ast_channel *target = ast_channel_search_locked(find_by_mark, (char *) mark);
 
-	while ((target = ast_channel_walk_locked(target))) {
-		if ((tmp = pbx_builtin_getvar_helper(target, PICKUPMARK)) &&
-			!strcasecmp(tmp, mark) &&
-			can_pickup(target)) {
-			res = pickup_do(chan, target);
-			ast_channel_unlock(target);
-			break;
-		}
+	if (target) {
+		int res = pickup_do(chan, target);
 		ast_channel_unlock(target);
+		target = NULL;
+		return res;
 	}
 
-	return res;
+	return -1;
 }
 
 /* application entry point for Pickup() */

@@ -110,6 +110,70 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			or <literal>0</literal> on success.</para>
 		</description>
 	</application>
+	<function name="IAXPEER" language="en_US">
+		<synopsis>
+			Gets IAX peer information.
+		</synopsis>
+		<syntax>
+			<parameter name="peername" required="true">
+				<enumlist>
+					<enum name="CURRENTCHANNEL">
+						<para>If <replaceable>peername</replaceable> is specified to this value, return the IP address of the
+						endpoint of the current channel</para>
+					</enum>
+				</enumlist>
+			</parameter>
+			<parameter name="item">
+				<para>If <replaceable>peername</replaceable> is specified, valid items are:</para>
+				<enumlist>
+					<enum name="ip">
+						<para>(default) The IP address.</para>
+					</enum>
+					<enum name="status">
+						<para>The peer's status (if <literal>qualify=yes</literal>)</para>
+					</enum>
+					<enum name="mailbox">
+						<para>The configured mailbox.</para>
+					</enum>
+					<enum name="context">
+						<para>The configured context.</para>
+					</enum>
+					<enum name="expire">
+						<para>The epoch time of the next expire.</para>
+					</enum>
+					<enum name="dynamic">
+						<para>Is it dynamic? (yes/no).</para>
+					</enum>
+					<enum name="callerid_name">
+						<para>The configured Caller ID name.</para>
+					</enum>
+					<enum name="callerid_num">
+						<para>The configured Caller ID number.</para>
+					</enum>
+					<enum name="codecs">
+						<para>The configured codecs.</para>
+					</enum>
+					<enum name="codec[x]">
+						<para>Preferred codec index number <replaceable>x</replaceable> (beginning
+						with <literal>0</literal>)</para>
+					</enum>
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description />
+		<see-also>
+			<ref type="function">SIPPEER</ref>
+		</see-also>
+	</function>
+	<function name="IAXVAR" language="en_US">
+		<synopsis>
+			Sets or retrieves a remote variable.
+		</synopsis>
+		<syntax>
+			<parameter name="varname" required="true" />
+		</syntax>
+		<description />
+	</function>
  ***/
 
 /* Define SCHED_MULTITHREADED to run the scheduler in a special
@@ -796,7 +860,8 @@ struct iax2_thread {
 	time_t checktime;
 	ast_mutex_t lock;
 	ast_cond_t cond;
-	unsigned int ready_for_signal:1;
+	ast_mutex_t init_lock;
+	ast_cond_t init_cond;
 	/*! if this thread is processing a full frame,
 	  some information about that frame will be stored
 	  here, so we can avoid dispatching any more full
@@ -819,6 +884,7 @@ static AST_LIST_HEAD_STATIC(active_list, iax2_thread);
 static AST_LIST_HEAD_STATIC(dynamic_list, iax2_thread);
 
 static void *iax2_process_thread(void *data);
+static void iax2_destroy(int callno);
 
 static void signal_condition(ast_mutex_t *lock, ast_cond_t *cond)
 {
@@ -1137,6 +1203,9 @@ static struct iax2_thread *find_idle_thread(void)
 	/* Initialize lock and condition */
 	ast_mutex_init(&thread->lock);
 	ast_cond_init(&thread->cond, NULL);
+	ast_mutex_init(&thread->init_lock);
+	ast_cond_init(&thread->init_cond, NULL);
+	ast_mutex_lock(&thread->init_lock);
 
 	/* Create thread and send it on it's way */
 	if (ast_pthread_create_detached_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
@@ -1151,8 +1220,10 @@ static struct iax2_thread *find_idle_thread(void)
 	memset(&thread->ffinfo, 0, sizeof(thread->ffinfo));
 
 	/* Wait for the thread to be ready before returning it to the caller */
-	while (!thread->ready_for_signal)
-		usleep(1);
+	ast_cond_wait(&thread->init_cond, &thread->init_lock);
+
+	/* Done with init_lock */
+	ast_mutex_unlock(&thread->init_lock);
 
 	return thread;
 }
@@ -1329,7 +1400,7 @@ static int peer_hash_cb(const void *obj, const int flags)
 /*!
  * \note The only member of the peer passed here guaranteed to be set is the name field
  */
-static int peer_cmp_cb(void *obj, void *arg, int flags)
+static int peer_cmp_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct iax2_peer *peer = obj, *peer2 = arg;
 
@@ -1349,7 +1420,7 @@ static int user_hash_cb(const void *obj, const int flags)
 /*!
  * \note The only member of the user passed here guaranteed to be set is the name field
  */
-static int user_cmp_cb(void *obj, void *arg, int flags)
+static int user_cmp_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct iax2_user *user = obj, *user2 = arg;
 
@@ -1367,7 +1438,7 @@ static struct iax2_peer *find_peer(const char *name, int realtime)
 		.name = name,
 	};
 
-	peer = ao2_find(peers, &tmp_peer, OBJ_POINTER);
+	peer = ao2_find(peers, &tmp_peer, NULL, OBJ_POINTER);
 
 	/* Now go for realtime if applicable */
 	if(!peer && realtime)
@@ -1441,7 +1512,7 @@ static void iax2_destroy_helper(struct chan_iax2_pvt *pvt)
 			.name = pvt->username,
 		};
 
-		user = ao2_find(users, &tmp_user, OBJ_POINTER);
+		user = ao2_find(users, &tmp_user, NULL, OBJ_POINTER);
 		if (user) {
 			ast_atomic_fetchadd_int(&user->curauthreq, -1);
 			user_unref(user);	
@@ -1463,6 +1534,20 @@ static void iax2_frame_free(struct iax_frame *fr)
 {
 	AST_SCHED_DEL(sched, fr->retrans);
 	iax_frame_free(fr);
+}
+
+static int scheduled_destroy(const void *vid)
+{
+	short callno = PTR_TO_CALLNO(vid);
+	ast_mutex_lock(&iaxsl[callno]);
+	if (iaxs[callno]) {
+		if (option_debug) {
+			ast_log(LOG_DEBUG, "Really destroying %d now...\n", callno);
+		}
+		iax2_destroy(callno);
+	}
+	ast_mutex_unlock(&iaxsl[callno]);
+	return 0;
 }
 
 static void pvt_destructor(void *obj)
@@ -1708,7 +1793,7 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 
 			memcpy(&tmp_pvt.addr, sin, sizeof(tmp_pvt.addr));
 
-			if ((pvt = ao2_find(iax_peercallno_pvts, &tmp_pvt, OBJ_POINTER))) {
+			if ((pvt = ao2_find(iax_peercallno_pvts, &tmp_pvt, NULL, OBJ_POINTER))) {
 				if (return_locked) {
 					ast_mutex_lock(&iaxsl[pvt->callno]);
 				}
@@ -1721,11 +1806,20 @@ static int __find_callno(unsigned short callno, unsigned short dcallno, struct s
 
 		/* This will occur on the first response to a message that we initiated,
 		 * such as a PING. */
+		if (dcallno) {
+			ast_mutex_lock(&iaxsl[dcallno]);
+		}
 		if (callno && dcallno && iaxs[dcallno] && !iaxs[dcallno]->peercallno && match(sin, callno, dcallno, iaxs[dcallno], check_dcallno)) {
 			iaxs[dcallno]->peercallno = callno;
 			res = dcallno;
 			store_by_peercallno(iaxs[dcallno]);
+			if (!res || !return_locked) {
+				ast_mutex_unlock(&iaxsl[dcallno]);
+			}
 			return res;
+		}
+		if (dcallno) {
+			ast_mutex_unlock(&iaxsl[dcallno]);
 		}
 
 #ifdef IAX_OLD_FIND
@@ -3804,14 +3898,18 @@ static int iax2_hangup(struct ast_channel *c)
 {
 	unsigned short callno = PTR_TO_CALLNO(c->tech_pvt);
  	struct iax_ie_data ied;
+	int alreadygone;
  	memset(&ied, 0, sizeof(ied));
 	ast_mutex_lock(&iaxsl[callno]);
 	if (callno && iaxs[callno]) {
 		ast_debug(1, "We're hanging up %s now...\n", c->name);
+		alreadygone = ast_test_flag(iaxs[callno], IAX_ALREADYGONE);
 		/* Send the hangup unless we have had a transmission error or are already gone */
  		iax_ie_append_byte(&ied, IAX_IE_CAUSECODE, (unsigned char)c->hangupcause);
-		if (!iaxs[callno]->error && !ast_test_flag(iaxs[callno], IAX_ALREADYGONE)) {
- 			send_command_final(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_HANGUP, 0, ied.buf, ied.pos, -1);
+		if (!iaxs[callno]->error && !alreadygone) {
+ 			if (send_command_final(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_HANGUP, 0, ied.buf, ied.pos, -1)) {
+				ast_log(LOG_WARNING, "No final packet could be sent for callno %d\n", callno);
+			}
 			if (!iaxs[callno]) {
 				ast_mutex_unlock(&iaxsl[callno]);
 				return 0;
@@ -3820,9 +3918,14 @@ static int iax2_hangup(struct ast_channel *c)
 		/* Explicitly predestroy it */
 		iax2_predestroy(callno);
 		/* If we were already gone to begin with, destroy us now */
-		if (iaxs[callno]) {
+		if (iaxs[callno] && alreadygone) {
 			ast_debug(1, "Really destroying %s now...\n", c->name);
 			iax2_destroy(callno);
+		} else if (iaxs[callno]) {
+			if (ast_sched_add(sched, 10000, scheduled_destroy, CALLNO_TO_PTR(callno)) < 0) {
+				ast_log(LOG_ERROR, "Unable to schedule iax2 callno %d destruction?!!  Destroying immediately.\n", callno);
+				iax2_destroy(callno);
+			}
 		}
 	} else if (c->tech_pvt) {
 		/* If this call no longer exists, but the channel still
@@ -5335,7 +5438,7 @@ static char *handle_cli_iax2_unregister(struct ast_cli_entry *e, int cmd, struct
 			};
 			struct iax2_peer *peer;
 
-			peer = ao2_find(peers, &tmp_peer, OBJ_POINTER);
+			peer = ao2_find(peers, &tmp_peer, NULL, OBJ_POINTER);
 			if (peer) {
 				expire_registry(peer_ref(peer)); /* will release its own reference when done */
 				peer_unref(peer); /* ref from ao2_find() */
@@ -6227,7 +6330,7 @@ static int authenticate_request(int call_num)
 			.name = p->username,	
 		};
 
-		user = ao2_find(users, &tmp_user, OBJ_POINTER);
+		user = ao2_find(users, &tmp_user, NULL, OBJ_POINTER);
 		if (user) {
 			if (user->curauthreq == user->maxauthreq)
 				authreq_restrict = 1;
@@ -6277,7 +6380,7 @@ static int authenticate_verify(struct chan_iax2_pvt *p, struct iax_ies *ies)
 		.name = p->username,	
 	};
 
-	user = ao2_find(users, &tmp_user, OBJ_POINTER);
+	user = ao2_find(users, &tmp_user, NULL, OBJ_POINTER);
 	if (user) {
 		if (ast_test_flag(p, IAX_MAXAUTHREQ)) {
 			ast_atomic_fetchadd_int(&user->curauthreq, -1);
@@ -8141,8 +8244,6 @@ static int acf_iaxvar_write(struct ast_channel *chan, const char *cmd, char *dat
 
 static struct ast_custom_function iaxvar_function = {
 	.name = "IAXVAR",
-	.synopsis = "Sets or retrieves a remote variable",
-	.syntax = "IAXVAR(<varname>)",
 	.read = acf_iaxvar_read,
 	.write = acf_iaxvar_write,
 };
@@ -9813,6 +9914,8 @@ static void iax2_process_thread_cleanup(void *data)
 	struct iax2_thread *thread = data;
 	ast_mutex_destroy(&thread->lock);
 	ast_cond_destroy(&thread->cond);
+	ast_mutex_destroy(&thread->init_lock);
+	ast_cond_destroy(&thread->init_cond);
 	ast_free(thread);
 	ast_atomic_dec_and_test(&iaxactivethreadcount);
 }
@@ -9823,6 +9926,7 @@ static void *iax2_process_thread(void *data)
 	struct timeval wait;
 	struct timespec ts;
 	int put_into_idle = 0;
+	int first_time = 1;
 
 	ast_atomic_fetchadd_int(&iaxactivethreadcount,1);
 	pthread_cleanup_push(iax2_process_thread_cleanup, data);
@@ -9831,8 +9935,11 @@ static void *iax2_process_thread(void *data)
 		ast_mutex_lock(&thread->lock);
 
 		/* Flag that we're ready to accept signals */
-		thread->ready_for_signal = 1;
-		
+		if (first_time) {
+			signal_condition(&thread->init_lock, &thread->init_cond);
+			first_time = 0;
+		}
+
 		/* Put into idle list if applicable */
 		if (put_into_idle)
 			insert_idle_thread(thread);
@@ -10152,7 +10259,7 @@ static int iax2_poke_noanswer(const void *data)
 	return 0;
 }
 
-static int iax2_poke_peer_cb(void *obj, void *arg, int flags)
+static int iax2_poke_peer_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct iax2_peer *peer = obj;
 
@@ -10592,7 +10699,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 	};
 
 	if (!temponly) {
-		peer = ao2_find(peers, &tmp_peer, OBJ_POINTER);
+		peer = ao2_find(peers, &tmp_peer, NULL, OBJ_POINTER);
 		if (peer && !ast_test_flag(peer, IAX_DELME))
 			firstpass = 0;
 	}
@@ -10846,7 +10953,7 @@ static struct iax2_user *build_user(const char *name, struct ast_variable *v, st
 	};
 
 	if (!temponly) {
-		user = ao2_find(users, &tmp_user, OBJ_POINTER);
+		user = ao2_find(users, &tmp_user, NULL, OBJ_POINTER);
 		if (user && !ast_test_flag(user, IAX_DELME))
 			firstpass = 0;
 	}
@@ -11046,7 +11153,7 @@ cleanup:
 	return user;
 }
 
-static int peer_delme_cb(void *obj, void *arg, int flags)
+static int peer_delme_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct iax2_peer *peer = obj;
 
@@ -11055,7 +11162,7 @@ static int peer_delme_cb(void *obj, void *arg, int flags)
 	return 0;
 }
 
-static int user_delme_cb(void *obj, void *arg, int flags)
+static int user_delme_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct iax2_user *user = obj;
 
@@ -11068,7 +11175,7 @@ static void delete_users(void)
 {
 	struct iax2_registry *reg;
 
-	ao2_callback(users, 0, user_delme_cb, NULL);
+	ao2_callback(users, 0, user_delme_cb, NULL, NULL);
 
 	AST_LIST_LOCK(&registrations);
 	while ((reg = AST_LIST_REMOVE_HEAD(&registrations, entry))) {
@@ -11088,7 +11195,7 @@ static void delete_users(void)
 	}
 	AST_LIST_UNLOCK(&registrations);
 
-	ao2_callback(peers, 0, peer_delme_cb, NULL);
+	ao2_callback(peers, 0, peer_delme_cb, NULL, NULL);
 }
 
 static void prune_users(void)
@@ -11998,23 +12105,7 @@ static int function_iaxpeer(struct ast_channel *chan, const char *cmd, char *dat
 
 struct ast_custom_function iaxpeer_function = {
 	.name = "IAXPEER",
-	.synopsis = "Gets IAX peer information",
-	.syntax = "IAXPEER(<peername|CURRENTCHANNEL>[,item])",
 	.read = function_iaxpeer,
-	.desc = "If peername specified, valid items are:\n"
-	"- ip (default)          The IP address.\n"
-	"- status                The peer's status (if qualify=yes)\n"
-	"- mailbox               The configured mailbox.\n"
-	"- context               The configured context.\n"
-	"- expire                The epoch time of the next expire.\n"
-	"- dynamic               Is it dynamic? (yes/no).\n"
-	"- callerid_name         The configured Caller ID name.\n"
-	"- callerid_num          The configured Caller ID number.\n"
-	"- codecs                The configured codecs.\n"
-	"- codec[x]              Preferred codec index number 'x' (beginning with zero).\n"
-	"\n"
-	"If CURRENTCHANNEL specified, returns IP address of current channel\n"
-	"\n"
 };
 
 static int acf_channel_write(struct ast_channel *chan, const char *function, char *args, const char *value)
@@ -12352,7 +12443,7 @@ static int unload_module(void)
 	return __unload_module();
 }
 
-static int peer_set_sock_cb(void *obj, void *arg, int flags)
+static int peer_set_sock_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct iax2_peer *peer = obj;
 
@@ -12369,7 +12460,7 @@ static int pvt_hash_cb(const void *obj, const int flags)
 	return pvt->peercallno;
 }
 
-static int pvt_cmp_cb(void *obj, void *arg, int flags)
+static int pvt_cmp_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct chan_iax2_pvt *pvt = obj, *pvt2 = arg;
 
@@ -12483,8 +12574,8 @@ static int load_module(void)
 		iax2_do_register(reg);
 	AST_LIST_UNLOCK(&registrations);	
 	
-	ao2_callback(peers, 0, peer_set_sock_cb, NULL);
-	ao2_callback(peers, 0, iax2_poke_peer_cb, NULL);
+	ao2_callback(peers, 0, peer_set_sock_cb, NULL, NULL);
+	ao2_callback(peers, 0, iax2_poke_peer_cb, NULL, NULL);
 
 
 	reload_firmware(0);

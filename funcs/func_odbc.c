@@ -27,7 +27,7 @@
  */
 
 /*** MODULEINFO
-	<depend>unixodbc_or_iodbc</depend>
+	<depend>odbc</depend>
 	<depend>ltdl</depend>
 	<depend>res_odbc</depend>
 	<use>unixodbc</use>
@@ -300,7 +300,7 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 		if (!ast_strlen_zero(query->writehandle[dsn])) {
 			obj = ast_odbc_request_obj(query->writehandle[dsn], 0);
 			if (obj)
-				stmt = ast_odbc_direct_execute(obj, generic_execute, buf);
+				stmt = ast_odbc_direct_execute(obj, generic_execute, buf->str);
 		}
 		if (stmt) {
 			status = "SUCCESS";
@@ -316,7 +316,7 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 			if (!ast_strlen_zero(query->writehandle[dsn])) {
 				obj = ast_odbc_request_obj(query->writehandle[dsn], 0);
 				if (obj) {
-					stmt = ast_odbc_direct_execute(obj, generic_execute, insertbuf);
+					stmt = ast_odbc_direct_execute(obj, generic_execute, insertbuf->str);
 				}
 			}
 			if (stmt) {
@@ -375,6 +375,8 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 		pbx_builtin_setvar_helper(chan, "ODBCSTATUS", status);
 		return -1;
 	}
+
+	ast_str_reset(colnames);
 
 	AST_RWLIST_RDLOCK(&queries);
 	AST_RWLIST_TRAVERSE(&queries, query, list) {
@@ -531,6 +533,7 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 					colnames->str[colnames->used++] = colname[i];
 
 					if (colname[i] == '\0') {
+						colnames->used--;
 						break;
 					}
 				}

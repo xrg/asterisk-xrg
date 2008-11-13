@@ -214,6 +214,16 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				</variable>
 			</variablelist>
 		</description>
+		<see-also>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="application">AgentLogin</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+		</see-also>
 	</application>
 	<application name="AddQueueMember" language="en_US">
 		<synopsis>
@@ -240,6 +250,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				</variable>
 			</variablelist>
 		</description>
+		<see-also>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="application">AgentLogin</ref>
+		</see-also>
 	</application>
 	<application name="RemoveQueueMember" language="en_US">
 		<synopsis>
@@ -262,6 +278,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</variablelist>
 			<para>Example: RemoveQueueMember(techsupport,SIP/3000)</para>
 		</description>
+		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+		</see-also>
 	</application>
 	<application name="PauseQueueMember" language="en_US">
 		<synopsis>
@@ -291,6 +313,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</variablelist>
 			<para>Example: PauseQueueMember(,SIP/3000)</para>
 		</description>
+		<see-also>
+			<ref type="application">UnpauseQueueMember</ref>
+		</see-also>
 	</application>
 	<application name="UnpauseQueueMember" language="en_US">
 		<synopsis>
@@ -317,6 +342,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</variablelist>
 			<para>Example: UnpauseQueueMember(,SIP/3000)</para>
 		</description>
+		<see-also>
+			<ref type="application">PauseQueueMember</ref>
+		</see-also>
 	</application>
 	<application name="QueueLog" language="en_US">
 		<synopsis>
@@ -333,6 +361,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Allows you to write your own events into the queue log.</para>
 			<para>Example: QueueLog(101,${UNIQUEID},${AGENT},WENTONBREAK,600)</para>
 		</description>
+		<see-also>
+			<ref type="application">Queue</ref>
+		</see-also>
 	</application>
 	<function name="QUEUE_VARIABLES" language="en_US">
 		<synopsis>
@@ -408,6 +439,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Returns the number of members currently associated with the specified <replaceable>queuename</replaceable>.</para>
 			<warning><para>This function has been deprecated in favor of the <literal>QUEUE_MEMBER()</literal> function</para></warning>
 		</description>
+		<see-also>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+		</see-also>
 	</function>
 	<function name="QUEUE_WAITING_COUNT" language="en_US">
 		<synopsis>
@@ -430,6 +464,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Returns a comma-separated list of members associated with the specified <replaceable>queuename</replaceable>.</para>
 		</description>
+		<see-also>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+		</see-also>
 	</function>
 	<function name="QUEUE_MEMBER_PENALTY" language="en_US">
 		<synopsis>
@@ -816,7 +853,7 @@ static int queue_hash_cb(const void *obj, const int flags)
 	return ast_str_hash(q->name);
 }
 
-static int queue_cmp_cb(void *obj, void *arg, int flags)
+static int queue_cmp_cb(void *obj, void *arg, void *data, int flags)
 {
 	struct call_queue *q = obj, *q2 = arg;
 	return !strcasecmp(q->name, q2->name) ? CMP_MATCH | CMP_STOP : 0;
@@ -1007,9 +1044,9 @@ static int handle_statechange(void *datap)
 	}
 
 	if (found)
-		ast_debug(1, "Device '%s' changed to state '%d' (%s)\n", sc->dev, sc->state, devstate2str(sc->state));
+		ast_debug(1, "Device '%s' changed to state '%d' (%s)\n", sc->dev, sc->state, ast_devstate2str(sc->state));
 	else
-		ast_debug(3, "Device '%s' changed to state '%d' (%s) but we don't care because they're not a member of any queue.\n", sc->dev, sc->state, devstate2str(sc->state));
+		ast_debug(3, "Device '%s' changed to state '%d' (%s) but we don't care because they're not a member of any queue.\n", sc->dev, sc->state, ast_devstate2str(sc->state));
 
 	ast_free(sc);
 	return 0;
@@ -1089,7 +1126,7 @@ static int member_hash_fn(const void *obj, const int flags)
 	return ret;
 }
 
-static int member_cmp_fn(void *obj1, void *obj2, int flags)
+static int member_cmp_fn(void *obj1, void *obj2, void *data, int flags)
 {
 	struct member *mem1 = obj1, *mem2 = obj2;
 	return strcasecmp(mem1->interface, mem2->interface) ? 0 : CMP_MATCH | CMP_STOP;
@@ -1603,7 +1640,7 @@ static struct call_queue *find_queue_by_name_rt(const char *queuename, struct as
 	char tmpbuf[64];	/* Must be longer than the longest queue param name. */
 
 	/* Static queues override realtime. */
-	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
 		ao2_lock(q);
 		if (!q->realtime) {
 			if (q->dead) {
@@ -1730,7 +1767,7 @@ static struct call_queue *load_realtime_queue(const char *queuename)
 	};
 
 	/* Find the queue in the in-core list first. */
-	q = ao2_find(queues, &tmpq, OBJ_POINTER);
+	q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER);
 
 	if (!q || q->realtime) {
 		/*! \note Load from realtime before taking the "queues" container lock, to avoid blocking all
@@ -2224,7 +2261,7 @@ static int compare_weight(struct call_queue *rq, struct member *member)
 		}
 		ao2_lock(q);
 		if (q->count && q->members) {
-			if ((mem = ao2_find(q->members, member, OBJ_POINTER))) {
+			if ((mem = ao2_find(q->members, member, NULL, OBJ_POINTER))) {
 				ast_debug(1, "Found matching member %s in queue '%s'\n", mem->interface, q->name);
 				if (q->weight > rq->weight) {
 					ast_debug(1, "Queue '%s' (weight %d, calls %d) is preferred over '%s' (weight %d, calls %d)\n", q->name, q->weight, q->count, rq->name, rq->weight, rq->count);
@@ -3114,7 +3151,7 @@ static int update_queue(struct call_queue *q, struct member *member, int callcom
 		queue_iter = ao2_iterator_init(queues, 0);
 		while ((qtmp = ao2_iterator_next(&queue_iter))) {
 			ao2_lock(qtmp);
-			if ((mem = ao2_find(qtmp->members, member, OBJ_POINTER))) {
+			if ((mem = ao2_find(qtmp->members, member, NULL, OBJ_POINTER))) {
 				time(&mem->lastcall);
 				mem->calls++;
 				mem->lastqueue = q;
@@ -3340,6 +3377,15 @@ static void setup_transfer_datastore(struct queue_ent *qe, struct member *member
 	ast_channel_unlock(qe->chan);
 }
 
+static void end_bridge_callback(void *data)
+{
+	struct queue_ent *qe = data;
+
+	ao2_lock(qe->parent);
+	set_queue_variables(qe);
+	ao2_unlock(qe->parent);
+}
+
 /*! \brief A large function which calls members, updates statistics, and bridges the caller and a member
  * 
  * Here is the process of this function
@@ -3407,13 +3453,6 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	int callcompletedinsl;
 	struct ao2_iterator memi;
 	struct ast_datastore *datastore;
-	auto void end_bridge_callback(void);
-	void end_bridge_callback(void)
-	{
-		ao2_lock(qe->parent);
-		set_queue_variables(qe);
-		ao2_unlock(qe->parent);
-	}
 
 	ast_channel_lock(qe->chan);
 	datastore = ast_channel_datastore_find(qe->chan, &dialed_interface_info, NULL);
@@ -3485,6 +3524,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		}
 
 	bridge_config.end_bridge_callback = end_bridge_callback;
+	bridge_config.end_bridge_callback_data = qe;
 
 	/* Hold the lock while we setup the outgoing calls */
 	if (use_weight)
@@ -4161,10 +4201,10 @@ static int remove_from_queue(const char *queuename, const char *interface)
 	int res = RES_NOSUCHQUEUE;
 
 	ast_copy_string(tmpmem.interface, interface, sizeof(tmpmem.interface));
-	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
 		ao2_lock(queues);
 		ao2_lock(q);
-		if ((mem = ao2_find(q->members, &tmpmem, OBJ_POINTER))) {
+		if ((mem = ao2_find(q->members, &tmpmem, NULL, OBJ_POINTER))) {
 			/* XXX future changes should beware of this assumption!! */
 			if (!mem->dynamic) {
 				ao2_ref(mem, -1);
@@ -4387,7 +4427,7 @@ static int get_member_penalty(char *queuename, char *interface)
 	};
 	struct member *mem;
 	
-	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
 		foundqueue = 1;
 		ao2_lock(q);
 		if ((mem = interface_exists(q, interface))) {
@@ -4439,7 +4479,7 @@ static void reload_queue_members(void)
 			struct call_queue tmpq = {
 				.name = queue_name,
 			};
-			cur_queue = ao2_find(queues, &tmpq, OBJ_POINTER);
+			cur_queue = ao2_find(queues, &tmpq, NULL, OBJ_POINTER);
 		}	
 
 		if (!cur_queue)
@@ -5067,7 +5107,7 @@ static int queue_function_var(struct ast_channel *chan, const char *cmd, char *d
 		return -1;
 	}
 
-	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
 		ao2_lock(q);
 		if (q->setqueuevar) {
 			sl = 0;
@@ -5208,7 +5248,7 @@ static int queue_function_queuewaitingcount(struct ast_channel *chan, const char
 		return -1;
 	}
 
-	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
 		ao2_lock(q);
 		count = q->count;
 		ao2_unlock(q);
@@ -5244,7 +5284,7 @@ static int queue_function_queuememberlist(struct ast_channel *chan, const char *
 		return -1;
 	}
 
-	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
 		int buflen = 0, count = 0;
 		struct ao2_iterator mem_iter = ao2_iterator_init(q->members, 0);
 
@@ -5501,7 +5541,7 @@ static int reload_queues(int reload)
 			struct call_queue tmpq = {
 				.name = cat,
 			};
-			if (!(q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
+			if (!(q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
 				/* Make one then */
 				if (!(q = alloc_queue(cat))) {
 					/* TODO: Handle memory allocation failure */
@@ -5579,7 +5619,7 @@ static int reload_queues(int reload)
 
 						/* Find the old position in the list */
 						ast_copy_string(tmpmem.interface, interface, sizeof(tmpmem.interface));
-						cur = ao2_find(q->members, &tmpmem, OBJ_POINTER | OBJ_UNLINK);
+						cur = ao2_find(q->members, &tmpmem, NULL, OBJ_POINTER | OBJ_UNLINK);
 						newm = create_queue_member(interface, membername, penalty, cur ? cur->paused : 0, state_interface);
 						ao2_link(q->members, newm);
 						ao2_ref(newm, -1);
@@ -5719,7 +5759,7 @@ static char *__queues_show(struct mansession *s, int fd, int argc, char **argv)
 					mem->dynamic ? " (dynamic)" : "",
 					mem->realtime ? " (realtime)" : "",
 					mem->paused ? " (paused)" : "",
-					devstate2str(mem->status));
+					ast_devstate2str(mem->status));
 				if (mem->calls)
 					ast_str_append(&out, 0, " has taken %d calls (last was %ld secs ago)",
 						mem->calls, (long) (time(NULL) - mem->lastcall));

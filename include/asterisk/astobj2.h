@@ -511,7 +511,7 @@ Operations on container include:
     can be:
 	OBJ_UNLINK - to remove the object, once found, from the container.
 	OBJ_NODATA - don't return the object if found (no ref count change)
-	OBJ_MULTIPLE - don't stop at first match (not implemented)
+	OBJ_MULTIPLE - don't stop at first match (not fully implemented)
 	OBJ_POINTER	- if set, 'arg' is an object pointer, and a hashtable
                   search will be done. If not, a traversal is done.
 
@@ -523,7 +523,7 @@ Operations on container include:
       - flags can be 
 	     OBJ_UNLINK   - to remove the object, once found, from the container.
 	     OBJ_NODATA   - don't return the object if found (no ref count change)
-	     OBJ_MULTIPLE - don't stop at first match (not implemented)
+	     OBJ_MULTIPLE - don't stop at first match (not fully implemented)
 	     OBJ_POINTER  - if set, 'arg' is an object pointer, and a hashtable
                         search will be done. If not, a traversal is done through
                         all the hashtable 'buckets'..
@@ -589,7 +589,7 @@ to define callback and hash functions and their arguments.
  * The return values are a combination of enum _cb_results.
  * Callback functions are used to search or manipulate objects in a container,
  */
-typedef int (ao2_callback_fn)(void *obj, void *arg, int flags);
+typedef int (ao2_callback_fn)(void *obj, void *arg, void *data, int flags);
 
 /*! \brief a very common callback is one that matches by address. */
 ao2_callback_fn ao2_match_by_addr;
@@ -615,7 +615,10 @@ enum search_flags {
 	 *  its refcount. */
 	OBJ_NODATA	 = (1 << 1),
 	/*! Don't stop at the first match in ao2_callback()
-	 *  \note This is not fully implemented. */
+	 *  \note This is not fully implemented.   Using OBJ_MULTIME with OBJ_NODATA
+	 *  is perfectly fine.  The part that is not implemented is the case where
+	 *  multiple objects should be returned by ao2_callback().
+	 */
 	OBJ_MULTIPLE = (1 << 2),
 	/*! obj is an object of the same type as the one being searched for,
 	 *  so use the object's hash function for optimized searching.
@@ -819,31 +822,31 @@ struct ao2_list {
  * be used to free the additional reference possibly created by this function.
  */
 #ifdef REF_DEBUG
-#define ao2_t_callback(arg1,arg2,arg3,arg4,arg5) _ao2_callback_debug((arg1), (arg2), (arg3), (arg4), (arg5),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
-#define ao2_callback(arg1,arg2,arg3,arg4)        _ao2_callback_debug((arg1), (arg2), (arg3), (arg4), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_t_callback(arg1,arg2,arg3,arg4,arg5,arg6) _ao2_callback_debug((arg1), (arg2), (arg3), (arg4), (arg5), (arg6), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_callback(arg1,arg2,arg3,arg4,arg5)        _ao2_callback_debug((arg1), (arg2), (arg3), (arg4), (arg5), "", __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #else
-#define ao2_t_callback(arg1,arg2,arg3,arg4,arg5) _ao2_callback((arg1), (arg2), (arg3), (arg4))
-#define ao2_callback(arg1,arg2,arg3,arg4)        _ao2_callback((arg1), (arg2), (arg3), (arg4))
+#define ao2_t_callback(arg1,arg2,arg3,arg4,arg5,arg6) _ao2_callback((arg1), (arg2), (arg3), (arg4), (arg5))
+#define ao2_callback(arg1,arg2,arg3,arg4,arg5)        _ao2_callback((arg1), (arg2), (arg3), (arg4), (arg5))
 #endif
 void *_ao2_callback_debug(struct ao2_container *c, enum search_flags flags,
-						 ao2_callback_fn *cb_fn, void *arg, char *tag, 
-						 char *file, int line, const char *funcname);
+						  ao2_callback_fn *cb_fn, void *arg, void *data, char *tag, 
+						  char *file, int line, const char *funcname);
 void *_ao2_callback(struct ao2_container *c,
-				   enum search_flags flags,
-				   ao2_callback_fn *cb_fn, void *arg);
+					enum search_flags flags,
+					ao2_callback_fn *cb_fn, void *arg, void *data);
 
 /*! ao2_find() is a short hand for ao2_callback(c, flags, c->cmp_fn, arg)
  * XXX possibly change order of arguments ?
  */
 #ifdef REF_DEBUG
-#define ao2_t_find(arg1,arg2,arg3,arg4) _ao2_find_debug((arg1), (arg2), (arg3), (arg4),  __FILE__, __LINE__, __PRETTY_FUNCTION__)
-#define ao2_find(arg1,arg2,arg3)        _ao2_find_debug((arg1), (arg2), (arg3), "",  __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_t_find(arg1,arg2,arg3,arg4,arg5) _ao2_find_debug((arg1), (arg2), (arg3), (arg4), (arg5), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_find(arg1,arg2,arg3,arg4)        _ao2_find_debug((arg1), (arg2), (arg3), (arg4), "", __FILE__, __LINE__, __PRETTY_FUNCTION__)
 #else
-#define ao2_t_find(arg1,arg2,arg3,arg4) _ao2_find((arg1), (arg2), (arg3))
-#define ao2_find(arg1,arg2,arg3)        _ao2_find((arg1), (arg2), (arg3))
+#define ao2_t_find(arg1,arg2,arg3,arg4,arg5) _ao2_find((arg1), (arg2), (arg3), (arg4))
+#define ao2_find(arg1,arg2,arg3,arg4)        _ao2_find((arg1), (arg2), (arg3), (arg4))
 #endif
-void *_ao2_find_debug(struct ao2_container *c, void *arg, enum search_flags flags, char *tag, char *file, int line, const char *funcname);
-void *_ao2_find(struct ao2_container *c, void *arg, enum search_flags flags);
+void *_ao2_find_debug(struct ao2_container *c, void *arg, void *data, enum search_flags flags, char *tag, char *file, int line, const char *funcname);
+void *_ao2_find(struct ao2_container *c, void *arg, void *data, enum search_flags flags);
 
 /*! \brief
  *

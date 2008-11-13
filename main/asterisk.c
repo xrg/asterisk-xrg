@@ -117,8 +117,8 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/devicestate.h"
 #include "asterisk/module.h"
 #include "asterisk/dsp.h"
-#include "asterisk/xml.h"
 #include "asterisk/buildinfo.h"
+#include "asterisk/xmldoc.h"
 
 #include "asterisk/doxyref.h"		/* Doxygen documentation */
 
@@ -1374,7 +1374,7 @@ static void quit_handler(int num, int niceness, int safeshutdown, int restart)
 		if (niceness)
 			ast_module_shutdown();
 	}
-	if (ast_opt_console || ast_opt_remote) {
+	if (ast_opt_console || (ast_opt_remote && !ast_opt_exec)) {
 		if (getenv("HOME")) 
 			snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
 		if (!ast_strlen_zero(filename))
@@ -1590,14 +1590,6 @@ static char *handle_stop_now(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 	return CLI_SUCCESS;
 }
 
-static char *handle_stop_now_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_stop_now(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "stop now";
-	return res;
-}
-
 static char *handle_stop_gracefully(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
@@ -1616,14 +1608,6 @@ static char *handle_stop_gracefully(struct ast_cli_entry *e, int cmd, struct ast
 		return CLI_SHOWUSAGE;
 	quit_handler(0, 1 /* nicely */, 1 /* safely */, 0 /* no restart */);
 	return CLI_SUCCESS;
-}
-
-static char *handle_stop_gracefully_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_stop_gracefully(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "stop gracefully";
-	return res;
 }
 
 static char *handle_stop_when_convenient(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -1646,14 +1630,6 @@ static char *handle_stop_when_convenient(struct ast_cli_entry *e, int cmd, struc
 	return CLI_SUCCESS;
 }
 
-static char *handle_stop_when_convenient_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_stop_when_convenient(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "stop when convenient";
-	return res;
-}
-
 static char *handle_restart_now(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
@@ -1672,14 +1648,6 @@ static char *handle_restart_now(struct ast_cli_entry *e, int cmd, struct ast_cli
 		return CLI_SHOWUSAGE;
 	quit_handler(0, 0 /* not nicely */, 1 /* safely */, 1 /* restart */);
 	return CLI_SUCCESS;
-}
-
-static char *handle_restart_now_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_restart_now(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "restart now";
-	return res;
 }
 
 static char *handle_restart_gracefully(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -1702,14 +1670,6 @@ static char *handle_restart_gracefully(struct ast_cli_entry *e, int cmd, struct 
 	return CLI_SUCCESS;
 }
 
-static char *handle_restart_gracefully_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_restart_gracefully(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "restart gracefully";
-	return res;
-}
-
 static char *handle_restart_when_convenient(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	switch (cmd) {
@@ -1728,14 +1688,6 @@ static char *handle_restart_when_convenient(struct ast_cli_entry *e, int cmd, st
 	ast_cli(a->fd, "Waiting for inactivity to perform restart\n");
 	quit_handler(0, 2 /* really nicely */, 1 /* safely */, 1 /* restart */);
 	return CLI_SUCCESS;
-}
-
-static char *handle_restart_when_convenient_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_restart_when_convenient(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "restart when convenient";
-	return res;
 }
 
 static char *handle_abort_shutdown(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -1757,14 +1709,6 @@ static char *handle_abort_shutdown(struct ast_cli_entry *e, int cmd, struct ast_
 	ast_cancel_shutdown();
 	shuttingdown = 0;
 	return CLI_SUCCESS;
-}
-
-static char *handle_abort_shutdown_deprecated(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	char *res = handle_abort_shutdown(e, cmd, a);
-	if (cmd == CLI_INIT)
-		e->command = "abort shutdown";
-	return res;
 }
 
 static char *handle_bang(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -1866,24 +1810,14 @@ static char *show_license(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 
 #define ASTERISK_PROMPT2 "%s*CLI> "
 
-/* deprecated cli entries */
-static struct ast_cli_entry cli_abort_shutdown_deprecated = AST_CLI_DEFINE(handle_abort_shutdown_deprecated, "Cancel a running shutdown.");
-static struct ast_cli_entry cli_stop_now_deprecated = AST_CLI_DEFINE(handle_stop_now_deprecated, "Shut down Asterisk immediately.");
-static struct ast_cli_entry cli_stop_gracefully_deprecated = AST_CLI_DEFINE(handle_stop_gracefully_deprecated, "Gracefully shut down Asterisk.");
-static struct ast_cli_entry cli_stop_when_convenient_deprecated = AST_CLI_DEFINE(handle_stop_when_convenient_deprecated, "Shut down Asterisk at empty call volume.");
-static struct ast_cli_entry cli_restart_now_deprecated = AST_CLI_DEFINE(handle_restart_now_deprecated, "Restart Asterisk immediately.");
-static struct ast_cli_entry cli_restart_gracefully_deprecated = AST_CLI_DEFINE(handle_restart_gracefully_deprecated, "Restart Asterisk gracefully.");
-static struct ast_cli_entry cli_restart_when_convenient_deprecated = AST_CLI_DEFINE(handle_restart_when_convenient_deprecated, "Restart Asterisk at empty call volume.");
-/* end deprecated cli entries */
-
 static struct ast_cli_entry cli_asterisk[] = {
-	AST_CLI_DEFINE(handle_abort_shutdown, "Cancel a running shutdown", .deprecate_cmd = &cli_abort_shutdown_deprecated),
-	AST_CLI_DEFINE(handle_stop_now, "Shut down Asterisk immediately", .deprecate_cmd = &cli_stop_now_deprecated),
-	AST_CLI_DEFINE(handle_stop_gracefully, "Gracefully shut down Asterisk", .deprecate_cmd = &cli_stop_gracefully_deprecated),
-	AST_CLI_DEFINE(handle_stop_when_convenient, "Shut down Asterisk at empty call volume", .deprecate_cmd = &cli_stop_when_convenient_deprecated),
-	AST_CLI_DEFINE(handle_restart_now, "Restart Asterisk immediately", .deprecate_cmd = &cli_restart_now_deprecated), 
-	AST_CLI_DEFINE(handle_restart_gracefully, "Restart Asterisk gracefully", .deprecate_cmd = &cli_restart_gracefully_deprecated),
-	AST_CLI_DEFINE(handle_restart_when_convenient, "Restart Asterisk at empty call volume", .deprecate_cmd = &cli_restart_when_convenient_deprecated),
+	AST_CLI_DEFINE(handle_abort_shutdown, "Cancel a running shutdown"),
+	AST_CLI_DEFINE(handle_stop_now, "Shut down Asterisk immediately"),
+	AST_CLI_DEFINE(handle_stop_gracefully, "Gracefully shut down Asterisk"),
+	AST_CLI_DEFINE(handle_stop_when_convenient, "Shut down Asterisk at empty call volume"),
+	AST_CLI_DEFINE(handle_restart_now, "Restart Asterisk immediately"), 
+	AST_CLI_DEFINE(handle_restart_gracefully, "Restart Asterisk gracefully"),
+	AST_CLI_DEFINE(handle_restart_when_convenient, "Restart Asterisk at empty call volume"),
 	AST_CLI_DEFINE(show_warranty, "Show the warranty (if any) for this copy of Asterisk"),
 	AST_CLI_DEFINE(show_license, "Show the license(s) for this copy of Asterisk"),
 	AST_CLI_DEFINE(handle_version, "Display version info"),
@@ -2474,17 +2408,6 @@ static void ast_remotecontrol(char *data)
 		else 
 			printf("log and verbose output currently muted ('logger mute' to unmute)\n");
 	}
-	ast_verbose("Connected to Asterisk %s currently running on %s (pid = %d)\n", version, hostname, pid);
-	remotehostname = hostname;
-	if (getenv("HOME")) 
-		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
-	if (el_hist == NULL || el == NULL)
-		ast_el_initialize();
-
-	el_set(el, EL_GETCFN, ast_el_read_char);
-
-	if (!ast_strlen_zero(filename))
-		ast_el_read_history(filename);
 
 	if (ast_opt_exec && data) {  /* hack to print output then exit if asterisk -rx is used */
 		struct pollfd fds;
@@ -2523,6 +2446,19 @@ static void ast_remotecontrol(char *data)
 		}
 		return;
 	}
+
+	ast_verbose("Connected to Asterisk %s currently running on %s (pid = %d)\n", version, hostname, pid);
+	remotehostname = hostname;
+	if (getenv("HOME")) 
+		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
+	if (el_hist == NULL || el == NULL)
+		ast_el_initialize();
+
+	el_set(el, EL_GETCFN, ast_el_read_char);
+
+	if (!ast_strlen_zero(filename))
+		ast_el_read_history(filename);
+
 	for (;;) {
 		ebuf = (char *)el_gets(el, &num);
 
@@ -3066,11 +3002,6 @@ int main(int argc, char *argv[])
 	if (ast_opt_console && !option_verbose) 
 		ast_verbose("[ Booting...\n");
 
-	if (ast_opt_always_fork && (ast_opt_remote || ast_opt_console)) {
-		ast_log(LOG_WARNING, "'alwaysfork' is not compatible with console or remote console mode; ignored\n");
-		ast_clear_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK);
-	}
-
 	/* For remote connections, change the name of the remote connection.
 	 * We do this for the benefit of init scripts (which need to know if/when
 	 * the main asterisk process has died yet). */
@@ -3081,8 +3012,10 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (ast_opt_console && !option_verbose) 
+	if (ast_opt_console && !option_verbose) {
 		ast_verbose("[ Reading Master Configuration ]\n");
+	}
+
 	ast_readconfig();
 
 	if (ast_opt_remote && remotesock != NULL)
@@ -3090,6 +3023,11 @@ int main(int argc, char *argv[])
 
 	if (!ast_language_is_prefix && !ast_opt_remote)
 		ast_log(LOG_WARNING, "The 'languageprefix' option in asterisk.conf is deprecated; in a future release it will be removed, and your sound files will need to be organized in the 'new style' language layout.\n");
+
+	if (ast_opt_always_fork && (ast_opt_remote || ast_opt_console)) {
+		ast_log(LOG_WARNING, "'alwaysfork' is not compatible with console or remote console mode; ignored\n");
+		ast_clear_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK);
+	}
 
 	if (ast_opt_dump_core) {
 		struct rlimit l;
@@ -3344,7 +3282,7 @@ int main(int argc, char *argv[])
 
 #ifdef AST_XML_DOCS
 	/* Load XML documentation. */
-	ast_load_documentation();
+	ast_xmldoc_load_documentation();
 #endif
 
 	if (load_modules(1)) {		/* Load modules, pre-load only */
