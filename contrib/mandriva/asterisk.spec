@@ -66,6 +66,7 @@ Requires(post): rpm-helper
 Requires(preun): rpm-helper
 Requires:	mpg123
 Requires:	asterisk-core-sounds
+Requires:	asterisk-core-moh
 BuildRequires:	ast_menuselect
 BuildRequires:	libtool
 BuildRequires:	autoconf >= 1:2.60
