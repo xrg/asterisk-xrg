@@ -12702,7 +12702,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, char *rest, str
 		break;
 	case 200:	/* 200 OK */
 		if (!r) {
-			ast_log(LOG_WARNING, "Got 200 OK on REGISTER that isn't a register\n");
+			ast_log(LOG_WARNING, "Got 200 OK on REGISTER, but there isn't a registry entry for '%s' (we probably already got the OK)\n", S_OR(p->peername, p->username));
 			ast_set_flag(&p->flags[0], SIP_NEEDDESTROY);	
 			return 0;
 		}
@@ -17341,6 +17341,14 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				peer->maxms = default_qualify ? default_qualify : DEFAULT_MAXMS;
 			} else if (sscanf(v->value, "%d", &peer->maxms) != 1) {
 				ast_log(LOG_WARNING, "Qualification of peer '%s' should be 'yes', 'no', or a number of milliseconds at line %d of sip.conf\n", peer->name, v->lineno);
+				peer->maxms = 0;
+			}
+			if (realtime && !ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && peer->maxms > 0) {
+				/* This would otherwise cause a network storm, where the
+				 * qualify response refreshes the peer from the database,
+				 * which in turn causes another qualify to be sent, ad
+				 * infinitum. */
+				ast_log(LOG_WARNING, "Qualify is incompatible with dynamic uncached realtime.  Please either turn rtcachefriends on or turn qualify off on peer '%s'\n", peer->name);
 				peer->maxms = 0;
 			}
 		} else if (!strcasecmp(v->name, "maxcallbitrate")) {

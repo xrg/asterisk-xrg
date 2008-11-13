@@ -832,6 +832,31 @@ static void set_dial_features(struct ast_flags *opts, struct ast_dial_features *
 		ast_set_flag(&(features->features_caller), AST_FEATURE_PARKCALL);
 }
 
+static void end_bridge_callback (void *data)
+{
+	char buf[80];
+	time_t end;
+	struct ast_channel *chan = data;
+
+	if (!chan->cdr) {
+		return;
+	}
+
+	time(&end);
+
+	ast_channel_lock(chan);
+	if (chan->cdr->answer.tv_sec) {
+		snprintf(buf, sizeof(buf), "%ld", end - chan->cdr->answer.tv_sec);
+		pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", buf);
+	}
+
+	if (chan->cdr->start.tv_sec) {
+		snprintf(buf, sizeof(buf), "%ld", end - chan->cdr->start.tv_sec);
+		pbx_builtin_setvar_helper(chan, "DIALEDTIME", buf);
+	}
+	ast_channel_unlock(chan);
+}
+
 static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags *peerflags, int *continue_exec)
 {
 	int res = -1;
@@ -1434,9 +1459,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		/* almost done, although the 'else' block is 400 lines */
 	} else {
 		const char *number;
-		time_t end_time, answer_time = time(NULL);
 
 		strcpy(status, "ANSWER");
+		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		/* Ah ha!  Someone answered within the desired timeframe.  Of course after this
 		   we will always return with -1 so that it is hung up properly after the 
 		   conversation.  */
@@ -1719,6 +1744,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		if (!res) {
 			if (calldurationlimit > 0) {
 				peer->whentohangup = time(NULL) + calldurationlimit;
+			} else if (timelimit > 0) {
+				/* Not enough granularity to make it less, but we can't use the special value 0 */
+				peer->whentohangup = time(NULL) + 1;
 			}
 			if (!ast_strlen_zero(dtmfcalled)) { 
 				if (option_verbose > 2)
@@ -1731,7 +1759,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				res = ast_dtmf_stream(chan,peer,dtmfcalling,250);
 			}
 		}
-		
+
 		if (!res) {
 			struct ast_bridge_config config;
 
@@ -1765,6 +1793,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			config.warning_sound = warning_sound;
 			config.end_sound = end_sound;
 			config.start_sound = start_sound;
+			config.end_bridge_callback = end_bridge_callback;
+			config.end_bridge_callback_data = chan;
 			if (moh) {
 				moh = 0;
 				ast_moh_stop(chan);
@@ -1795,21 +1825,10 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 					AST_OPTION_OPRMODE,&oprmode,sizeof(struct oprmode),0);
 			}
 			res = ast_bridge_call(chan,peer,&config);
-			time(&end_time);
-			if (res != AST_PBX_KEEPALIVE) { /* if keepalive is set, don't even think about accessing chan! */
-				char toast[80];
-				snprintf(toast, sizeof(toast), "%ld", (long)(end_time - answer_time));
-				pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", toast);
-			}
 		} else {
-			time(&end_time);
 			res = -1;
 		}
-		if (res != AST_PBX_KEEPALIVE) { /* if keepalive is set, don't even think about accessing chan! */
-			char toast[80];
-			snprintf(toast, sizeof(toast), "%ld", (long)(end_time - start_time));
-			pbx_builtin_setvar_helper(chan, "DIALEDTIME", toast);
-		}
+
 		if (res != AST_PBX_NO_HANGUP_PEER && res != AST_PBX_NO_HANGUP_PEER_PARKED) {
 			if (res != AST_PBX_KEEPALIVE && !chan->_softhangup)
 				chan->hangupcause = peer->hangupcause;
@@ -1835,7 +1854,7 @@ out:
 			ast_log(LOG_DEBUG, "Exiting with DIALSTATUS=%s.\n", status);
 		
 		if ((ast_test_flag(peerflags, OPT_GO_ON)) && (!chan->_softhangup) && (res != AST_PBX_KEEPALIVE)) {
-			if (calldurationlimit)
+			if (timelimit)
 				chan->whentohangup = 0;
 			res = 0;
 		}

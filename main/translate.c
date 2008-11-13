@@ -587,7 +587,7 @@ static int show_translation_deprecated(int fd, int argc, char *argv[])
 			}
 		}
 		ast_build_string(&buf, &left, "\n");
-		ast_cli(fd, line);			
+		ast_cli(fd, "%s", line);			
 	}
 	AST_LIST_UNLOCK(&translators);
 	return RESULT_SUCCESS;
@@ -656,7 +656,7 @@ static int show_translation(int fd, int argc, char *argv[])
 			}
 		}
 		ast_build_string(&buf, &left, "\n");
-		ast_cli(fd, line);			
+		ast_cli(fd, "%s", line);			
 	}
 	AST_LIST_UNLOCK(&translators);
 	return RESULT_SUCCESS;

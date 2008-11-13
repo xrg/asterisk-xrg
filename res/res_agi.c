@@ -1876,7 +1876,8 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				/* If it's voice, write it to the audio pipe */
 				if ((agi->audio > -1) && (f->frametype == AST_FRAME_VOICE)) {
 					/* Write, ignoring errors */
-					write(agi->audio, f->data, f->datalen);
+					if (write(agi->audio, f->data, f->datalen) < 0) {
+					}
 				}
 				ast_frfree(f);
 			}
@@ -1966,7 +1967,7 @@ static int handle_showagi(int fd, int argc, char *argv[])
 	if (argc > 2) {
 		e = find_command(argv + 2, 1);
 		if (e) 
-			ast_cli(fd, e->usage);
+			ast_cli(fd, "%s", e->usage);
 		else {
 			if (find_command(argv + 2, -1)) {
 				return help_workhorse(fd, argv + 1);

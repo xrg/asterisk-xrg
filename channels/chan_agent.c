@@ -666,9 +666,15 @@ static int agent_indicate(struct ast_channel *ast, int condition, const void *da
 	struct agent_pvt *p = ast->tech_pvt;
 	int res = -1;
 	ast_mutex_lock(&p->lock);
-	if (p->chan && !ast_check_hangup(p->chan))
-		res = p->chan->tech->indicate ? p->chan->tech->indicate(p->chan, condition, data, datalen) : -1;
-	else
+	if (p->chan && !ast_check_hangup(p->chan)) {
+		while (ast_channel_trylock(p->chan)) {
+			ast_channel_unlock(ast);
+			usleep(1);
+			ast_channel_lock(ast);
+		}
+  		res = p->chan->tech->indicate ? p->chan->tech->indicate(p->chan, condition, data, datalen) : -1;
+		ast_channel_unlock(p->chan);
+	} else
 		res = 0;
 	ast_mutex_unlock(&p->lock);
 	return res;
@@ -2453,7 +2459,7 @@ static int action_agent_callback_login(struct mansession *s, const struct messag
 				p->wrapuptime = 0;
 		}
 
-		if (strcasecmp(ackcall_s, "always"))
+		if (!strcasecmp(ackcall_s, "always"))
 			p->ackcall = 2;
 		else if (ast_true(ackcall_s))
 			p->ackcall = 1;
