@@ -1744,7 +1744,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		if (!res) {
 			if (calldurationlimit > 0) {
 				peer->whentohangup = time(NULL) + calldurationlimit;
-			} else if (timelimit > 0) {
+			} else if ((timelimit > 0) && (timelimit < 1000)) {
 				/* Not enough granularity to make it less, but we can't use the special value 0 */
 				peer->whentohangup = time(NULL) + 1;
 			}
