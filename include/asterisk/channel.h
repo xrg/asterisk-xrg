@@ -586,6 +586,10 @@ struct ast_bridge_config {
 	unsigned int flags;
 	void (* end_bridge_callback)(void *);   /*!< A callback that is called after a bridge attempt */
 	void *end_bridge_callback_data;         /*!< Data passed to the callback */
+	/*! If the end_bridge_callback_data refers to a channel which no longer is going to
+	 * exist when the end_bridge_callback is called, then it needs to be fixed up properly
+	 */
+	void (*end_bridge_callback_data_fixup)(struct ast_bridge_config *bconfig, struct ast_channel *originator, struct ast_channel *terminator);
 };
 
 struct chanmon;
@@ -640,14 +644,14 @@ enum channelreloadreason {
  * \deprecated You should use the ast_datastore_alloc() generic function instead.
  */
 struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
-	__attribute__ ((deprecated));
+	__attribute__((deprecated));
 
 /*!
  * \brief Free a channel data store object
  * \deprecated You should use the ast_datastore_free() generic function instead.
  */
 int ast_channel_datastore_free(struct ast_datastore *datastore)
-	__attribute__ ((deprecated));
+	__attribute__((deprecated));
 
 /*! \brief Inherit datastores from a parent to a child. */
 int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *to);
@@ -698,7 +702,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
  * \note By default, new channels are set to the "s" extension
  *       and "default" context.
  */
-struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...);
+struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...) __attribute__((format(printf, 9, 10)));
 
 /*! 
  * \brief Queue an outgoing frame 
@@ -917,7 +921,7 @@ int ast_check_hangup(struct ast_channel *chan);
  * is earlier than current time plus the offset, it returns 1, if the two
  * time values are equal, it return 0, otherwise, it return -1.
  */
-int ast_channel_cmpwhentohangup(struct ast_channel *chan, time_t offset) __attribute__ ((deprecated));
+int ast_channel_cmpwhentohangup(struct ast_channel *chan, time_t offset) __attribute__((deprecated));
 int ast_channel_cmpwhentohangup_tv(struct ast_channel *chan, struct timeval offset);
 
 /*! \brief Set when to hang a channel up 
@@ -932,7 +936,7 @@ int ast_channel_cmpwhentohangup_tv(struct ast_channel *chan, struct timeval offs
  *
  * \return Nothing
  */
-void ast_channel_setwhentohangup(struct ast_channel *chan, time_t offset) __attribute__ ((deprecated));
+void ast_channel_setwhentohangup(struct ast_channel *chan, time_t offset) __attribute__((deprecated));
 void ast_channel_setwhentohangup_tv(struct ast_channel *chan, struct timeval offset);
 
 /*! 

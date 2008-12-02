@@ -110,8 +110,8 @@ modules.link:
 	@for file in $(patsubst %,$(SUBDIR)/%,$(filter-out %.eo,$^)); do echo "INPUT (../$${file})" >> $@; done
 
 clean::
-	rm -f *.so *.o *.oo *.eo
-	rm -f .*.o.d .*.oo.d
+	rm -f *.so *.o *.oo *.eo *.i *.ii
+	rm -f .*.d
 	rm -f *.s *.i
 	rm -f modules.link
 

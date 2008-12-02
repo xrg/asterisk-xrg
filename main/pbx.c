@@ -762,6 +762,7 @@ struct ast_app;
 static struct ast_taskprocessor *device_state_tps;
 
 AST_THREADSTORAGE(switch_data);
+AST_THREADSTORAGE(extensionstate_buf);
 
 /*!
    \brief ast_exten: An extension
@@ -950,10 +951,15 @@ void log_match_char_tree(struct match_char *node, char *prefix); /* for use anyw
 int pbx_builtin_setvar_multiple(struct ast_channel *, void *);
 static int pbx_builtin_importvar(struct ast_channel *, void *);
 static void set_ext_pri(struct ast_channel *c, const char *exten, int pri); 
-static void new_find_extension(const char *str, struct scoreboard *score, struct match_char *tree, int length, int spec, const char *callerid, const char *label, enum ext_match_t action);
+static void new_find_extension(const char *str, struct scoreboard *score, 
+		struct match_char *tree, int length, int spec, const char *callerid, 
+		const char *label, enum ext_match_t action);
 static struct match_char *already_in_tree(struct match_char *current, char *pat);
-static struct match_char *add_exten_to_pattern_tree(struct ast_context *con, struct ast_exten *e1, int findonly);
-static struct match_char *add_pattern_node(struct ast_context *con, struct match_char *current, char *pattern, int is_pattern, int already, int specificity, struct match_char **parent);
+static struct match_char *add_exten_to_pattern_tree(struct ast_context *con, 
+		struct ast_exten *e1, int findonly);
+static struct match_char *add_pattern_node(struct ast_context *con, 
+		struct match_char *current, char *pattern, int is_pattern, 
+		int already, int specificity, struct match_char **parent);
 static void create_match_char_tree(struct ast_context *con);
 static struct ast_exten *get_canmatch_exten(struct match_char *node);
 static void destroy_pattern_tree(struct match_char *pattern_tree);
@@ -2437,9 +2443,6 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 	ast_log(LOG_NOTICE,"Looking for cont/ext/prio/label/action = %s/%s/%d/%s/%d\n", context, exten, priority, label, (int)action);
 #endif
 
-	if (ast_strlen_zero(exten))
-		return NULL;
-
 	/* Initialize status if appropriate */
 	if (q->stacklen == 0) {
 		q->status = STATUS_NO_CONTEXT;
@@ -3710,7 +3713,7 @@ static struct ast_exten *ast_hint_extension(struct ast_channel *c, const char *c
 /*! \brief Check state of extension by using hints */
 static int ast_extension_state2(struct ast_exten *e)
 {
-	char hint[AST_MAX_EXTENSION] = "";
+	struct ast_str *hint = ast_str_thread_get(&extensionstate_buf, 16);
 	char *cur, *rest;
 	struct ast_devstate_aggregate agg;
 	enum ast_device_state state;
@@ -3720,9 +3723,9 @@ static int ast_extension_state2(struct ast_exten *e)
 
 	ast_devstate_aggregate_init(&agg);
 
-	ast_copy_string(hint, ast_get_extension_app(e), sizeof(hint));
+	ast_str_set(&hint, 0, "%s", ast_get_extension_app(e));
 
-	rest = hint;	/* One or more devices separated with a & character */
+	rest = hint->str;	/* One or more devices separated with a & character */
 
 	while ( (cur = strsep(&rest, "&")) )
 		ast_devstate_aggregate_add(&agg, ast_device_state(cur));
@@ -7074,14 +7077,19 @@ int ast_context_add_ignorepat2(struct ast_context *con, const char *value, const
 {
 	struct ast_ignorepat *ignorepat, *ignorepatc, *ignorepatl = NULL;
 	int length;
+	char *pattern;
 	length = sizeof(struct ast_ignorepat);
 	length += strlen(value) + 1;
 	if (!(ignorepat = ast_calloc(1, length)))
 		return -1;
 	/* The cast to char * is because we need to write the initial value.
-	 * The field is not supposed to be modified otherwise
+	 * The field is not supposed to be modified otherwise.  Also, gcc 4.2
+	 * sees the cast as dereferencing a type-punned pointer and warns about
+	 * it.  This is the workaround (we're telling gcc, yes, that's really
+	 * what we wanted to do).
 	 */
-	strcpy((char *)ignorepat->pattern, value);
+	pattern = (char *) ignorepat->pattern;
+	strcpy(pattern, value);
 	ignorepat->next = NULL;
 	ignorepat->registrar = registrar;
 	ast_wrlock_context(con);
@@ -7231,18 +7239,19 @@ int ast_async_goto_by_name(const char *channame, const char *context, const char
 static int ext_strncpy(char *dst, const char *src, int len)
 {
 	int count = 0;
+	int insquares = 0;
 
 	while (*src && (count < len - 1)) {
-		switch (*src) {
-		case ' ':
-			/*	otherwise exten => [a-b],1,... doesn't work */
-			/*		case '-': */
-			/* Ignore */
-			break;
-		default:
-			*dst = *src;
-			dst++;
+		if (*src == '[') {
+			insquares = 1;
+		} else if (*src == ']') {
+			insquares = 0;
+		} else if (*src == ' ' && !insquares) {
+			src++;
+			continue;
 		}
+		*dst = *src;
+		dst++;
 		src++;
 		count++;
 	}
@@ -7526,7 +7535,7 @@ int ast_add_extension2(struct ast_context *con,
 	}
 	res = 0; /* some compilers will think it is uninitialized otherwise */
 	for (e = con->root; e; el = e, e = e->next) {   /* scan the extension list */
-		res = ext_cmp(e->exten, extension);
+		res = ext_cmp(e->exten, tmp->exten);
 		if (res == 0) { /* extension match, now look at cidmatch */
 			if (!e->matchcid && !tmp->matchcid)
 				res = 0;

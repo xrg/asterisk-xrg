@@ -44,6 +44,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/module.h"
+#include "asterisk/astobj2.h"
 
 /*
  * The following variable controls the layout of localized sound files.
@@ -280,12 +281,57 @@ static int exts_compare(const char *exts, const char *type)
 	return 0;
 }
 
+static void filestream_destructor(void *arg)
+{
+	char *cmd = NULL;
+	size_t size = 0;
+	struct ast_filestream *f = arg;
+
+	/* Stop a running stream if there is one */
+	if (f->owner) {
+		if (f->fmt->format < AST_FORMAT_AUDIO_MASK) {
+			f->owner->stream = NULL;
+			AST_SCHED_DEL(f->owner->sched, f->owner->streamid);
+#ifdef HAVE_DAHDI
+			ast_settimeout(f->owner, 0, NULL, NULL);
+#endif			
+		} else {
+			f->owner->vstream = NULL;
+			AST_SCHED_DEL(f->owner->sched, f->owner->vstreamid);
+		}
+	}
+	/* destroy the translator on exit */
+	if (f->trans)
+		ast_translator_free_path(f->trans);
+
+	if (f->realfilename && f->filename) {
+			size = strlen(f->filename) + strlen(f->realfilename) + 15;
+			cmd = alloca(size);
+			memset(cmd,0,size);
+			snprintf(cmd,size,"/bin/mv -f %s %s",f->filename,f->realfilename);
+			ast_safe_system(cmd);
+	}
+
+	if (f->filename)
+		free(f->filename);
+	if (f->realfilename)
+		free(f->realfilename);
+	if (f->fmt->close)
+		f->fmt->close(f);
+	fclose(f->f);
+	if (f->vfs)
+		ast_closestream(f->vfs);
+	if (f->orig_chan_name)
+		free((void *) f->orig_chan_name);
+	ast_module_unref(f->fmt->module);
+}
+
 static struct ast_filestream *get_filestream(struct ast_format *fmt, FILE *bfile)
 {
 	struct ast_filestream *s;
 
 	int l = sizeof(*s) + fmt->buf_size + fmt->desc_size;	/* total allocation size */
-	if ( (s = ast_calloc(1, l)) == NULL)
+	if ( (s = ao2_alloc(l, filestream_destructor)) == NULL)
 		return NULL;
 	s->fmt = fmt;
 	s->f = bfile;
@@ -406,6 +452,9 @@ static int ast_filehelper(const char *filename, const void *arg2, const char *fm
 					ast_free(fn);
 					ast_free(s);
 					continue;	/* cannot run open on file */
+				}
+				if (st.st_size == 0) {
+					ast_log(LOG_WARNING, "File %s detected to have zero size.\n", fn);
 				}
 				/* ok this is good for OPEN */
 				res = 1;	/* found */
@@ -639,6 +688,10 @@ struct ast_frame *ast_readframe(struct ast_filestream *s)
 	int whennext = 0;	
 	if (s && s->fmt)
 		f = s->fmt->read(s, &whennext);
+	if (f) {
+		ast_set_flag(f, AST_FRFLAG_FROM_FILESTREAM);
+		ao2_ref(s, +1);
+	}
 	return f;
 }
 
@@ -788,49 +841,21 @@ int ast_stream_rewind(struct ast_filestream *fs, off_t ms)
 
 int ast_closestream(struct ast_filestream *f)
 {
-	char *cmd = NULL;
-	size_t size = 0;
-	/* Stop a running stream if there is one */
-	if (f->owner) {
-		if (f->fmt->format & AST_FORMAT_AUDIO_MASK) {
-			f->owner->stream = NULL;
-			AST_SCHED_DEL(f->owner->sched, f->owner->streamid);
-			ast_settimeout(f->owner, 0, NULL, NULL);
-		} else {
-			f->owner->vstream = NULL;
-			AST_SCHED_DEL(f->owner->sched, f->owner->vstreamid);
-		}
+	if (ast_test_flag(&f->fr, AST_FRFLAG_FROM_FILESTREAM)) {
+		/* If this flag is still set, it essentially means that the reference
+		 * count of f is non-zero. We can't destroy this filestream until
+		 * whatever is using the filestream's frame has finished.
+		 *
+		 * Since this was called, however, we need to remove the reference from
+		 * when this filestream was first allocated. That way, when the embedded
+		 * frame is freed, the refcount will reach 0 and we can finish destroying
+		 * this filestream properly.
+		 */
+		ao2_ref(f, -1);
+		return 0;
 	}
-	/* destroy the translator on exit */
-	if (f->trans)
-		ast_translator_free_path(f->trans);
-
-	if (f->realfilename && f->filename) {
-			size = strlen(f->filename) + strlen(f->realfilename) + 15;
-			cmd = alloca(size);
-			memset(cmd, 0, size);
-			snprintf(cmd, size, "/bin/mv -f %s %s", f->filename, f->realfilename);
-			ast_safe_system(cmd);
-	}
-
-	if (f->fmt->close) {
-		f->fmt->close(f);
-	}
-	if (f->filename)
-		ast_free(f->filename);
-	if (f->realfilename)
-		ast_free(f->realfilename);
-	fclose(f->f);
-	if (f->vfs)
-		ast_closestream(f->vfs);
-	if (f->orig_chan_name)
-		free((void *) f->orig_chan_name);
-	if (f->write_buffer) {
-		ast_free(f->write_buffer);
-	}
-
-	ast_module_unref(f->fmt->module);
-	ast_free(f);
+	
+	ao2_ref(f, -1);
 	return 0;
 }
 
@@ -872,30 +897,41 @@ int ast_streamfile(struct ast_channel *chan, const char *filename, const char *p
 	struct ast_filestream *fs;
 	struct ast_filestream *vfs=NULL;
 	char fmt[256];
+	int seekattempt;
+	int res;
 
 	fs = ast_openstream(chan, filename, preflang);
-	if (fs)
-		vfs = ast_openvstream(chan, filename, preflang);
+	if (!fs) {
+		ast_log(LOG_WARNING, "Unable to open %s (format %s): %s\n", filename, ast_getformatname_multiple(fmt, sizeof(fmt), chan->nativeformats), strerror(errno));
+		return -1;
+	}
+
+	/* check to see if there is any data present (not a zero length file),
+	 * done this way because there is no where for ast_openstream_full to
+	 * return the file had no data. */
+	seekattempt = fseek(fs->f, -1, SEEK_END);
+	if (!seekattempt)
+		fseek(fs->f, 0, SEEK_SET);
+	else
+		return 0;
+
+	vfs = ast_openvstream(chan, filename, preflang);
 	if (vfs) {
 		ast_debug(1, "Ooh, found a video stream, too, format %s\n", ast_getformatname(vfs->fmt->format));
 	}
-	if (fs){
-		int res;
-		if (ast_test_flag(chan, AST_FLAG_MASQ_NOSTREAM))
-			fs->orig_chan_name = ast_strdup(chan->name);
-		if (ast_applystream(chan, fs))
-			return -1;
-		if (vfs && ast_applystream(chan, vfs))
-			return -1;
-		res = ast_playstream(fs);
-		if (!res && vfs)
-			res = ast_playstream(vfs);
-		ast_verb(3, "<%s> Playing '%s.%s' (language '%s')\n", chan->name, filename, ast_getformatname(chan->writeformat), preflang ? preflang : "default");
 
-		return res;
-	}
-	ast_log(LOG_WARNING, "Unable to open %s (format %s): %s\n", filename, ast_getformatname_multiple(fmt, sizeof(fmt), chan->nativeformats), strerror(errno));
-	return -1;
+	if (ast_test_flag(chan, AST_FLAG_MASQ_NOSTREAM))
+		fs->orig_chan_name = ast_strdup(chan->name);
+	if (ast_applystream(chan, fs))
+		return -1;
+	if (vfs && ast_applystream(chan, vfs))
+		return -1;
+	res = ast_playstream(fs);
+	if (!res && vfs)
+		res = ast_playstream(vfs);
+	ast_verb(3, "<%s> Playing '%s.%s' (language '%s')\n", chan->name, filename, ast_getformatname(chan->writeformat), preflang ? preflang : "default");
+
+	return res;
 }
 
 struct ast_filestream *ast_readfile(const char *filename, const char *type, const char *comment, int flags, int check, mode_t mode)
@@ -1239,6 +1275,17 @@ int ast_waitstream_exten(struct ast_channel *c, const char *context)
 		context = c->context;
 	return waitstream_core(c, NULL, NULL, NULL, 0,
 		-1, -1, context);
+}
+
+void ast_filestream_frame_freed(struct ast_frame *fr)
+{
+	struct ast_filestream *fs;
+
+	ast_clear_flag(fr, AST_FRFLAG_FROM_FILESTREAM);
+
+	fs = (struct ast_filestream *) (((char *) fr) - offsetof(struct ast_filestream, fr));
+
+	ao2_ref(fs, -1);
 }
 
 /*

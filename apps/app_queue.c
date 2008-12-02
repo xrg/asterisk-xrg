@@ -67,6 +67,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/time.h>
 #include <sys/signal.h>
 #include <netinet/in.h>
+#include <ctype.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
@@ -850,10 +851,11 @@ static int strat2int(const char *strategy)
 static int queue_hash_cb(const void *obj, const int flags)
 {
 	const struct call_queue *q = obj;
-	return ast_str_hash(q->name);
+
+	return ast_str_case_hash(q->name);
 }
 
-static int queue_cmp_cb(void *obj, void *arg, void *data, int flags)
+static int queue_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct call_queue *q = obj, *q2 = arg;
 	return !strcasecmp(q->name, q2->name) ? CMP_MATCH | CMP_STOP : 0;
@@ -1126,7 +1128,7 @@ static int member_hash_fn(const void *obj, const int flags)
 	return ret;
 }
 
-static int member_cmp_fn(void *obj1, void *obj2, void *data, int flags)
+static int member_cmp_fn(void *obj1, void *obj2, int flags)
 {
 	struct member *mem1 = obj1, *mem2 = obj2;
 	return strcasecmp(mem1->interface, mem2->interface) ? 0 : CMP_MATCH | CMP_STOP;
@@ -1640,7 +1642,7 @@ static struct call_queue *find_queue_by_name_rt(const char *queuename, struct as
 	char tmpbuf[64];	/* Must be longer than the longest queue param name. */
 
 	/* Static queues override realtime. */
-	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
 		ao2_lock(q);
 		if (!q->realtime) {
 			if (q->dead) {
@@ -1671,7 +1673,6 @@ static struct call_queue *find_queue_by_name_rt(const char *queuename, struct as
 			/* Delete if unused (else will be deleted when last caller leaves). */
 			ao2_unlink(queues, q);
 			ao2_unlock(q);
-			queue_unref(q);
 		}
 		return NULL;
 	}
@@ -1767,7 +1768,7 @@ static struct call_queue *load_realtime_queue(const char *queuename)
 	};
 
 	/* Find the queue in the in-core list first. */
-	q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER);
+	q = ao2_find(queues, &tmpq, OBJ_POINTER);
 
 	if (!q || q->realtime) {
 		/*! \note Load from realtime before taking the "queues" container lock, to avoid blocking all
@@ -1921,7 +1922,7 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 		q->count++;
 		res = 0;
 		manager_event(EVENT_FLAG_CALL, "Join",
-			"Channel: %s\r\nCallerID: %s\r\nCallerIDName: %s\r\nQueue: %s\r\nPosition: %d\r\nCount: %d\r\nUniqueid: %s\r\n",
+			"Channel: %s\r\nCallerIDNum: %s\r\nCallerIDName: %s\r\nQueue: %s\r\nPosition: %d\r\nCount: %d\r\nUniqueid: %s\r\n",
 			qe->chan->name,
 			S_OR(qe->chan->cid.cid_num, "unknown"), /* XXX somewhere else it is <unknown> */
 			S_OR(qe->chan->cid.cid_name, "unknown"),
@@ -2215,8 +2216,6 @@ static void leave_queue(struct queue_ent *qe)
 	if (q->dead) {	
 		/* It's dead and nobody is in it, so kill it */
 		ao2_unlink(queues, q);
-		/* unref the container's reference to the queue */
-		queue_unref(q);
 	}
 	/* unref the explicit ref earlier in the function */
 	queue_unref(q);
@@ -2261,7 +2260,7 @@ static int compare_weight(struct call_queue *rq, struct member *member)
 		}
 		ao2_lock(q);
 		if (q->count && q->members) {
-			if ((mem = ao2_find(q->members, member, NULL, OBJ_POINTER))) {
+			if ((mem = ao2_find(q->members, member, OBJ_POINTER))) {
 				ast_debug(1, "Found matching member %s in queue '%s'\n", mem->interface, q->name);
 				if (q->weight > rq->weight) {
 					ast_debug(1, "Queue '%s' (weight %d, calls %d) is preferred over '%s' (weight %d, calls %d)\n", q->name, q->weight, q->count, rq->name, rq->weight, rq->count);
@@ -2271,11 +2270,10 @@ static int compare_weight(struct call_queue *rq, struct member *member)
 			}
 		}
 		ao2_unlock(q);
+		queue_unref(q);
 		if (found) {
-			queue_unref(q);
 			break;
 		}
-		queue_unref(q);
 	}
 	return found;
 }
@@ -3151,7 +3149,7 @@ static int update_queue(struct call_queue *q, struct member *member, int callcom
 		queue_iter = ao2_iterator_init(queues, 0);
 		while ((qtmp = ao2_iterator_next(&queue_iter))) {
 			ao2_lock(qtmp);
-			if ((mem = ao2_find(qtmp->members, member, NULL, OBJ_POINTER))) {
+			if ((mem = ao2_find(qtmp->members, member, OBJ_POINTER))) {
 				time(&mem->lastcall);
 				mem->calls++;
 				mem->lastqueue = q;
@@ -4201,14 +4199,16 @@ static int remove_from_queue(const char *queuename, const char *interface)
 	int res = RES_NOSUCHQUEUE;
 
 	ast_copy_string(tmpmem.interface, interface, sizeof(tmpmem.interface));
-	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
 		ao2_lock(queues);
 		ao2_lock(q);
-		if ((mem = ao2_find(q->members, &tmpmem, NULL, OBJ_POINTER))) {
+		if ((mem = ao2_find(q->members, &tmpmem, OBJ_POINTER))) {
 			/* XXX future changes should beware of this assumption!! */
 			if (!mem->dynamic) {
 				ao2_ref(mem, -1);
 				ao2_unlock(q);
+				queue_unref(q);
+				ao2_unlock(queues);
 				return RES_NOT_DYNAMIC;
 			}
 			q->membercount--;
@@ -4427,7 +4427,7 @@ static int get_member_penalty(char *queuename, char *interface)
 	};
 	struct member *mem;
 	
-	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
 		foundqueue = 1;
 		ao2_lock(q);
 		if ((mem = interface_exists(q, interface))) {
@@ -4479,7 +4479,7 @@ static void reload_queue_members(void)
 			struct call_queue tmpq = {
 				.name = queue_name,
 			};
-			cur_queue = ao2_find(queues, &tmpq, NULL, OBJ_POINTER);
+			cur_queue = ao2_find(queues, &tmpq, OBJ_POINTER);
 		}	
 
 		if (!cur_queue)
@@ -5107,7 +5107,7 @@ static int queue_function_var(struct ast_channel *chan, const char *cmd, char *d
 		return -1;
 	}
 
-	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
 		ao2_lock(q);
 		if (q->setqueuevar) {
 			sl = 0;
@@ -5248,7 +5248,7 @@ static int queue_function_queuewaitingcount(struct ast_channel *chan, const char
 		return -1;
 	}
 
-	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
 		ao2_lock(q);
 		count = q->count;
 		ao2_unlock(q);
@@ -5284,7 +5284,7 @@ static int queue_function_queuememberlist(struct ast_channel *chan, const char *
 		return -1;
 	}
 
-	if ((q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
+	if ((q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
 		int buflen = 0, count = 0;
 		struct ao2_iterator mem_iter = ao2_iterator_init(q->members, 0);
 
@@ -5541,7 +5541,7 @@ static int reload_queues(int reload)
 			struct call_queue tmpq = {
 				.name = cat,
 			};
-			if (!(q = ao2_find(queues, &tmpq, NULL, OBJ_POINTER))) {
+			if (!(q = ao2_find(queues, &tmpq, OBJ_POINTER))) {
 				/* Make one then */
 				if (!(q = alloc_queue(cat))) {
 					/* TODO: Handle memory allocation failure */
@@ -5619,7 +5619,7 @@ static int reload_queues(int reload)
 
 						/* Find the old position in the list */
 						ast_copy_string(tmpmem.interface, interface, sizeof(tmpmem.interface));
-						cur = ao2_find(q->members, &tmpmem, NULL, OBJ_POINTER | OBJ_UNLINK);
+						cur = ao2_find(q->members, &tmpmem, OBJ_POINTER | OBJ_UNLINK);
 						newm = create_queue_member(interface, membername, penalty, cur ? cur->paused : 0, state_interface);
 						ao2_link(q->members, newm);
 						ao2_ref(newm, -1);
@@ -5718,13 +5718,15 @@ static char *__queues_show(struct mansession *s, int fd, int argc, char **argv)
 		}
 	}
 
-	queue_iter = ao2_iterator_init(queues, 0);
+	queue_iter = ao2_iterator_init(queues, F_AO2I_DONTLOCK);
+	ao2_lock(queues);
 	while ((q = ao2_iterator_next(&queue_iter))) {
 		float sl;
 
 		ao2_lock(q);
 		if (argc == 3 && strcasecmp(q->name, argv[2])) {
 			ao2_unlock(q);
+			queue_unref(q);
 			continue;
 		}
 		found = 1;
@@ -5795,6 +5797,7 @@ static char *__queues_show(struct mansession *s, int fd, int argc, char **argv)
 		}
 		queue_unref(q); /* Unref the iterator's reference */
 	}
+	ao2_unlock(queues);
 	if (!found) {
 		if (argc == 3)
 			ast_str_set(&out, 0, "No such queue: %s.", argv[2]);
@@ -6391,6 +6394,9 @@ static char *handle_queue_remove_member(struct ast_cli_entry *e, int cmd, struct
 		return CLI_FAILURE;
 	case RES_OUTOFMEMORY:
 		ast_cli(a->fd, "Out of memory\n");
+		return CLI_FAILURE;
+	case RES_NOT_DYNAMIC:
+		ast_cli(a->fd, "Unable to remove interface '%s' from queue '%s': Member is not dynamic\n", interface, queuename);
 		return CLI_FAILURE;
 	default:
 		return CLI_FAILURE;

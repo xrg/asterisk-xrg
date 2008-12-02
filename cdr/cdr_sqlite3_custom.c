@@ -21,10 +21,10 @@
  * \brief Custom SQLite3 CDR records.
  *
  * \author Adapted by Alejandro Rios <alejandro.rios@avatar.com.co> and
- *  Russell Bryant <russell@digium.com> from 
+ *  Russell Bryant <russell@digium.com> from
  *  cdr_mysql_custom by Edward Eastman <ed@dm3.co.uk>,
  *	and cdr_sqlite by Holger Schurig <hs4233@mail.mn-solutions.de>
- *	
+ *
  *
  * \arg See also \ref AstCDR
  *
@@ -158,7 +158,7 @@ static int load_config(int reload)
 	struct ast_variable *mappingvar;
 	const char *tmp;
 
-	if (!(cfg = ast_config_load(config_file, config_flags))) {
+	if (!(cfg = ast_config_load(config_file, config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 		if (reload)
 			ast_log(LOG_WARNING, "Failed to reload configuration file.\n");
 		else
@@ -178,7 +178,7 @@ static int load_config(int reload)
 		ast_config_destroy(cfg);
 		return 0;
 	}
-	
+
 	/* Mapping must have a table name */
 	tmp = ast_variable_retrieve(cfg, "master", "table");
 	if (!ast_strlen_zero(tmp))

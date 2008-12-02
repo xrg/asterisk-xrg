@@ -38,9 +38,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/manager.h"
 #include "asterisk/channel.h"
-
-/* usage of AGI is optional, so indicate that to the header file */
-#define ASTERISK_AGI_OPTIONAL
 #include "asterisk/agi.h"
 
 /*** DOCUMENTATION
@@ -491,11 +488,11 @@ static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, char **arg
 		/* Lookup the priority label */
 		if ((priority = ast_findlabel_extension(chan, argv[1], argv[2], argv[3], chan->cid.cid_num)) < 0) {
 			ast_log(LOG_ERROR, "Priority '%s' not found in '%s@%s'\n", argv[3], argv[2], argv[1]);
-			ast_agi_fdprintf(chan, agi->fd, "200 result=-1 Gosub label not found\n");
+			ast_agi_send(agi->fd, chan, "200 result=-1 Gosub label not found\n");
 			return RESULT_FAILURE;
 		}
 	} else if (!ast_exists_extension(chan, argv[1], argv[2], priority, chan->cid.cid_num)) {
-		ast_agi_fdprintf(chan, agi->fd, "200 result=-1 Gosub label not found\n");
+		ast_agi_send(agi->fd, chan, "200 result=-1 Gosub label not found\n");
 		return RESULT_FAILURE;
 	}
 
@@ -506,7 +503,7 @@ static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, char **arg
 
 	if (!(theapp = pbx_findapp("Gosub"))) {
 		ast_log(LOG_ERROR, "Gosub() cannot be found in the list of loaded applications\n");
-		ast_agi_fdprintf(chan, agi->fd, "503 result=-2 Gosub is not loaded\n");
+		ast_agi_send(agi->fd, chan, "503 result=-2 Gosub is not loaded\n");
 		return RESULT_FAILURE;
 	}
 
@@ -540,19 +537,19 @@ static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, char **arg
 			struct ast_pbx *pbx = chan->pbx;
 			/* Suppress warning about PBX already existing */
 			chan->pbx = NULL;
-			ast_agi_fdprintf(chan, agi->fd, "100 result=0 Trying...\n");
+			ast_agi_send(agi->fd, chan, "100 result=0 Trying...\n");
 			ast_pbx_run(chan);
-			ast_agi_fdprintf(chan, agi->fd, "200 result=0 Gosub complete\n");
+			ast_agi_send(agi->fd, chan, "200 result=0 Gosub complete\n");
 			if (chan->pbx) {
 				ast_free(chan->pbx);
 			}
 			chan->pbx = pbx;
 		} else {
-			ast_agi_fdprintf(chan, agi->fd, "200 result=%d Gosub failed\n", res);
+			ast_agi_send(agi->fd, chan, "200 result=%d Gosub failed\n", res);
 		}
 		ast_free(gosub_args);
 	} else {
-		ast_agi_fdprintf(chan, agi->fd, "503 result=-2 Memory allocation failure\n");
+		ast_agi_send(agi->fd, chan, "503 result=-2 Memory allocation failure\n");
 		return RESULT_FAILURE;
 	}
 
@@ -576,9 +573,7 @@ static int unload_module(void)
 {
 	struct ast_context *con;
 
-	if (ast_agi_unregister) {
-		ast_agi_unregister(ast_module_info->self, &gosub_agi_command);
-
+	if (ast_agi_unregister(ast_module_info->self, &gosub_agi_command) == 1) {
 		if ((con = ast_context_find("app_stack_gosub_virtual_context"))) {
 			ast_context_remove_extension2(con, "s", 1, NULL, 0);
 			ast_context_destroy(con, "app_stack"); /* leave nothing behind */
@@ -598,19 +593,13 @@ static int load_module(void)
 {
 	struct ast_context *con;
 
-	/* usage of AGI is optional, so check to see if the ast_agi_register()
-	   function is available; if so, use it.
-	*/
-	if (ast_agi_register) {
-		con = ast_context_find_or_create(NULL, NULL, "app_stack_gosub_virtual_context", "app_stack");
-		if (!con) {
+	if (ast_agi_register(ast_module_info->self, &gosub_agi_command) == 1) {
+		if (!(con = ast_context_find_or_create(NULL, NULL, "app_stack_gosub_virtual_context", "app_stack"))) {
 			ast_log(LOG_ERROR, "Virtual context 'app_stack_gosub_virtual_context' does not exist and unable to create\n");
 			return AST_MODULE_LOAD_DECLINE;
 		} else {
 			ast_add_extension2(con, 1, "s", 1, NULL, NULL, "KeepAlive", ast_strdup(""), ast_free_ptr, "app_stack");
 		}
-
-		ast_agi_register(ast_module_info->self, &gosub_agi_command);
 	}
 
 	ast_register_application_xml(app_pop, pop_exec);

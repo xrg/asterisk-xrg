@@ -38,7 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /*! \brief Default documentation language. */
 static const char default_documentation_language[] = "en_US";
 
-/*! \brief Number of columns to print when showing the XML documentation with a 
+/*! \brief Number of columns to print when showing the XML documentation with a
  *         'core show application/function *' CLI command. Used in text wrapping.*/
 static const int xmldoc_text_columns = 74;
 
@@ -503,14 +503,14 @@ static struct ast_xml_node *xmldoc_get_node(const char *type, const char *name, 
 
 /*! \internal
  *  \brief Helper function used to build the syntax, it allocates the needed buffer (or reallocates it),
- *         and based on the reverse value it makes use of fmt to print the parameter list inside the 
+ *         and based on the reverse value it makes use of fmt to print the parameter list inside the
  *         realloced buffer (syntax).
  *  \param reverse We are going backwards while generating the syntax?
  *  \param len Current length of 'syntax' buffer.
  *  \param syntax Output buffer for the concatenated values.
  *  \param fmt A format string that will be used in a sprintf call.
  */
-static __attribute__((format(printf,4,5))) void xmldoc_reverse_helper(int reverse, int *len, char **syntax, const char *fmt, ...)
+static void __attribute__((format(printf, 4, 5))) xmldoc_reverse_helper(int reverse, int *len, char **syntax, const char *fmt, ...)
 {
 	int totlen, tmpfmtlen;
 	char *tmpfmt, tmp;
@@ -584,11 +584,10 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 #define ISLAST(__rev, __a)  (__rev == 1 ? (ast_xml_node_get_prev(__a) ? 0 : 1) : (ast_xml_node_get_next(__a) ? 0 : 1))
 #define MP(__a) ((multiple ? __a : ""))
 	struct ast_xml_node *node = NULL, *firstparam = NULL, *lastparam = NULL;
-	const char *paramtype, *multipletype, *paramname, *attrargsep, *parenthesis, *argname;
+	const char *paramtype, *multipletype, *paramnameattr, *attrargsep, *parenthesis, *argname;
 	int reverse, required, paramcount = 0, openbrackets = 0, len = 0, hasparams=0;
-	int reqfinode = 0, reqlanode = 0, optmidnode = 0, prnparenthesis;
-	char *syntax = NULL, *argsep;
-	int paramnamemalloc, multiple;
+	int reqfinode = 0, reqlanode = 0, optmidnode = 0, prnparenthesis, multiple;
+	char *syntax = NULL, *argsep, *paramname;
 
 	if (ast_strlen_zero(rootname) || ast_strlen_zero(childname)) {
 		ast_log(LOG_WARNING, "Tried to look in XML tree with faulty rootname or childname while creating a syntax.\n");
@@ -682,7 +681,7 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 		}
 
 		/* Get the argument name, if it is not the leaf, go inside that parameter. */
-		if (xmldoc_has_inside(node, "arguments")) {
+		if (xmldoc_has_inside(node, "argument")) {
 			parenthesis = ast_xml_get_attribute(node, "hasparams");
 			prnparenthesis = 0;
 			if (parenthesis) {
@@ -696,16 +695,13 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 			if (argname) {
 				paramname = xmldoc_get_syntax_fun(node, argname, "argument", prnparenthesis, prnparenthesis);
 				ast_xml_free_attr(argname);
-				paramnamemalloc = 1;
 			} else {
 				/* Malformed XML, print **UNKOWN** */
 				paramname = ast_strdup("**unknown**");
 			}
-			paramnamemalloc = 1;
 		} else {
-			paramnamemalloc = 0;
-			paramname = ast_xml_get_attribute(node, "name");
-			if (!paramname) {
+			paramnameattr = ast_xml_get_attribute(node, "name");
+			if (!paramnameattr) {
 				ast_log(LOG_WARNING, "Malformed XML %s: no %s name\n", rootname, childname);
 				if (syntax) {
 					/* Free already allocated syntax */
@@ -715,6 +711,8 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 				ast_asprintf(&syntax, "%s%s", (printrootname ? rootname : ""), (printparenthesis ? "()" : ""));
 				return syntax;
 			}
+			paramname = ast_strdup(paramnameattr);
+			ast_xml_free_attr(paramnameattr);
 		}
 
 		/* Defaults to 'false'. */
@@ -779,11 +777,7 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 				}
 			}
 		}
-		if (paramnamemalloc) {
-			ast_free((char *) paramname);
-		} else {
-			ast_xml_free_attr(paramname);
-		}
+		ast_free(paramname);
 
 		paramcount++;
 	}
@@ -808,12 +802,12 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 #undef MP
 }
 
-/*! \internal 
+/*! \internal
  *  \brief Parse an enumlist inside a <parameter> to generate a COMMAND
  *         syntax.
  *  \param fixnode A pointer to the <enumlist> node.
  *  \retval {<unknown>} on error.
- *  \retval A string inside brackets {} with the enum's separated by pipes |. 
+ *  \retval A string inside brackets {} with the enum's separated by pipes |.
  */
 static char *xmldoc_parse_cmd_enumlist(struct ast_xml_node *fixnode)
 {
@@ -855,7 +849,7 @@ static char *xmldoc_parse_cmd_enumlist(struct ast_xml_node *fixnode)
 }
 
 /*! \internal
- *  \brief Generate a syntax of COMMAND type. 
+ *  \brief Generate a syntax of COMMAND type.
  *  \param fixnode The <syntax> node pointer.
  *  \param name The name of the 'command'.
  *  \param printname Print the name of the command before the paramters?
@@ -1050,7 +1044,7 @@ static int xmldoc_parse_para(struct ast_xml_node *node, const char *tabs, const 
 			ast_xml_free_text(tmptext);
 			if (tmpstr) {
 				if (strcasecmp(ast_xml_node_get_name(tmp), "text")) {
-					ast_str_append(buffer, 0, "<%s>%s</%s>", ast_xml_node_get_name(tmp), 
+					ast_str_append(buffer, 0, "<%s>%s</%s>", ast_xml_node_get_name(tmp),
 							tmpstr->str, ast_xml_node_get_name(tmp));
 				} else {
 					ast_str_append(buffer, 0, "%s", tmpstr->str);
@@ -1462,8 +1456,9 @@ static int xmldoc_parse_option(struct ast_xml_node *fixnode, const char *tabs, s
 static void xmldoc_parse_optionlist(struct ast_xml_node *fixnode, const char *tabs, struct ast_str **buffer)
 {
 	struct ast_xml_node *node;
-	const char *optname;
+	const char *optname, *hasparams;
 	char *optionsyntax;
+	int optparams;
 
 	for (node = ast_xml_node_get_children(fixnode); node; node = ast_xml_node_get_next(node)) {
 		/* Start appending every option tag. */
@@ -1477,8 +1472,16 @@ static void xmldoc_parse_optionlist(struct ast_xml_node *fixnode, const char *ta
 			continue;
 		}
 
-		optionsyntax = xmldoc_get_syntax_fun(node, optname, "argument", 0, 1);
+		optparams = 1;
+		hasparams = ast_xml_get_attribute(node, "hasparams");
+		if (hasparams && !strcasecmp(hasparams, "optional")) {
+			optparams = 2;
+		}
+
+		optionsyntax = xmldoc_get_syntax_fun(node, optname, "argument", 0, optparams);
 		if (!optionsyntax) {
+			ast_xml_free_attr(optname);
+			ast_xml_free_attr(hasparams);
 			continue;
 		}
 
@@ -1487,6 +1490,8 @@ static void xmldoc_parse_optionlist(struct ast_xml_node *fixnode, const char *ta
 		if (!xmldoc_parse_option(node, tabs, buffer)) {
 			ast_str_append(buffer, 0, "\n");
 		}
+		ast_xml_free_attr(optname);
+		ast_xml_free_attr(hasparams);
 	}
 }
 
@@ -1508,7 +1513,7 @@ static void xmldoc_parse_parameter(struct ast_xml_node *fixnode, const char *tab
 		return;
 	}
 
-	hasarguments = xmldoc_has_inside(node, "arguments");
+	hasarguments = xmldoc_has_inside(node, "argument");
 	if (!(paramname = ast_xml_get_attribute(node, "name"))) {
 		/* parameter MUST have an attribute name. */
 		return;
@@ -1716,7 +1721,7 @@ int ast_xmldoc_load_documentation(void)
 	/* setup default XML documentation language */
 	snprintf(documentation_language, sizeof(documentation_language), default_documentation_language);
 
-	if ((cfg = ast_config_load2("asterisk.conf", "" /* core can't reload */, cnfflags))) {
+	if ((cfg = ast_config_load2("asterisk.conf", "" /* core can't reload */, cnfflags)) && cfg != CONFIG_STATUS_FILEINVALID) {
 		for (var = ast_variable_browse(cfg, "options"); var; var = var->next) {
 			if (!strcasecmp(var->name, "documentation_language")) {
 				if (!ast_strlen_zero(var->value)) {

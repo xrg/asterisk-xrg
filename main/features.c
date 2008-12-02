@@ -292,12 +292,14 @@ struct ast_bridge_thread_obj
 static int parkinglot_hash_cb(const void *obj, const int flags)
 {
 	const struct ast_parkinglot *parkinglot = obj;
-	return ast_str_hash(parkinglot->name);
+
+	return ast_str_case_hash(parkinglot->name);
 }
 
-static int parkinglot_cmp_cb(void *obj, void *arg, void *data, int flags)
+static int parkinglot_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct ast_parkinglot *parkinglot = obj, *parkinglot2 = arg;
+
 	return !strcasecmp(parkinglot->name, parkinglot2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
@@ -332,7 +334,7 @@ static void check_goto_on_transfer(struct ast_channel *chan)
 
 	goto_on_transfer = ast_strdupa(val);
 
-	if (!(xferchan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, chan->name)))
+	if (!(xferchan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "%s", chan->name)))
 		return;
 
 	for (x = goto_on_transfer; x && *x; x++) {
@@ -1422,6 +1424,10 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		tobj->peer = xferchan;
 		tobj->bconfig = *config;
 
+		if (tobj->bconfig.end_bridge_callback_data_fixup) {
+			tobj->bconfig.end_bridge_callback_data_fixup(&tobj->bconfig, tobj->peer, tobj->chan);
+		}
+
 		if (ast_stream_and_wait(newchan, xfersound, ""))
 			ast_log(LOG_WARNING, "Failed to play transfer sound!\n");
 		ast_bridge_call_thread_launch(tobj);
@@ -1518,6 +1524,10 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		tobj->chan = newchan;
 		tobj->peer = xferchan;
 		tobj->bconfig = *config;
+
+		if (tobj->bconfig.end_bridge_callback_data_fixup) {
+			tobj->bconfig.end_bridge_callback_data_fixup(&tobj->bconfig, tobj->peer, tobj->chan);
+		}
 
 		if (ast_stream_and_wait(newchan, xfersound, ""))
 			ast_log(LOG_WARNING, "Failed to play transfer sound!\n");
@@ -2458,7 +2468,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	autoloopflag = ast_test_flag(chan, AST_FLAG_IN_AUTOLOOP);
 	ast_set_flag(chan, AST_FLAG_IN_AUTOLOOP);
 	if (res != AST_PBX_KEEPALIVE && !ast_test_flag(&(config->features_caller),AST_FEATURE_NO_H_EXTEN) && ast_exists_extension(chan, chan->context, "h", 1, chan->cid.cid_num)) {
-		struct ast_cdr *swapper;
+		struct ast_cdr *swapper = NULL;
 		char savelastapp[AST_MAX_EXTENSION];
 		char savelastdata[AST_MAX_EXTENSION];
 		char save_exten[AST_MAX_EXTENSION];
@@ -2466,16 +2476,18 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		int  found = 0;	/* set if we find at least one match */
 		int  spawn_error = 0;
 		
-		if (ast_opt_end_cdr_before_h_exten) {
+		if (bridge_cdr && ast_opt_end_cdr_before_h_exten) {
 			ast_cdr_end(bridge_cdr);
 		}
 		/* swap the bridge cdr and the chan cdr for a moment, and let the endbridge
 		   dialplan code operate on it */
-		swapper = chan->cdr;
-		ast_copy_string(savelastapp, bridge_cdr->lastapp, sizeof(bridge_cdr->lastapp));
-		ast_copy_string(savelastdata, bridge_cdr->lastdata, sizeof(bridge_cdr->lastdata));
 		ast_channel_lock(chan);
-		chan->cdr = bridge_cdr;
+		if (bridge_cdr) {
+			swapper = chan->cdr;
+			ast_copy_string(savelastapp, bridge_cdr->lastapp, sizeof(bridge_cdr->lastapp));
+			ast_copy_string(savelastdata, bridge_cdr->lastdata, sizeof(bridge_cdr->lastdata));
+			chan->cdr = bridge_cdr;
+		}
 		ast_copy_string(save_exten, chan->exten, sizeof(save_exten));
 		save_prio = chan->priority;
 		ast_copy_string(chan->exten, "h", sizeof(chan->exten));
@@ -2493,25 +2505,30 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		ast_channel_lock(chan);
 		ast_copy_string(chan->exten, save_exten, sizeof(chan->exten));
 		chan->priority = save_prio;
-		chan->cdr = swapper;
+		if (bridge_cdr)
+			chan->cdr = swapper;
 		ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_RUN);
 		ast_channel_unlock(chan);
 		/* protect the lastapp/lastdata against the effects of the hangup/dialplan code */
-		ast_copy_string(bridge_cdr->lastapp, savelastapp, sizeof(bridge_cdr->lastapp));
-		ast_copy_string(bridge_cdr->lastdata, savelastdata, sizeof(bridge_cdr->lastdata));
+		if (bridge_cdr) {
+			ast_copy_string(bridge_cdr->lastapp, savelastapp, sizeof(bridge_cdr->lastapp));
+			ast_copy_string(bridge_cdr->lastdata, savelastdata, sizeof(bridge_cdr->lastdata));
+		}
 	}
 	ast_set2_flag(chan, autoloopflag, AST_FLAG_IN_AUTOLOOP);
 
 	/* obey the NoCDR() wishes. -- move the DISABLED flag to the bridge CDR if it was set on the channel during the bridge... */
 	if (res != AST_PBX_KEEPALIVE) {
 		new_chan_cdr = pick_unlocked_cdr(chan->cdr); /* the proper chan cdr, if there are forked cdrs */
-		if (new_chan_cdr && ast_test_flag(new_chan_cdr, AST_CDR_FLAG_POST_DISABLED))
+		if (bridge_cdr && new_chan_cdr && ast_test_flag(new_chan_cdr, AST_CDR_FLAG_POST_DISABLED))
 			ast_set_flag(bridge_cdr, AST_CDR_FLAG_POST_DISABLED);
 	}
 
 	/* we can post the bridge CDR at this point */
-	ast_cdr_end(bridge_cdr);
-	ast_cdr_detach(bridge_cdr);
+	if (bridge_cdr) {
+		ast_cdr_end(bridge_cdr);
+		ast_cdr_detach(bridge_cdr);
+	}
 	
 	/* do a specialized reset on the beginning channel
 	   CDR's, if they still exist, so as not to mess up
@@ -2838,7 +2855,7 @@ struct ast_parkinglot *find_parkinglot(const char *name)
 
 	ast_copy_string(tmp_parkinglot.name, name, sizeof(tmp_parkinglot.name));
 
-	parkinglot = ao2_find(parkinglots, &tmp_parkinglot, NULL, OBJ_POINTER);
+	parkinglot = ao2_find(parkinglots, &tmp_parkinglot, OBJ_POINTER);
 
 	if (parkinglot && option_debug)
 		ast_log(LOG_DEBUG, "Found Parkinglot: %s\n", parkinglot->name);
@@ -2875,10 +2892,8 @@ static int park_call_exec(struct ast_channel *chan, void *data)
 		AST_APP_ARG(options);
 	);
 
-	if (!ast_strlen_zero(data)) {
-		parse = ast_strdupa(data);
-		AST_STANDARD_APP_ARGS(app_args, parse);
-	}
+	parse = ast_strdupa(data);
+	AST_STANDARD_APP_ARGS(app_args, parse);
 
 	ast_copy_string(orig_exten, chan->exten, sizeof(orig_exten));
 

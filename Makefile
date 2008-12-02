@@ -92,6 +92,7 @@ export DOWNLOAD
 export AWK
 export GREP
 export ID
+export MD5
 
 # even though we could use '-include makeopts' here, use a wildcard
 # lookup anyway, so that make won't try to build makeopts if it doesn't
@@ -236,7 +237,13 @@ endif
 ASTCFLAGS+=-Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
 ifeq ($(AST_DEVMODE),yes)
-  ASTCFLAGS+=-Werror -Wunused -Wundef $(AST_DECLARATION_AFTER_STATEMENT) -Wmissing-format-attribute -Wformat-security #-Wformat=2
+  ASTCFLAGS+=-Werror
+  ASTCFLAGS+=-Wunused
+  ASTCFLAGS+=$(AST_DECLARATION_AFTER_STATEMENT)
+  ASTCFLAGS+=$(AST_FORTIFY_SOURCE)
+  ASTCFLAGS+=-Wundef 
+  ASTCFLAGS+=-Wmissing-format-attribute
+  ASTCFLAGS+=-Wformat=2
 endif
 
 ifneq ($(findstring BSD,$(OSARCH)),)
@@ -440,7 +447,9 @@ $(SUBDIRS_CLEAN):
 $(SUBDIRS_DIST_CLEAN):
 	@$(SUBMAKE) -C $(@:-dist-clean=) dist-clean
 
-clean: $(SUBDIRS_CLEAN)
+clean: $(SUBDIRS_CLEAN) _clean
+
+_clean:
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
 	rm -f main/version.c
@@ -449,7 +458,7 @@ clean: $(SUBDIRS_CLEAN)
 
 dist-clean: distclean
 
-distclean: $(SUBDIRS_DIST_CLEAN) clean
+distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	@$(MAKE) -C menuselect dist-clean
 	@$(MAKE) -C sounds dist-clean
 	rm -f menuselect.makeopts makeopts menuselect-tree menuselect.makedeps
@@ -809,6 +818,8 @@ config:
 		elif [ -f /etc/SuSE-release -o -f /etc/novell-release ]; then \
 			$(INSTALL) -m 755 contrib/init.d/rc.suse.asterisk $(DESTDIR)/etc/init.d/asterisk; \
 			if [ -z "$(DESTDIR)" ]; then /sbin/chkconfig --add asterisk; fi; \
+		elif [ -f /etc/arch-release -o -f /etc/arch-release ]; then \
+			$(INSTALL) -m 755 contrib/init.d/rc.archlinux.asterisk $(DESTDIR)/etc/rc.d/asterisk; \
 		elif [ -f /etc/slackware-version ]; then \
 			echo "Slackware is not currently supported, although an init script does exist for it." \
 		else \
@@ -924,7 +935,7 @@ pdf: asterisk.pdf
 asterisk.pdf:
 	$(MAKE) -C doc/tex asterisk.pdf
 
-.PHONY: menuselect menuselect.makeopts main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all pdf dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell installdirs validate-docs
+.PHONY: menuselect menuselect.makeopts main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all pdf dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell installdirs validate-docs _clean
 
 FORCE:
 

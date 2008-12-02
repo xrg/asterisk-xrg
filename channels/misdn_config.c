@@ -882,12 +882,14 @@ static int _parse (union misdn_cfg_pt *dest, const char *value, enum misdn_cfg_t
 		break;
 	case MISDN_CTYPE_INT:
 	{
-		char *pat;
-		if (strchr(value,'x')) 
-			pat="%x";
-		else
-			pat="%d";
-		if (sscanf(value, pat, &tmp)) {
+		int res;
+
+		if (strchr(value,'x')) {
+			res = sscanf(value, "%x", &tmp);
+		} else {
+			res = sscanf(value, "%d", &tmp);
+		}
+		if (res) {
 			dest->num = ast_malloc(sizeof(int));
 			memcpy(dest->num, &tmp, sizeof(int));
 		} else
@@ -1101,8 +1103,8 @@ int misdn_cfg_init(int this_max_ports, int reload)
 	struct ast_variable *v;
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	if (!(cfg = ast_config_load2(config, "chan_misdn", config_flags))) {
-		ast_log(LOG_WARNING, "missing file: misdn.conf\n");
+	if (!(cfg = ast_config_load2(config, "chan_misdn", config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_WARNING, "missing or invalid file: misdn.conf\n");
 		return -1;
 	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
 		return 0;

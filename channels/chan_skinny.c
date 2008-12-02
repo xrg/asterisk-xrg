@@ -3180,7 +3180,9 @@ static void *skinny_ss(void *data)
 		} else if (res == 0) {
 			ast_debug(1, "Not enough digits (%s) (and no ambiguous match)...\n", d->exten);
 			memset(d->exten, 0, sizeof(d->exten));
-			transmit_tone(d, SKINNY_REORDER, l->instance, sub->callid);
+			if (l->hookstate == SKINNY_OFFHOOK) {
+				transmit_tone(d, SKINNY_REORDER, l->instance, sub->callid);
+			}
 			if (sub->owner && sub->owner->_state != AST_STATE_UP) {
 				ast_indicate(c, -1);
 				ast_hangup(c);
@@ -3190,9 +3192,11 @@ static void *skinny_ss(void *data)
 			   ((d->exten[0] != '*') || (!ast_strlen_zero(d->exten) > 2))) {
 			ast_log(LOG_WARNING, "Can't match [%s] from '%s' in context %s\n", d->exten, c->cid.cid_num ? c->cid.cid_num : "<Unknown Caller>", c->context);
 			memset(d->exten, 0, sizeof(d->exten));
-			transmit_tone(d, SKINNY_REORDER, l->instance, sub->callid);
-			/* hang out for 3 seconds to let congestion play */
-			ast_safe_sleep(c, 3000);
+			if (l->hookstate == SKINNY_OFFHOOK) {
+				transmit_tone(d, SKINNY_REORDER, l->instance, sub->callid);
+				/* hang out for 3 seconds to let congestion play */
+				ast_safe_sleep(c, 3000);
+			}
 			break;
 		}
 		if (!timeout) {
@@ -3312,6 +3316,7 @@ static int skinny_hangup(struct ast_channel *ast)
 				transmit_closereceivechannel(d, sub);
 				transmit_stopmediatransmission(d, sub);
 				transmit_lamp_indication(d, STIMULUS_LINE, l->instance, SKINNY_LAMP_BLINK);
+				transmit_tone(d, SKINNY_SILENCE, l->instance, sub->callid);
 			} else {    /* we are killing a background sub on the line with other subs*/
 				ast_verb(4,"Killing inactive sub %d\n", sub->callid);
 				if (AST_LIST_NEXT(sub, list)) {
@@ -3332,6 +3337,7 @@ static int skinny_hangup(struct ast_channel *ast)
 				transmit_stopmediatransmission(d, sub);
 				transmit_speaker_mode(d, SKINNY_SPEAKEROFF);
 				transmit_ringer_mode(d, SKINNY_RING_OFF);
+				transmit_tone(d, SKINNY_SILENCE, l->instance, sub->callid);
 				/* we should check to see if we can start the ringer if another line is ringing */
 			}
 		}
@@ -3574,6 +3580,8 @@ static char *control2str(int ind) {
 		return "Hold";
 	case AST_CONTROL_UNHOLD:
 		return "Unhold";
+	case AST_CONTROL_SRCUPDATE:
+		return "Media Source Update";
 	case -1:
 		return "Stop tone";
 	default:
@@ -4577,9 +4585,9 @@ static int handle_offhook_message(struct skinny_req *req, struct skinnysession *
 	if (sub && sub->outgoing) {
 		/* We're answering a ringing call */
 		ast_queue_control(sub->owner, AST_CONTROL_ANSWER);
-		transmit_callstateonly(d, sub, SKINNY_CONNECTED);
+		transmit_callstate(d, l->instance, SKINNY_OFFHOOK, sub->callid);
 		transmit_tone(d, SKINNY_SILENCE, l->instance, sub->callid);
-		transmit_callstate(d, l->instance, SKINNY_CONNECTED, sub->callid);
+		transmit_callstateonly(d, sub, SKINNY_CONNECTED);
 		transmit_selectsoftkeys(d, l->instance, sub->callid, KEYDEF_CONNECTED);
 		start_rtp(sub);
 		ast_setstate(sub->owner, AST_STATE_UP);
@@ -4682,7 +4690,8 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 				l->name, d->name, sub->callid);
 		}
 	}
-	if ((l->hookstate == SKINNY_ONHOOK) && (AST_LIST_NEXT(sub, list) && !AST_LIST_NEXT(sub, list)->rtp)) {
+	/* The bit commented below gives a very occasional core dump. */
+	if ((l->hookstate == SKINNY_ONHOOK) && (AST_LIST_NEXT(sub, list) /*&& !AST_LIST_NEXT(sub, list)->rtp*/)) {
 		do_housekeeping(s);
 	}
 	return 1;
@@ -6477,7 +6486,7 @@ static struct ast_channel *skinny_request(const char *type, int format, void *da
   	cfg = ast_config_load(config, config_flags);
   
   	/* We *must* have a config file otherwise stop immediately */
-  	if (!cfg) {
+  	if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
  		ast_log(LOG_NOTICE, "Unable to load config %s, Skinny disabled.\n", config);
   		return -1;
   	}

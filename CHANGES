@@ -1,3 +1,13 @@
+======================================================================
+===
+=== This file documents the new and/or enhanced functionality added in
+=== the Asterisk versions listed below. This file does NOT include
+=== changes in behavior that would not be backwards compatible with
+=== previous versions; for that information see the UPGRADE.txt file
+=== and the other UPGRADE files for older releases.
+===
+======================================================================
+
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------
 ------------------------------------------------------------------------------
@@ -22,6 +32,11 @@ Skinny Changes
    Please have a look at configs/skinny.conf.sample and change your skinny.conf
    accordingly.
 
+DAHDI Changes
+-------------
+ * The UK option waitfordialtone has been added for use with BT analog
+   lines.
+
 Dialplan Functions
 ------------------
  * Added a new dialplan function, CURLOPT, which permits setting various
@@ -35,6 +50,8 @@ Dialplan Functions
  * Added a new dialplan function, LISTFILTER, which permits removing elements
    from a set list, by name.  Uses the same general syntax as the existing CUT
    and FIELDQTY dialplan functions, which also manage lists.
+ * Added REALTIME_FIELD and REALTIME_HASH, which should aid users in better
+   obtaining realtime data from the dialplan.
 
 Applications
 ------------
@@ -60,6 +77,21 @@ Miscellaneous
    which are interpreted as relative to the astvarlibdir setting in asterisk.conf.
  * All deprecated CLI commands are removed from the sourcecode. They are now handled
    by the new clialiases module. See cli_aliases.conf.sample file.
+
+Asterisk Manager Interface
+--------------------------
+ * When using the AMI over HTTP, you can now include a 'SuppressEvents' header (with
+   a non-empty value) in your request. If you do this, any pending AMI events will
+   *not* be included in the response to your request as they would normally, but
+   will be left in the event queue for the next request you make to retrieve. For
+   some applications, this will allow you to guarantee that you will only see
+   events in responses to 'WaitEvent' actions, and can better know when to expect them.
+   To know whether the Asterisk server supports this header or not, your client can
+   inspect the first response back from the server to see if it includes this header:
+
+   Pragma: SuppressEvents
+
+   If this is included, the server supports event suppression.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.0 to Asterisk 1.6.1  -------------
@@ -370,6 +402,12 @@ Dialplan functions
 
 CLI Changes
 -----------
+  * Added CLI permissions, config file: cli_permissions.conf
+     default is to allow all commands for every local user/group.
+     Also this new feature added three new CLI commands:
+      - cli check permissions {<username>|@<groupname>|<username>@<groupname>} [<command>]
+      - cli reload permissions
+      - cli show permissions
   * New CLI command "core show hint" (usage: core show hint <exten>)
   * New CLI command "core show settings"
   * Added 'core show channels count' CLI command.
@@ -931,3 +969,11 @@ Miscellaneous
     consoles, you may want to try using this option. This option is enabled by default
     on Darwin systems since it is known that the Darwin poll() implementation has
     odd issues.
+
+Timer Changes
+--------------------
+* In addition to timing from DAHDI, there is a new timing module called
+  res_timing_timerfd. In order to use this, you must be running Linux with
+  a kernel version 2.6.25 or newer as well as glibc 2.8 or newer. The configure
+  script will be able to tell if you have the requirements. From menuselect, select
+  res_timing_timerfd from the Resource Modules menu.

@@ -38,6 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/translate.h"
 #include "asterisk/dsp.h"
+#include "asterisk/file.h"
 
 #ifdef TRACE_FRAMES
 static int headers;
@@ -307,10 +308,13 @@ static void frame_cache_cleanup(void *data)
 
 void ast_frame_free(struct ast_frame *fr, int cache)
 {
-	if (ast_test_flag(fr, AST_FRFLAG_FROM_TRANSLATOR))
+	if (ast_test_flag(fr, AST_FRFLAG_FROM_TRANSLATOR)) {
 		ast_translate_frame_freed(fr);
-	else if (ast_test_flag(fr, AST_FRFLAG_FROM_DSP))
+	} else if (ast_test_flag(fr, AST_FRFLAG_FROM_DSP)) {
 		ast_dsp_frame_freed(fr);
+	} else if (ast_test_flag(fr, AST_FRFLAG_FROM_FILESTREAM)) {
+		ast_filestream_frame_freed(fr);
+	}
 
 	if (!fr->mallocd)
 		return;
@@ -474,9 +478,12 @@ struct ast_frame *ast_frdup(const struct ast_frame *f)
 		memcpy(out->data.ptr, f->data.ptr, out->datalen);	
 	}
 	if (srclen > 0) {
+		/* This may seem a little strange, but it's to avoid a gcc (4.2.4) compiler warning */
+		char *src;
 		out->src = buf + sizeof(*out) + AST_FRIENDLY_OFFSET + f->datalen;
+		src = (char *) out->src;
 		/* Must have space since we allocated for it */
-		strcpy((char *)out->src, f->src);
+		strcpy(src, f->src);
 	}
 	ast_copy_flags(out, f, AST_FRFLAG_HAS_TIMING_INFO);
 	out->ts = f->ts;

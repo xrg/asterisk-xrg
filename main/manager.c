@@ -336,6 +336,7 @@ static struct permalias {
 	{ EVENT_FLAG_CDR, "cdr" },
 	{ EVENT_FLAG_DIALPLAN, "dialplan" },
 	{ EVENT_FLAG_ORIGINATE, "originate" },
+	{ EVENT_FLAG_AGI, "agi" },
 	{ -1, "all" },
 	{ 0, "none" },
 };
@@ -1107,7 +1108,8 @@ static char mandescr_ping[] =
 static int action_ping(struct mansession *s, const struct message *m)
 {
 	astman_append(s, "Response: Success\r\n"
-			 "Ping: Pong\r\n");
+		"Ping: Pong\r\n"
+		"\r\n");
 	return 0;
 }
 
@@ -1812,7 +1814,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 
 	if (varname[strlen(varname) - 1] == ')') {
 		if (!c) {
-			c = ast_channel_alloc(0, 0, "", "", "", "", "", 0, "Bogus/%p", NULL);
+			c = ast_channel_alloc(0, 0, "", "", "", "", "", 0, "Bogus/manager");
 			if (c) {
 				ast_func_read(c, (char *) varname, workspace, sizeof(workspace));
 				ast_channel_free(c);
@@ -2240,7 +2242,8 @@ static int action_command(struct mansession *s, const struct message *m)
 /*! \brief helper function for originate */
 struct fast_originate_helper {
 	char tech[AST_MAX_EXTENSION];
-	char data[AST_MAX_EXTENSION];
+	/*! data can contain a channel name, extension number, username, password, etc. */
+	char data[512];
 	int timeout;
 	int format;				/*!< Codecs used for a call */
 	char app[AST_MAX_APP];
@@ -2766,6 +2769,7 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 		}
 
 		astman_append(s,
+			"Event: CoreShowChannel\r\n"
 			"Channel: %s\r\n"
 			"UniqueID: %s\r\n"
 			"Context: %s\r\n"
@@ -2970,8 +2974,14 @@ static int process_message(struct mansession *s, const struct message *m)
 	}
 	if (ret)
 		return ret;
-	/* Once done with our message, deliver any pending events */
-	return process_events(s);
+	/* Once done with our message, deliver any pending events unless the
+	   requester doesn't want them as part of this response.
+	*/
+	if (ast_strlen_zero(astman_get_header(m, "SuppressEvents"))) {
+		return process_events(s);
+	} else {
+		return ret;
+	}
 }
 
 /*!
@@ -3564,7 +3574,7 @@ static int variable_count_hash_fn(const void *vvc, const int flags)
 	return res;
 }
 
-static int variable_count_cmp_fn(void *obj, void *vstr, void *data, int flags)
+static int variable_count_cmp_fn(void *obj, void *vstr, int flags)
 {
 	/* Due to the simplicity of struct variable_count, it makes no difference
 	 * if you pass in objects or strings, the same operation applies. This is
@@ -3673,7 +3683,7 @@ static void xml_translate(struct ast_str **out, char *in, struct ast_variable *v
 
 		if (!in_data) {	/* build appropriate line start */
 			ast_str_append(out, 0, xml ? " " : "<tr><td>");
-			if ((vc = ao2_find(vco, var, NULL, 0)))
+			if ((vc = ao2_find(vco, var, 0)))
 				vc->count++;
 			else {
 				/* Create a new entry for this one */
@@ -3792,6 +3802,7 @@ static struct ast_str *generic_http_callback(enum output_format format,
 		       "Content-type: text/%s\r\n"
 		       "Cache-Control: no-cache;\r\n"
 		       "Set-Cookie: mansession_id=\"%08x\"; Version=\"1\"; Max-Age=%d\r\n"
+		       "Pragma: SuppressEvents\r\n"
 		       "\r\n",
 			contenttype[format],
 			s->managerid, httptimeout);

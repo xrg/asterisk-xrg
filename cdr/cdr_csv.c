@@ -23,7 +23,7 @@
  * \brief Comma Separated Value CDR records.
  *
  * \author Mark Spencer <markster@digium.com>
- * 
+ *
  * \arg See also \ref AstCDR
  * \ingroup cdr_drivers
  */
@@ -62,26 +62,26 @@ static char *config = "cdr.conf";
 
   "accountcode", 	accountcode is the account name of detail records, Master.csv contains all records *
   			Detail records are configured on a channel basis, IAX and SIP are determined by user *
-			DAHDI is determined by channel in dahdi.conf 
+			DAHDI is determined by channel in dahdi.conf
   "source",
   "destination",
-  "destination context", 
+  "destination context",
   "callerid",
   "channel",
   "destination channel",	(if applicable)
-  "last application",	Last application run on the channel 
-  "last app argument",	argument to the last channel 
-  "start time", 
-  "answer time", 
-  "end time", 
-  duration,   		Duration is the whole length that the entire call lasted. ie. call rx'd to hangup  
-  			"end time" minus "start time" 
-  billable seconds, 	the duration that a call was up after other end answered which will be <= to duration  
-  			"end time" minus "answer time" 
-  "disposition",    	ANSWERED, NO ANSWER, BUSY 
-  "amaflags",       	DOCUMENTATION, BILL, IGNORE etc, specified on a per channel basis like accountcode. 
-  "uniqueid",           unique call identifier 
-  "userfield"		user field set via SetCDRUserField 
+  "last application",	Last application run on the channel
+  "last app argument",	argument to the last channel
+  "start time",
+  "answer time",
+  "end time",
+  duration,   		Duration is the whole length that the entire call lasted. ie. call rx'd to hangup
+  			"end time" minus "start time"
+  billable seconds, 	the duration that a call was up after other end answered which will be <= to duration
+  			"end time" minus "answer time"
+  "disposition",    	ANSWERED, NO ANSWER, BUSY
+  "amaflags",       	DOCUMENTATION, BILL, IGNORE etc, specified on a per channel basis like accountcode.
+  "uniqueid",           unique call identifier
+  "userfield"		user field set via SetCDRUserField
 ----------------------------------------------------------*/
 
 static char *name = "csv";
@@ -96,21 +96,21 @@ static int load_config(int reload)
 	const char *tmp;
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
-	usegmtime = 0;
-	loguniqueid = 0;
-	loguserfield = 0;
-
-	if (!(cfg = ast_config_load(config, config_flags))) {
+	if (!(cfg = ast_config_load(config, config_flags)) || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "unable to load config: %s\n", config);
 		return 0;
 	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
 		return 1;
 
+	usegmtime = 0;
+	loguniqueid = 0;
+	loguserfield = 0;
+
 	if (!(var = ast_variable_browse(cfg, "csv"))) {
 		ast_config_destroy(cfg);
 		return 0;
 	}
-	
+
 	if ((tmp = ast_variable_retrieve(cfg, "csv", "usegmtime"))) {
 		usegmtime = ast_true(tmp);
 		if (usegmtime)
@@ -238,7 +238,7 @@ static int build_csv_record(char *buf, size_t bufsize, struct ast_cdr *cdr)
 		append_string(buf, cdr->uniqueid, bufsize);
 	/* append the user field */
 	if(loguserfield)
-		append_string(buf, cdr->userfield,bufsize);	
+		append_string(buf, cdr->userfield,bufsize);
 	/* If we hit the end of our buffer, log an error */
 	if (strlen(buf) < bufsize - 5) {
 		/* Trim off trailing comma */
@@ -290,7 +290,7 @@ static int csv_log(struct ast_cdr *cdr)
 		ast_log(LOG_WARNING, "Unable to create CSV record in %d bytes.  CDR not recorded!\n", (int)sizeof(buf));
 		return 0;
 	}
-	
+
 	/* because of the absolutely unconditional need for the
 	   highest reliability possible in writing billing records,
 	   we open write and close the log file each time */
@@ -305,7 +305,7 @@ static int csv_log(struct ast_cdr *cdr)
 		ast_mutex_unlock(&mf_lock);
 		ast_log(LOG_ERROR, "Unable to re-open master file %s : %s\n", csvmaster, strerror(errno));
 	}
-	
+
 	if (!ast_strlen_zero(cdr->accountcode)) {
 		if (writefile(buf, cdr->accountcode))
 			ast_log(LOG_WARNING, "Unable to write CSV record to account file '%s' : %s\n", cdr->accountcode, strerror(errno));
@@ -324,7 +324,7 @@ static int unload_module(void)
 static int load_module(void)
 {
 	int res;
-	
+
 	if(!load_config(0))
 		return AST_MODULE_LOAD_DECLINE;
 

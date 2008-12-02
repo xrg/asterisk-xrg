@@ -149,7 +149,7 @@ static int hash_string(const void *obj, const int flags)
 	return total;
 }
 
-static int hashtab_compare_strings(void *a, void *b, void *data, int flags)
+static int hashtab_compare_strings(void *a, void *b, int flags)
 {
 	const struct inclfile *ae = a, *be = b;
 	return !strcmp(ae->fname, be->fname) ? CMP_MATCH | CMP_STOP : 0;
@@ -359,16 +359,18 @@ void ast_variable_insert(struct ast_category *category, struct ast_variable *var
 	int lineno;
 	int insertline;
 
-	if (!variable || sscanf(line, "%d", &insertline) != 1)
+	if (!variable || sscanf(line, "%d", &insertline) != 1) {
 		return;
+	}
 	if (!insertline) {
 		variable->next = category->root;
 		category->root = variable;
 	} else {
 		for (lineno = 1; lineno < insertline; lineno++) {
 			cur = cur->next;
-			if (!cur->next)
+			if (!cur->next) {
 				break;
+			}
 		}
 		variable->next = cur->next;
 		cur->next = variable;
@@ -390,10 +392,11 @@ struct ast_variable *ast_variable_browse(const struct ast_config *config, const 
 {
 	struct ast_category *cat = NULL;
 
-	if (category && config->last_browse && (config->last_browse->name == category))
+	if (category && config->last_browse && (config->last_browse->name == category)) {
 		cat = config->last_browse;
-	else
+	} else {
 		cat = ast_category_get(config, category);
+	}
 
 	return (cat) ? cat->root : NULL;
 }
@@ -402,8 +405,9 @@ const char *ast_config_option(struct ast_config *cfg, const char *cat, const cha
 {
 	const char *tmp;
 	tmp = ast_variable_retrieve(cfg, cat, var);
-	if (!tmp)
+	if (!tmp) {
 		tmp = ast_variable_retrieve(cfg, "general", var);
+	}
 	return tmp;
 }
 
@@ -414,16 +418,20 @@ const char *ast_variable_retrieve(const struct ast_config *config, const char *c
 
 	if (category) {
 		for (v = ast_variable_browse(config, category); v; v = v->next) {
-			if (!strcasecmp(variable, v->name))
+			if (!strcasecmp(variable, v->name)) {
 				return v->value;
+			}
 		}
 	} else {
 		struct ast_category *cat;
 
-		for (cat = config->root; cat; cat = cat->next)
-			for (v = cat->root; v; v = v->next)
-				if (!strcasecmp(variable, v->name))
+		for (cat = config->root; cat; cat = cat->next) {
+			for (v = cat->root; v; v = v->next) {
+				if (!strcasecmp(variable, v->name)) {
 					return v->value;
+				}
+			}
+		}
 	}
 
 	return NULL;
@@ -1509,7 +1517,7 @@ static void set_fn(char *fn, int fn_size, const char *file, const char *configfi
 	else
 		snprintf(fn, fn_size, "%s/%s", ast_config_AST_CONFIG_DIR, file);
 	lookup.fname = fn;
-	*fi = ao2_find(fileset, &lookup, NULL, OBJ_POINTER);
+	*fi = ao2_find(fileset, &lookup, OBJ_POINTER);
 	if (!(*fi)) {
 		/* set up a file scratch pad */
 		struct inclfile *fx = ao2_alloc(sizeof(struct inclfile), inclfile_destroy);
@@ -1552,7 +1560,10 @@ static void insert_leading_blank_lines(FILE *fp, struct inclfile *fi, struct ast
 	   stored in the precomments, but not printed back out.
 	   I did have to make sure that comments following
 	   the ;! header comments were not also deleted in the process */
-	for (i=fi->lineno;i<lineno - precomment_lines; i++) {
+	if (lineno - precomment_lines - fi->lineno < 0) { /* insertions can mess up the line numbering and produce negative numbers that mess things up */
+		return;
+	}
+	for (i=fi->lineno; i<lineno - precomment_lines; i++) {
 		fprintf(fp,"\n");
 	}
 	fi->lineno = lineno+1; /* Advance the file lineno */
@@ -1641,7 +1652,7 @@ int ast_config_text_file_save(const char *configfile, const struct ast_config *c
 					}
 				}
 			}
-			
+
 			insert_leading_blank_lines(f, fi, cat->precomments, cat->lineno);
 			/* Dump section with any appropriate comment */
 			for (cmt = cat->precomments; cmt; cmt=cmt->next) {
@@ -1655,8 +1666,6 @@ int ast_config_text_file_save(const char *configfile, const struct ast_config *c
 				if (cmtp)
 					fprintf(f,"%s", cmtp);
 			}
-			if (!cat->precomments)
-				fprintf(f,"\n");
 			fprintf(f, "[%s]", cat->name);
 			if (cat->ignored || !AST_LIST_EMPTY(&cat->template_instances)) {
 				fprintf(f, "(");

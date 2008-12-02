@@ -91,6 +91,9 @@
 /* Define to 1 if you have the `atexit' function. */
 #undef HAVE_ATEXIT
 
+/* Define to 1 if your GCC C compiler supports the 'alias' attribute. */
+#undef HAVE_ATTRIBUTE_alias
+
 /* Define to 1 if your GCC C compiler supports the 'always_inline' attribute.
    */
 #undef HAVE_ATTRIBUTE_always_inline
@@ -319,6 +322,9 @@
 /* Define to 1 if you have the `getpagesize' function. */
 #undef HAVE_GETPAGESIZE
 
+/* Define to 1 if you have the `getpeereid' function. */
+#undef HAVE_GETPEEREID
+
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
@@ -382,6 +388,9 @@
 
 /* Define to indicate the ${IODBC_DESCRIP} library version */
 #undef HAVE_IODBC_VERSION
+
+/* Define to 1 if you have the `ioperm' function. */
+#undef HAVE_IOPERM
 
 /* Define if your system has the IP_MTU_DISCOVER headers. */
 #undef HAVE_IP_MTU_DISCOVER
@@ -945,6 +954,9 @@
 /* Define to 1 if you have the <sys/ioctl.h> header file. */
 #undef HAVE_SYS_IOCTL_H
 
+/* Define to 1 if you have the <sys/io.h> header file. */
+#undef HAVE_SYS_IO_H
+
 /* Define to 1 if you have the <sys/ndir.h> header file, and it defines `DIR'.
    */
 #undef HAVE_SYS_NDIR_H
@@ -993,6 +1005,12 @@
 
 /* Define to 1 if you have the <termios.h> header file. */
 #undef HAVE_TERMIOS_H
+
+/* Define if your system has the TIMERFD headers. */
+#undef HAVE_TIMERFD
+
+/* Define TIMERFD headers version */
+#undef HAVE_TIMERFD_VERSION
 
 /* Define to 1 if your system defines timersub. */
 #undef HAVE_TIMERSUB

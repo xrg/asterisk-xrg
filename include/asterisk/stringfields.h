@@ -183,7 +183,7 @@ ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr
 */
 void __ast_string_field_ptr_build(struct ast_string_field_mgr *mgr,
 				  struct ast_string_field_pool **pool_head,
-				  const ast_string_field *ptr, const char *format, ...);
+				  const ast_string_field *ptr, const char *format, ...) __attribute((format(printf, 4, 5)));
 
 /*!
   \internal
@@ -198,7 +198,7 @@ void __ast_string_field_ptr_build(struct ast_string_field_mgr *mgr,
 */
 void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 				     struct ast_string_field_pool **pool_head,
-				     const ast_string_field *ptr, const char *format, va_list a1, va_list a2);
+				     const ast_string_field *ptr, const char *format, va_list a1, va_list a2) __attribute((format(printf, 4, 0)));
 
 /*!
   \brief Declare a string field
@@ -255,12 +255,16 @@ int __ast_string_field_init(struct ast_string_field_mgr *mgr,
 	const char *__d__ = (data);				\
 	size_t __dlen__ = (__d__) ? strlen(__d__) + 1 : 1;	\
 	const char **__p__ = (const char **) (ptr);		\
+	char *__q__; \
 	if (__dlen__ == 1)					\
 		*__p__ = __ast_string_field_empty;		\
-	else if (!__ast_string_field_ptr_grow(&(x)->__field_mgr, __dlen__, ptr)) \
-		memcpy((char *) *__p__, __d__, __dlen__);	\
-	else if ((*__p__ = __ast_string_field_alloc_space(&(x)->__field_mgr, &(x)->__field_mgr_pool, __dlen__))) \
-		memcpy((char *) *__p__, __d__, __dlen__);	\
+	else if (!__ast_string_field_ptr_grow(&(x)->__field_mgr, __dlen__, ptr)) { \
+		__q__ = (char *) *__p__; \
+		memcpy(__q__, __d__, __dlen__);	\
+	} else if ((*__p__ = __ast_string_field_alloc_space(&(x)->__field_mgr, &(x)->__field_mgr_pool, __dlen__))) { \
+		__q__ = (char *) *__p__; \
+		memcpy(__q__, __d__, __dlen__);	\
+	} \
 	} while (0)
 
 /*!

@@ -775,6 +775,13 @@ enum sipmethod {
 	SIP_PING,		/*!< Not supported at all, no standard but still implemented out there */
 };
 
+/*! \brief Settings for the 'notifycid' option, see sip.conf.sample for details. */
+enum notifycid_setting {
+	DISABLED       = 0,
+	ENABLED        = 1,
+	IGNORE_CONTEXT = 2,
+};
+
 /*! \brief The core structure to setup dialogs. We parse incoming messages by using
 	structure and then route the messages according to the type.
 
@@ -952,7 +959,7 @@ static const struct cfsip_options {
 #define DEFAULT_ALLOW_EXT_DOM	TRUE		/*!< Allow external domains */
 #define DEFAULT_REALM		"asterisk"	/*!< Realm for HTTP digest authentication */
 #define DEFAULT_NOTIFYRINGING	TRUE		/*!< Notify devicestate system on ringing state */
-#define DEFAULT_NOTIFYCID		FALSE	/*!< Include CID with ringing notifications */
+#define DEFAULT_NOTIFYCID		DISABLED	/*!< Include CID with ringing notifications */
 #define DEFAULT_PEDANTIC	FALSE		/*!< Avoid following SIP standards for dialog matching */
 #define DEFAULT_AUTOCREATEPEER	FALSE		/*!< Don't create peers automagically */
 #define	DEFAULT_MATCHEXTERNIPLOCALLY FALSE	/*!< Match extern IP locally default setting */
@@ -1023,8 +1030,9 @@ static struct sip_settings sip_cfg;
 
 static int global_notifyringing;	/*!< Send notifications on ringing */
 static int global_notifyhold;		/*!< Send notifications on hold */
-static int global_notifycid;        /*!< Send CID with ringing notifications */
 static int global_match_auth_username;		/*!< Match auth username if available instead of From: Default off. */
+
+static enum notifycid_setting global_notifycid; /*!< Send CID with ringing notifications */
 
 static int global_relaxdtmf;		/*!< Relax DTMF */
 static int global_rtptimeout;		/*!< Time out call if no RTP */
@@ -1592,7 +1600,7 @@ struct sip_pvt {
 	char tag[11];				/*!< Our tag for this session */
 	int sessionid;				/*!< SDP Session ID */
 	int sessionversion;			/*!< SDP Session Version */
-	int sessionversion_remote;		/*!< Remote UA's SDP Session Version */
+	uint64_t sessionversion_remote;		/*!< Remote UA's SDP Session Version */
 	int session_modify;			/*!< Session modification request true/false  */
 	struct sockaddr_in sa;			/*!< Our peer */
 	struct sockaddr_in redirip;		/*!< Where our RTP should be going if not to us */
@@ -1949,13 +1957,13 @@ static int peer_hash_cb(const void *obj, const int flags)
 {
 	const struct sip_peer *peer = obj;
 
-	return ast_str_hash(peer->name);
+	return ast_str_case_hash(peer->name);
 }
 
 /*!
  * \note The only member of the peer used here is the name field
  */
-static int peer_cmp_cb(void *obj, void *arg, void *data, int flags)
+static int peer_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct sip_peer *peer = obj, *peer2 = arg;
 
@@ -1982,7 +1990,7 @@ static int peer_iphash_cb(const void *obj, const int flags)
 /*!
  * \note the peer's addr struct provides to fields combined to make a key: the sin_addr.s_addr and sin_port fields.
  */
-static int peer_ipcmp_cb(void *obj, void *arg, void *data, int flags)
+static int peer_ipcmp_cb(void *obj, void *arg, int flags)
 {
 	struct sip_peer *peer = obj, *peer2 = arg;
 
@@ -2005,13 +2013,13 @@ static int dialog_hash_cb(const void *obj, const int flags)
 {
 	const struct sip_pvt *pvt = obj;
 
-	return ast_str_hash(pvt->callid);
+	return ast_str_case_hash(pvt->callid);
 }
 
 /*!
  * \note The only member of the dialog used here callid string
  */
-static int dialog_cmp_cb(void *obj, void *arg, void *data, int flags)
+static int dialog_cmp_cb(void *obj, void *arg, int flags)
 {
 	struct sip_pvt *pvt = obj, *pvt2 = arg;
 	
@@ -2893,7 +2901,7 @@ static struct ast_udptl_protocol sip_udptl = {
 };
 
 static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
-	__attribute__ ((format (printf, 2, 3)));
+	__attribute__((format(printf, 2, 3)));
 
 
 /*! \brief Convert transfer status to string */
@@ -3204,9 +3212,9 @@ static void build_via(struct sip_pvt *p)
 
 	/* z9hG4bK is a magic cookie.  See RFC 3261 section 8.1.1.7 */
 	ast_string_field_build(p, via, "SIP/2.0/%s %s:%d;branch=z9hG4bK%08x%s",
-			get_transport_pvt(p),
-			ast_inet_ntoa(p->ourip.sin_addr),
-			ntohs(p->ourip.sin_port), p->branch, rport);
+			       get_transport_pvt(p),
+			       ast_inet_ntoa(p->ourip.sin_addr),
+			       ntohs(p->ourip.sin_port), (int) p->branch, rport);
 }
 
 /*! \brief NAT fix - decide which IP address to use for Asterisk server?
@@ -3267,7 +3275,7 @@ static void ast_sip_ouraddrfor(struct in_addr *them, struct sockaddr_in *us)
 }
 
 /*! \brief Append to SIP dialog history with arg list  */
-static __attribute__((format (printf, 2, 0))) void append_history_va(struct sip_pvt *p, const char *fmt, va_list ap)
+static __attribute__((format(printf, 2, 0))) void append_history_va(struct sip_pvt *p, const char *fmt, va_list ap)
 {
 	char buf[80], *c = buf; /* max history length */
 	struct sip_history *hist;
@@ -4462,15 +4470,15 @@ static struct sip_peer *find_peer(const char *peer, struct sockaddr_in *sin, int
 
 	if (peer) {
 		ast_copy_string(tmp_peer.name, peer, sizeof(tmp_peer.name));
-		p = ao2_t_callback(peers, OBJ_POINTER, find_by_name, &tmp_peer, &forcenamematch, "ao2_find in peers table");
+		p = ao2_t_callback_data(peers, OBJ_POINTER, find_by_name, &tmp_peer, &forcenamematch, "ao2_find in peers table");
 	} else if (sin) { /* search by addr? */
 		tmp_peer.addr.sin_addr.s_addr = sin->sin_addr.s_addr;
 		tmp_peer.addr.sin_port = sin->sin_port;
 		tmp_peer.flags[0].flags = 0;
-		p = ao2_t_find(peers_by_ip, &tmp_peer, NULL, OBJ_POINTER, "ao2_find in peers_by_ip table"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
+		p = ao2_t_find(peers_by_ip, &tmp_peer, OBJ_POINTER, "ao2_find in peers_by_ip table"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
 		if (!p) {
 			ast_set_flag(&tmp_peer.flags[0], SIP_INSECURE_PORT);
-			p = ao2_t_find(peers_by_ip, &tmp_peer, NULL, OBJ_POINTER, "ao2_find in peers_by_ip table 2"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
+			p = ao2_t_find(peers_by_ip, &tmp_peer, OBJ_POINTER, "ao2_find in peers_by_ip table 2"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
 			if (p) {
 				return p;
 			}
@@ -4886,8 +4894,11 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 
 	res = update_call_counter(p, INC_CALL_RINGING);
 
-	if (res == -1)
+	if (res == -1) {
 		return res;
+	} else {
+		ast->hangupcause = AST_CAUSE_USER_BUSY;
+	}
 
 	p->callingpres = ast->cid.cid_pres;
 	p->jointcapability = ast_translate_available_formats(p->capability, p->prefcodec);
@@ -4998,6 +5009,10 @@ static void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 		p->registry = registry_unref(p->registry, "delete p->registry");
 	}
 	
+	if (p->mwi) {
+		p->mwi->call = NULL;
+	}
+
 	if (dumphistory)
 		sip_dump_history(p);
 
@@ -5096,12 +5111,12 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 	ast_copy_string(name, fup->username, sizeof(name));
 
 	/* Check the list of devices */
-	if ( (p = find_peer(ast_strlen_zero(fup->peername) ? name : fup->peername, NULL, TRUE, FINDALLDEVICES, FALSE) ) ) { /* Try to find peer */
+	if ((p = find_peer(ast_strlen_zero(fup->peername) ? name : fup->peername, NULL, TRUE, FINDALLDEVICES, FALSE))) { 
 		inuse = &p->inUse;
 		call_limit = &p->call_limit;
 		inringing = &p->inRinging;
 		ast_copy_string(name, fup->peername, sizeof(name));
-	} 
+	}
 	if (!p) {
 		ast_debug(2, "%s is not a local device, no call limit\n", name);
 		return 0;
@@ -5111,20 +5126,44 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 	/* incoming and outgoing affects the inUse counter */
 	case DEC_CALL_LIMIT:
 		/* Decrement inuse count if applicable */
-		if (inuse && *inuse > 0 && ast_test_flag(&fup->flags[0], SIP_INC_COUNT)) {
-			ast_atomic_fetchadd_int(inuse, -1);
-			ast_clear_flag(&fup->flags[0], SIP_INC_COUNT);
-		} else
-			*inuse = 0;
-		/* Decrement ringing count if applicable */
-		if (inringing && *inringing > 0 && ast_test_flag(&fup->flags[0], SIP_INC_RINGING)) {
-			ast_atomic_fetchadd_int(inringing, -1);
-			ast_clear_flag(&fup->flags[0], SIP_INC_RINGING);
+		if (inuse) {
+			sip_pvt_lock(fup);
+			ao2_lock(p);
+			if ((*inuse > 0) && ast_test_flag(&fup->flags[0], SIP_INC_COUNT)) {
+				(*inuse)--;
+				ast_clear_flag(&fup->flags[0], SIP_INC_COUNT);
+			} else {
+				*inuse = 0;
+			}
+			ao2_unlock(p);
+			sip_pvt_unlock(fup);
 		}
+
+		/* Decrement ringing count if applicable */
+		if (inringing) {
+			sip_pvt_lock(fup);
+			ao2_lock(p);
+			if ((*inringing > 0)&& ast_test_flag(&fup->flags[0], SIP_INC_RINGING)) {
+				(*inringing)--;
+				ast_clear_flag(&fup->flags[0], SIP_INC_RINGING);
+			} else {
+			   *inringing = 0;
+			}
+			ao2_unlock(p);
+			sip_pvt_unlock(fup);
+		}
+
 		/* Decrement onhold count if applicable */
+		sip_pvt_lock(fup);
+		ao2_lock(p);
 		if (ast_test_flag(&fup->flags[1], SIP_PAGE2_CALL_ONHOLD) && global_notifyhold) {
 			ast_clear_flag(&fup->flags[1], SIP_PAGE2_CALL_ONHOLD);
+			ao2_unlock(p);
+			sip_pvt_unlock(fup);
 			sip_peer_hold(fup, FALSE);
+		} else {
+			ao2_unlock(p);
+			sip_pvt_unlock(fup);
 		}
 		if (sipdebug)
 			ast_debug(2, "Call %s %s '%s' removed from call limit %d\n", outgoing ? "to" : "from", "peer", name, *call_limit);
@@ -5141,29 +5180,47 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 			}
 		}
 		if (inringing && (event == INC_CALL_RINGING)) {
+			sip_pvt_lock(fup);
+			ao2_lock(p);
 			if (!ast_test_flag(&fup->flags[0], SIP_INC_RINGING)) {
-				ast_atomic_fetchadd_int(inringing, +1);
+				(*inringing)++;
 				ast_set_flag(&fup->flags[0], SIP_INC_RINGING);
 			}
+			ao2_unlock(p);
+			sip_pvt_unlock(fup);
 		}
-		/* Continue */
-		ast_atomic_fetchadd_int(inuse, +1);
-		ast_set_flag(&fup->flags[0], SIP_INC_COUNT);
+		if (inuse) {
+			sip_pvt_lock(fup);
+			ao2_lock(p);
+			if (!ast_test_flag(&fup->flags[0], SIP_INC_COUNT)) {
+				(*inuse)++;
+				ast_set_flag(&fup->flags[0], SIP_INC_COUNT);
+			}
+			ao2_unlock(p);
+			sip_pvt_unlock(fup);
+		}
 		if (sipdebug) {
 			ast_debug(2, "Call %s %s '%s' is %d out of %d\n", outgoing ? "to" : "from", "peer", name, *inuse, *call_limit);
 		}
 		break;
 
 	case DEC_CALL_RINGING:
-		if (inringing && *inringing > 0 && ast_test_flag(&fup->flags[0], SIP_INC_RINGING)) {
-			ast_atomic_fetchadd_int(inringing, -1);
-			ast_clear_flag(&fup->flags[0], SIP_INC_RINGING);
+		if (inringing) {
+			sip_pvt_lock(fup);
+			ao2_lock(p);
+			if (ast_test_flag(&fup->flags[0], SIP_INC_RINGING)) {
+				(*inringing)--;
+				ast_clear_flag(&fup->flags[0], SIP_INC_RINGING);
+			}
+			ao2_unlock(p);
+			sip_pvt_unlock(fup);
 		}
 		break;
 
 	default:
 		ast_log(LOG_ERROR, "update_call_counter(%s, %d) called with no event!\n", name, event);
 	}
+
 	if (p) {
 		ast_devstate_changed(AST_DEVICE_UNKNOWN, "SIP/%s", p->name);
 		unref_peer(p, "update_call_counter: unref_peer from call counter");
@@ -5614,6 +5671,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
 					ast_rtp_new_source(p->rtp);
+					p->invitestate = INV_EARLY_MEDIA;
 					transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE, FALSE);
 					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
 				}
@@ -5631,6 +5689,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 				if ((ast->_state != AST_STATE_UP) &&
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 				    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
+					p->invitestate = INV_EARLY_MEDIA;
 					transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE, FALSE);
 					ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
 				}
@@ -5651,6 +5710,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 					if ((ast->_state != AST_STATE_UP) &&
 					    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
 					    !ast_test_flag(&p->flags[0], SIP_OUTGOING)) {
+						p->invitestate = INV_EARLY_MEDIA;
 						transmit_response_with_sdp(p, "183 Session Progress", &p->initreq, XMIT_UNRELIABLE, FALSE);
 						ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);	
 					}
@@ -6571,7 +6631,7 @@ struct find_call_cb_arg {
  * code to determine whether this is the pvt that we are looking for.
  * Return FALSE if not found, true otherwise. p is unlocked.
  */
-static int find_call_cb(void *__pvt, void *__arg, void *data, int flags)
+static int find_call_cb(void *__pvt, void *__arg, int flags)
 {
 	struct sip_pvt *p = __pvt;
 	struct find_call_cb_arg *arg = __arg;
@@ -6669,7 +6729,7 @@ restartsearch:
 		struct sip_pvt tmp_dialog = {
 			.callid = callid,
 		};			
-		sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, NULL, OBJ_POINTER, "ao2_find in dialogs");
+		sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, OBJ_POINTER, "ao2_find in dialogs");
 		if (sip_pvt_ptr) {  /* well, if we don't find it-- what IS in there? */
 			/* Found the call */
 			sip_pvt_lock(sip_pvt_ptr);
@@ -6677,7 +6737,7 @@ restartsearch:
 		}
 	} else { /* in pedantic mode! -- do the fancy linear search */
 		ao2_lock(dialogs);
-		p = ao2_t_callback(dialogs, 0 /* single, data */, find_call_cb, &arg, NULL, "pedantic linear search for dialog");
+		p = ao2_t_callback(dialogs, 0 /* single, data */, find_call_cb, &arg, "pedantic linear search for dialog");
 		if (p) {
 			if (sip_pvt_trylock(p)) {
 				ao2_unlock(dialogs);
@@ -7203,7 +7263,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	int last_rtpmap_codec=0;
 
 	char buf[SIPBUFSIZE];
-	int rua_version;
+	uint64_t rua_version;
 	
 	int red_data_pt[10];
 	int red_num_gen = 0;
@@ -7279,7 +7339,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		ast_log(LOG_WARNING, "SDP syntax error in o= line\n");
 		return -1;
 	}
-	if (!sscanf(token, "%d", &rua_version)) {
+	if (!sscanf(token, "%" SCNu64, &rua_version)) {
 		ast_log(LOG_WARNING, "SDP syntax error in o= line version\n");
 		return -1;
 	}
@@ -9887,17 +9947,12 @@ static int __sip_subscribe_mwi_do(struct sip_subscription_mwi *mwi)
 	return 0;
 }
 
-struct caller_criteria {
-	const char *exten;
-	const char *context;
-};
-
 static int find_calling_channel(struct ast_channel *c, void *data) {
-	struct caller_criteria *info = data;
+	struct sip_pvt *p = data;
 
 	return (c->pbx &&
-			(!strcasecmp(c->macroexten, info->exten) || !strcasecmp(c->exten, info->exten)) &&
-			!strcasecmp(c->context, info->context));
+			(!strcasecmp(c->macroexten, p->exten) || !strcasecmp(c->exten, p->exten)) &&
+			(global_notifycid == IGNORE_CONTEXT || !strcasecmp(c->context, p->context)));
 }
 
 /*! \brief Used in the SUBSCRIBE notification subsystem (RFC3265) */
@@ -10065,13 +10120,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 			   callee must be dialing the same extension that is being monitored.  Simply dialing
 			   the hint'd device is not sufficient. */
 			if (global_notifycid) {
-				struct ast_channel *caller = NULL;
-				struct caller_criteria data = {
-					.exten = p->exten,
-					.context = p->context,
-				};
-
-				caller = ast_channel_search_locked(find_calling_channel, &data);
+				struct ast_channel *caller = ast_channel_search_locked(find_calling_channel, p);
 
 				if (caller) {
 					local_display = ast_strdupa(caller->cid.cid_name);
@@ -12058,7 +12107,7 @@ static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *t
 
 	/* Search dialogs and find the match */
 	
-	sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, NULL, OBJ_POINTER, "ao2_find of dialog in dialogs table");
+	sip_pvt_ptr = ao2_t_find(dialogs, &tmp_dialog, OBJ_POINTER, "ao2_find of dialog in dialogs table");
 	if (sip_pvt_ptr) {
 		/* Go ahead and lock it (and its owner) before returning */
 		sip_pvt_lock(sip_pvt_ptr);
@@ -13401,7 +13450,7 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 #undef FORMAT2
 }
 
-static int peer_dump_func(void *userobj, void *arg, void *data, int flags)
+static int peer_dump_func(void *userobj, void *arg, int flags)
 {
 	struct sip_peer *peer = userobj;
 	int refc = ao2_t_ref(userobj, 0, "");
@@ -13412,7 +13461,7 @@ static int peer_dump_func(void *userobj, void *arg, void *data, int flags)
 	return 0;
 }
 
-static int dialog_dump_func(void *userobj, void *arg, void *data, int flags)
+static int dialog_dump_func(void *userobj, void *arg, int flags)
 {
 	struct sip_pvt *pvt = userobj;
 	int refc = ao2_t_ref(userobj, 0, "");
@@ -13443,11 +13492,11 @@ static char *sip_show_objects(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 	if (a->argc != 3)
 		return CLI_SHOWUSAGE;
 	ast_cli(a->fd, "-= Peer objects: %d static, %d realtime, %d autocreate =-\n\n", speerobjs, rpeerobjs, apeerobjs);
-	ao2_t_callback(peers, OBJ_NODATA, peer_dump_func, &a->fd, NULL, "initiate ao2_callback to dump peers");
+	ao2_t_callback(peers, OBJ_NODATA, peer_dump_func, &a->fd, "initiate ao2_callback to dump peers");
 	ast_cli(a->fd, "-= Registry objects: %d =-\n\n", regobjs);
 	ASTOBJ_CONTAINER_DUMP(a->fd, tmp, sizeof(tmp), &regl);
 	ast_cli(a->fd, "-= Dialog objects:\n\n");
-	ao2_t_callback(dialogs, OBJ_NODATA, dialog_dump_func, &a->fd, NULL, "initiate ao2_callback to dump dialogs");
+	ao2_t_callback(dialogs, OBJ_NODATA, dialog_dump_func, &a->fd, "initiate ao2_callback to dump dialogs");
 	return CLI_SUCCESS;
 }
 /*! \brief Print call group and pickup group */
@@ -13527,7 +13576,7 @@ static void cleanup_stale_contexts(char *new, char *old)
    to be destroyed, toss it into the queue. Have a separate
    thread do the locking and destruction */
 
-static int dialog_needdestroy(void *dialogobj, void *arg, void *data, int flags) 
+static int dialog_needdestroy(void *dialogobj, void *arg, int flags) 
 {
 	struct sip_pvt *dialog = dialogobj;
 	time_t *t = arg;
@@ -13591,7 +13640,7 @@ static int dialog_needdestroy(void *dialogobj, void *arg, void *data, int flags)
 
 /* this func is used with ao2_callback to unlink/delete all marked
    peers */
-static int peer_is_marked(void *peerobj, void *arg, void *data, int flags)
+static int peer_is_marked(void *peerobj, void *arg, int flags)
 {
 	struct sip_peer *peer = peerobj;
 	return peer->the_mark ? CMP_MATCH : 0;
@@ -13698,7 +13747,7 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 				unref_peer(pi, "toss iterator peer ptr");
 			}
 			if (pruned) {
-				ao2_t_callback(peers, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, peer_is_marked, NULL, NULL,
+				ao2_t_callback(peers, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, peer_is_marked, NULL,
 						"initiating callback to remove marked peers");
 				ast_cli(a->fd, "%d peers pruned.\n", pruned);
 			} else
@@ -13708,7 +13757,7 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 		if (prunepeer) {
 			struct sip_peer tmp;
 			ast_copy_string(tmp.name, name, sizeof(tmp.name));
-			if ((peer = ao2_t_find(peers, &tmp, NULL, OBJ_POINTER | OBJ_UNLINK, "finding to unlink from peers"))) {
+			if ((peer = ao2_t_find(peers, &tmp, OBJ_POINTER | OBJ_UNLINK, "finding to unlink from peers"))) {
 				if (peer->addr.sin_addr.s_addr) {
 					ao2_t_unlink(peers_by_ip, peer, "unlinking peer from peers_by_ip also");
 				}
@@ -14378,7 +14427,7 @@ static char *sip_unregister(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 }
 
 /*! \brief Callback for show_chanstats */
-static int show_chanstats_cb(void *__cur, void *__arg, void *data, int flags)
+static int show_chanstats_cb(void *__cur, void *__arg, int flags)
 {
 #define FORMAT2 "%-15.15s  %-11.11s  %-8.8s %-10.10s  %-10.10s (%-2.2s) %-6.6s %-10.10s  %-10.10s ( %%) %-6.6s\n"
 #define FORMAT  "%-15.15s  %-11.11s  %-8.8s %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u %-10.10u%-1.1s %-10.10u (%-2.2u%%) %-6.6u\n"
@@ -14457,7 +14506,7 @@ static char *sip_show_channelstats(struct ast_cli_entry *e, int cmd, struct ast_
 
 	ast_cli(a->fd, FORMAT2, "Peer", "Call ID", "Duration", "Recv: Pack", "Lost", "%", "Jitter", "Send: Pack", "Lost", "Jitter");
 	/* iterate on the container and invoke the callback on each item */
-	ao2_t_callback(dialogs, OBJ_NODATA, show_chanstats_cb, &arg, NULL, "callback to sip show chanstats");
+	ao2_t_callback(dialogs, OBJ_NODATA, show_chanstats_cb, &arg, "callback to sip show chanstats");
 	ast_cli(a->fd, "%d active SIP channel%s\n", arg.numchans, (arg.numchans != 1) ? "s" : ""); 
 	return CLI_SUCCESS;
 }
@@ -14616,7 +14665,9 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Outbound reg. attempts: %d\n", global_regattempts_max);
 	ast_cli(a->fd, "  Notify ringing state:   %s\n", cli_yesno(global_notifyringing));
 	if (global_notifyringing) {
-		ast_cli(a->fd, "    Include CID:          %s\n", cli_yesno(global_notifycid));
+		ast_cli(a->fd, "    Include CID:          %s%s\n",
+				cli_yesno(global_notifycid),
+				global_notifycid == IGNORE_CONTEXT ? " (Ignoring context)" : "");
 	}
 	ast_cli(a->fd, "  Notify hold state:      %s\n", cli_yesno(global_notifyhold));
 	ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(global_allowtransfer));
@@ -14733,7 +14784,7 @@ static const struct cfsubscription_types *find_subscription_type(enum subscripti
 #define FORMAT  "%-15.15s  %-10.10s  %-15.15s  %-15.15s  %-3.3s %-3.3s  %-15.15s %-10.10s\n"
 
 /*! \brief callback for show channel|subscription */
-static int show_channels_cb(void *__cur, void *__arg, void *data, int flags)
+static int show_channels_cb(void *__cur, void *__arg, int flags)
 {
 	struct sip_pvt *cur = __cur;
 	struct __show_chan_arg *arg = __arg;
@@ -14805,7 +14856,7 @@ static char *sip_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(arg.fd, FORMAT3, "Peer", "User", "Call ID", "Extension", "Last state", "Type", "Mailbox", "Expiry");
 
 	/* iterate on the container and invoke the callback on each item */
-	ao2_t_callback(dialogs, OBJ_NODATA, show_channels_cb, &arg, NULL, "callback to show channels");
+	ao2_t_callback(dialogs, OBJ_NODATA, show_channels_cb, &arg, "callback to show channels");
 	
 	/* print summary information */
 	ast_cli(arg.fd, "%d active SIP %s%s\n", arg.numchans,
@@ -16879,6 +16930,20 @@ static void handle_response(struct sip_pvt *p, int resp, char *rest, struct sip_
 	   Fix assigned to Rizzo :-)
 	*/
 	/* check_via_response(p, req); */
+
+	/* RFC 3261 Section 15 specifies that if we receive a 408 or 481
+	 * in response to a BYE, then we should end the current dialog
+	 * and session. There is no mention in the spec of other 4XX responses,
+	 * but it is known that at least one phone manufacturer potentially
+	 * will send a 404 in response to a BYE, so we'll be liberal in what
+	 * we accept and end the dialog and session if we receive any 4XX 
+	 * response to a BYE.
+	 */
+	if (resp >= 400 && resp < 500 && sipmethod == SIP_BYE) {
+		pvt_set_needdestroy(p, "received 4XX response to a BYE");
+		return;
+	}
+
 	if (p->relatedpeer && p->method == SIP_OPTIONS) {
 		/* We don't really care what the response is, just that it replied back. 
 		   Well, as long as it's not a 100 response...  since we might
@@ -20246,6 +20311,7 @@ static int sipsock_read(int *id, int fd, short events, void *ignore)
 		return -1;
 	}
 
+	req.len = res;
 	req.socket.fd 	= sipsock;
 	req.socket.type = SIP_TRANSPORT_UDP;
 	req.socket.ser	= NULL;
@@ -20719,7 +20785,7 @@ static void *do_monitor(void *data)
 		   of time since the last time we did it (when MWI is being sent, we can
 		   get back to this point every millisecond or less)
 		*/
-		ao2_t_callback(dialogs, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, dialog_needdestroy, &t, NULL,
+		ao2_t_callback(dialogs, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, dialog_needdestroy, &t,
 				"callback to remove dialogs w/needdestroy");
 
 		/* the old methodology would be to restart the search for dialogs to delete with every 
@@ -21929,7 +21995,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		   during reload
 		*/
 		ast_copy_string(tmp_peer.name, name, sizeof(tmp_peer.name));
-		peer = ao2_t_find(peers, &tmp_peer, NULL, OBJ_POINTER | OBJ_UNLINK, "find and unlink peer from peers table");
+		peer = ao2_t_find(peers, &tmp_peer, OBJ_POINTER | OBJ_UNLINK, "find and unlink peer from peers table");
 	}
 	
 	if (peer) {
@@ -22371,7 +22437,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	return peer;
 }
 
-static int peer_markall_func(void *device, void *arg, void *data, int flags)
+static int peer_markall_func(void *device, void *arg, int flags)
 {
 	struct sip_peer *peer = device;
 	peer->the_mark = 1;
@@ -22476,7 +22542,7 @@ static int reload_config(enum channelreloadreason reason)
 		/* Then, actually destroy users and registry */
 		ASTOBJ_CONTAINER_DESTROYALL(&regl, sip_registry_destroy);
 		ast_debug(4, "--------------- Done destroying registry list\n");
-		ao2_t_callback(peers, OBJ_NODATA, peer_markall_func, NULL, NULL, "callback to mark all peers");
+		ao2_t_callback(peers, OBJ_NODATA, peer_markall_func, NULL, "callback to mark all peers");
 	}
 	
 	/* Reset certificate handling for TLS sessions */
@@ -22759,7 +22825,11 @@ static int reload_config(enum channelreloadreason reason)
 		} else if (!strcasecmp(v->name, "notifyhold")) {
 			global_notifyhold = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifycid")) {
-			global_notifycid = ast_true(v->value);
+			if (!strcasecmp(v->value, "ignore-context")) {
+				global_notifycid = IGNORE_CONTEXT;
+			} else {
+				global_notifycid = ast_true(v->value);
+			}
 		} else if (!strcasecmp(v->name, "alwaysauthreject")) {
 			sip_cfg.alwaysauthreject = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "mohinterpret")) {
@@ -23773,7 +23843,7 @@ static int sip_do_reload(enum channelreloadreason reason)
 
 	start_poke = time(0);
 	/* Prune peers who still are supposed to be deleted */
-	ao2_t_callback(peers, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, peer_is_marked, NULL, NULL,
+	ao2_t_callback(peers, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, peer_is_marked, NULL,
 			"callback to remove marked peers");
 	
 	ast_debug(4, "--------------- Done destroying pruned peers\n");

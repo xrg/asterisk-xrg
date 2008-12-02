@@ -260,7 +260,7 @@ static void profile_set_param(struct call_followme *f, const char *param, const 
 		ast_copy_string(f->norecordingprompt, val, sizeof(f->norecordingprompt));
 	else if (!strcasecmp(param, "followme-options-prompt") || !strcasecmp(param, "options_prompt")) 
 		ast_copy_string(f->optionsprompt, val, sizeof(f->optionsprompt));
-	else if (!strcasecmp(param, "followme-pls-hold-prompt") || !strcasecmp(param, "hold_prompt"))
+	else if (!strcasecmp(param, "followme-pls-hold-prompt") || !strcasecmp(param, "pls_hold_prompt"))
 		ast_copy_string(f->plsholdprompt, val, sizeof(f->plsholdprompt));
 	else if (!strcasecmp(param, "followme-status-prompt") || !strcasecmp(param, "status_prompt")) 
 		ast_copy_string(f->statusprompt, val, sizeof(f->statusprompt));
@@ -992,6 +992,11 @@ static void end_bridge_callback(void *data)
 	ast_channel_unlock(chan);
 }
 
+static void end_bridge_callback_data_fixup(struct ast_bridge_config *bconfig, struct ast_channel *originator, struct ast_channel *terminator)
+{
+	bconfig->end_bridge_callback_data = originator;
+}
+
 static int app_exec(struct ast_channel *chan, void *data)
 {
 	struct fm_args targs;
@@ -1116,6 +1121,7 @@ static int app_exec(struct ast_channel *chan, void *data)
 		ast_set_flag(&(config.features_caller), AST_FEATURE_AUTOMON);
 		config.end_bridge_callback = end_bridge_callback;
 		config.end_bridge_callback_data = chan;
+		config.end_bridge_callback_data_fixup = end_bridge_callback_data_fixup;
 
 		ast_moh_stop(caller);
 		/* Be sure no generators are left on it */

@@ -190,6 +190,12 @@ if test "${SOXMIX}" != ":" ; then
 	AC_DEFINE([HAVE_SOXMIX], 1, [Define to 1 if your system has soxmix application.])
 fi
 
+AC_CHECK_PROGS([MD5], [md5 md5sum gmd5sum digest])
+
+if test "${MD5}" = "digest" ; then
+   MD5="${MD5} -a md5"   
+fi
+
 ACX_PTHREAD
 
 AC_LANG(C)
@@ -262,6 +268,7 @@ AST_EXT_LIB_SETUP([SDL], [Sdl], [sdl])
 AST_EXT_LIB_SETUP([SDL_IMAGE], [Sdl Image library], [SDL_image])
 AST_EXT_LIB_SETUP([OPENAIS], [OpenAIS], [openais])
 AST_EXT_LIB_SETUP([SPEEX], [Speex], [speex])
+AST_EXT_LIB_SETUP([SPEEX_PREPROCESS], [Speex preprocess routines], [speex])
 AST_EXT_LIB_SETUP([SPEEXDSP], [Speexdsp], [speexdsp])
 AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
 AST_EXT_LIB_SETUP([SQLITE3], [SQLite], [sqlite3])
@@ -277,6 +284,7 @@ AST_EXT_LIB_SETUP([VORBIS], [Vorbis], [vorbis])
 AST_EXT_LIB_SETUP([VPB], [Voicetronix API], [vpb])
 AST_EXT_LIB_SETUP([X11], [X11 support], [x11])
 AST_EXT_LIB_SETUP([ZLIB], [zlib], [z])
+AST_EXT_LIB_SETUP([TIMERFD], [timerfd], [timerfd])
 
 # check for basic system features and functionality before
 # checking for package libraries
@@ -285,7 +293,7 @@ AC_FUNC_ALLOCA
 AC_HEADER_DIRENT
 AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
-AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h])
+AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h sys/io.h])
 
 AC_CHECK_HEADERS([winsock.h winsock2.h])
 
@@ -329,7 +337,7 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit dup2 endpwent ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf])
+AC_CHECK_FUNCS([asprintf atexit dup2 endpwent ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday ioperm inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf getpeereid])
 
 AC_CHECK_FUNCS([glob])
 
@@ -473,6 +481,7 @@ AST_GCC_ATTRIBUTE(deprecated)
 AST_GCC_ATTRIBUTE(sentinel)
 AST_GCC_ATTRIBUTE(warn_unused_result)
 AST_GCC_ATTRIBUTE(weak)
+AST_GCC_ATTRIBUTE(alias, [alias("foo")])
 
 AC_MSG_CHECKING(for -ffunction-sections support)
 saved_CFLAGS="${CFLAGS}"
@@ -506,6 +515,16 @@ else
 	AST_DECLARATION_AFTER_STATEMENT=
 fi
 AC_SUBST(AST_DECLARATION_AFTER_STATEMENT)
+
+AC_MSG_CHECKING(for _FORTIFY_SOURCE support)
+if $(${CC} -D_FORTIFY_SOURCE=2 -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
+	AC_MSG_RESULT(yes)
+	AST_FORTIFY_SOURCE=-D_FORTIFY_SOURCE=2
+else
+	AC_MSG_RESULT(no)
+	AST_FORTIFY_SOURCE=
+fi
+AC_SUBST(AST_FORTIFY_SOURCE)
 
 AC_MSG_CHECKING(for -fno-strict-overflow)
 if $(${CC} -O2 -fno-strict-overflow -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
@@ -645,6 +664,7 @@ AST_EXT_LIB_CHECK([FLOOR], [m], [floor])
 AST_EXT_LIB_CHECK([CEIL], [m], [ceil])
 
 AST_C_COMPILE_CHECK([GETIFADDRS], [struct ifaddrs *p; getifaddrs(&p)], [ifaddrs.h], , [getifaddrs() support])
+AST_C_COMPILE_CHECK([TIMERFD], [timerfd_create(0,0); timerfd_settime(0,0,NULL,NULL);], [sys/timerfd.h], , [timerfd support])
 
 GSM_INTERNAL="yes"
 AC_SUBST(GSM_INTERNAL)
@@ -1384,6 +1404,12 @@ if test "x${PBX_SPANDSP}" = "x1" ; then
 	# properly, and that libtiff is available
 	PBX_SPANDSP=0
 	AST_EXT_LIB_CHECK([SPANDSP], [spandsp], [span_set_message_handler], [spandsp.h], [-ltiff])
+fi
+
+if test "x${PBX_SPANDSP}" = "x1" ; then
+	# We also need t38_terminal_init()
+	PBX_SPANDSP=0
+	AST_EXT_LIB_CHECK([SPANDSP], [spandsp], [t38_terminal_init], [spandsp.h], [-ltiff])
 fi
 
 AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_pollflags], [libss7.h])

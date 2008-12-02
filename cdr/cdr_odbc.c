@@ -19,7 +19,7 @@
 /*! \file
  *
  * \brief ODBC CDR Backend
- * 
+ *
  * \author Brian K. West <brian@bkw.org>
  *
  * See also:
@@ -115,7 +115,7 @@ static SQLHSTMT execute_cb(struct odbc_obj *obj, void *data)
 	}
 
 	ODBC_res = SQLExecDirect(stmt, (unsigned char *)sqlcmd, SQL_NTS);
-	
+
 	if ((ODBC_res != SQL_SUCCESS) && (ODBC_res != SQL_SUCCESS_WITH_INFO)) {
 		ast_verb(11, "cdr_odbc: Error in ExecDirect: %d\n", ODBC_res);
 		SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -161,13 +161,13 @@ static int odbc_load_module(int reload)
 
 	do {
 		cfg = ast_config_load(config_file, config_flags);
-		if (!cfg) {
+		if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
 			ast_log(LOG_WARNING, "cdr_odbc: Unable to load config for ODBC CDR's: %s\n", config_file);
 			res = AST_MODULE_LOAD_DECLINE;
 			break;
 		} else if (cfg == CONFIG_STATUS_FILEUNCHANGED)
 			break;
-	
+
 		var = ast_variable_browse(cfg, "global");
 		if (!var) {
 			/* nothing configured */
@@ -228,7 +228,7 @@ static int odbc_load_module(int reload)
 		}
 	} while (0);
 
-	if (cfg && cfg != CONFIG_STATUS_FILEUNCHANGED)
+	if (cfg && cfg != CONFIG_STATUS_FILEUNCHANGED && cfg != CONFIG_STATUS_FILEINVALID)
 		ast_config_destroy(cfg);
 	return res;
 }

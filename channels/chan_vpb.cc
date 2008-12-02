@@ -2478,7 +2478,7 @@ static struct ast_channel *vpb_new(struct vpb_pvt *me, enum ast_channel_state st
 	}
 	ast_verb(4, "%s: New call for context [%s]\n", me->dev, context);
 	    
-	tmp = ast_channel_alloc(1, state, 0, 0, "", me->ext, me->context, 0, me->dev);
+	tmp = ast_channel_alloc(1, state, 0, 0, "", me->ext, me->context, 0, "%s", me->dev);
 	if (tmp) {
 		if (use_ast_ind == 1){
 			tmp->tech = &vpb_tech_indicate;
@@ -2714,7 +2714,7 @@ static enum ast_module_load_result load_module()
 	cfg = ast_config_load(config, config_flags);
 
 	/* We *must* have a config file otherwise stop immediately */
-	if (!cfg) {
+	if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Unable to load config %s\n", config);
 		return AST_MODULE_LOAD_DECLINE;
 	}  

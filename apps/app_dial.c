@@ -735,6 +735,7 @@ static void do_forward(struct chanlist *o,
 	if (!c) {
 		ast_clear_flag64(o, DIAL_STILLGOING);
 		handle_cause(cause, num);
+		ast_hangup(original);
 	} else {
 		char *new_cid_num, *new_cid_name;
 		struct ast_channel *src;
@@ -762,6 +763,7 @@ static void do_forward(struct chanlist *o,
 			ast_log(LOG_NOTICE, "Failed to dial on local channel for call forward to '%s'\n", tmpchan);
 			ast_clear_flag64(o, DIAL_STILLGOING);
 			ast_hangup(original);
+			ast_hangup(c);
 			c = o->chan = NULL;
 			num->nochan++;
 		} else {
@@ -1170,7 +1172,7 @@ static int do_timelimit(struct ast_channel *chan, struct ast_bridge_config *conf
 		play_to_caller = 1;
 
 	var = pbx_builtin_getvar_helper(chan, "LIMIT_WARNING_FILE");
-	config->warning_sound = !ast_strlen_zero(var) ? ast_strdupa(var) : "timeleft";
+	config->warning_sound = !ast_strlen_zero(var) ? ast_strdup(var) : ast_strdup("timeleft");
 
 	/* The code looking at config wants a NULL, not just "", to decide
 	 * that the message should not be played, so we replace "" with NULL.
@@ -1179,10 +1181,10 @@ static int do_timelimit(struct ast_channel *chan, struct ast_bridge_config *conf
 	 */
 
 	var = pbx_builtin_getvar_helper(chan, "LIMIT_TIMEOUT_FILE");
-	config->end_sound = !ast_strlen_zero(var) ? ast_strdupa(var) : NULL;
+	config->end_sound = !ast_strlen_zero(var) ? ast_strdup(var) : NULL;
 
 	var = pbx_builtin_getvar_helper(chan, "LIMIT_CONNECT_FILE");
-	config->start_sound = !ast_strlen_zero(var) ? ast_strdupa(var) : NULL;
+	config->start_sound = !ast_strlen_zero(var) ? ast_strdup(var) : NULL;
 
 	ast_channel_unlock(chan);
 
@@ -1488,6 +1490,10 @@ static void end_bridge_callback(void *data)
 		pbx_builtin_setvar_helper(chan, "DIALEDTIME", buf);
 	}
 	ast_channel_unlock(chan);
+}
+
+static void end_bridge_callback_data_fixup(struct ast_bridge_config *bconfig, struct ast_channel *originator, struct ast_channel *terminator) {
+	bconfig->end_bridge_callback_data = originator;
 }
 
 static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags64 *peerflags, int *continue_exec)
@@ -1814,6 +1820,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			/* Again, keep going even if there's an error */
 			ast_debug(1, "ast call on peer returned %d\n", res);
 			ast_verb(3, "Couldn't call %s\n", numsubst);
+			if (tc->hangupcause) {
+				chan->hangupcause = tc->hangupcause;
+			}
 			ast_hangup(tc);
 			tc = NULL;
 			ast_free(tmp);
@@ -2170,7 +2179,8 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 
 			config.end_bridge_callback = end_bridge_callback;
 			config.end_bridge_callback_data = chan;
-
+			config.end_bridge_callback_data_fixup = end_bridge_callback_data_fixup;
+			
 			if (moh) {
 				moh = 0;
 				ast_moh_stop(chan);
@@ -2264,6 +2274,15 @@ out:
 	}
 
 done:
+	if (config.warning_sound) {
+		ast_free((char *)config.warning_sound);
+	}
+	if (config.end_sound) {
+		ast_free((char *)config.end_sound);
+	}
+	if (config.start_sound) {
+		ast_free((char *)config.start_sound);
+	}
 	return res;
 }
 
