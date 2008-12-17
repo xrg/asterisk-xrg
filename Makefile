@@ -411,10 +411,10 @@ res:	main
 endif
 
 $(MOD_SUBDIRS):
-	@ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
+	@+ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 $(OTHER_SUBDIRS):
-	@ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
+	@+ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 defaults.h: makeopts
 	@build_tools/make_defaults_h > $@.tmp
@@ -442,10 +442,10 @@ include/asterisk/build.h:
 	@rm -f $@.tmp
 
 $(SUBDIRS_CLEAN):
-	@$(SUBMAKE) -C $(@:-clean=) clean
+	@+$(SUBMAKE) -C $(@:-clean=) clean
 
 $(SUBDIRS_DIST_CLEAN):
-	@$(SUBMAKE) -C $(@:-dist-clean=) dist-clean
+	@+$(SUBMAKE) -C $(@:-dist-clean=) dist-clean
 
 clean: $(SUBDIRS_CLEAN) _clean
 
