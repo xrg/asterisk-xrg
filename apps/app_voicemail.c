@@ -117,6 +117,187 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/res_odbc.h"
 #endif
 
+/*** DOCUMENTATION
+	<application name="VoiceMail" language="en_US">
+		<synopsis>
+			Leave a Voicemail message.
+		</synopsis>
+		<syntax>
+			<parameter name="mailboxs" argsep="&amp;" required="true">
+				<argument name="mailbox1" argsep="@" required="true">
+					<argument name="mailbox" required="true" />
+					<argument name="context" />
+				</argument>
+				<argument name="mailbox2" argsep="@" multiple="true">
+					<argument name="mailbox" required="true" />
+					<argument name="context" />
+				</argument>
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="b">
+						<para>Play the <literal>busy</literal> greeting to the calling party.</para>
+					</option>
+					<option name="d">
+						<argument name="c" />
+						<para>Accept digits for a new extension in context <replaceable>c</replaceable>,
+						if played during the greeting. Context defaults to the current context.</para>
+					</option>
+					<option name="g">
+						<argument name="#" required="true" />
+						<para>Use the specified amount of gain when recording the voicemail
+						message. The units are whole-number decibels (dB). Only works on supported
+						technologies, which is DAHDI only.</para>
+					</option>
+					<option name="s">
+						<para>Skip the playback of instructions for leaving a message to the
+						calling party.</para>
+					</option>
+					<option name="u">
+						<para>Play the <literal>unavailable</literal> greeting.</para>
+					</option>
+					<option name="U">
+						<para>Mark message as <literal>URGENT</literal>.</para>
+					</option>
+					<option name="P">
+						<para>Mark message as <literal>PRIORITY</literal>.</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application allows the calling party to leave a message for the specified
+			list of mailboxes. When multiple mailboxes are specified, the greeting will be taken from
+			the first mailbox specified. Dialplan execution will stop if the specified mailbox does not
+			exist.</para>
+			<para>The Voicemail application will exit if any of the following DTMF digits are received:</para>
+			<enumlist>
+				<enum name="0">
+					<para>Jump to the <literal>o</literal> extension in the current dialplan context.</para>
+				</enum>
+				<enum name="*">
+					<para>Jump to the <literal>a</literal> extension in the current dialplan context.</para>
+				</enum>
+			</enumlist>
+			<para>This application will set the following channel variable upon completion:</para>
+			<variablelist>
+				<variable name="VMSTATUS">
+					<para>This indicates the status of the execution of the VoiceMail application.</para>
+					<value name="SUCCESS" />
+					<value name="USEREXIT" />
+					<value name="FAILED" />
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+	<application name="VoiceMailMain" language="en_US">
+		<synopsis>
+			Check Voicemail messages.
+		</synopsis>
+		<syntax>
+			<parameter name="mailbox" required="true" argsep="@">
+				<argument name="mailbox" />
+				<argument name="context" />
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="p">
+						<para>Consider the <replaceable>mailbox</replaceable> parameter as a prefix to
+						the mailbox that is entered by the caller.</para>
+					</option>
+					<option name="g">
+						<argument name="#" required="true" />
+						<para>Use the specified amount of gain when recording a voicemail message.
+						The units are whole-number decibels (dB).</para>
+					</option>
+					<option name="s">
+						<para>Skip checking the passcode for the mailbox.</para>
+					</option>
+					<option name="a">
+						<argument name="folder" required="true" />
+						<para>Skip folder prompt and go directly to <replaceable>folder</replaceable> specified.
+						Defaults to <literal>INBOX</literal>.</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application allows the calling party to check voicemail messages. A specific
+			<replaceable>mailbox</replaceable>, and optional corresponding <replaceable>context</replaceable>,
+			may be specified. If a <replaceable>mailbox</replaceable> is not provided, the calling party will
+			be prompted to enter one. If a <replaceable>context</replaceable> is not specified, the
+			<literal>default</literal> context will be used.</para>
+		</description>
+	</application>
+	<application name="MailboxExists" language="en_US">
+		<synopsis>
+			Check to see if Voicemail mailbox exists.
+		</synopsis>
+		<syntax>
+			<parameter name="mailbox" required="true" argsep="@">
+				<argument name="mailbox" required="true" />
+				<argument name="context" />
+			</parameter>
+			<parameter name="options">
+				<para>None options.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Check to see if the specified <replaceable>mailbox</replaceable> exists. If no voicemail
+			<replaceable>context</replaceable> is specified, the <literal>default</literal> context
+			will be used.</para>
+			<para>This application will set the following channel variable upon completion:</para>
+			<variablelist>
+				<variable name="VMBOXEXISTSSTATUS">
+					<para>This will contain the status of the execution of the MailboxExists application.
+					Possible values include:</para>
+					<value name="SUCCESS" />
+					<value name="FAILED" />
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+	<application name="VMAuthenticate" language="en_US">
+		<synopsis>
+			Authenticate with Voicemail passwords.
+		</synopsis>
+		<syntax>
+			<parameter name="mailbox" required="true" argsep="@">
+				<argument name="mailbox" />
+				<argument name="context" />
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="s">
+						<para>Skip playing the initial prompts.</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application behaves the same way as the Authenticate application, but the passwords
+			are taken from <filename>voicemail.conf</filename>. If the <replaceable>mailbox</replaceable> is
+			specified, only that mailbox's password will be considered valid. If the <replaceable>mailbox</replaceable>
+			is not specified, the channel variable <variable>AUTH_MAILBOX</variable> will be set with the authenticated
+			mailbox.</para>
+		</description>
+	</application>
+	<function name="MAILBOX_EXISTS" language="en_US">
+		<synopsis>
+			Tell if a mailbox is configured.
+		</synopsis>
+		<syntax argsep="@">
+			<parameter name="mailbox" required="true" />
+			<parameter name="context" />
+		</syntax>
+		<description>
+			<para>Returns a boolean of whether the corresponding <replaceable>mailbox</replaceable> exists.
+			If <replaceable>context</replaceable> is not specified, defaults to the <literal>default</literal>
+			context.</para>
+		</description>
+	</function>
+ ***/
+
 #ifdef IMAP_STORAGE
 static char imapserver[48];
 static char imapport[8];
@@ -226,6 +407,7 @@ static AST_LIST_HEAD_STATIC(vmstates, vmstate);
 #define VM_TEMPGREETWARN (1 << 15)  /*!< Remind user tempgreeting is set */
 #define VM_MOVEHEARD     (1 << 16)  /*!< Move a "heard" message to Old after listening to it */
 #define VM_MESSAGEWRAP   (1 << 17)  /*!< Wrap around from the last message to the first, and vice-versa */
+#define VM_FWDURGAUTO    (1 << 18)  /*!< Autoset of Urgent flag on forwarded Urgent messages set globally */
 #define ERROR_LOCK_PATH  -100
 
 
@@ -497,77 +679,6 @@ static char userscontext[AST_MAX_EXTENSION] = "default";
 
 static char *addesc = "Comedian Mail";
 
-static char *synopsis_vm = "Leave a Voicemail message";
-
-static char *descrip_vm =
-	"  VoiceMail(mailbox[@context][&mailbox[@context]][...][,options]): This\n"
-	"application allows the calling party to leave a message for the specified\n"
-	"list of mailboxes. When multiple mailboxes are specified, the greeting will\n"
-	"be taken from the first mailbox specified. Dialplan execution will stop if the\n"
-	"specified mailbox does not exist.\n"
-	"  The Voicemail application will exit if any of the following DTMF digits are\n"
-	"received:\n"
-	"    0 - Jump to the 'o' extension in the current dialplan context.\n"
-	"    * - Jump to the 'a' extension in the current dialplan context.\n"
-	"  This application will set the following channel variable upon completion:\n"
-	"    VMSTATUS - This indicates the status of the execution of the VoiceMail\n"
-	"               application. The possible values are:\n"
-	"               SUCCESS | USEREXIT | FAILED\n\n"
-	"  Options:\n"
-	"    b    - Play the 'busy' greeting to the calling party.\n"
-	"    d([c]) - Accept digits for a new extension in context c, if played during\n"
-	"             the greeting.  Context defaults to the current context.\n"
-	"    g(#) - Use the specified amount of gain when recording the voicemail\n"
-	"           message. The units are whole-number decibels (dB).\n"
-	"           Only works on supported technologies, which is DAHDI only.\n"
-	"    s    - Skip the playback of instructions for leaving a message to the\n"
-	"           calling party.\n"
-	"    u    - Play the 'unavailable' greeting.\n"
-	"    U    - Mark message as Urgent.\n"
-	"    P    - Mark message as PRIORITY.\n";
-
-static char *synopsis_vmain = "Check Voicemail messages";
-
-static char *descrip_vmain =
-	"  VoiceMailMain([mailbox][@context][,options]): This application allows the\n"
-	"calling party to check voicemail messages. A specific mailbox, and optional\n"
-	"corresponding context, may be specified. If a mailbox is not provided, the\n"
-	"calling party will be prompted to enter one. If a context is not specified,\n"
-	"the 'default' context will be used.\n\n"
-	"  Options:\n"
-	"    p    - Consider the mailbox parameter as a prefix to the mailbox that\n"
-	"           is entered by the caller.\n"
-	"    g(#) - Use the specified amount of gain when recording a voicemail\n"
-	"           message. The units are whole-number decibels (dB).\n"
-	"    s    - Skip checking the passcode for the mailbox.\n"
-	"    a(#) - Skip folder prompt and go directly to folder specified.\n"
-	"           Defaults to INBOX\n";
-
-static char *synopsis_vm_box_exists =
-"Check to see if Voicemail mailbox exists";
-
-static char *descrip_vm_box_exists =
-	"  MailboxExists(mailbox[@context][,options]): Check to see if the specified\n"
-	"mailbox exists. If no voicemail context is specified, the 'default' context\n"
-	"will be used.\n"
-	"  This application will set the following channel variable upon completion:\n"
-	"    VMBOXEXISTSSTATUS - This will contain the status of the execution of the\n"
-	"                        MailboxExists application. Possible values include:\n"
-	"                        SUCCESS | FAILED\n\n"
-	"  Options: (none)\n";
-
-static char *synopsis_vmauthenticate = "Authenticate with Voicemail passwords";
-
-static char *descrip_vmauthenticate =
-	"  VMAuthenticate([mailbox][@context][,options]): This application behaves the\n"
-	"same way as the Authenticate application, but the passwords are taken from\n"
-	"voicemail.conf.\n"
-	"  If the mailbox is specified, only that mailbox's password will be considered\n"
-	"valid. If the mailbox is not specified, the channel variable AUTH_MAILBOX will\n"
-	"be set with the authenticated mailbox.\n\n"
-	"  Options:\n"
-	"    s - Skip playing the initial prompts.\n";
-
 /* Leave a message */
 static char *app = "VoiceMail";
 
@@ -579,6 +690,7 @@ static char *app4 = "VMAuthenticate";
 
 static AST_LIST_HEAD_STATIC(users, ast_vm_user);
 static AST_LIST_HEAD_STATIC(zones, vm_zone);
+static char zonetag[80];
 static int maxsilence;
 static int maxmsg;
 static int maxdeletedmsg;
@@ -736,6 +848,7 @@ static void populate_defaults(struct ast_vm_user *vmu)
 	ast_copy_string(vmu->callback, callcontext, sizeof(vmu->callback));
 	ast_copy_string(vmu->dialout, dialcontext, sizeof(vmu->dialout));
 	ast_copy_string(vmu->exit, exitcontext, sizeof(vmu->exit));
+	ast_copy_string(vmu->zonetag, zonetag, sizeof(vmu->zonetag));
 	if (vmmaxsecs)
 		vmu->maxsecs = vmmaxsecs;
 	if (maxmsg)
@@ -1310,7 +1423,7 @@ static const char *mbox(int id)
 		"Deleted",
 		"Urgent"
 	};
-	return (id >= 0 && id < (sizeof(msgs)/sizeof(msgs[0]))) ? msgs[id] : "Unknown";
+	return (id >= 0 && id < ARRAY_LEN(msgs)) ? msgs[id] : "Unknown";
 }
 
 static void free_user(struct ast_vm_user *vmu)
@@ -1784,7 +1897,12 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 			*(vmu->email) = '\0';
 		return -1;
 	}
-	fread(buf, len, 1, p);
+	if (fread(buf, len, 1, p) < len) {
+		if (ferror(p)) {
+			ast_log(LOG_ERROR, "Short read while reading in mail file.\n");
+			return -1;
+		}
+	}
 	((char *)buf)[len] = '\0';
 	INIT(&str, mail_string, buf, len);
 	ret = init_mailstream(vms, NEW_FOLDER);
@@ -2131,7 +2249,11 @@ static void write_file(char *filename, char *buffer, unsigned long len)
 	FILE *output;
 
 	output = fopen (filename, "w");
-	fwrite (buffer, len, 1, output);
+	if (fwrite(buffer, len, 1, output) < len) {
+		if (ferror(output)) {
+			ast_log(LOG_ERROR, "Short write while writing e-mail body.\n");
+		}
+	}
 	fclose (output);
 }
 
@@ -3873,7 +3995,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 
 	if (!ast_strlen_zero(fromstring)) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			char *ptr;
 			memset(passdata2, 0, len_passdata2);
 			prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, enc_cidnum, enc_cidname, dur, date, passdata2, len_passdata2, category, flag);
@@ -3917,7 +4039,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	}
 	if (!ast_strlen_zero(emailsubject)) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			int vmlen = strlen(emailsubject) * 3 + 200;
 			/* Only allocate more space if the previous was not large enough */
 			if (vmlen > len_passdata) {
@@ -4002,7 +4124,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	fprintf(p, "Content-Type: text/plain; charset=%s" ENDL "Content-Transfer-Encoding: 8bit" ENDL ENDL, charset);
 	if (emailbody) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			char *passdata;
 			int vmlen = strlen(emailbody)*3 + 200;
 			passdata = alloca(vmlen);
@@ -4146,7 +4268,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 
 	if (*pagerfromstring) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			char *passdata;
 			int vmlen = strlen(fromstring)*3 + 200;
 			passdata = alloca(vmlen);
@@ -4162,7 +4284,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 	fprintf(p, "To: %s\n", pager);
 	if (pagersubject) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			char *passdata;
 			int vmlen = strlen(pagersubject) * 3 + 200;
 			passdata = alloca(vmlen);
@@ -4184,7 +4306,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 	ast_strftime(date, sizeof(date), "%A, %B %d, %Y at %r", &tm);
 	if (pagerbody) {
 		struct ast_channel *ast;
-		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0))) {
+		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			char *passdata;
 			int vmlen = strlen(pagerbody) * 3 + 200;
 			passdata = alloca(vmlen);
@@ -6146,7 +6268,9 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 	char urgent_str[7] = "";
 	char tmptxtfile[PATH_MAX];
 
-	ast_copy_string(urgent_str, urgent ? "Urgent" : "", sizeof(urgent_str));
+	if (ast_test_flag((&globalflags), VM_FWDURGAUTO)) {
+		ast_copy_string(urgent_str, urgent ? "Urgent" : "", sizeof(urgent_str));
+	}
 
 	if (vms == NULL) return -1;
 	dir = vms->curdir;
@@ -9523,11 +9647,6 @@ static int acf_mailbox_exists(struct ast_channel *chan, const char *cmd, char *a
 
 static struct ast_custom_function mailbox_exists_acf = {
 	.name = "MAILBOX_EXISTS",
-	.synopsis = "Tell if a mailbox is configured",
-	.desc =
-"Returns a boolean of whether the corresponding mailbox exists.  If context\n"
-"is not specified, defaults to the \"default\" context.\n",
-	.syntax = "MAILBOX_EXISTS(<vmbox>[@<context>])",
 	.read = acf_mailbox_exists,
 };
 
@@ -10077,6 +10196,48 @@ static void free_vm_zones(void)
 	AST_LIST_UNLOCK(&zones);
 }
 
+static const char *substitute_escapes(const char *value)
+{
+	char *current;
+
+	/* Add 16 for fudge factor */
+	struct ast_str *str = ast_str_thread_get(&global_app_buf, strlen(value) + 16);
+
+	/* Substitute strings \r, \n, and \t into the appropriate characters */
+	for (current = (char *) value; *current; current++) {
+		if (*current == '\\') {
+			current++;
+			if (!*current) {
+				ast_log(AST_LOG_NOTICE, "Incomplete escape at end of value.\n");
+				break;
+			}
+			switch (*current) {
+			case 'r':
+				ast_str_append(&str, 0, "\r");
+				break;
+			case 'n':
+#ifdef IMAP_STORAGE
+				if (!str->used || str->str[str->used - 1] != '\r') {
+					ast_str_append(&str, 0, "\r");
+				}
+#endif
+				ast_str_append(&str, 0, "\n");
+				break;
+			case 't':
+				ast_str_append(&str, 0, "\t");
+				break;
+			default:
+				ast_log(AST_LOG_NOTICE, "Substitution routine does not support this character: \\%c\n", *current);
+				break;
+			}
+		} else {
+			ast_str_append(&str, 0, "%c", *current);
+		}
+	}
+
+	return ast_str_buffer(str);
+}
+
 static int load_config(int reload)
 {
 	struct ast_vm_user *current;
@@ -10502,6 +10663,12 @@ static int load_config(int reload)
 		}
 		ast_set2_flag((&globalflags), ast_true(val), VM_MOVEHEARD);	
 
+		if (!(val = ast_variable_retrieve(cfg, "general", "forward_urgent_auto"))) {
+			ast_debug(1,"Autoset of Urgent flag on forwarded Urgent messages disabled globally\n");
+			val = "no";
+		}
+		ast_set2_flag((&globalflags), ast_true(val), VM_FWDURGAUTO);	
+
 		if (!(val = ast_variable_retrieve(cfg, "general", "sayduration"))) {
 			ast_debug(1,"Duration info before msg enabled globally\n");
 			val = "yes";
@@ -10681,61 +10848,20 @@ static int load_config(int reload)
 				adsiver = atoi(val);
 			}
 		}
-		if ((val = ast_variable_retrieve(cfg, "general", "emailsubject")))
-			emailsubject = ast_strdup(val);
-		if ((val = ast_variable_retrieve(cfg, "general", "emailbody"))) {
-			char *tmpread, *tmpwrite;
-			emailbody = ast_strdup(val);
-
-			/* substitute strings \t and \n into the appropriate characters */
-			tmpread = tmpwrite = emailbody;
-			while ((tmpwrite = strchr(tmpread,'\\'))) {
-				switch (tmpwrite[1]) {
-				case 'r':
-					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
-					*tmpwrite = '\r';
-					break;
-				case 'n':
-					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
-					*tmpwrite = '\n';
-					break;
-				case 't':
-					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
-					*tmpwrite = '\t';
-					break;
-				default:
-					ast_log(AST_LOG_NOTICE, "Substitution routine does not support this character: %c\n", tmpwrite[1]);
-				}
-				tmpread = tmpwrite + 1;
-			}
+		if ((val = ast_variable_retrieve(cfg, "general", "tz"))) {
+			ast_copy_string(zonetag, val, sizeof(zonetag));
 		}
-		if ((val = ast_variable_retrieve(cfg, "general", "pagersubject")))
+		if ((val = ast_variable_retrieve(cfg, "general", "emailsubject"))) {
+			emailsubject = ast_strdup(val);
+		}
+		if ((val = ast_variable_retrieve(cfg, "general", "emailbody"))) {
+			emailbody = ast_strdup(substitute_escapes(val));
+		}
+		if ((val = ast_variable_retrieve(cfg, "general", "pagersubject"))) {
 			pagersubject = ast_strdup(val);
+		}
 		if ((val = ast_variable_retrieve(cfg, "general", "pagerbody"))) {
-			char *tmpread, *tmpwrite;
-			pagerbody = ast_strdup(val);
-
-			/* substitute strings \t and \n into the appropriate characters */
-			tmpread = tmpwrite = pagerbody;
-			while ((tmpwrite = strchr(tmpread, '\\'))) {
-				switch (tmpwrite[1]) {
-				case 'r':
-					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
-					*tmpwrite = '\r';
-					break;
-				case 'n':
-					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
-					*tmpwrite = '\n';
-					break;
-				case 't':
-					memmove(tmpwrite + 1, tmpwrite + 2, strlen(tmpwrite + 2) + 1);
-					*tmpwrite = '\t';
-					break;
-				default:
-					ast_log(AST_LOG_NOTICE, "Substitution routine does not support this character: %c\n", tmpwrite[1]);
-				}
-				tmpread = tmpwrite + 1;
-			}
+			pagerbody = ast_strdup(substitute_escapes(val));
 		}
 		AST_LIST_UNLOCK(&users);
 		ast_config_destroy(cfg);
@@ -10784,7 +10910,7 @@ static int unload_module(void)
 	res |= ast_unregister_application(app4);
 	res |= ast_custom_function_unregister(&mailbox_exists_acf);
 	res |= ast_manager_unregister("VoicemailUsersList");
-	ast_cli_unregister_multiple(cli_voicemail, sizeof(cli_voicemail) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_voicemail, ARRAY_LEN(cli_voicemail));
 	ast_uninstall_vm_functions();
 
 	if (poll_thread != AST_PTHREADT_NULL)
@@ -10815,16 +10941,16 @@ static int load_module(void)
 	if ((res = load_config(0)))
 		return res;
 
-	res = ast_register_application(app, vm_exec, synopsis_vm, descrip_vm);
-	res |= ast_register_application(app2, vm_execmain, synopsis_vmain, descrip_vmain);
-	res |= ast_register_application(app3, vm_box_exists, synopsis_vm_box_exists, descrip_vm_box_exists);
-	res |= ast_register_application(app4, vmauthenticate, synopsis_vmauthenticate, descrip_vmauthenticate);
+	res = ast_register_application_xml(app, vm_exec);
+	res |= ast_register_application_xml(app2, vm_execmain);
+	res |= ast_register_application_xml(app3, vm_box_exists);
+	res |= ast_register_application_xml(app4, vmauthenticate);
 	res |= ast_custom_function_register(&mailbox_exists_acf);
 	res |= ast_manager_register("VoicemailUsersList", EVENT_FLAG_CALL | EVENT_FLAG_REPORTING, manager_list_voicemail_users, "List All Voicemail User Information");
 	if (res)
 		return res;
 
-	ast_cli_register_multiple(cli_voicemail, sizeof(cli_voicemail) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_voicemail, ARRAY_LEN(cli_voicemail));
 
 	ast_install_vm_functions(has_voicemail, inboxcount, inboxcount2, messagecount, sayname);
 	ast_realtime_require_field("voicemail", "uniqueid", RQ_UINTEGER3, 11, "password", RQ_CHAR, 10, SENTINEL);

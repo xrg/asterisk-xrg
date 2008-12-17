@@ -533,14 +533,14 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		sprintf(subclass2, "%c", fh->csub);
 		subclass = subclass2;
 	} else if (fh->type == AST_FRAME_IAX) {
-		if (fh->csub >= (int)sizeof(iaxs)/(int)sizeof(iaxs[0])) {
+		if (fh->csub >= ARRAY_LEN(iaxs)) {
 			snprintf(subclass2, sizeof(subclass2), "(%d?)", fh->csub);
 			subclass = subclass2;
 		} else {
 			subclass = iaxs[(int)fh->csub];
 		}
 	} else if (fh->type == AST_FRAME_CONTROL) {
-		if (fh->csub >= (int)sizeof(cmds)/(int)sizeof(cmds[0])) {
+		if (fh->csub >= ARRAY_LEN(cmds)) {
 			snprintf(subclass2, sizeof(subclass2), "(%d?)", fh->csub);
 			subclass = subclass2;
 		} else {
@@ -929,7 +929,7 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 				for (var2 = ies->vars, prev = NULL; var2; prev = var2, var2 = var2->next) {
 					if (strcmp(tmp, var2->name) == 0) {
 						ast_str_set(&str, 0, "%s%s", var2->value, tmp2);
-						var = ast_variable_new(tmp, str->str, var2->file);
+						var = ast_variable_new(tmp, ast_str_buffer(str), var2->file);
 						var->next = var2->next;
 						if (prev) {
 							prev->next = var;

@@ -598,7 +598,7 @@ static char *handle_cli_core_show_translation(struct ast_cli_entry *e, int cmd, 
 			}
 		}
 		ast_str_append(&out, -1, "\n");
-		ast_cli(a->fd, "%s", out->str);			
+		ast_cli(a->fd, "%s", ast_str_buffer(out));			
 	}
 	AST_RWLIST_UNLOCK(&translators);
 	return CLI_SUCCESS;
@@ -676,7 +676,7 @@ int __ast_register_translator(struct ast_translator *t, struct ast_module *mod)
 			    ast_getformatname(1 << t->srcfmt), ast_getformatname(1 << t->dstfmt), t->cost);
 
 	if (!added_cli) {
-		ast_cli_register_multiple(cli_translate, sizeof(cli_translate) / sizeof(struct ast_cli_entry));
+		ast_cli_register_multiple(cli_translate, ARRAY_LEN(cli_translate));
 		added_cli++;
 	}
 

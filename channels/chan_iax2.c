@@ -10804,7 +10804,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 			} else if (!strcasecmp(v->name, "trunk")) {
 				ast_set2_flag(peer, ast_true(v->value), IAX_TRUNK);	
 				if (ast_test_flag(peer, IAX_TRUNK) && (timingfd < 0)) {
-					ast_log(LOG_WARNING, "Unable to support trunking on peer '%s' without DAHDI timing\n", peer->name);
+					ast_log(LOG_WARNING, "Unable to support trunking on peer '%s' without a timing interface\n", peer->name);
 					ast_clear_flag(peer, IAX_TRUNK);
 				}
 			} else if (!strcasecmp(v->name, "auth")) {
@@ -12446,7 +12446,7 @@ static int __unload_module(void)
 	ast_manager_unregister( "IAXnetstats" );
 	ast_manager_unregister( "IAXregistry" );
 	ast_unregister_application(papp);
-	ast_cli_unregister_multiple(cli_iax2, sizeof(cli_iax2) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_iax2, ARRAY_LEN(cli_iax2));
 	ast_unregister_switch(&iax2_switch);
 	ast_channel_unregister(&iax2_tech);
 	delete_users();
@@ -12573,7 +12573,7 @@ static int load_module(void)
 	}
 	ast_netsock_init(outsock);
 
-	ast_cli_register_multiple(cli_iax2, sizeof(cli_iax2) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_iax2, ARRAY_LEN(cli_iax2));
 
 	ast_register_application_xml(papp, iax2_prov_app);
 	
@@ -12582,12 +12582,13 @@ static int load_module(void)
 	ast_manager_register( "IAXnetstats", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_iax2_show_netstats, "Show IAX Netstats" );
 	ast_manager_register( "IAXregistry", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_iax2_show_registry, "Show IAX registrations");
 
-	if(set_config(config, 0) == -1)
-		return AST_MODULE_LOAD_DECLINE;
-
 	timingfd = ast_timer_open();
 	if (timingfd > -1) {
 		ast_timer_set_rate(timingfd, trunkfreq);
+	}
+
+	if (set_config(config, 0) == -1) {
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
  	if (ast_channel_register(&iax2_tech)) {

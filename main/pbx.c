@@ -212,6 +212,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<argument name="weekdays" required="true" />
 				<argument name="mdays" required="true" />
 				<argument name="months" required="true" />
+				<argument name="timezone" required="false" />
 			</parameter>
 			<parameter name="appname" required="true" hasparams="optional">
 				<argument name="appargs" required="true" />
@@ -306,6 +307,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<argument name="weekdays" required="true" />
 				<argument name="mdays" required="true" />
 				<argument name="months" required="true" />
+				<argument name="timezone" required="false" />
 			</parameter>
 			<parameter name="destination" required="true" argsep=":">
 				<argument name="labeliftrue" />
@@ -1504,7 +1506,7 @@ void log_match_char_tree(struct match_char *node, char *prefix)
 	ast_str_set(&my_prefix, 0, "%s+       ", prefix);
 
 	if (node->next_char)
-		log_match_char_tree(node->next_char, my_prefix->str);
+		log_match_char_tree(node->next_char, ast_str_buffer(my_prefix));
 
 	if (node->alt_char)
 		log_match_char_tree(node->alt_char, prefix);
@@ -1533,7 +1535,7 @@ static void cli_match_char_tree(struct match_char *node, char *prefix, int fd)
 	ast_str_set(&my_prefix, 0, "%s+       ", prefix);
 
 	if (node->next_char)
-		cli_match_char_tree(node->next_char, my_prefix->str, fd);
+		cli_match_char_tree(node->next_char, ast_str_buffer(my_prefix), fd);
 
 	if (node->alt_char)
 		cli_match_char_tree(node->alt_char, prefix, fd);
@@ -2017,7 +2019,6 @@ static void destroy_pattern_tree(struct match_char *pattern_tree) /* pattern tre
  * Special characters used in patterns:
  *	'_'	underscore is the leading character of a pattern.
  *		In other position it is treated as a regular char.
- *	' ' '-'	space and '-' are separator and ignored.
  *	.	one or more of any character. Only allowed at the end of
  *		a pattern.
  *	!	zero or more of anything. Also impacts the result of CANMATCH
@@ -2040,8 +2041,7 @@ static void destroy_pattern_tree(struct match_char *pattern_tree) /* pattern tre
  *		considered specially.
  *
  * When we compare a pattern with a specific extension, all characters in the extension
- * itself are considered literally with the only exception of '-' which is considered
- * as a separator and thus ignored.
+ * itself are considered literally.
  * XXX do we want to consider space as a separator as well ?
  * XXX do we want to consider the separators in non-patterns as well ?
  */
@@ -2078,8 +2078,7 @@ static int ext_cmp1(const char **p)
 	/* load, sign extend and advance pointer until we find
 	 * a valid character.
 	 */
-	while ( (c = *(*p)++) && (c == ' ' || c == '-') )
-		;	/* ignore some characters */
+	c = *(*p)++;
 
 	/* always return unless we have a set of chars */
 	switch (toupper(c)) {
@@ -2525,8 +2524,8 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 				break;
 			} else if (eval) {
 				/* Substitute variables now */
-				pbx_substitute_variables_helper(chan, osw, tmpdata->str, tmpdata->len);
-				datap = tmpdata->str;
+				pbx_substitute_variables_helper(chan, osw, ast_str_buffer(tmpdata), ast_str_size(tmpdata));
+				datap = ast_str_buffer(tmpdata);
 			} else {
 				datap = osw;
 			}
@@ -2695,7 +2694,7 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 				ast_log(LOG_WARNING, "Can't evaluate switch?!");
 				continue;
 			}
-			pbx_substitute_variables_helper(chan, sw->data, tmpdata->str, tmpdata->len);
+			pbx_substitute_variables_helper(chan, sw->data, ast_str_buffer(tmpdata), ast_str_size(tmpdata));
 		}
 
 		/* equivalent of extension_match_core() at the switch level */
@@ -2705,7 +2704,7 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 			aswf = asw->matchmore;
 		else /* action == E_MATCH */
 			aswf = asw->exists;
-		datap = sw->eval ? tmpdata->str : sw->data;
+		datap = sw->eval ? ast_str_buffer(tmpdata) : sw->data;
 		if (!aswf)
 			res = 0;
 		else {
@@ -3351,11 +3350,11 @@ int ast_func_write(struct ast_channel *chan, const char *function, const char *v
 	return -1;
 }
 
-static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int count)
+void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int count, size_t *used)
 {
 	/* Substitutes variables into cp2, based on string cp1, cp2 NO LONGER NEEDS TO BE ZEROED OUT!!!!  */
 	char *cp4;
-	const char *tmp, *whereweare;
+	const char *tmp, *whereweare, *orig_cp2 = cp2;
 	int length, offset, offset2, isfunction;
 	char *workspace = NULL;
 	char *ltmp = NULL, *var = NULL;
@@ -3435,10 +3434,11 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 
 			/* Substitute if necessary */
 			if (needsub) {
+				size_t used;
 				if (!ltmp)
 					ltmp = alloca(VAR_BUF_SIZE);
 
-				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1);
+				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1, &used);
 				vars = ltmp;
 			} else {
 				vars = var;
@@ -3522,10 +3522,11 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 
 			/* Substitute if necessary */
 			if (needsub) {
+				size_t used;
 				if (!ltmp)
 					ltmp = alloca(VAR_BUF_SIZE);
 
-				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1);
+				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1, &used);
 				vars = ltmp;
 			} else {
 				vars = var;
@@ -3541,16 +3542,19 @@ static void pbx_substitute_variables_helper_full(struct ast_channel *c, struct v
 			}
 		}
 	}
+	*used = cp2 - orig_cp2;
 }
 
 void pbx_substitute_variables_helper(struct ast_channel *c, const char *cp1, char *cp2, int count)
 {
-	pbx_substitute_variables_helper_full(c, (c) ? &c->varshead : NULL, cp1, cp2, count);
+	size_t used;
+	pbx_substitute_variables_helper_full(c, (c) ? &c->varshead : NULL, cp1, cp2, count, &used);
 }
 
 void pbx_substitute_variables_varshead(struct varshead *headp, const char *cp1, char *cp2, int count)
 {
-	pbx_substitute_variables_helper_full(NULL, headp, cp1, cp2, count);
+	size_t used;
+	pbx_substitute_variables_helper_full(NULL, headp, cp1, cp2, count, &used);
 }
 
 static void pbx_substitute_variables(char *passdata, int datalen, struct ast_channel *c, struct ast_exten *e)
@@ -3725,7 +3729,7 @@ static int ast_extension_state2(struct ast_exten *e)
 
 	ast_str_set(&hint, 0, "%s", ast_get_extension_app(e));
 
-	rest = hint->str;	/* One or more devices separated with a & character */
+	rest = ast_str_buffer(hint);	/* One or more devices separated with a & character */
 
 	while ( (cur = strsep(&rest, "&")) )
 		ast_devstate_aggregate_add(&agg, ast_device_state(cur));
@@ -4105,6 +4109,7 @@ static void set_ext_pri(struct ast_channel *c, const char *exten, int pri)
 
 /*!
  * \brief collect digits from the channel into the buffer.
+ * \param waittime is in milliseconds
  * \retval 0 on timeout or done.
  * \retval -1 on error.
 */
@@ -4116,7 +4121,7 @@ static int collect_digits(struct ast_channel *c, int waittime, char *buf, int bu
 	while (ast_matchmore_extension(c, c->context, buf, 1, c->cid.cid_num)) {
 		/* As long as we're willing to wait, and as long as it's not defined,
 		   keep reading digits until we can't possibly get a right answer anymore.  */
-		digit = ast_waitfordigit(c, waittime * 1000);
+		digit = ast_waitfordigit(c, waittime);
 		if (c->_softhangup == AST_SOFTHANGUP_ASYNCGOTO) {
 			c->_softhangup = 0;
 		} else {
@@ -4480,6 +4485,7 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c)
 	/* Start a new thread, and get something handling this channel. */
 	if (ast_pthread_create_detached(&t, NULL, pbx_thread, c)) {
 		ast_log(LOG_WARNING, "Failed to create new channel thread\n");
+		decrease_call_count();
 		return AST_PBX_FAILED;
 	}
 
@@ -4609,6 +4615,7 @@ int ast_context_remove_include2(struct ast_context *con, const char *include, co
 			else
 				con->includes = i->next;
 			/* free include and return */
+			ast_destroy_timing(&(i->timing));
 			ast_free(i);
 			ret = 0;
 			break;
@@ -6087,8 +6094,8 @@ static char *handle_show_chanvar(struct ast_cli_entry *e, int cmd, struct ast_cl
 	}
 
 	pbx_builtin_serialize_variables(chan, &vars);
-	if (vars->str) {
-		ast_cli(a->fd, "\nVariables for channel %s:\n%s\n", a->argv[e->args], vars->str);
+	if (ast_str_strlen(vars)) {
+		ast_cli(a->fd, "\nVariables for channel %s:\n%s\n", a->argv[e->args], ast_str_buffer(vars));
 	}
 	ast_channel_unlock(chan);
 	return CLI_SUCCESS;
@@ -6635,15 +6642,20 @@ static int lookup_name(const char *s, char *const names[], int max)
 {
 	int i;
 
-	if (names) {
+	if (names && *s > '9') {
 		for (i = 0; names[i]; i++) {
-			if (!strcasecmp(s, names[i]))
-				return i+1;
+			if (!strcasecmp(s, names[i])) {
+				return i;
+			}
 		}
-	} else if (sscanf(s, "%d", &i) == 1 && i >= 1 && i <= max) {
-		return i;
 	}
-	return 0; /* error return */
+
+	/* Allow months and weekdays to be specified as numbers, as well */
+	if (sscanf(s, "%d", &i) == 1 && i >= 1 && i <= max) {
+		/* What the array offset would have been: "1" would be at offset 0 */
+		return i - 1;
+	}
+	return -1; /* error return */
 }
 
 /*! \brief helper function to return a range up to max (7, 12, 31 respectively).
@@ -6651,131 +6663,104 @@ static int lookup_name(const char *s, char *const names[], int max)
  */
 static unsigned get_range(char *src, int max, char *const names[], const char *msg)
 {
-	int s, e; /* start and ending position */
+	int start, end; /* start and ending position */
 	unsigned int mask = 0;
+	char *part;
 
 	/* Check for whole range */
 	if (ast_strlen_zero(src) || !strcmp(src, "*")) {
-		s = 0;
-		e = max - 1;
-	} else {
-		/* Get start and ending position */
-		char *c = strchr(src, '-');
-		if (c)
-			*c++ = '\0';
-		/* Find the start */
-		s = lookup_name(src, names, max);
-		if (!s) {
-			ast_log(LOG_WARNING, "Invalid %s '%s', assuming none\n", msg, src);
-			return 0;
-		}
-		s--;
-		if (c) { /* find end of range */
-			e = lookup_name(c, names, max);
-			if (!e) {
-				ast_log(LOG_WARNING, "Invalid end %s '%s', assuming none\n", msg, c);
-				return 0;
-			}
-			e--;
-		} else
-			e = s;
+		return (1 << max) - 1;
 	}
-	/* Fill the mask. Remember that ranges are cyclic */
-	mask = 1 << e;	/* initialize with last element */
-	while (s != e) {
-		if (s >= max) {
-			s = 0;
-			mask |= (1 << s);
+
+	while ((part = strsep(&src, "&"))) {
+		/* Get start and ending position */
+		char *endpart = strchr(part, '-');
+		if (endpart) {
+			*endpart++ = '\0';
+		}
+		/* Find the start */
+		if ((start = lookup_name(part, names, max)) < 0) {
+			ast_log(LOG_WARNING, "Invalid %s '%s', skipping element\n", msg, part);
+			continue;
+		}
+		if (endpart) { /* find end of range */
+			if ((end = lookup_name(endpart, names, max)) < 0) {
+				ast_log(LOG_WARNING, "Invalid end %s '%s', skipping element\n", msg, endpart);
+				continue;
+			}
 		} else {
-			mask |= (1 << s);
-			s++;
+			end = start;
+		}
+		/* Fill the mask. Remember that ranges are cyclic */
+		mask |= (1 << end);   /* initialize with last element */
+		while (start != end) {
+			if (start >= max) {
+				start = 0;
+			}
+			mask |= (1 << start);
+			start++;
 		}
 	}
 	return mask;
 }
 
-/*! \brief store a bitmask of valid times, one bit each 2 minute */
+/*! \brief store a bitmask of valid times, one bit each 1 minute */
 static void get_timerange(struct ast_timing *i, char *times)
 {
-	char *e;
+	char *endpart, *part;
 	int x;
-	int s1, s2;
-	int e1, e2;
-	/*	int cth, ctm; */
+	int st_h, st_m;
+	int endh, endm;
+	int minute_start, minute_end;
 
 	/* start disabling all times, fill the fields with 0's, as they may contain garbage */
 	memset(i->minmask, 0, sizeof(i->minmask));
 
-	/* 2-minutes per bit, since the mask has only 32 bits :( */
+	/* 1-minute per bit */
 	/* Star is all times */
 	if (ast_strlen_zero(times) || !strcmp(times, "*")) {
-		for (x = 0; x < 24; x++)
+		/* 48, because each hour takes 2 integers; 30 bits each */
+		for (x = 0; x < 48; x++) {
 			i->minmask[x] = 0x3fffffff; /* 30 bits */
+		}
 		return;
 	}
 	/* Otherwise expect a range */
-	e = strchr(times, '-');
-	if (!e) {
-		ast_log(LOG_WARNING, "Time range is not valid. Assuming no restrictions based on time.\n");
-		return;
-	}
-	*e++ = '\0';
-	/* XXX why skip non digits ? */
-	while (*e && !isdigit(*e))
-		e++;
-	if (!*e) {
-		ast_log(LOG_WARNING, "Invalid time range.  Assuming no restrictions based on time.\n");
-		return;
-	}
-	if (sscanf(times, "%d:%d", &s1, &s2) != 2) {
-		ast_log(LOG_WARNING, "%s isn't a time.  Assuming no restrictions based on time.\n", times);
-		return;
-	}
-	if (sscanf(e, "%d:%d", &e1, &e2) != 2) {
-		ast_log(LOG_WARNING, "%s isn't a time.  Assuming no restrictions based on time.\n", e);
-		return;
-	}
-	/* XXX this needs to be optimized */
-#if 1
-	s1 = s1 * 30 + s2/2;
-	if ((s1 < 0) || (s1 >= 24*30)) {
-		ast_log(LOG_WARNING, "%s isn't a valid start time. Assuming no time.\n", times);
-		return;
-	}
-	e1 = e1 * 30 + e2/2;
-	if ((e1 < 0) || (e1 >= 24*30)) {
-		ast_log(LOG_WARNING, "%s isn't a valid end time. Assuming no time.\n", e);
-		return;
-	}
-	/* Go through the time and enable each appropriate bit */
-	for (x=s1;x != e1;x = (x + 1) % (24 * 30)) {
-		i->minmask[x/30] |= (1 << (x % 30));
-	}
-	/* Do the last one */
-	i->minmask[x/30] |= (1 << (x % 30));
-#else
-	for (cth = 0; cth < 24; cth++) {
-		/* Initialize masks to blank */
-		i->minmask[cth] = 0;
-		for (ctm = 0; ctm < 30; ctm++) {
-			if (
-			/* First hour with more than one hour */
-			      (((cth == s1) && (ctm >= s2)) &&
-			       ((cth < e1)))
-			/* Only one hour */
-			||    (((cth == s1) && (ctm >= s2)) &&
-			       ((cth == e1) && (ctm <= e2)))
-			/* In between first and last hours (more than 2 hours) */
-			||    ((cth > s1) &&
-			       (cth < e1))
-			/* Last hour with more than one hour */
-			||    ((cth > s1) &&
-			       ((cth == e1) && (ctm <= e2)))
-			)
-				i->minmask[cth] |= (1 << (ctm / 2));
+	while ((part = strsep(&times, "&"))) {
+		if (!(endpart = strchr(part, '-'))) {
+			if (sscanf(part, "%d:%d", &st_h, &st_m) != 2 || st_h < 0 || st_h > 23 || st_m < 0 || st_m > 59) {
+				ast_log(LOG_WARNING, "%s isn't a valid time.\n", part);
+				continue;
+			}
+			i->minmask[st_h * 2 + (st_m >= 30 ? 1 : 0)] |= (1 << (st_m % 30));
+			continue;
 		}
+		*endpart++ = '\0';
+		/* why skip non digits? Mostly to skip spaces */
+		while (*endpart && !isdigit(*endpart)) {
+			endpart++;
+		}
+		if (!*endpart) {
+			ast_log(LOG_WARNING, "Invalid time range starting with '%s-'.\n", part);
+			continue;
+		}
+		if (sscanf(part, "%d:%d", &st_h, &st_m) != 2 || st_h < 0 || st_h > 23 || st_m < 0 || st_m > 59) {
+			ast_log(LOG_WARNING, "'%s' isn't a valid start time.\n", part);
+			continue;
+		}
+		if (sscanf(endpart, "%d:%d", &endh, &endm) != 2 || endh < 0 || endh > 23 || endm < 0 || endm > 59) {
+			ast_log(LOG_WARNING, "'%s' isn't a valid end time.\n", endpart);
+			continue;
+		}
+		minute_start = st_h * 60 + st_m;
+		minute_end = endh * 60 + endm;
+		/* Go through the time and enable each appropriate bit */
+		for (x = minute_start; x != minute_end; x = (x + 1) % (24 * 60)) {
+			i->minmask[x / 30] |= (1 << (x % 30));
+		}
+		/* Do the last one */
+		i->minmask[x / 30] |= (1 << (x % 30));
 	}
-#endif
 	/* All done */
 	return;
 }
@@ -6811,15 +6796,32 @@ static char *months[] =
 
 int ast_build_timing(struct ast_timing *i, const char *info_in)
 {
-	char info_save[256];
-	char *info;
+	char *info_save, *info;
+	int j, num_fields, last_sep = -1;
 
 	/* Check for empty just in case */
-	if (ast_strlen_zero(info_in))
+	if (ast_strlen_zero(info_in)) {
 		return 0;
+	}
+
 	/* make a copy just in case we were passed a static string */
-	ast_copy_string(info_save, info_in, sizeof(info_save));
-	info = info_save;
+	info_save = info = ast_strdupa(info_in);
+
+	/* count the number of fields in the timespec */
+	for (j = 0, num_fields = 1; info[j] != '\0'; j++) {
+		if (info[j] == ',') {
+			last_sep = j;
+			num_fields++;
+		}
+	}
+
+	/* save the timezone, if it is specified */
+	if (num_fields == 5) {
+		i->timezone = ast_strdup(info + last_sep + 1);
+	} else {
+		i->timezone = NULL;
+	}
+
 	/* Assume everything except time */
 	i->monthmask = 0xfff;	/* 12 bits */
 	i->daymask = 0x7fffffffU; /* 31 bits */
@@ -6840,7 +6842,7 @@ int ast_check_timing(const struct ast_timing *i)
 	struct ast_tm tm;
 	struct timeval now = ast_tvnow();
 
-	ast_localtime(&now, &tm, NULL);
+	ast_localtime(&now, &tm, i->timezone);
 
 	/* If it's not the right month, return */
 	if (!(i->monthmask & (1 << tm.tm_mon)))
@@ -6863,13 +6865,21 @@ int ast_check_timing(const struct ast_timing *i)
 
 	/* Now the tough part, we calculate if it fits
 	   in the right time based on min/hour */
-	if (!(i->minmask[tm.tm_hour] & (1 << (tm.tm_min / 2))))
+	if (!(i->minmask[tm.tm_hour * 2 + (tm.tm_min >= 30 ? 1 : 0)] & (1 << (tm.tm_min >= 30 ? tm.tm_min - 30 : tm.tm_min))))
 		return 0;
 
 	/* If we got this far, then we're good */
 	return 1;
 }
 
+int ast_destroy_timing(struct ast_timing *i)
+{
+	if (i->timezone) {
+		ast_free(i->timezone);
+		i->timezone = NULL;
+	}
+	return 0;
+}
 /*
  * errno values
  *  ENOMEM - out of memory
@@ -6914,6 +6924,7 @@ int ast_context_add_include2(struct ast_context *con, const char *value,
 	/* ... go to last include and check if context is already included too... */
 	for (i = con->includes; i; i = i->next) {
 		if (!strcasecmp(i->name, new_include->name)) {
+			ast_destroy_timing(&(new_include->timing));
 			ast_free(new_include);
 			ast_unlock_context(con);
 			errno = EEXIST;
@@ -7462,18 +7473,10 @@ int ast_add_extension2(struct ast_context *con,
 	if (priority == PRIORITY_HINT && strstr(application, "${") && !strstr(extension, "_")) {
 		struct ast_channel c = {0, };
 
-		/* Start out with regular variables */
 		ast_copy_string(c.exten, extension, sizeof(c.exten));
 		ast_copy_string(c.context, con->name, sizeof(c.context));
 		pbx_substitute_variables_helper(&c, application, expand_buf, sizeof(expand_buf));
-
-		/* Move on to global variables if they exist */
-		ast_rwlock_rdlock(&globalslock);
-		if (AST_LIST_FIRST(&globals)) {
-			pbx_substitute_variables_varshead(&globals, application, expand_buf, sizeof(expand_buf));
-			application = expand_buf;
-		}
-		ast_rwlock_unlock(&globalslock);
+		application = expand_buf;
 	}
 
 	length = sizeof(struct ast_exten);
@@ -7708,7 +7711,7 @@ static void *async_wait(void *data)
 static int ast_pbx_outgoing_cdr_failed(void)
 {
 	/* allocate a channel */
-	struct ast_channel *chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0);
+	struct ast_channel *chan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "%s", "");
 
 	if (!chan)
 		return -1;  /* failure */
@@ -8406,7 +8409,7 @@ static int pbx_builtin_gotoiftime(struct ast_channel *chan, void *data)
 	struct ast_timing timing;
 
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "GotoIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>?'labeliftrue':'labeliffalse'\n");
+		ast_log(LOG_WARNING, "GotoIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>[,<timezone>]?'labeliftrue':'labeliffalse'\n");
 		return -1;
 	}
 
@@ -8422,6 +8425,7 @@ static int pbx_builtin_gotoiftime(struct ast_channel *chan, void *data)
 		branch = branch1;
 	else
 		branch = branch2;
+	ast_destroy_timing(&timing);
 
 	if (ast_strlen_zero(branch)) {
 		ast_debug(1, "Not taking any branch\n");
@@ -8439,7 +8443,7 @@ static int pbx_builtin_execiftime(struct ast_channel *chan, void *data)
 	char *s, *appname;
 	struct ast_timing timing;
 	struct ast_app *app;
-	static const char *usage = "ExecIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>?<appname>[(<appargs>)]";
+	static const char *usage = "ExecIfTime requires an argument:\n  <time range>,<days of week>,<days of month>,<months>[,<timezone>]?<appname>[(<appargs>)]";
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "%s\n", usage);
@@ -8456,11 +8460,15 @@ static int pbx_builtin_execiftime(struct ast_channel *chan, void *data)
 
 	if (!ast_build_timing(&timing, s)) {
 		ast_log(LOG_WARNING, "Invalid Time Spec: %s\nCorrect usage: %s\n", s, usage);
+		ast_destroy_timing(&timing);
 		return -1;
 	}
 
-	if (!ast_check_timing(&timing))	/* outside the valid time window, just return */
+	if (!ast_check_timing(&timing))	{ /* outside the valid time window, just return */
+		ast_destroy_timing(&timing);
 		return 0;
+	}
+	ast_destroy_timing(&timing);
 
 	/* now split appname(appargs) */
 	if ((s = strchr(appname, '('))) {
@@ -8668,8 +8676,7 @@ int pbx_builtin_serialize_variables(struct ast_channel *chan, struct ast_str **b
 	if (!chan)
 		return 0;
 
-	(*buf)->used = 0;
-	(*buf)->str[0] = '\0';
+	ast_str_reset(*buf);
 
 	ast_channel_lock(chan);
 
@@ -9052,11 +9059,11 @@ int load_pbx(void)
 	}
 
 	ast_verb(1, "Registering builtin applications:\n");
-	ast_cli_register_multiple(pbx_cli, sizeof(pbx_cli) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(pbx_cli, ARRAY_LEN(pbx_cli));
 	__ast_custom_function_register(&exception_function, NULL);
 
 	/* Register builtin applications */
-	for (x = 0; x < sizeof(builtins) / sizeof(struct pbx_builtin); x++) {
+	for (x = 0; x < ARRAY_LEN(builtins); x++) {
 		ast_verb(1, "[%s]\n", builtins[x].name);
 		if (ast_register_application2(builtins[x].name, builtins[x].execute, NULL, NULL, NULL)) {
 			ast_log(LOG_ERROR, "Unable to register builtin application '%s'\n", builtins[x].name);

@@ -285,9 +285,6 @@ static int function_fieldqty(struct ast_channel *chan, const char *cmd,
 	char delim[2] = "";
 	size_t delim_used;
 
-	if (chan)
-		ast_autoservice_start(chan);
-
 	AST_STANDARD_APP_ARGS(args, parse);
 	if (args.delim) {
 		ast_get_encoded_char(args.delim, delim, &delim_used);
@@ -307,9 +304,6 @@ static int function_fieldqty(struct ast_channel *chan, const char *cmd,
 	}
 	snprintf(buf, len, "%d", fieldcount);
 
-	if (chan)
-		ast_autoservice_stop(chan);
-
 	return 0;
 }
 
@@ -327,7 +321,7 @@ static int listfilter(struct ast_channel *chan, const char *cmd, char *parse, ch
 	);
 	const char *orig_list, *ptr;
 	const char *begin, *cur, *next;
-	int dlen, flen;
+	int dlen, flen, first = 1;
 	struct ast_str *result = ast_str_thread_get(&result_buf, 16);
 	char *delim;
 
@@ -391,15 +385,12 @@ static int listfilter(struct ast_channel *chan, const char *cmd, char *parse, ch
 			begin += flen + dlen;
 		} else {
 			/* Copy field to output */
-			if (result->used) {
+			if (!first) {
 				ast_str_append(&result, 0, "%s", delim);
 			}
 
-			/* Have to do it this way, since we're not null-terminated. */
-			strncpy(result->str + result->used, begin, cur - begin);
-			result->used += cur - begin;
-			result->str[result->used] = '\0';
-
+			ast_str_append_substr(&result, 0, begin, cur - begin + 1);
+			first = 0;
 			begin = cur + dlen;
 		}
 	} while (*cur != '\0');
@@ -407,7 +398,7 @@ static int listfilter(struct ast_channel *chan, const char *cmd, char *parse, ch
 		ast_channel_unlock(chan);
 	}
 
-	ast_copy_string(buf, result->str, len);
+	ast_copy_string(buf, ast_str_buffer(result), len);
 
 	return 0;
 }
@@ -566,9 +557,6 @@ static int array(struct ast_channel *chan, const char *cmd, char *var,
 	if (!var || !value2)
 		return -1;
 
-	if (chan)
-		ast_autoservice_start(chan);
-
 	if (!strcmp(cmd, "HASH")) {
 		const char *var2 = pbx_builtin_getvar_helper(chan, "~ODBCFIELDS~");
 		origvar = var;
@@ -614,9 +602,6 @@ static int array(struct ast_channel *chan, const char *cmd, char *var,
 			}
 		}
 	}
-
-	if (chan)
-		ast_autoservice_stop(chan);
 
 	return 0;
 }
@@ -855,11 +840,7 @@ static int function_eval(struct ast_channel *chan, const char *cmd, char *data,
 		return -1;
 	}
 
-	if (chan)
-		ast_autoservice_start(chan);
 	pbx_substitute_variables_helper(chan, data, buf, buflen - 1);
-	if (chan)
-		ast_autoservice_stop(chan);
 
 	return 0;
 }

@@ -755,14 +755,14 @@ static void *httpd_helper_thread(void *data)
 			* append a random variable to your GET request.  Ex: 'something.html?r=109987734'
 			*/
 		if (!contentlength) {	/* opaque body ? just dump it hoping it is properly formatted */
-			fprintf(ser->f, "%s", out->str);
+			fprintf(ser->f, "%s", ast_str_buffer(out));
 		} else {
-			char *tmp = strstr(out->str, "\r\n\r\n");
+			char *tmp = strstr(ast_str_buffer(out), "\r\n\r\n");
 
 			if (tmp) {
 				fprintf(ser->f, "Content-length: %d\r\n", contentlength);
 				/* first write the header, then the body */
-				if (fwrite(out->str, 1, (tmp + 4 - out->str), ser->f) != tmp + 4 - out->str) {
+				if (fwrite(ast_str_buffer(out), 1, (tmp + 4 - ast_str_buffer(out)), ser->f) != tmp + 4 - ast_str_buffer(out)) {
 					ast_log(LOG_WARNING, "fwrite() failed: %s\n", strerror(errno));
 				}
 				if (fwrite(tmp + 4, 1, contentlength, ser->f) != contentlength ) {
@@ -1024,7 +1024,7 @@ int ast_http_init(void)
 {
 	ast_http_uri_link(&statusuri);
 	ast_http_uri_link(&staticuri);
-	ast_cli_register_multiple(cli_http, sizeof(cli_http) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_http, ARRAY_LEN(cli_http));
 
 	return __ast_http_load(0);
 }

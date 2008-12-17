@@ -414,7 +414,7 @@ static int spawn_mp3(struct mohclass *class)
 		files = 1;
 	} else {
 		dir = opendir(class->dir);
-		if (!dir && !strstr(class->dir,"http://") && !strstr(class->dir,"HTTP://")) {
+		if (!dir && strncasecmp(class->dir, "http://", 7)) {
 			ast_log(LOG_WARNING, "%s is not a valid directory\n", class->dir);
 			return -1;
 		}
@@ -457,8 +457,7 @@ static int spawn_mp3(struct mohclass *class)
 		}
 	}
 
-
-	if (strstr(class->dir,"http://") || strstr(class->dir,"HTTP://")) {
+	if (!strncasecmp(class->dir, "http://", 7)) {
 		ast_copy_string(fns[files], class->dir, sizeof(fns[files]));
 		argv[argc++] = fns[files];
 		files++;
@@ -489,7 +488,7 @@ static int spawn_mp3(struct mohclass *class)
 		close(fds[1]);
 		return -1;
 	}
-	if (time(NULL) - class->start < respawn_time) {
+	if (!strncasecmp(class->dir, "http://", 7) && time(NULL) - class->start < respawn_time) {
 		sleep(respawn_time - (time(NULL) - class->start));
 	}
 
@@ -513,7 +512,7 @@ static int spawn_mp3(struct mohclass *class)
 		ast_close_fds_above_n(STDERR_FILENO);
 
 		/* Child */
-		if (chdir(class->dir) < 0) {
+		if (strcasecmp(class->dir, "nodir") && chdir(class->dir) < 0) {
 			ast_log(LOG_WARNING, "chdir() failed: %s\n", strerror(errno));
 			_exit(1);
 		}
@@ -840,8 +839,9 @@ static int moh_generate(struct ast_channel *chan, void *data, int len, int sampl
 	short buf[1280 + AST_FRIENDLY_OFFSET / 2];
 	int res;
 
-	if (!moh->parent->pid)
+	if (!moh->parent->pid && moh->parent->inuse == 0) {
 		return -1;
+	}
 
 	len = ast_codec_get_len(moh->parent->format, samples);
 
@@ -1619,7 +1619,7 @@ static int load_module(void)
 
 	res = ast_register_application(play_moh, play_moh_exec, play_moh_syn, play_moh_desc);
 	ast_register_atexit(ast_moh_destroy);
-	ast_cli_register_multiple(cli_moh, sizeof(cli_moh) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_moh, ARRAY_LEN(cli_moh));
 	if (!res)
 		res = ast_register_application(wait_moh, wait_moh_exec, wait_moh_syn, wait_moh_desc);
 	if (!res)
@@ -1671,7 +1671,7 @@ static int unload_module(void)
 	res |= ast_unregister_application(set_moh);
 	res |= ast_unregister_application(start_moh);
 	res |= ast_unregister_application(stop_moh);
-	ast_cli_unregister_multiple(cli_moh, sizeof(cli_moh) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(cli_moh, ARRAY_LEN(cli_moh));
 	ast_unregister_atexit(ast_moh_destroy);
 	return res;
 }

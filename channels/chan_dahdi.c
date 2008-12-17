@@ -6102,12 +6102,12 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 		else	
 			ast_str_set(&chan_name, 0, "%d-%d", i->channel, y);
 		for (x = 0; x < 3; x++) {
-			if ((idx != x) && i->subs[x].owner && !strcasecmp(chan_name->str, i->subs[x].owner->name + 6))
+			if ((idx != x) && i->subs[x].owner && !strcasecmp(ast_str_buffer(chan_name), i->subs[x].owner->name + 6))
 				break;
 		}
 		y++;
 	} while (x < 3);
-	tmp = ast_channel_alloc(0, state, i->cid_num, i->cid_name, i->accountcode, i->exten, i->context, i->amaflags, "DAHDI/%s", chan_name->str);
+	tmp = ast_channel_alloc(0, state, i->cid_num, i->cid_name, i->accountcode, i->exten, i->context, i->amaflags, "DAHDI/%s", ast_str_buffer(chan_name));
 	if (!tmp)
 		return NULL;
 	tmp->tech = &dahdi_tech;
@@ -8165,9 +8165,10 @@ static void *do_monitor(void *data)
 							res = has_voicemail(last);
 							if (last->msgstate != res) {
 								/* Set driver resources for signalling VMWI */
-								res2 = ioctl(last->subs[SUB_REAL].dfd, DAHDI_VMWI, res);
+								res2 = ioctl(last->subs[SUB_REAL].dfd, DAHDI_VMWI, &res);
 								if (res2) {
-									ast_log(LOG_DEBUG, "Unable to control message waiting led on channel %d: %s\n", last->channel, strerror(errno));
+									/* TODO: This message will ALWAYS be generated on some cards; any way to restrict it to those cards where it is interesting? */
+									ast_debug(3, "Unable to control message waiting led on channel %d: %s\n", last->channel, strerror(errno));
 								}
 								/* This channel has a new voicemail state,
 								* initiate a mechanism to send an MWI message
@@ -9097,7 +9098,11 @@ static inline int available(struct dahdi_pvt *p, int channelmatch, ast_group_t g
 			} else if (par.rxisoffhook) {
 				ast_debug(1, "Channel %d off hook, can't use\n", p->channel);
 				/* Not available when the other end is off hook */
+#ifdef DAHDI_CHECK_HOOKSTATE
 				return 0;
+#else
+				return 1;
+#endif
 			}
 		}
 		return 1;
@@ -13612,10 +13617,10 @@ static int __unload_module(void)
 		if (linksets[i].master != AST_PTHREADT_NULL)
 			pthread_cancel(linksets[i].master);
 		}
-	ast_cli_unregister_multiple(dahdi_ss7_cli, sizeof(dahdi_ss7_cli) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(dahdi_ss7_cli, ARRAY_LEN(dahdi_ss7_cli));
 #endif
 
-	ast_cli_unregister_multiple(dahdi_cli, sizeof(dahdi_cli) / sizeof(struct ast_cli_entry));
+	ast_cli_unregister_multiple(dahdi_cli, ARRAY_LEN(dahdi_cli));
 	ast_manager_unregister( "DAHDIDialOffhook" );
 	ast_manager_unregister( "DAHDIHangup" );
 	ast_manager_unregister( "DAHDITransfer" );

@@ -25,6 +25,14 @@ SIP Changes
    remote services. For backwards compatibility, "secret" still has the
    same function as before, but now you can configure both a remote secret and a
    local secret for mutual authentication.
+ * Added a new 'faxdetect=yes|no' configuration option to sip.conf.  When this
+   option is enabled, a SIP channel will go to the fax extension (if it exists)
+   after T38 is negotiated.  This option is disabled by default.
+ * If ATTENDED_TRANSFER_COMPLETE_SOUND is set, the sound will be played to the
+   target of an attended transfer
+ * Added two new configuration options, "qualifygap" and "qualifypeers", which allow
+   finer control over how many peers Asterisk will qualify and the gap between them
+   when all peers need to be qualified at the same time.
 
 Skinny Changes
 --------------
@@ -52,6 +60,9 @@ Dialplan Functions
    and FIELDQTY dialplan functions, which also manage lists.
  * Added REALTIME_FIELD and REALTIME_HASH, which should aid users in better
    obtaining realtime data from the dialplan.
+ * Added LOCAL_PEEK, which I have no idea how to use, but Leif Madsen wanted it.
+   Russell says it's, like, a scope resolution function for LOCAL variables.
+   Totally.  Hopefully, that means more to you than it does to me.
 
 Applications
 ------------
@@ -65,6 +76,8 @@ Applications
 
 Miscellaneous
 -------------
+ * The Asterisk CLI has a new command, "channel redirect", which is similar in
+   operation to the AMI Redirect action.
  * res_jabber: autoprune has been disabled by default, to avoid misconfiguration 
    that would end up being interpreted as a bug once Asterisk started removing 
    the contacts from a user list.
@@ -77,6 +90,16 @@ Miscellaneous
    which are interpreted as relative to the astvarlibdir setting in asterisk.conf.
  * All deprecated CLI commands are removed from the sourcecode. They are now handled
    by the new clialiases module. See cli_aliases.conf.sample file.
+ * Times within timespecs are now accurate down to the minute.  This is a change
+   from historical Asterisk, which only provided timespecs rounded to the nearest
+   even (read: evenly divisible by 2) minute mark.
+ * The realtime switch now supports an option flag, 'p', which disables searches for
+   pattern matches.
+ * In addition to a time range and date range, timespecs now accept a 5th optional
+   argument, timezone.  This allows you to perform time checks on alternate
+   timezones, especially if those daylight savings time ranges vary from your
+   machine's native timezone.  See GotoIfTime, ExecIfTime, IFTIME(), and timed
+   includes.
 
 Asterisk Manager Interface
 --------------------------

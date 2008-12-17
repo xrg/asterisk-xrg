@@ -1556,7 +1556,7 @@ static struct ast_call_feature builtin_features[] =
 };
 
 
-static AST_LIST_HEAD_STATIC(feature_list,ast_call_feature);
+static AST_RWLIST_HEAD_STATIC(feature_list, ast_call_feature);
 
 /*! \brief register new feature into feature_list*/
 void ast_register_feature(struct ast_call_feature *feature)
@@ -1566,9 +1566,9 @@ void ast_register_feature(struct ast_call_feature *feature)
 		return;
 	}
   
-	AST_LIST_LOCK(&feature_list);
-	AST_LIST_INSERT_HEAD(&feature_list,feature,feature_entry);
-	AST_LIST_UNLOCK(&feature_list);
+	AST_RWLIST_WRLOCK(&feature_list);
+	AST_RWLIST_INSERT_HEAD(&feature_list,feature,feature_entry);
+	AST_RWLIST_UNLOCK(&feature_list);
 
 	ast_verb(2, "Registered Feature '%s'\n",feature->sname);
 }
@@ -1649,12 +1649,14 @@ static void register_group_feature(struct feature_group *fg, const char *exten, 
 
 void ast_unregister_feature(struct ast_call_feature *feature)
 {
-	if (!feature)
+	if (!feature) {
 		return;
+	}
 
-	AST_LIST_LOCK(&feature_list);
-	AST_LIST_REMOVE(&feature_list,feature,feature_entry);
-	AST_LIST_UNLOCK(&feature_list);
+	AST_RWLIST_WRLOCK(&feature_list);
+	AST_RWLIST_REMOVE(&feature_list, feature, feature_entry);
+	AST_RWLIST_UNLOCK(&feature_list);
+
 	ast_free(feature);
 }
 
@@ -1663,10 +1665,11 @@ static void ast_unregister_features(void)
 {
 	struct ast_call_feature *feature;
 
-	AST_LIST_LOCK(&feature_list);
-	while ((feature = AST_LIST_REMOVE_HEAD(&feature_list,feature_entry)))
+	AST_RWLIST_WRLOCK(&feature_list);
+	while ((feature = AST_RWLIST_REMOVE_HEAD(&feature_list, feature_entry))) {
 		ast_free(feature);
-	AST_LIST_UNLOCK(&feature_list);
+	}
+	AST_RWLIST_UNLOCK(&feature_list);
 }
 
 /*! \brief find a call feature by name */
@@ -1674,9 +1677,10 @@ static struct ast_call_feature *find_dynamic_feature(const char *name)
 {
 	struct ast_call_feature *tmp;
 
-	AST_LIST_TRAVERSE(&feature_list, tmp, feature_entry) {
-		if (!strcasecmp(tmp->sname, name))
+	AST_RWLIST_TRAVERSE(&feature_list, tmp, feature_entry) {
+		if (!strcasecmp(tmp->sname, name)) {
 			break;
+		}
 	}
 
 	return tmp;
@@ -1917,10 +1921,11 @@ static int ast_feature_interpret(struct ast_channel *chan, struct ast_channel *p
 		}
 
 		AST_RWLIST_UNLOCK(&feature_groups);
-		AST_LIST_LOCK(&feature_list);
 
-		if(!(feature = find_dynamic_feature(tok))) {
-			AST_LIST_UNLOCK(&feature_list);
+		AST_RWLIST_RDLOCK(&feature_list);
+
+		if (!(feature = find_dynamic_feature(tok))) {
+			AST_RWLIST_UNLOCK(&feature_list);
 			continue;
 		}
 			
@@ -1929,14 +1934,14 @@ static int ast_feature_interpret(struct ast_channel *chan, struct ast_channel *p
 			ast_verb(3, " Feature Found: %s exten: %s\n",feature->sname, tok);
 			res = feature->operation(chan, peer, config, code, sense, feature);
 			if (res != AST_FEATURE_RETURN_KEEPTRYING) {
-				AST_LIST_UNLOCK(&feature_list);
+				AST_RWLIST_UNLOCK(&feature_list);
 				break;
 			}
 			res = AST_FEATURE_RETURN_PASSDIGITS;
 		} else if (!strncmp(feature->exten, code, strlen(code)))
 			res = AST_FEATURE_RETURN_STOREDIGITS;
 
-		AST_LIST_UNLOCK(&feature_list);
+		AST_RWLIST_UNLOCK(&feature_list);
 	}
 	
 	return res;
@@ -1971,14 +1976,14 @@ static void set_config_flags(struct ast_channel *chan, struct ast_channel *peer,
 
 			/* while we have a feature */
 			while ((tok = strsep(&tmp, "#"))) {
-				AST_LIST_LOCK(&feature_list);
+				AST_RWLIST_RDLOCK(&feature_list);
 				if ((feature = find_dynamic_feature(tok)) && ast_test_flag(feature, AST_FEATURE_FLAG_NEEDSDTMF)) {
 					if (ast_test_flag(feature, AST_FEATURE_FLAG_BYCALLER))
 						ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_0);
 					if (ast_test_flag(feature, AST_FEATURE_FLAG_BYCALLEE))
 						ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
 				}
-				AST_LIST_UNLOCK(&feature_list);
+				AST_RWLIST_UNLOCK(&feature_list);
 			}
 		}
 	}
@@ -2004,131 +2009,11 @@ static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *call
 	struct ast_channel *monitor_chans[2];
 	struct ast_channel *active_channel;
 	int res = 0, ready = 0;
+	struct timeval started;
+	int x, len = 0;
+	char *disconnect_code = NULL, *dialed_code = NULL;
 
-	if ((chan = ast_request(type, format, data, &cause))) {
-		ast_set_callerid(chan, cid_num, cid_name, cid_num);
-		ast_string_field_set(chan, language, language);
-		ast_channel_inherit_variables(caller, chan);	
-		pbx_builtin_setvar_helper(chan, "TRANSFERERNAME", caller->name);
-			
-		if (!ast_call(chan, data, timeout)) {
-			struct timeval started;
-			int x, len = 0;
-			char *disconnect_code = NULL, *dialed_code = NULL;
-
-			ast_indicate(caller, AST_CONTROL_RINGING);
-			/* support dialing of the featuremap disconnect code while performing an attended tranfer */
-			ast_rwlock_rdlock(&features_lock);
-			for (x = 0; x < FEATURES_COUNT; x++) {
-				if (strcasecmp(builtin_features[x].sname, "disconnect"))
-					continue;
-
-				disconnect_code = builtin_features[x].exten;
-				len = strlen(disconnect_code) + 1;
-				dialed_code = alloca(len);
-				memset(dialed_code, 0, len);
-				break;
-			}
-			ast_rwlock_unlock(&features_lock);
-			x = 0;
-			started = ast_tvnow();
-			to = timeout;
-
-			ast_poll_channel_add(caller, chan);
-
-			while (!((transferee && ast_check_hangup(transferee)) && (!igncallerstate && ast_check_hangup(caller))) && timeout && (chan->_state != AST_STATE_UP)) {
-				struct ast_frame *f = NULL;
-
-				monitor_chans[0] = caller;
-				monitor_chans[1] = chan;
-				active_channel = ast_waitfor_n(monitor_chans, 2, &to);
-
-				/* see if the timeout has been violated */
-				if(ast_tvdiff_ms(ast_tvnow(), started) > timeout) {
-					state = AST_CONTROL_UNHOLD;
-					ast_log(LOG_NOTICE, "We exceeded our AT-timeout\n");
-					break; /*doh! timeout*/
-				}
-
-				if (!active_channel)
-					continue;
-
-				if (chan && (chan == active_channel)){
-					f = ast_read(chan);
-					if (f == NULL) { /*doh! where'd he go?*/
-						state = AST_CONTROL_HANGUP;
-						res = 0;
-						break;
-					}
-					
-					if (f->frametype == AST_FRAME_CONTROL || f->frametype == AST_FRAME_DTMF || f->frametype == AST_FRAME_TEXT) {
-						if (f->subclass == AST_CONTROL_RINGING) {
-							state = f->subclass;
-							ast_verb(3, "%s is ringing\n", chan->name);
-							ast_indicate(caller, AST_CONTROL_RINGING);
-						} else if ((f->subclass == AST_CONTROL_BUSY) || (f->subclass == AST_CONTROL_CONGESTION)) {
-							state = f->subclass;
-							ast_verb(3, "%s is busy\n", chan->name);
-							ast_indicate(caller, AST_CONTROL_BUSY);
-							ast_frfree(f);
-							f = NULL;
-							break;
-						} else if (f->subclass == AST_CONTROL_ANSWER) {
-							/* This is what we are hoping for */
-							state = f->subclass;
-							ast_frfree(f);
-							f = NULL;
-							ready=1;
-							break;
-						} else if (f->subclass != -1) {
-							ast_log(LOG_NOTICE, "Don't know what to do about control frame: %d\n", f->subclass);
-						}
-						/* else who cares */
-					}
-
-				} else if (caller && (active_channel == caller)) {
-					f = ast_read(caller);
-					if (f == NULL) { /*doh! where'd he go?*/
-						if (!igncallerstate) {
-							if (ast_check_hangup(caller) && !ast_check_hangup(chan)) {
-								/* make this a blind transfer */
-								ready = 1;
-								break;
-							}
-							state = AST_CONTROL_HANGUP;
-							res = 0;
-							break;
-						}
-					} else {
-					
-						if (f->frametype == AST_FRAME_DTMF) {
-							dialed_code[x++] = f->subclass;
-							dialed_code[x] = '\0';
-							if (strlen(dialed_code) == len) {
-								x = 0;
-							} else if (x && strncmp(dialed_code, disconnect_code, x)) {
-								x = 0;
-								dialed_code[x] = '\0';
-							}
-							if (*dialed_code && !strcmp(dialed_code, disconnect_code)) {
-								/* Caller Canceled the call */
-								state = AST_CONTROL_UNHOLD;
-								ast_frfree(f);
-								f = NULL;
-								break;
-							}
-						}
-					}
-				}
-				if (f)
-					ast_frfree(f);
-			} /* end while */
-
-			ast_poll_channel_del(caller, chan);
-
-		} else
-			ast_log(LOG_NOTICE, "Unable to call channel %s/%s\n", type, (char *)data);
-	} else {
+	if (!(chan = ast_request(type, format, data, &cause))) {
 		ast_log(LOG_NOTICE, "Unable to request channel %s/%s\n", type, (char *)data);
 		switch(cause) {
 		case AST_CAUSE_BUSY:
@@ -2138,14 +2023,136 @@ static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *call
 			state = AST_CONTROL_CONGESTION;
 			break;
 		}
+		goto done;
+	}
+
+	ast_set_callerid(chan, cid_num, cid_name, cid_num);
+	ast_string_field_set(chan, language, language);
+	ast_channel_inherit_variables(caller, chan);	
+	pbx_builtin_setvar_helper(chan, "TRANSFERERNAME", caller->name);
+		
+	if (ast_call(chan, data, timeout)) {
+		ast_log(LOG_NOTICE, "Unable to call channel %s/%s\n", type, (char *)data);
+		goto done;
 	}
 	
+	ast_indicate(caller, AST_CONTROL_RINGING);
+	/* support dialing of the featuremap disconnect code while performing an attended tranfer */
+	ast_rwlock_rdlock(&features_lock);
+	for (x = 0; x < FEATURES_COUNT; x++) {
+		if (strcasecmp(builtin_features[x].sname, "disconnect"))
+			continue;
+
+		disconnect_code = builtin_features[x].exten;
+		len = strlen(disconnect_code) + 1;
+		dialed_code = alloca(len);
+		memset(dialed_code, 0, len);
+		break;
+	}
+	ast_rwlock_unlock(&features_lock);
+	x = 0;
+	started = ast_tvnow();
+	to = timeout;
+
+	ast_poll_channel_add(caller, chan);
+
+	while (!((transferee && ast_check_hangup(transferee)) && (!igncallerstate && ast_check_hangup(caller))) && timeout && (chan->_state != AST_STATE_UP)) {
+		struct ast_frame *f = NULL;
+
+		monitor_chans[0] = caller;
+		monitor_chans[1] = chan;
+		active_channel = ast_waitfor_n(monitor_chans, 2, &to);
+
+		/* see if the timeout has been violated */
+		if(ast_tvdiff_ms(ast_tvnow(), started) > timeout) {
+			state = AST_CONTROL_UNHOLD;
+			ast_log(LOG_NOTICE, "We exceeded our AT-timeout\n");
+			break; /*doh! timeout*/
+		}
+
+		if (!active_channel)
+			continue;
+
+		if (chan && (chan == active_channel)){
+			f = ast_read(chan);
+			if (f == NULL) { /*doh! where'd he go?*/
+				state = AST_CONTROL_HANGUP;
+				res = 0;
+				break;
+			}
+			
+			if (f->frametype == AST_FRAME_CONTROL || f->frametype == AST_FRAME_DTMF || f->frametype == AST_FRAME_TEXT) {
+				if (f->subclass == AST_CONTROL_RINGING) {
+					state = f->subclass;
+					ast_verb(3, "%s is ringing\n", chan->name);
+					ast_indicate(caller, AST_CONTROL_RINGING);
+				} else if ((f->subclass == AST_CONTROL_BUSY) || (f->subclass == AST_CONTROL_CONGESTION)) {
+					state = f->subclass;
+					ast_verb(3, "%s is busy\n", chan->name);
+					ast_indicate(caller, AST_CONTROL_BUSY);
+					ast_frfree(f);
+					f = NULL;
+					break;
+				} else if (f->subclass == AST_CONTROL_ANSWER) {
+					/* This is what we are hoping for */
+					state = f->subclass;
+					ast_frfree(f);
+					f = NULL;
+					ready=1;
+					break;
+				} else if (f->subclass != -1) {
+					ast_log(LOG_NOTICE, "Don't know what to do about control frame: %d\n", f->subclass);
+				}
+				/* else who cares */
+			}
+
+		} else if (caller && (active_channel == caller)) {
+			f = ast_read(caller);
+			if (f == NULL) { /*doh! where'd he go?*/
+				if (!igncallerstate) {
+					if (ast_check_hangup(caller) && !ast_check_hangup(chan)) {
+						/* make this a blind transfer */
+						ready = 1;
+						break;
+					}
+					state = AST_CONTROL_HANGUP;
+					res = 0;
+					break;
+				}
+			} else {
+			
+				if (f->frametype == AST_FRAME_DTMF) {
+					dialed_code[x++] = f->subclass;
+					dialed_code[x] = '\0';
+					if (strlen(dialed_code) == len) {
+						x = 0;
+					} else if (x && strncmp(dialed_code, disconnect_code, x)) {
+						x = 0;
+						dialed_code[x] = '\0';
+					}
+					if (*dialed_code && !strcmp(dialed_code, disconnect_code)) {
+						/* Caller Canceled the call */
+						state = AST_CONTROL_UNHOLD;
+						ast_frfree(f);
+						f = NULL;
+						break;
+					}
+				}
+			}
+		}
+		if (f)
+			ast_frfree(f);
+	} /* end while */
+
+	ast_poll_channel_del(caller, chan);
+		
+done:
 	ast_indicate(caller, -1);
 	if (chan && ready) {
 		if (chan->_state == AST_STATE_UP) 
 			state = AST_CONTROL_ANSWER;
 		res = 0;
-	} else if(chan) {
+	} else if (chan) {
 		res = -1;
 		ast_hangup(chan);
 		chan = NULL;
@@ -2213,8 +2220,16 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	if (chan && peer) {
 		pbx_builtin_setvar_helper(chan, "BRIDGEPEER", peer->name);
 		pbx_builtin_setvar_helper(peer, "BRIDGEPEER", chan->name);
-	} else if (chan)
+	} else if (chan) {
 		pbx_builtin_setvar_helper(chan, "BLINDTRANSFER", NULL);
+	}
+
+	/* This is an interesting case.  One example is if a ringing channel gets redirected to
+	 * an extension that picks up a parked call.  This will make sure that the call taken
+	 * out of parking gets told that the channel it just got bridged to is still ringing. */
+	if (chan->_state == AST_STATE_RINGING && peer->visible_indication != AST_CONTROL_RINGING) {
+		ast_indicate(peer, AST_CONTROL_RINGING);
+	}
 
 	if (monitor_ok) {
 		const char *monitor_exec;
@@ -3451,13 +3466,13 @@ static int load_config(void)
 			continue;
 		}
 
-		AST_LIST_LOCK(&feature_list);
+		AST_RWLIST_RDLOCK(&feature_list);
 		if ((feature = find_dynamic_feature(var->name))) {
-			AST_LIST_UNLOCK(&feature_list);
+			AST_RWLIST_UNLOCK(&feature_list);
 			ast_log(LOG_WARNING, "Dynamic Feature '%s' specified more than once!\n", var->name);
 			continue;
 		}
-		AST_LIST_UNLOCK(&feature_list);
+		AST_RWLIST_UNLOCK(&feature_list);
 				
 		if (!(feature = ast_calloc(1, sizeof(*feature))))
 			continue;					
@@ -3535,14 +3550,14 @@ static int load_config(void)
 		for (var = ast_variable_browse(cfg, ctg); var; var = var->next) {
 			struct ast_call_feature *feature;
 
-			AST_LIST_LOCK(&feature_list);
-			if(!(feature = find_dynamic_feature(var->name)) && 
-			   !(feature = ast_find_call_feature(var->name))) {
-				AST_LIST_UNLOCK(&feature_list);
+			AST_RWLIST_RDLOCK(&feature_list);
+			if (!(feature = find_dynamic_feature(var->name)) && 
+			    !(feature = ast_find_call_feature(var->name))) {
+				AST_RWLIST_UNLOCK(&feature_list);
 				ast_log(LOG_WARNING, "Feature '%s' was not found.\n", var->name);
 				continue;
 			}
-			AST_LIST_UNLOCK(&feature_list);
+			AST_RWLIST_UNLOCK(&feature_list);
 
 			register_group_feature(fg, var->value, feature);
 		}
@@ -3614,13 +3629,14 @@ static char *handle_feature_show(struct ast_cli_entry *e, int cmd, struct ast_cl
 	ast_cli(a->fd, "\n");
 	ast_cli(a->fd, HFS_FORMAT, "Dynamic Feature", "Default", "Current");
 	ast_cli(a->fd, HFS_FORMAT, "---------------", "-------", "-------");
-	if (AST_LIST_EMPTY(&feature_list))
+	if (AST_RWLIST_EMPTY(&feature_list)) {
 		ast_cli(a->fd, "(none)\n");
-	else {
-		AST_LIST_LOCK(&feature_list);
-		AST_LIST_TRAVERSE(&feature_list, feature, feature_entry)
+	} else {
+		AST_RWLIST_RDLOCK(&feature_list);
+		AST_RWLIST_TRAVERSE(&feature_list, feature, feature_entry) {
 			ast_cli(a->fd, HFS_FORMAT, feature->sname, "no def", feature->exten);
-		AST_LIST_UNLOCK(&feature_list);
+		}
+		AST_RWLIST_UNLOCK(&feature_list);
 	}
 
 	// loop through all the parking lots
@@ -4194,7 +4210,7 @@ int ast_features_init(void)
 
 	if ((res = load_config()))
 		return res;
-	ast_cli_register_multiple(cli_features, sizeof(cli_features) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_features, ARRAY_LEN(cli_features));
 	ast_pthread_create(&parking_thread, NULL, do_parking_thread, NULL);
 	res = ast_register_application2(parkedcall, park_exec, NULL, NULL, NULL);
 	if (!res)

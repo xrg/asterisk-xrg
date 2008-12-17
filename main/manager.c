@@ -146,6 +146,7 @@ static struct {
 } command_blacklist[] = {
 	{{ "module", "load", NULL }},
 	{{ "module", "unload", NULL }},
+	{{ "restart", "gracefully", NULL }},
 };
 
 struct mansession {
@@ -347,7 +348,7 @@ static char *authority_to_str(int authority, struct ast_str **res)
 	int i;
 	char *sep = "";
 
-	(*res)->used = 0;
+	ast_str_reset(*res);
 	for (i = 0; i < ARRAY_LEN(perms) - 1; i++) {
 		if (authority & perms[i].num) {
 			ast_str_append(res, 0, "%s%s", sep, perms[i].label);
@@ -355,10 +356,10 @@ static char *authority_to_str(int authority, struct ast_str **res)
 		}
 	}
 
-	if ((*res)->used == 0)	/* replace empty string with something sensible */
+	if (ast_str_strlen(*res) == 0)	/* replace empty string with something sensible */
 		ast_str_append(res, 0, "<none>");
 
-	return (*res)->str;
+	return ast_str_buffer(*res);
 }
 
 /*! Tells you if smallstr exists inside bigstr
@@ -545,8 +546,8 @@ static char *handle_showmanager(struct ast_cli_entry *e, int cmd, struct ast_cli
 	struct ast_manager_user *user = NULL;
 	int l, which;
 	char *ret = NULL;
-	struct ast_str *rauthority = ast_str_alloca(80);
-	struct ast_str *wauthority = ast_str_alloca(80);
+	struct ast_str *rauthority = ast_str_alloca(128);
+	struct ast_str *wauthority = ast_str_alloca(128);
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -950,10 +951,11 @@ void astman_append(struct mansession *s, const char *fmt, ...)
 	ast_str_set_va(&buf, 0, fmt, ap);
 	va_end(ap);
 
-	if (s->f != NULL)
-		send_string(s, buf->str);
-	else
+	if (s->f != NULL) {
+		send_string(s, ast_str_buffer(buf));
+	} else {
 		ast_verbose("fd == -1 in astman_append, should not happen\n");
+	}
 }
 
 /*! \note NOTE: XXX this comment is unclear and possibly wrong.
@@ -1152,7 +1154,7 @@ static int action_getconfig(struct mansession *s, const struct message *m)
 		}
 	}
 	if (!ast_strlen_zero(category) && catcount == 0) /* TODO: actually, a config with no categories doesn't even get loaded */
-		astman_append(s, "No categories found");
+		astman_append(s, "No categories found\r\n");
 	ast_config_destroy(cfg);
 	astman_append(s, "\r\n");
 
@@ -1187,7 +1189,7 @@ static int action_listcategories(struct mansession *s, const struct message *m)
 		catcount++;
 	}
 	if (catcount == 0) /* TODO: actually, a config with no categories doesn't even get loaded */
-		astman_append(s, "Error: no categories found");
+		astman_append(s, "Error: no categories found\r\n");
 	ast_config_destroy(cfg);
 	astman_append(s, "\r\n");
 
@@ -1525,11 +1527,12 @@ static int action_createconfig(struct mansession *s, const struct message *m)
 	ast_str_set(&filepath, 0, "%s/", ast_config_AST_CONFIG_DIR);
 	ast_str_append(&filepath, 0, "%s", fn);
 
-	if ((fd = open(filepath->str, O_CREAT | O_EXCL, AST_FILE_MODE)) != -1) {
+	if ((fd = open(ast_str_buffer(filepath), O_CREAT | O_EXCL, AST_FILE_MODE)) != -1) {
 		close(fd);
 		astman_send_ack(s, m, "New configuration file created successfully");
-	} else 
+	} else {
 		astman_send_error(s, m, strerror(errno));
+	}
 
 	return 0;
 }
@@ -1939,7 +1942,7 @@ static int action_status(struct mansession *s, const struct message *m)
 			c->accountcode,
 			c->_state,
 			ast_state2str(c->_state), c->context,
-			c->exten, c->priority, (long)elapsed_seconds, bridge, c->uniqueid, str->str, idText);
+			c->exten, c->priority, (long)elapsed_seconds, bridge, c->uniqueid, ast_str_buffer(str), idText);
 		} else {
 			astman_append(s,
 			"Event: Status\r\n"
@@ -1958,7 +1961,7 @@ static int action_status(struct mansession *s, const struct message *m)
 			S_OR(c->cid.cid_num, "<unknown>"),
 			S_OR(c->cid.cid_name, "<unknown>"),
 			c->accountcode,
-			ast_state2str(c->_state), bridge, c->uniqueid, str->str, idText);
+			ast_state2str(c->_state), bridge, c->uniqueid, ast_str_buffer(str), idText);
 		}
 		ast_channel_unlock(c);
 		if (!all)
@@ -3268,7 +3271,7 @@ int __manager_event(int category, const char *event,
 
 	ast_str_append(&buf, 0, "\r\n");
 
-	append_event(buf->str, category);
+	append_event(ast_str_buffer(buf), category);
 
 	/* Wake up any sleeping sessions */
 	AST_LIST_LOCK(&sessions);
@@ -3289,7 +3292,7 @@ int __manager_event(int category, const char *event,
 
 	AST_RWLIST_RDLOCK(&manager_hooks);
 	AST_RWLIST_TRAVERSE(&manager_hooks, hook, list) {
-		hook->helper(category, event, buf->str);
+		hook->helper(category, event, ast_str_buffer(buf));
 	}
 	AST_RWLIST_UNLOCK(&manager_hooks);
 
@@ -4014,7 +4017,7 @@ static int __init_manager(int reload)
 		ast_manager_register2("ModuleLoad", EVENT_FLAG_SYSTEM, manager_moduleload, "Module management", mandescr_moduleload);
 		ast_manager_register2("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck, "Check if module is loaded", mandescr_modulecheck);
 
-		ast_cli_register_multiple(cli_manager, sizeof(cli_manager) / sizeof(struct ast_cli_entry));
+		ast_cli_register_multiple(cli_manager, ARRAY_LEN(cli_manager));
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);
 		registered = 1;
 		/* Append placeholder event so master_eventq never runs dry */

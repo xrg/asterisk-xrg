@@ -789,6 +789,7 @@ static int cdr_handler(struct ast_cdr *cdr)
 	struct sqlite_cache_tables *tbl = find_table(cdr_table);
 	struct sqlite_cache_columns *col;
 	struct ast_str *sql1 = ast_str_create(160), *sql2 = ast_str_create(16);
+	int first = 1;
 
 	if (!tbl) {
 		ast_log(LOG_WARNING, "No such table: %s\n", cdr_table);
@@ -805,33 +806,31 @@ static int cdr_handler(struct ast_cdr *cdr)
 				continue;
 			}
 			if (sscanf(tmp, "%d", &scannum) == 1) {
-				ast_str_append(&sql1, 0, "%s,", col->name);
-				ast_str_append(&sql2, 0, "%d,", scannum);
+				ast_str_append(&sql1, 0, "%s%s", first ? "" : ",", col->name);
+				ast_str_append(&sql2, 0, "%s%d", first ? "" : ",", scannum);
 			}
 		} else {
 			ast_cdr_getvar(cdr, col->name, &tmp, workspace, sizeof(workspace), 0, 0);
 			if (!tmp) {
 				continue;
 			}
-			ast_str_append(&sql1, 0, "%s,", col->name);
+			ast_str_append(&sql1, 0, "%s%s", first ? "" : ",", col->name);
 			tmp = sqlite_mprintf("%Q", tmp);
-			ast_str_append(&sql2, 0, "%s,", tmp);
+			ast_str_append(&sql2, 0, "%s%s", first ? "" : ",", tmp);
 			sqlite_freemem(tmp);
 		}
 	}
 	release_table(tbl);
 
-	sql1->str[--sql1->used] = '\0';
-	sql2->str[--sql2->used] = '\0';
-	ast_str_append(&sql1, 0, "%s)", sql2->str);
+	ast_str_append(&sql1, 0, "%s)", ast_str_buffer(sql2));
 	ast_free(sql2);
 
-	ast_debug(1, "SQL query: %s\n", sql1->str);
+	ast_debug(1, "SQL query: %s\n", ast_str_buffer(sql1));
 
 	ast_mutex_lock(&mutex);
 
 	RES_CONFIG_SQLITE_BEGIN
-		error = sqlite_exec(db, sql1->str, NULL, NULL, &errormsg);
+		error = sqlite_exec(db, ast_str_buffer(sql1), NULL, NULL, &errormsg);
 	RES_CONFIG_SQLITE_END(error)
 
 	ast_mutex_unlock(&mutex);
@@ -1413,13 +1412,13 @@ static int realtime_update2_handler(const char *database, const char *table,
 		first = 0;
 	}
 
-	ast_str_append(&sql, 0, " %s", where->str);
-	ast_debug(1, "SQL query: %s\n", sql->str);
+	ast_str_append(&sql, 0, " %s", ast_str_buffer(where));
+	ast_debug(1, "SQL query: %s\n", ast_str_buffer(sql));
 
 	ast_mutex_lock(&mutex);
 
 	RES_CONFIG_SQLITE_BEGIN
-		error = sqlite_exec(db, sql->str, NULL, NULL, &errormsg);
+		error = sqlite_exec(db, ast_str_buffer(sql), NULL, NULL, &errormsg);
 	RES_CONFIG_SQLITE_END(error)
 
 	if (!error) {
@@ -1735,7 +1734,7 @@ static char *handle_cli_sqlite_show_tables(struct ast_cli_entry *e, int cmd, str
 static int unload_module(void)
 {
 	if (cli_status_registered)
-		ast_cli_unregister_multiple(cli_status, sizeof(cli_status) / sizeof(struct ast_cli_entry));
+		ast_cli_unregister_multiple(cli_status, ARRAY_LEN(cli_status));
 
 	if (cdr_registered)
 		ast_cdr_unregister(RES_CONFIG_SQLITE_NAME);
@@ -1850,7 +1849,7 @@ static int load_module(void)
 		cdr_registered = 1;
 	}
 
-	error = ast_cli_register_multiple(cli_status, sizeof(cli_status) / sizeof(struct ast_cli_entry));
+	error = ast_cli_register_multiple(cli_status, ARRAY_LEN(cli_status));
 
 	if (error) {
 		unload_module();

@@ -226,68 +226,6 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 	return &hp->hp;
 }
 
-
-
-AST_MUTEX_DEFINE_STATIC(test_lock);
-AST_MUTEX_DEFINE_STATIC(test_lock2);
-static pthread_t test_thread; 
-static int lock_count = 0;
-static int test_errors = 0;
-
-/*! \brief This is a regression test for recursive mutexes.
-   test_for_thread_safety() will return 0 if recursive mutex locks are
-   working properly, and non-zero if they are not working properly. */
-static void *test_thread_body(void *data) 
-{ 
-	ast_mutex_lock(&test_lock);
-	lock_count += 10;
-	if (lock_count != 10) 
-		test_errors++;
-	ast_mutex_lock(&test_lock);
-	lock_count += 10;
-	if (lock_count != 20) 
-		test_errors++;
-	ast_mutex_lock(&test_lock2);
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 10;
-	if (lock_count != 10) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 10;
-	ast_mutex_unlock(&test_lock2);
-	if (lock_count != 0) 
-		test_errors++;
-	return NULL;
-} 
-
-int test_for_thread_safety(void)
-{ 
-	ast_mutex_lock(&test_lock2);
-	ast_mutex_lock(&test_lock);
-	lock_count += 1;
-	ast_mutex_lock(&test_lock);
-	lock_count += 1;
-	ast_pthread_create(&test_thread, NULL, test_thread_body, NULL); 
-	usleep(100);
-	if (lock_count != 2) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 1;
-	usleep(100); 
-	if (lock_count != 1) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock);
-	lock_count -= 1;
-	if (lock_count != 0) 
-		test_errors++;
-	ast_mutex_unlock(&test_lock2);
-	usleep(100);
-	if (lock_count != 0) 
-		test_errors++;
-	pthread_join(test_thread, NULL);
-	return(test_errors);          /* return 0 on success. */
-}
-
 /*! \brief Produce 32 char MD5 hash of value. */
 void ast_md5_hash(char *output, char *input)
 {
@@ -582,6 +520,12 @@ static void lock_info_destroy(void *data)
 
 
 	for (i = 0; i < lock_info->num_locks; i++) {
+		if (lock_info->locks[i].pending == -1) {
+			/* This just means that the last lock this thread went for was by
+			 * using trylock, and it failed.  This is fine. */
+			break;
+		}
+
 		ast_log(LOG_ERROR, 
 			"Thread '%s' still has a lock! - '%s' (%p) from '%s' in %s:%d!\n", 
 			lock_info->thread_name,
@@ -882,7 +826,7 @@ void log_show_lock(void *this_lock_addr)
 			   it's acquired... */
 			if (lock_info->locks[i].lock_addr == this_lock_addr) {
 				append_lock_information(&str, lock_info, i);
-				ast_log(LOG_NOTICE, "%s", str->str);
+				ast_log(LOG_NOTICE, "%s", ast_str_buffer(str));
 				break;
 			}
 		}
@@ -955,7 +899,7 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	if (!str)
 		return CLI_FAILURE;
 
-	ast_cli(a->fd, "%s", str->str);
+	ast_cli(a->fd, "%s", ast_str_buffer(str));
 
 	ast_free(str);
 
@@ -1647,66 +1591,6 @@ int ast_get_time_t(const char *src, time_t *dst, time_t _default, int *consumed)
 		return 0;
 	} else
 		return -1;
-}
-
-/*!
- * core handler for dynamic strings.
- * This is not meant to be called directly, but rather through the
- * various wrapper macros
- *	ast_str_set(...)
- *	ast_str_append(...)
- *	ast_str_set_va(...)
- *	ast_str_append_va(...)
- */
-
-int __ast_str_helper(struct ast_str **buf, size_t max_len,
-	int append, const char *fmt, va_list ap)
-{
-	int res, need;
-	int offset = (append && (*buf)->len) ? (*buf)->used : 0;
-	va_list aq;
-
-	do {
-		if (max_len < 0) {
-			max_len = (*buf)->len;	/* don't exceed the allocated space */
-		}
-		/*
-		 * Ask vsnprintf how much space we need. Remember that vsnprintf
-		 * does not count the final '\0' so we must add 1.
-		 */
-		va_copy(aq, ap);
-		res = vsnprintf((*buf)->str + offset, (*buf)->len - offset, fmt, aq);
-
-		need = res + offset + 1;
-		/*
-		 * If there is not enough space and we are below the max length,
-		 * reallocate the buffer and return a message telling to retry.
-		 */
-		if (need > (*buf)->len && (max_len == 0 || (*buf)->len < max_len) ) {
-			if (max_len && max_len < need) {	/* truncate as needed */
-				need = max_len;
-			} else if (max_len == 0) {	/* if unbounded, give more room for next time */
-				need += 16 + need / 4;
-			}
-			if (0) {	/* debugging */
-				ast_verbose("extend from %d to %d\n", (int)(*buf)->len, need);
-			}
-			if (ast_str_make_space(buf, need)) {
-				ast_verbose("failed to extend from %d to %d\n", (int)(*buf)->len, need);
-				return AST_DYNSTR_BUILD_FAILED;
-			}
-			(*buf)->str[offset] = '\0';	/* Truncate the partial write. */
-
-			/* Restart va_copy before calling vsnprintf() again. */
-			va_end(aq);
-			continue;
-		}
-		break;
-	} while (1);
-	/* update space used, keep in mind the truncation */
-	(*buf)->used = (res + offset > (*buf)->len) ? (*buf)->len : res + offset;
-
-	return res;
 }
 
 void ast_enable_packet_fragmentation(int sock)

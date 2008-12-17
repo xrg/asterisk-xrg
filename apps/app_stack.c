@@ -142,6 +142,28 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="application">Return</ref>
 		</see-also>
 	</function>
+	<function name="LOCAL_PEEK" language="en_US">
+		<synopsis>
+			Retrieve variables hidden by the local gosub stack frame.
+		</synopsis>
+		<syntax>
+			<parameter name="n" required="true" />
+			<parameter name="varname" required="true" />
+		</syntax>
+		<description>
+			<para>Read a variable <replaceable>varname</replaceable> hidden by
+			<replaceable>n</replaceable> levels of gosub stack frames.  Note that ${LOCAL_PEEK(0,foo)}
+			is the same as <variable>foo</variable>, since the value of <replaceable>n</replaceable>
+			peeks under 0 levels of stack frames; in other words, 0 is the current level.  If
+			<replaceable>n</replaceable> exceeds the available number of stack frames, then an empty
+			string is returned.</para>
+		</description>
+		<see-also>
+			<ref type="application">Gosub</ref>
+			<ref type="application">GosubIf</ref>
+			<ref type="application">Return</ref>
+		</see-also>
+	</function>
  ***/
 
 static const char *app_gosub = "Gosub";
@@ -351,11 +373,22 @@ static int gosub_exec(struct ast_channel *chan, void *data)
 	/* Create the return address, but don't save it until we know that the Gosub destination exists */
 	newframe = gosub_allocate_frame(chan->context, chan->exten, chan->priority + 1, args2.argc);
 
-	if (!newframe)
+	if (!newframe) {
 		return -1;
+	}
 
 	if (ast_parseable_goto(chan, label)) {
 		ast_log(LOG_ERROR, "Gosub address is invalid: '%s'\n", (char *)data);
+		ast_free(newframe);
+		return -1;
+	}
+
+	if (!ast_exists_extension(chan, chan->context, chan->exten, ast_test_flag(chan, AST_FLAG_IN_AUTOLOOP) ? chan->priority + 1 : chan->priority, chan->cid.cid_num)) {
+		ast_log(LOG_ERROR, "Attempt to reach a non-existent destination for gosub: (Context:%s, Extension:%s, Priority:%d)\n",
+				chan->context, chan->exten, chan->priority);
+		ast_copy_string(chan->context, newframe->context, sizeof(chan->context));
+		ast_copy_string(chan->exten, newframe->extension, sizeof(chan->exten));
+		chan->priority = newframe->priority;
 		ast_free(newframe);
 		return -1;
 	}
@@ -469,6 +502,40 @@ static struct ast_custom_function local_function = {
 	.name = "LOCAL",
 	.write = local_write,
 	.read = local_read,
+};
+
+static int peek_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+{
+	int found = 0, n;
+	struct ast_var_t *variables;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(n);
+		AST_APP_ARG(name);
+	);
+
+	if (!chan) {
+		ast_log(LOG_ERROR, "LOCAL_PEEK must be called on an active channel\n");
+		return -1;
+	}
+
+	AST_STANDARD_APP_ARGS(args, data);
+	n = atoi(args.n);
+	*buf = '\0';
+
+	ast_channel_lock(chan);
+	AST_LIST_TRAVERSE(&chan->varshead, variables, entries) {
+		if (!strcmp(args.name, ast_var_name(variables)) && ++found > n) {
+			ast_copy_string(buf, ast_var_value(variables), len);
+			break;
+		}
+	}
+	ast_channel_unlock(chan);
+	return 0;
+}
+
+static struct ast_custom_function peek_function = {
+	.name = "LOCAL_PEEK",
+	.read = peek_read,
 };
 
 static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, char **argv)
@@ -585,6 +652,7 @@ static int unload_module(void)
 	ast_unregister_application(app_gosubif);
 	ast_unregister_application(app_gosub);
 	ast_custom_function_unregister(&local_function);
+	ast_custom_function_unregister(&peek_function);
 
 	return 0;
 }
@@ -607,6 +675,7 @@ static int load_module(void)
 	ast_register_application_xml(app_gosubif, gosubif_exec);
 	ast_register_application_xml(app_gosub, gosub_exec);
 	ast_custom_function_register(&local_function);
+	ast_custom_function_register(&peek_function);
 
 	return 0;
 }

@@ -114,15 +114,32 @@ struct ast_switch {
 };
 
 struct ast_timing {
-	int hastime;				/*!< If time construct exists */
-	unsigned int monthmask;			/*!< Mask for month */
-	unsigned int daymask;			/*!< Mask for date */
-	unsigned int dowmask;			/*!< Mask for day of week (mon-sun) */
-	unsigned int minmask[24];		/*!< Mask for minute */
+	int hastime;                    /*!< If time construct exists */
+	unsigned int monthmask;         /*!< Mask for month */
+	unsigned int daymask;           /*!< Mask for date */
+	unsigned int dowmask;           /*!< Mask for day of week (sun-sat) */
+	unsigned int minmask[48];       /*!< Mask for minute */
+	char *timezone;                 /*!< NULL, or zoneinfo style timezone */
 };
 
+/*!\brief Construct a timing bitmap, for use in time-based conditionals.
+ * \param i Pointer to an ast_timing structure.
+ * \param info Standard string containing a timerange, weekday range, monthday range, and month range, as well as an optional timezone.
+ * \retval Returns 1 on success or 0 on failure.
+ */
 int ast_build_timing(struct ast_timing *i, const char *info);
+
+/*!\brief Evaluate a pre-constructed bitmap as to whether the current time falls within the range specified.
+ * \param i Pointer to an ast_timing structure.
+ * \retval Returns 1, if the time matches or 0, if the current time falls outside of the specified range.
+ */
 int ast_check_timing(const struct ast_timing *i);
+
+/*!\brief Deallocates memory structures associated with a timing bitmap.
+ * \param i Pointer to an ast_timing structure.
+ * \retval Returns 0 on success or a number suitable for passing into strerror, otherwise.
+ */
+int ast_destroy_timing(struct ast_timing *i);
 
 struct ast_pbx {
 	int dtimeoutms;				/*!< Timeout between digits (milliseconds) */
@@ -381,6 +398,10 @@ int ast_get_hint(char *hint, int maxlen, char *name, int maxnamelen,
  * \param priority priority of the action within the extension
  * \param callerid callerid to search for
  *
+ * \note It is possible for autoservice to be started and stopped on c during this
+ * function call, it is important that c is not locked prior to calling this. Otherwise
+ * a deadlock may occur
+ *
  * \return If an extension within the given context(or callerid) with the given priority 
  *         is found a non zero value will be returned. Otherwise, 0 is returned.
  */
@@ -396,6 +417,10 @@ int ast_exists_extension(struct ast_channel *c, const char *context, const char 
  * \param label label of the action within the extension to match to priority
  * \param callerid callerid to search for
  *
+ * \note It is possible for autoservice to be started and stopped on c during this
+ * function call, it is important that c is not locked prior to calling this. Otherwise
+ * a deadlock may occur
+ *
  * \retval the priority which matches the given label in the extension
  * \retval -1 if not found.
  */
@@ -404,6 +429,10 @@ int ast_findlabel_extension(struct ast_channel *c, const char *context,
 
 /*!
  * \brief Find the priority of an extension that has the specified label
+ *
+ * \note It is possible for autoservice to be started and stopped on c during this
+ * function call, it is important that c is not locked prior to calling this. Otherwise
+ * a deadlock may occur
  *
  * \note This function is the same as ast_findlabel_extension, except that it accepts
  * a pointer to an ast_context structure to specify the context instead of the
@@ -421,6 +450,10 @@ int ast_findlabel_extension2(struct ast_channel *c, struct ast_context *con,
  * \param priority priority of extension path
  * \param callerid callerid of extension being searched for
  *
+ * \note It is possible for autoservice to be started and stopped on c during this
+ * function call, it is important that c is not locked prior to calling this. Otherwise
+ * a deadlock may occur
+ *
  * \return If "exten" *could be* a valid extension in this context with or without
  * some more digits, return non-zero.  Basically, when this returns 0, no matter
  * what you add to exten, it's not going to be a valid extension anymore
@@ -436,6 +469,10 @@ int ast_canmatch_extension(struct ast_channel *c, const char *context,
  * \param exten extension to check
  * \param priority priority of extension path
  * \param callerid callerid of extension being searched for
+ *
+ * \note It is possible for autoservice to be started and stopped on c during this
+ * function call, it is important that c is not locked prior to calling this. Otherwise
+ * a deadlock may occur
  *
  * \return If "exten" *could match* a valid extension in this context with
  * some more digits, return non-zero.  Does NOT return non-zero if this is
@@ -486,6 +523,10 @@ int ast_extension_cmp(const char *a, const char *b);
  * \param combined_find_spawn 
  *
  * This adds a new extension to the asterisk extension list.
+ *
+ * \note It is possible for autoservice to be started and stopped on c during this
+ * function call, it is important that c is not locked prior to calling this. Otherwise
+ * a deadlock may occur
  *
  * \retval 0 on success 
  * \retval -1 on failure.
@@ -866,6 +907,8 @@ int pbx_builtin_raise_exception(struct ast_channel *chan, void *data);
 
 void pbx_substitute_variables_helper(struct ast_channel *c,const char *cp1,char *cp2,int count);
 void pbx_substitute_variables_varshead(struct varshead *headp, const char *cp1, char *cp2, int count);
+void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead *headp, const char *cp1, char *cp2, int cp2_size, size_t *used);
+void ast_str_substitute_variables(struct ast_str **buf, size_t maxlen, struct ast_channel *chan, const char *templ);
 
 int ast_extension_patmatch(const char *pattern, const char *data);
 

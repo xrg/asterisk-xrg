@@ -110,8 +110,9 @@ void ast_cli(int fd, const char *fmt, ...)
 	res = ast_str_set_va(&buf, 0, fmt, ap);
 	va_end(ap);
 
-	if (res != AST_DYNSTR_BUILD_FAILED)
-		ast_carefulwrite(fd, buf->str, strlen(buf->str), 100);
+	if (res != AST_DYNSTR_BUILD_FAILED) {
+		ast_carefulwrite(fd, ast_str_buffer(buf), ast_str_strlen(buf), 100);
+	}
 }
 
 unsigned int ast_debug_get_by_file(const char *file) 
@@ -317,6 +318,46 @@ static struct ast_debug_file *find_debug_file(const char *fn, unsigned int debug
 	return df;
 }
 
+static char *complete_number(const char *partial, unsigned int min, unsigned int max, int n)
+{
+	int i, count = 0;
+	unsigned int prospective[2];
+	unsigned int part = strtoul(partial, NULL, 10);
+	char next[12];
+
+	if (part < min || part > max) {
+		return NULL;
+	}
+
+	for (i = 0; i < 21; i++) {
+		if (i == 0) {
+			prospective[0] = prospective[1] = part;
+		} else if (part == 0 && !ast_strlen_zero(partial)) {
+			break;
+		} else if (i < 11) {
+			prospective[0] = prospective[1] = part * 10 + (i - 1);
+		} else {
+			prospective[0] = (part * 10 + (i - 11)) * 10;
+			prospective[1] = prospective[0] + 9;
+		}
+		if (i < 11 && (prospective[0] < min || prospective[0] > max)) {
+			continue;
+		} else if (prospective[1] < min || prospective[0] > max) {
+			continue;
+		}
+
+		if (++count > n) {
+			if (i < 11) {
+				snprintf(next, sizeof(next), "%u", prospective[0]);
+			} else {
+				snprintf(next, sizeof(next), "%u...", prospective[0] / 10);
+			}
+			return ast_strdup(next);
+		}
+	}
+	return NULL;
+}
+
 static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int oldval;
@@ -325,6 +366,7 @@ static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 	int fd = a->fd;
 	int argc = a->argc;
 	char **argv = a->argv;
+	char *argv3 = a->argv ? S_OR(a->argv[3], "") : "";
 	int *dst;
 	char *what;
 	struct debug_file_list *dfl;
@@ -333,7 +375,7 @@ static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "core set {debug|verbose} [off|atleast]";
+		e->command = "core set {debug|verbose}";
 		e->usage =
 			"Usage: core set {debug|verbose} [atleast] <level> [filename]\n"
 			"       core set {debug|verbose} off\n"
@@ -344,6 +386,29 @@ static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 		return NULL;
 
 	case CLI_GENERATE:
+		if (a->pos == 3 || (a->pos == 4 && !strcasecmp(a->argv[3], "atleast"))) {
+			char *pos = a->pos == 3 ? argv3 : S_OR(a->argv[4], "");
+			int numbermatch = (ast_strlen_zero(pos) || strchr("123456789", pos[0])) ? 0 : 21;
+			if (a->n < 21 && numbermatch == 0) {
+				return complete_number(pos, 0, 0x7fffffff, a->n);
+			} else if (pos[0] == '0') {
+				if (a->n == 0) {
+					return ast_strdup("0");
+				} else {
+					return NULL;
+				}
+			} else if (a->n == (21 - numbermatch)) {
+				if (a->pos == 3 && !strncasecmp(argv3, "off", strlen(argv3))) {
+					return ast_strdup("off");
+				} else if (a->pos == 3 && !strncasecmp(argv3, "atleast", strlen(argv3))) {
+					return ast_strdup("atleast");
+				}
+			} else if (a->n == (22 - numbermatch) && a->pos == 3 && ast_strlen_zero(argv3)) {
+				return ast_strdup("atleast");
+			}
+		} else if (a->pos == 4 || (a->pos == 5 && !strcasecmp(argv3, "atleast"))) {
+			return ast_complete_source_filename(a->pos == 4 ? S_OR(a->argv[4], "") : S_OR(a->argv[5], ""), a->n);
+		}
 		return NULL;
 	}
 	/* all the above return, so we proceed with the handler.
@@ -352,7 +417,7 @@ static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 
 	if (argc < e->args)
 		return CLI_SHOWUSAGE;
-	if (!strcasecmp(argv[e->args - 2], "debug")) {
+	if (!strcasecmp(argv[e->args - 1], "debug")) {
 		dst = &option_debug;
 		oldval = option_debug;
 		what = "Core debug";
@@ -361,7 +426,7 @@ static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 		oldval = option_verbose;
 		what = "Verbosity";
 	}
-	if (argc == e->args && !strcasecmp(argv[e->args - 1], "off")) {
+	if (argc == e->args + 1 && !strcasecmp(argv[e->args], "off")) {
 		unsigned int debug = (*what == 'C');
 		newlevel = 0;
 
@@ -375,17 +440,17 @@ static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 
 		goto done;
 	}
-	if (!strcasecmp(argv[e->args-1], "atleast"))
+	if (!strcasecmp(argv[e->args], "atleast"))
 		atleast = 1;
-	if (argc != e->args + atleast && argc != e->args + atleast + 1)
+	if (argc != e->args + atleast + 1 && argc != e->args + atleast + 2)
 		return CLI_SHOWUSAGE;
-	if (sscanf(argv[e->args + atleast - 1], "%d", &newlevel) != 1)
+	if (sscanf(argv[e->args + atleast], "%d", &newlevel) != 1)
 		return CLI_SHOWUSAGE;
-	if (argc == e->args + atleast + 1) {
+	if (argc == e->args + atleast + 2) {
 		unsigned int debug = (*what == 'C');
 		dfl = debug ? &debug_files : &verbose_files;
 
-		fn = argv[e->args + atleast];
+		fn = argv[e->args + atleast + 1];
 
 		AST_RWLIST_WRLOCK(dfl);
 
@@ -573,9 +638,9 @@ static void print_uptimestr(int fd, struct timeval timeval, const char *prefix, 
 		ast_str_append(&out, 0, "%d minute%s%s ", x, ESS(x),NEEDCOMMA(timeval.tv_sec));
 	}
 	x = timeval.tv_sec;
-	if (x > 0 || out->used == 0)	/* if there is nothing, print 0 seconds */
+	if (x > 0 || ast_str_strlen(out) == 0)	/* if there is nothing, print 0 seconds */
 		ast_str_append(&out, 0, "%d second%s ", x, ESS(x));
-	ast_cli(fd, "%s: %s\n", prefix, out->str);
+	ast_cli(fd, "%s: %s\n", prefix, ast_str_buffer(out));
 }
 
 static struct ast_cli_entry *cli_next(struct ast_cli_entry *e)
@@ -1194,7 +1259,7 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 {
 	struct ast_channel *c=NULL;
 	struct timeval now;
-	struct ast_str *out = ast_str_alloca(2048);
+	struct ast_str *out = ast_str_thread_get(&global_app_buf, 16);
 	char cdrtime[256];
 	char nf[256], wf[256], rf[256];
 	long elapsed_seconds=0;
@@ -1283,14 +1348,14 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 		(ast_test_flag(c, AST_FLAG_BLOCKING) ? c->blockproc : "(Not Blocking)"));
 	
 	if (pbx_builtin_serialize_variables(c, &out))
-		ast_cli(a->fd,"      Variables:\n%s\n", out->str);
+		ast_cli(a->fd,"      Variables:\n%s\n", ast_str_buffer(out));
 	if (c->cdr && ast_cdr_serialize_variables(c->cdr, &out, '=', '\n', 1))
-		ast_cli(a->fd,"  CDR Variables:\n%s\n", out->str);
+		ast_cli(a->fd,"  CDR Variables:\n%s\n", ast_str_buffer(out));
 #ifdef CHANNEL_TRACE
 	trace_enabled = ast_channel_trace_is_enabled(c);
 	ast_cli(a->fd, "  Context Trace: %s\n", trace_enabled ? "Enabled" : "Disabled");
 	if (trace_enabled && ast_channel_trace_serialize(c, &out))
-		ast_cli(a->fd, "          Trace:\n%s\n", out->str);
+		ast_cli(a->fd, "          Trace:\n%s\n", ast_str_buffer(out));
 #endif
 	ast_channel_unlock(c);
 	return CLI_SUCCESS;
@@ -1460,7 +1525,7 @@ static int set_full_cmd(struct ast_cli_entry *e)
 }
 
 /*! \brief cleanup (free) cli_perms linkedlist. */
-static void destroy_user_perms (void)
+static void destroy_user_perms(void)
 {
 	struct cli_perm *perm;
 	struct usergroup_cli_perm *user_perm;
@@ -1476,7 +1541,8 @@ static void destroy_user_perms (void)
 	AST_RWLIST_UNLOCK(&cli_perms);
 }
 
-int ast_cli_perms_init(int reload) {
+int ast_cli_perms_init(int reload)
+{
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 	struct ast_config *cfg;
 	char *cat = NULL;
@@ -1601,7 +1667,7 @@ int ast_cli_perms_init(int reload) {
 /*! \brief initialize the _full_cmd string in * each of the builtins. */
 void ast_builtins_init(void)
 {
-	ast_cli_register_multiple(cli_cli, sizeof(cli_cli) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_cli, ARRAY_LEN(cli_cli));
 }
 
 /*!

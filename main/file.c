@@ -911,7 +911,7 @@ int ast_streamfile(struct ast_channel *chan, const char *filename, const char *p
 	 * return the file had no data. */
 	seekattempt = fseek(fs->f, -1, SEEK_END);
 	if (!seekattempt)
-		fseek(fs->f, 0, SEEK_SET);
+		ast_seekstream(fs, 0, SEEK_SET);
 	else
 		return 0;
 
@@ -1347,6 +1347,6 @@ struct ast_cli_entry cli_file[] = {
 
 int ast_file_init(void)
 {
-	ast_cli_register_multiple(cli_file, sizeof(cli_file) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_file, ARRAY_LEN(cli_file));
 	return 0;
 }

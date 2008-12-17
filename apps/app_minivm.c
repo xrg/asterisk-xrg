@@ -198,17 +198,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<argument name="gain">
 						<para>Amount of gain to use</para>
 					</argument>
-					<para>Use the specified amount of gain when recording the voicemail message.  The units are whole-number decibels (dB).</para>
+					<para>Use the specified amount of gain when recording the voicemail message.
+					The units are whole-number decibels (dB).</para>
 				</option>
 			</optionlist>
 		</parameter>
 	</syntax>
 	<description>
-		<para>his application is part of the Mini-Voicemail system, configured in minivm.conf</para>
+		<para>This application is part of the Mini-Voicemail system, configured in <filename>minivm.conf</filename></para>
 		<para>MiniVM records audio file in configured format and forwards message to e-mail and pager.</para>
 		<para>If there's no user account for that address, a temporary account will be used with default options.</para>
-		<para>The recorded file name and path will be stored in MINIVM_FILENAME and the duration of the message will be stored in MINIVM_DURATION</para>
-		<para>Note: If the caller hangs up after the recording, the only way to send the message and clean up is to execute in the <literal>h</literal> extension.  The application will exit if any of the following DTMF digits are received and the requested extension exist in the current context.</para>
+		<para>The recorded file name and path will be stored in <variable>MINIVM_FILENAME</variable> and the duration
+		of the message will be stored in <variable>MINIVM_DURATION</variable></para>
+		<note><para>If the caller hangs up after the recording, the only way to send the message and clean up is to
+		execute in the <literal>h</literal> extension. The application will exit if any of the following DTMF digits
+		are received and the requested extension exist in the current context.</para></note>
 		<variablelist>
 			<variable name="MINIVM_RECORD_STATUS">
 				<para>This is the status of the record operation</para>
@@ -219,7 +223,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</variablelist>
 	</description>
 </application>
-
 <application name="MinivmGreet" language="en_US">
 	<synopsis>
 		Play Mini-Voicemail prompts.
@@ -250,7 +253,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	<description>
 		<para>This application is part of the Mini-Voicemail system, configured in minivm.conf.</para>
 		<para>MinivmGreet() plays default prompts or user specific prompts for an account.</para>
-		<para>Busy and unavailable messages can be choosen, but will be overridden if a temporary message exists for the account.</para>
+		<para>Busy and unavailable messages can be choosen, but will be overridden if a temporary
+		message exists for the account.</para>
 		<variablelist>
 			<variable name="MINIVM_GREET_STATUS">
 				<para>This is the status of the greeting playback.</para>
@@ -261,7 +265,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</variablelist>
 	</description>
 </application>
-
 <application name="MinivmNotify" language="en_US">
 	<synopsis>
 		Notify voicemail owner about new messages.
@@ -285,9 +288,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</syntax>
 	<description>
 		<para>This application is part of the Mini-Voicemail system, configured in minivm.conf.</para>
-		<para>MiniVMnotify forwards messages about new voicemail to e-mail and pager.  If there's no user account for that address, a temporary account will be used with default options (set in minivm.conf).</para>
-		<para>If the channel variable MVM_COUNTER is set, this will be used in the message file name and available in the template for the message.</para>
-		<para>If no template is given, the default email template will be used to send email and default pager template to send paging message (if the user account is configured with a paging address.</para>
+		<para>MiniVMnotify forwards messages about new voicemail to e-mail and pager. If there's no user
+		account for that address, a temporary account will be used with default options (set in
+		<filename>minivm.conf</filename>).</para>
+		<para>If the channel variable <variable>MVM_COUNTER</variable> is set, this will be used in the message
+		file name and available in the template for the message.</para>
+		<para>If no template is given, the default email template will be used to send email and default pager
+		template to send paging message (if the user account is configured with a paging address.</para>
 		<variablelist>
 			<variable name="MINIVM_NOTIFY_STATUS">
 				<para>This is the status of the notification attempt</para>
@@ -297,10 +304,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</variablelist>
 	</description>
 </application>
-
 <application name="MinivmDelete" language="en_US">
 	<synopsis>
-		Delete Mini-Voicemail voicemail messages
+		Delete Mini-Voicemail voicemail messages.
 	</synopsis>
 	<syntax>
 		<parameter name="filename" required="true">
@@ -308,7 +314,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</parameter>
 	</syntax>
 	<description>
-		<para>This application is part of the Mini-Voicemail system, configured in minivm.conf.</para>
+		<para>This application is part of the Mini-Voicemail system, configured in <filename>minivm.conf</filename>.</para>
 		<para>It deletes voicemail file set in MVM_FILENAME or given filename.</para>
 		<variablelist>
 			<variable name="MINIVM_DELETE_STATUS">
@@ -351,8 +357,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</parameter>
 	</syntax>
 	<description>
-		<para>This application is part of the Mini-Voicemail system, configured in minivm.conf.</para>
-		<para>Use this application to record account specific audio/video messages for busy, unavailable and temporary messages.</para>
+		<para>This application is part of the Mini-Voicemail system, configured in <filename>minivm.conf</filename>.</para>
+		<para>Use this application to record account specific audio/video messages for busy, unavailable
+		and temporary messages.</para>
 		<para>Account specific directories will be created if they do not exist.</para>
 		<variablelist>
 			<variable name="MINIVM_ACCMESS_STATUS">
@@ -364,7 +371,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</variablelist>
 	</description>
 </application>
-
 <application name="MinivmMWI" language="en_US">
 	<synopsis>
 		Send Message Waiting Notification to subscriber(s) of mailbox.
@@ -389,8 +395,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</parameter>
 	</syntax>
 	<description>
-		<para>This application is part of the Mini-Voicemail system, configured in minivm.conf.</para>
-		<para>MinivmMWI is used to send message waiting indication to any devices whose channels have subscribed to the mailbox passed in the first parameter.</para>
+		<para>This application is part of the Mini-Voicemail system, configured in <filename>minivm.conf</filename>.</para>
+		<para>MinivmMWI is used to send message waiting indication to any devices whose channels have
+		subscribed to the mailbox passed in the first parameter.</para>
 	</description>
 </application>
 ***/
@@ -1099,7 +1106,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 		return -1;
 	}
 	/* Allocate channel used for chanvar substitution */
-	ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, 0);
+	ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "%s", "");
 
 
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
@@ -2187,7 +2194,6 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 {
 	int argc = 0;
 	char *argv[2];
-	int res = 0;
 	char filename[PATH_MAX];
 	char tmp[PATH_MAX];
 	char *domain;
@@ -2229,8 +2235,10 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 		error = TRUE;
 	}
 
-	if (error)
+	if (error) {
+		pbx_builtin_setvar_helper(chan, "MINIVM_ACCMESS_STATUS", "FAILED");
 		return -1;
+	}
 
 	ast_copy_string(tmp, argv[0], sizeof(tmp));
 	username = tmp;
@@ -2241,6 +2249,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 	} 
 	if (ast_strlen_zero(domain) || ast_strlen_zero(username)) {
 		ast_log(LOG_ERROR, "Need username@domain as argument. Sorry. Argument 0 %s\n", argv[0]);
+		pbx_builtin_setvar_helper(chan, "MINIVM_ACCMESS_STATUS", "FAILED");
 		return -1;
 	}
 
@@ -2278,10 +2287,10 @@ static int minivm_accmess_exec(struct ast_channel *chan, void *data)
 	if(ast_test_flag(vmu, MVM_ALLOCED))
 		free_user(vmu);
 
+	pbx_builtin_setvar_helper(chan, "MINIVM_NOTIFY_STATUS", "SUCCESS");
 
 	/* Ok, we're ready to rock and roll. Return to dialplan */
-	return res;
-
+	return 0;
 }
 
 /*! \brief Append new mailbox to mailbox list from configuration file */
@@ -3274,7 +3283,7 @@ static int load_module(void)
 	if ((res = load_config(0)))
 		return(res);
 
-	ast_cli_register_multiple(cli_minivm, sizeof(cli_minivm)/sizeof(cli_minivm[0]));
+	ast_cli_register_multiple(cli_minivm, ARRAY_LEN(cli_minivm));
 
 	/* compute the location of the voicemail spool directory */
 	snprintf(MVM_SPOOL_DIR, sizeof(MVM_SPOOL_DIR), "%s/voicemail/", ast_config_AST_SPOOL_DIR);
@@ -3318,7 +3327,7 @@ static int unload_module(void)
 	res |= ast_unregister_application(app_minivm_notify);
 	res |= ast_unregister_application(app_minivm_delete);
 	res |= ast_unregister_application(app_minivm_accmess);
-	ast_cli_unregister_multiple(cli_minivm, sizeof(cli_minivm)/sizeof(cli_minivm[0]));
+	ast_cli_unregister_multiple(cli_minivm, ARRAY_LEN(cli_minivm));
 	ast_custom_function_unregister(&minivm_account_function);
 	ast_custom_function_unregister(&minivm_counter_function);
 

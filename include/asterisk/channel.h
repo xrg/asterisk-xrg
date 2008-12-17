@@ -496,7 +496,7 @@ struct ast_channel {
 
 	unsigned short transfercapability;		/*!< ISDN Transfer Capbility - AST_FLAG_DIGITAL is not enough */
 
-	char dtmfq[AST_MAX_EXTENSION];			/*!< Any/all queued DTMF characters */
+	char unused_old_dtmfq[AST_MAX_EXTENSION];			/*!< (deprecated, use readq instead) Any/all queued DTMF characters */
 	char context[AST_MAX_CONTEXT];			/*!< Dialplan: Current extension context */
 	char exten[AST_MAX_EXTENSION];			/*!< Dialplan: Current extension number */
 	char macrocontext[AST_MAX_CONTEXT];		/*!< Macro: Current non-macro context. See app_macro.c */
@@ -710,6 +710,20 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
  * \note The channel does not need to be locked before calling this function.
  */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
+
+/*!
+ * \brief Queue an outgoing frame to the head of the frame queue
+ *
+ * \param chan the channel to queue the frame on
+ * \param f the frame to queue.  Note that this frame will be duplicated by
+ *        this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame being passed if
+ *        necessary.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ */
+int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *f);
 
 /*! 
  * \brief Queue a hangup frame 
@@ -1414,6 +1428,11 @@ int ast_autoservice_start(struct ast_channel *chan);
 
 /*! 
  * \brief Stop servicing a channel for us...  
+ *
+ * \note if chan is locked prior to calling ast_autoservice_stop, it
+ * is likely that there will be a deadlock between the thread that calls
+ * ast_autoservice_stop and the autoservice thread. It is important
+ * that chan is not locked prior to this call
  *
  * \retval 0 success
  * \retval -1 error, or the channel has been hungup 

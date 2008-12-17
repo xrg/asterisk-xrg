@@ -1013,7 +1013,7 @@ int init_logger(void)
 	}
 
 	/* register the logger cli commands */
-	ast_cli_register_multiple(cli_logger, sizeof(cli_logger) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_logger, ARRAY_LEN(cli_logger));
 
 	ast_mkdir(ast_config_AST_LOG_DIR, 0777);
   
@@ -1106,8 +1106,8 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 			result = ast_str_set_va(&buf, BUFSIZ, fmt, ap); /* XXX BUFSIZ ? */
 			va_end(ap);
 			if (result != AST_DYNSTR_BUILD_FAILED) {
-				term_filter_escapes(buf->str);
-				fputs(buf->str, stdout);
+				term_filter_escapes(ast_str_buffer(buf));
+				fputs(ast_str_buffer(buf), stdout);
 			}
 		}
 		return;
@@ -1140,7 +1140,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 		return;
 
 	/* Copy string over */
-	strcpy(logmsg->str, buf->str);
+	strcpy(logmsg->str, ast_str_buffer(buf));
 
 	/* Set type to be normal */
 	logmsg->type = LOGMSG_NORMAL;
@@ -1269,7 +1269,7 @@ void __ast_verbose_ap(const char *file, int line, const char *func, const char *
 	if (!(logmsg = ast_calloc(1, sizeof(*logmsg) + res + 1)))
 		return;
 
-	strcpy(logmsg->str, buf->str);
+	strcpy(logmsg->str, ast_str_buffer(buf));
 
 	ast_log(__LOG_VERBOSE, file, line, func, "%s", logmsg->str + 1);
 
