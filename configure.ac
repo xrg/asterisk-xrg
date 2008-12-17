@@ -1582,6 +1582,9 @@ if test "${USE_VPB}" != "no"; then
 	PBX_VPB=1
 	AC_DEFINE([HAVE_VPB], 1, [Define if your system has the VoiceTronix API libraries.])
    fi
+else
+	PBX_VPB=0
+	AC_DEFINE([HAVE_VPB], 0, [Define if your system has the VoiceTronix API libraries.])
 fi
 
 AC_LANG_POP
