@@ -2228,8 +2228,12 @@ static void leave_queue(struct queue_ent *qe)
 
 	/*If the queue is a realtime queue, check to see if it's still defined in real time*/
 	if (q->realtime) {
-		if (!ast_load_realtime("queues", "name", q->name, SENTINEL))
+		struct ast_variable *var;
+		if (!(var = ast_load_realtime("queues", "name", q->name, SENTINEL))) {
 			q->dead = 1;
+		} else {
+			ast_variables_destroy(var);
+		}
 	}
 
 	if (q->dead) {	
@@ -4088,24 +4092,21 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		/* If the queue member did an attended transfer, then the TRANSFER already was logged in the queue_log
 		 * when the masquerade occurred. These other "ending" queue_log messages are unnecessary
 		 */
-		if (bridge != AST_PBX_KEEPALIVE && !attended_transfer_occurred(qe->chan)) {
+		if (!attended_transfer_occurred(qe->chan)) {
 			struct ast_datastore *tds;
 			if (strcasecmp(oldcontext, qe->chan->context) || strcasecmp(oldexten, qe->chan->exten)) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld|%d",
 					qe->chan->exten, qe->chan->context, (long) (callstart - qe->start),
 					(long) (time(NULL) - callstart), qe->opos);
-				if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
-					send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), TRANSFER);
+				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), TRANSFER);
 			} else if (ast_check_hangup(qe->chan)) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETECALLER", "%ld|%ld|%d",
 					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
-				if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
-					send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), CALLER);
+				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), CALLER);
 			} else {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "COMPLETEAGENT", "%ld|%ld|%d",
 					(long) (callstart - qe->start), (long) (time(NULL) - callstart), qe->opos);
-				if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
-					send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), AGENT);
+				send_agent_complete(qe, queuename, peer, member, callstart, vars, sizeof(vars), AGENT);
 			}
 			ast_channel_lock(qe->chan);
 			if ((tds = ast_channel_datastore_find(qe->chan, &queue_transfer_info, NULL))) {
@@ -4118,8 +4119,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		if (transfer_ds) {
 			ast_datastore_free(transfer_ds);
 		}
-		if (bridge != AST_PBX_NO_HANGUP_PEER && bridge != AST_PBX_NO_HANGUP_PEER_PARKED)
-			ast_hangup(peer);
+		ast_hangup(peer);
 		res = bridge ? bridge : 1;
 		ao2_ref(member, -1);
 	}
@@ -5084,7 +5084,7 @@ stop:
 	}
 
 	/* Don't allow return code > 0 */
-	if (res >= 0 && res != AST_PBX_KEEPALIVE) {
+	if (res >= 0) {
 		res = 0;	
 		if (ringing) {
 			ast_indicate(chan, -1);
@@ -6462,9 +6462,9 @@ static char *handle_queue_pause_member(struct ast_cli_entry *e, int cmd, struct 
 		e->command = "queue {pause|unpause} member";
 		e->usage = 
 			"Usage: queue {pause|unpause} member <member> [queue <queue> [reason <reason>]]\n"
-			"		Pause or unpause a queue member. Not specifying a particular queue\n"
-			"		will pause or unpause a member across all queues to which the member\n"
-			"		belongs.\n";
+			"	Pause or unpause a queue member. Not specifying a particular queue\n"
+			"	will pause or unpause a member across all queues to which the member\n"
+			"	belongs.\n";
 		return NULL;
 	case CLI_GENERATE:
 		return complete_queue_pause_member(a->line, a-> word, a->pos, a->n);
@@ -6536,8 +6536,8 @@ static char *handle_queue_set_member_penalty(struct ast_cli_entry *e, int cmd, s
 		e->command = "queue set penalty";
 		e->usage = 
 		"Usage: queue set penalty <penalty> on <interface> [in <queue>]\n"
-		"Set a member's penalty in the queue specified. If no queue is specified\n"
-		"then that interface's penalty is set in all queues to which that interface is a member\n";
+		"	Set a member's penalty in the queue specified. If no queue is specified\n"
+		"	then that interface's penalty is set in all queues to which that interface is a member\n";
 		return NULL;
 	case CLI_GENERATE:
 		return complete_queue_set_member_penalty(a->line, a->word, a->pos, a->n);
@@ -6598,8 +6598,8 @@ static char *handle_queue_rule_show(struct ast_cli_entry *e, int cmd, struct ast
 		e->command = "queue show rules";
 		e->usage =
 		"Usage: queue show rules [rulename]\n"
-		"Show the list of rules associated with rulename. If no\n"
-		"rulename is specified, list all rules defined in queuerules.conf\n";
+		"	Show the list of rules associated with rulename. If no\n"
+		"	rulename is specified, list all rules defined in queuerules.conf\n";
 		return NULL;
 	case CLI_GENERATE:
 		return complete_queue_rule_show(a->line, a->word, a->pos, a->n);
@@ -6629,7 +6629,7 @@ static char *handle_queue_rule_reload(struct ast_cli_entry *e, int cmd, struct a
 			e->command = "queue reload rules";
 			e->usage = 
 				"Usage: queue reload rules\n"
-				"Reloads rules defined in queuerules.conf\n";
+				"	Reloads rules defined in queuerules.conf\n";
 			return NULL;
 		case CLI_GENERATE:
 			return NULL;

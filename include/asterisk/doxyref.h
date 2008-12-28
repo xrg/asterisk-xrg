@@ -31,6 +31,7 @@
  *
  * \section devpolicy Development and Release Policies
  * \arg \ref CodeGuide : The must-read document for all developers
+ * \arg \ref CommitMessages : Information on formatting and special tags for commit messages
  * \arg \ref ReleaseStatus : The current support level for various Asterisk releases
  * \arg \ref ReleasePolicies : Asterisk Release and Commit Policies
  * \arg \ref AstCREDITS : A Thank You to contributors (unfortunately out of date)
@@ -99,7 +100,7 @@
  * \section releasestatustypes Release Status Types
  *
  * Release management is a essentially an agreement between the development
- * community and the user community on what kind of updates can be expected
+ * community and the %user community on what kind of updates can be expected
  * for Asterisk releases, and what types of changes these updates will contain.
  * Once these policies are established, the development community works very
  * hard to adhere to them.  However, the development community does reserve
@@ -117,7 +118,7 @@
  * \arg <b>Full-Support</b> - This release series is receiving updates for all
  *      types of bugs.
  * \arg <b>Full-Development</b> - Changes in this part of Asterisk include bug
- *      fixes, as well as new features and architectural improvements.
+ *      fixes, as well as new %features and architectural improvements.
  *
  * \section AsteriskReleases Asterisk Maintenance Levels
  *
@@ -187,7 +188,7 @@
  *
  * To monitor commits to Asterisk and related projects, visit 
  * <a href="http://lists.digium.com/">http://lists.digium.com</a>.  The Digium
- * mailing list server hosts a number of mailing lists for commits.
+ * mailing list server hosts a %number of mailing lists for commits.
  *
  * <hr/>
  *
@@ -239,9 +240,9 @@
  * significant.  1.4.X releases go through a release candidate testing cycle to help
  * catch any regressions that may have been introduced.
  *
- * Commits to Asterisk 1.4 must be to address bugs only.  No new features should be
- * introduced into Asterisk 1.4 to reduce the number of changes to this established
- * release series.  The only exceptions to this rule are for cases where something
+ * Commits to Asterisk 1.4 must be to address bugs only.  No new %features should be
+ * introduced into Asterisk 1.4 to reduce the %number of changes to this established
+ * release series.  The only exceptions to this %rule are for cases where something
  * that may be considered a feature is needed to address a bug or security issue.
  *
  * <hr/>
@@ -288,7 +289,7 @@
  *
  * Asterisk trunk is used as the main development area for upcoming Asterisk 1.6 
  * releases.  Commits to Asterisk trunk are not limited.  They can be bug fixes,
- * new features, and architectural improvements.  However, for larger sets
+ * new %features, and architectural improvements.  However, for larger sets
  * of changes, developers should work with the Asterisk project leaders to
  * schedule them for inclusion.  Care is taken not to include too many invasive
  * sets of changes for each new Asterisk 1.6 release.
@@ -311,8 +312,8 @@
  *
  * The Asterisk subversion repository has a special directory called "team"
  * where developers can make their own personal development branches.  This is
- * where new features, bug fixes, and architectural improvements are developed
- * while they are in progress.
+ * where new %features, bug fixes, and architectural improvements are developed
+ * while they are in %progress.
  *
  * Just about anything goes as far as commits to this area goes.  However,
  * developers should keep in mind that anything committed here, as well as
@@ -320,7 +321,7 @@
  * agreement.
  *
  * In addition to each developer having their own space for working on projects,
- * there is also a team/group folder where group development efforts take place.
+ * there is also a team/group folder where %group development efforts take place.
  *
  * Finally, in each developer folder, there is a folder called "private".  This
  * is where developers can create branches for working on things that they are
@@ -334,6 +335,98 @@
  * This file is in the /doc directory in your Asterisk source tree.
  * Make sure to stay up to date with the latest guidelines.
  * \verbinclude CODING-GUIDELINES
+ */
+
+/*!
+ * \page CommitMessages Guidelines for Commit Messages
+ *
+ * \AsteriskTrunkWarning
+ *
+ * <hr/>
+ *
+ * \section CommitMsgFormatting Commit Message Formatting
+ *
+ * The following illustrates the basic outline for commit messages:
+ *
+  \verbatim
+  <One-liner summary of changes>
+ 
+  <Verbose description of the changes>
+
+  <Special Tags>
+  \endverbatim
+ *
+ * Some commit history viewers treat the first line of commit messages as the
+ * summary for the commit.  So, an effort should be made to format our commit
+ * messages in that fashion.  The verbose description may contain multiple 
+ * paragraphs, itemized lists, etc.
+ *
+ * Commit messages should be wrapped at 80 %columns.
+ *
+ * \note For trivial commits, such as "fix the build", or "fix spelling mistake",
+ *       the verbose description may not be necessary.
+ *
+ * <hr/>
+ *
+ * \section CommitMsgTags Special Tags for Commit Messages
+ *
+ * \subsection MantisTags Mantis (http://bugs.digium.com/)
+ *
+ * To have a commit noted in an issue, use a tag of the form: 
+ * \arg (issue #1234)
+ *
+ * To have a commit automatically close an issue, use a tag of the form:
+ * \arg (closes issue #1234)
+ *
+ * When making a commit for a mantis issue, it is easiest to use the
+ * provided commit %message template functionality.  It will format the
+ * special tags appropriately, and will also include information about who
+ * reported the issue, which patches are being applied, and who did testing.
+ * 
+ * Assuming that you have bug marshal access (and if you have commit access,
+ * it is pretty safe to assume that you do), you will find the commit %message
+ * template section directly below the issue details section and above the
+ * issue relationships section.  You will have to click the '+' next to
+ * "Commit message template" to make the contents of the section visible.
+ *
+ * Here is an example of what the template will generate for you:
+ *
+  \verbatim
+  (closes issue #1234)
+  Reported by: SomeGuy
+  Patches:
+       fix_bug_1234.diff uploaded by SomeDeveloper (license 5678)
+  \endverbatim
+ *
+ * If the patch being committed was written by the person doing the commit,
+ * and is not available to reference as an upload to the issue, there is no
+ * need to include something like "fixed by me", as that will be the default
+ * assumption when a specific patch is not referenced.
+ *
+ * \subsection ReviewBoardTags Review Board (http://reviewboard.digium.com/)
+ *
+ * To have a commit set a review request as submitted, include the full URL
+ * to the review request.  For example:
+ * \arg Review: %http://reviewboard.digium.com/r/95/
+ *
+ * \note The trailing slash in the review URL is required.
+ *
+ * <hr/>
+ *
+ * \section CommitMsgSvnmerge Commit Messages with svnmerge
+ *
+ * When using the svnmerge tool for merging changes between branches, use the
+ * commit %message generated by svnmerge.  The '-f' option to svnmerge allows
+ * you to specify a file for svnmerge to write out a commit %message to.  The
+ * '-F' option to svn commit allows you to specify a file that contains the
+ * commit %message.
+ *
+ * If you are using the expect script wrappers for svnmerge from repotools,
+ * a commit %message is automatically placed in the file '../merge.msg'.
+ *
+ * For more detailed information about working with branches and merging,
+ * see the following page on %asterisk.org:
+ * \arg http://www.asterisk.org/developers/svn-branching-merging
  */
 
 /*! 

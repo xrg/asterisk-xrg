@@ -117,7 +117,7 @@
  *       specially to communication with other peers (proxies).
  * \todo We need to test TCP sessions with SIP proxies and in regards
  *       to the SIP outbound specs.
- * \todo transport=tls was deprecated in RFC3261 and should not be used at all. See section 22.2.2.
+ * \todo ;transport=tls was deprecated in RFC3261 and should not be used at all. See section 26.2.2.
  *
  * \todo If the message is smaller than the given Content-length, the request should get a 400 Bad request
  *       message. If it's a response, it should be dropped. (RFC 3261, Section 18.3)
@@ -1329,6 +1329,7 @@ struct sip_auth {
 #define SIP_PAGE2_ALLOWSUBSCRIBE	(1 << 16)	/*!< GP: Allow subscriptions from this peer? */
 #define SIP_PAGE2_ALLOWOVERLAP		(1 << 17)	/*!< DP: Allow overlap dialing ? */
 #define SIP_PAGE2_SUBSCRIBEMWIONLY	(1 << 18)	/*!< GP: Only issue MWI notification if subscribed to */
+#define SIP_PAGE2_IGNORESDPVERSION	(1 << 19)	/*!< GDP: Ignore the SDP session version number we receive and treat all sessions as new */
 
 #define SIP_PAGE2_T38SUPPORT		(7 << 20)	/*!< GDP: T38 Fax Passthrough Support */
 #define SIP_PAGE2_T38SUPPORT_UDPTL	(1 << 20)	/*!< GDP: T38 Fax Passthrough Support */
@@ -1349,10 +1350,10 @@ struct sip_auth {
 #define SIP_PAGE2_VIDEOSUPPORT_ALWAYS	(1 << 31)       /*!< DP: Always set up video, even if endpoints don't support it */
 
 #define SIP_PAGE2_FLAGS_TO_COPY \
-	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_VIDEOSUPPORT | \
-	SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | SIP_PAGE2_BUGGY_MWI | \
-	SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_FAX_DETECT | SIP_PAGE2_UDPTL_DESTINATION | \
-	SIP_PAGE2_VIDEOSUPPORT_ALWAYS)
+	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_IGNORESDPVERSION | \
+	SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | \
+	SIP_PAGE2_BUGGY_MWI | SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_FAX_DETECT | \
+	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_VIDEOSUPPORT_ALWAYS)
 
 /*@}*/ 
 
@@ -7359,8 +7360,11 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		return -1;
 	}
 
-	if (p->sessionversion_remote < 0 || p->sessionversion_remote != rua_version) {
- 		p->sessionversion_remote = rua_version;
+	if (ast_test_flag(&p->flags[1], SIP_PAGE2_IGNORESDPVERSION)
+		|| p->sessionversion_remote < 0
+		|| p->sessionversion_remote != rua_version) {
+ 		
+		p->sessionversion_remote = rua_version;
 		p->session_modify = TRUE;
 	} else if (p->sessionversion_remote == rua_version) {
 		p->session_modify = FALSE;
@@ -13694,9 +13698,9 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 	if (cmd == CLI_INIT) {
 		e->command = "sip prune realtime [peer|all]";
 		e->usage =
-		"Usage: sip prune realtime [peer [<name>|all|like <pattern>]|all]\n"
-		"       Prunes object(s) from the cache.\n"
-		"       Optional regular expression pattern is used to filter the objects.\n";
+			"Usage: sip prune realtime [peer [<name>|all|like <pattern>]|all]\n"
+			"       Prunes object(s) from the cache.\n"
+			"       Optional regular expression pattern is used to filter the objects.\n";
 		return NULL;
 	} else if (cmd == CLI_GENERATE) {
 		if (a->pos == 4 && !strcasecmp(a->argv[3], "peer")) {
@@ -14081,6 +14085,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  User=Phone   : %s\n", cli_yesno(ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)));
 		ast_cli(fd, "  Video Support: %s\n", cli_yesno(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT)));
 		ast_cli(fd, "  Text Support : %s\n", cli_yesno(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
+		ast_cli(fd, "  Ign SDP ver  : %s\n", cli_yesno(ast_test_flag(&peer->flags[1], SIP_PAGE2_IGNORESDPVERSION)));
 		ast_cli(fd, "  Trust RPID   : %s\n", cli_yesno(ast_test_flag(&peer->flags[0], SIP_TRUSTRPID)));
 		ast_cli(fd, "  Send RPID    : %s\n", cli_yesno(ast_test_flag(&peer->flags[0], SIP_SENDRPID)));
 		ast_cli(fd, "  Subscriptions: %s\n", cli_yesno(ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE)));
@@ -14590,6 +14595,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	}
 	ast_cli(a->fd, "  Videosupport:           %s\n", cli_yesno(ast_test_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT)));
 	ast_cli(a->fd, "  Textsupport:            %s\n", cli_yesno(ast_test_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT)));
+	ast_cli(a->fd, "  Ignore SDP sess. ver.:  %s\n", cli_yesno(ast_test_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION)));
 	ast_cli(a->fd, "  AutoCreate Peer:        %s\n", cli_yesno(sip_cfg.autocreatepeer));
 	ast_cli(a->fd, "  Match Auth Username:    %s\n", cli_yesno(global_match_auth_username));
 	ast_cli(a->fd, "  Allow unknown access:   %s\n", cli_yesno(sip_cfg.allowguest));
@@ -14871,10 +14877,10 @@ static char *sip_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	if (cmd == CLI_INIT) {
 		e->command = "sip show {channels|subscriptions}";
 		e->usage =
-		"Usage: sip show channels\n"
-		"       Lists all currently active SIP calls (dialogs).\n"
-		"Usage: sip show subscriptions\n"
-		"       Lists active SIP subscriptions.\n";
+			"Usage: sip show channels\n"
+			"       Lists all currently active SIP calls (dialogs).\n"
+			"Usage: sip show subscriptions\n"
+			"       Lists active SIP subscriptions.\n";
 		return NULL;
 	} else if (cmd == CLI_GENERATE)
 		return NULL;
@@ -15589,7 +15595,7 @@ static char *sip_set_history(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 	case CLI_INIT:
 		e->command = "sip set history {on|off}";
 		e->usage =
-			"Usage: sip history {on|off}\n"
+			"Usage: sip set history {on|off}\n"
 			"       Enables/Disables recording of SIP dialog history for debugging purposes.\n"
 			"       Use 'sip show history' to view the history of a call number.\n";
 		return NULL;
@@ -21715,6 +21721,9 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "allowsubscribe")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_ALLOWSUBSCRIBE);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_ALLOWSUBSCRIBE);
+	} else if (!strcasecmp(v->name, "ignoresdpversion")) {
+		ast_set_flag(&mask[1], SIP_PAGE2_IGNORESDPVERSION);
+		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_IGNORESDPVERSION);
 	} else if (!strcasecmp(v->name, "faxdetect")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_FAX_DETECT);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_FAX_DETECT);
@@ -22726,6 +22735,7 @@ static int reload_config(enum channelreloadreason reason)
 	ast_clear_flag(&global_flags[1], SIP_PAGE2_FAX_DETECT);
 	ast_clear_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_VIDEOSUPPORT_ALWAYS);
 	ast_clear_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT);
+	ast_clear_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION);
 
 
 	/* Read the [general] config section of sip.conf (or from realtime config) */
@@ -22933,6 +22943,8 @@ static int reload_config(enum channelreloadreason reason)
 			}
 
 			ast_copy_string(global_outboundproxy.name, proxyname, sizeof(global_outboundproxy.name));
+
+			proxy_update(&global_outboundproxy);
 		} else if (!strcasecmp(v->name, "autocreatepeer")) {
 			sip_cfg.autocreatepeer = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "match_auth_username")) {
@@ -23738,7 +23750,7 @@ static int sip_addheader(struct ast_channel *chan, void *data)
 	int no = 0;
 	int ok = FALSE;
 	char varbuf[30];
-	char *inbuf = data;
+	char *inbuf = data, *subbuf;
 	
 	if (ast_strlen_zero(inbuf)) {
 		ast_log(LOG_WARNING, "This application requires the argument: Header\n");
@@ -23752,13 +23764,18 @@ static int sip_addheader(struct ast_channel *chan, void *data)
 		snprintf(varbuf, sizeof(varbuf), "__SIPADDHEADER%.2d", no);
 
 		/* Compare without the leading underscores */
-		if( (pbx_builtin_getvar_helper(chan, (const char *) varbuf + 2) == (const char *) NULL) )
+		if ((pbx_builtin_getvar_helper(chan, (const char *) varbuf + 2) == (const char *) NULL)) {
 			ok = TRUE;
+		}
 	}
 	if (ok) {
-		pbx_builtin_setvar_helper (chan, varbuf, inbuf);
-		if (sipdebug)
+		size_t len = strlen(inbuf);
+		subbuf = alloca(len + 1);
+		ast_get_encoded_str(inbuf, subbuf, len + 1);
+		pbx_builtin_setvar_helper(chan, varbuf, subbuf);
+		if (sipdebug) {
 			ast_debug(1, "SIP Header added \"%s\" as %s\n", inbuf, varbuf);
+		}
 	} else {
 		ast_log(LOG_WARNING, "Too many SIP headers added, max 50\n");
 	}

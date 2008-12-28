@@ -41,10 +41,7 @@ extern "C" {
 #define AST_PBX_HANGUP                -1    /*!< Jump to the 'h' exten */
 #define AST_PBX_OK                     0    /*!< No errors */
 #define AST_PBX_ERROR                  1    /*!< Jump to the 'e' exten */
-#define AST_PBX_KEEPALIVE              10   /*!< Destroy the thread, but don't hang up the channel */
-#define AST_PBX_NO_HANGUP_PEER         11   /*!< The peer has been involved in a transfer */
 #define AST_PBX_INCOMPLETE             12   /*!< Return to PBX matching, allowing more digits for the extension */
-#define AST_PBX_NO_HANGUP_PEER_PARKED  13   /*!< Don't touch the peer channel - it was sent to the parking lot and might be gone by now */
 /*! } */
 
 #define PRIORITY_HINT	-1	/*!< Special Priority for a hint */
@@ -290,6 +287,37 @@ enum ast_pbx_result ast_pbx_start(struct ast_channel *c);
  * \retval non-zero on failure
  */
 enum ast_pbx_result ast_pbx_run(struct ast_channel *c);
+
+/*!
+ * \brief Options for ast_pbx_run()
+ */
+struct ast_pbx_args {
+	union {
+		/*! Pad this out so that we have plenty of room to add options
+		 *  but still maintain ABI compatibility over time. */
+		uint64_t __padding;
+		struct {
+			/*! Do not hangup the channel when the PBX is complete. */
+			unsigned int no_hangup_chan:1;
+		};
+	};
+};
+
+/*!
+ * \brief Execute the PBX in the current thread
+ *
+ * \param c channel to run the pbx on
+ * \param args options for the pbx
+ *
+ * This executes the PBX on a given channel. It allocates a new
+ * PBX structure for the channel, and provides all PBX functionality.
+ * See ast_pbx_start for an asynchronous function to run the PBX in a
+ * new thread as opposed to the current one.
+ * 
+ * \retval Zero on success
+ * \retval non-zero on failure
+ */
+enum ast_pbx_result ast_pbx_run_args(struct ast_channel *c, struct ast_pbx_args *args);
 
 /*! 
  * \brief Add and extension to an extension context.  

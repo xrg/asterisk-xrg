@@ -1427,7 +1427,7 @@ int ast_channel_datastore_inherit(struct ast_channel *from, struct ast_channel *
 		if (datastore->inheritance > 0) {
 			datastore2 = ast_datastore_alloc(datastore->info, datastore->uid);
 			if (datastore2) {
-				datastore2->data = datastore->info->duplicate(datastore->data);
+				datastore2->data = datastore->info->duplicate ? datastore->info->duplicate(datastore->data) : NULL;
 				datastore2->inheritance = datastore->inheritance == DATASTORE_INHERIT_FOREVER ? DATASTORE_INHERIT_FOREVER : datastore->inheritance - 1;
 				AST_LIST_INSERT_TAIL(&to->datastores, datastore2, entry);
 			}
@@ -2923,7 +2923,10 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	/* The channel driver does not support this indication, let's fake
 	 * it by doing our own tone generation if applicable. */
 
-	if (condition < 0) {
+	/*!\note If we compare the enumeration type, which does not have any
+	 * negative constants, the compiler may optimize this code away.
+	 * Therefore, we must perform an integer comparison here. */
+	if (_condition < 0) {
 		/* Stop any tones that are playing */
 		ast_playtones_stop(chan);
 		return 0;
@@ -4086,11 +4089,11 @@ int ast_do_masquerade(struct ast_channel *original)
 	/* Move data stores over */
 	if (AST_LIST_FIRST(&clonechan->datastores)) {
 		struct ast_datastore *ds;
-		AST_LIST_APPEND_LIST(&original->datastores, &clonechan->datastores, entry);
-		AST_LIST_TRAVERSE(&original->datastores, ds, entry) {
+		AST_LIST_TRAVERSE(&clonechan->datastores, ds, entry) {
 			if (ds->info->chan_fixup)
 				ds->info->chan_fixup(ds->data, clonechan, original);
 		}
+		AST_LIST_APPEND_LIST(&original->datastores, &clonechan->datastores, entry);
 	}
 
 	clone_variables(original, clonechan);

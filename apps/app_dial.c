@@ -2082,7 +2082,11 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 				if (gosub_args) {
 					res9 = pbx_exec(peer, theapp, gosub_args);
 					if (!res9) {
-						ast_pbx_run(peer);
+						struct ast_pbx_args args;
+						/* A struct initializer fails to compile for this case ... */
+						memset(&args, 0, sizeof(args));
+						args.no_hangup_chan = 1;
+						ast_pbx_run_args(peer, &args);
 					}
 					ast_free(gosub_args);
 					if (option_debug)
@@ -2211,14 +2215,9 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			res = ast_bridge_call(chan, peer, &config);
 		}
 
-		if (res != AST_PBX_NO_HANGUP_PEER_PARKED && ast_test_flag64(&opts, OPT_PEER_H)) {
-			ast_log(LOG_NOTICE, "PEER context: %s; PEER exten: %s;  PEER priority: %d\n",
-				peer->context, peer->exten, peer->priority);
-		}
-		if (res != AST_PBX_NO_HANGUP_PEER_PARKED)
-			strcpy(peer->context, chan->context);
+		strcpy(peer->context, chan->context);
 
-		if (res != AST_PBX_NO_HANGUP_PEER_PARKED && ast_test_flag64(&opts, OPT_PEER_H) && ast_exists_extension(peer, peer->context, "h", 1, peer->cid.cid_num)) {
+		if (ast_test_flag64(&opts, OPT_PEER_H) && ast_exists_extension(peer, peer->context, "h", 1, peer->cid.cid_num)) {
 			int autoloopflag;
 			int found;
 			int res9;
@@ -2238,41 +2237,34 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			}
 			ast_set2_flag(peer, autoloopflag, AST_FLAG_IN_AUTOLOOP);  /* set it back the way it was */
 		}
-		if (res != AST_PBX_NO_HANGUP_PEER && res != AST_PBX_NO_HANGUP_PEER_PARKED) {
-			if (!ast_check_hangup(peer) && ast_test_flag64(&opts, OPT_CALLEE_GO_ON) && !ast_strlen_zero(opt_args[OPT_ARG_CALLEE_GO_ON])) {		
-				replace_macro_delimiter(opt_args[OPT_ARG_CALLEE_GO_ON]);
-				ast_parseable_goto(peer, opt_args[OPT_ARG_CALLEE_GO_ON]);
-				ast_pbx_start(peer);
-			} else {
-				if (!ast_check_hangup(chan))
-					chan->hangupcause = peer->hangupcause;
-				ast_hangup(peer);
-			}
+		if (!ast_check_hangup(peer) && ast_test_flag64(&opts, OPT_CALLEE_GO_ON) && !ast_strlen_zero(opt_args[OPT_ARG_CALLEE_GO_ON])) {		
+			replace_macro_delimiter(opt_args[OPT_ARG_CALLEE_GO_ON]);
+			ast_parseable_goto(peer, opt_args[OPT_ARG_CALLEE_GO_ON]);
+			ast_pbx_start(peer);
+		} else {
+			if (!ast_check_hangup(chan))
+				chan->hangupcause = peer->hangupcause;
+			ast_hangup(peer);
 		}
 	}
 out:
-	/* cleaning up chan is not a good idea here if AST_PBX_KEEPALIVE
-	   is returned; chan will get the love it needs from another
-	   thread */
-	if (res != AST_PBX_KEEPALIVE) {
-		if (moh) {
-			moh = 0;
-			ast_moh_stop(chan);
-		} else if (sentringing) {
-			sentringing = 0;
-			ast_indicate(chan, -1);
-		}
-		ast_channel_early_bridge(chan, NULL);
-		hanguptree(outgoing, NULL, 0); /* In this case, there's no answer anywhere */
-		pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
-		senddialendevent(chan, pa.status);
-		ast_debug(1, "Exiting with DIALSTATUS=%s.\n", pa.status);
-
-		if ((ast_test_flag64(peerflags, OPT_GO_ON)) && !ast_check_hangup(chan) && (res != AST_PBX_KEEPALIVE) && (res != AST_PBX_INCOMPLETE)) {
-			if (!ast_tvzero(calldurationlimit))
-				memset(&chan->whentohangup, 0, sizeof(chan->whentohangup));
-			res = 0;
-		}
+	if (moh) {
+		moh = 0;
+		ast_moh_stop(chan);
+	} else if (sentringing) {
+		sentringing = 0;
+		ast_indicate(chan, -1);
+	}
+	ast_channel_early_bridge(chan, NULL);
+	hanguptree(outgoing, NULL, 0); /* In this case, there's no answer anywhere */
+	pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
+	senddialendevent(chan, pa.status);
+	ast_debug(1, "Exiting with DIALSTATUS=%s.\n", pa.status);
+	
+	if ((ast_test_flag64(peerflags, OPT_GO_ON)) && !ast_check_hangup(chan) && (res != AST_PBX_INCOMPLETE)) {
+		if (!ast_tvzero(calldurationlimit))
+			memset(&chan->whentohangup, 0, sizeof(chan->whentohangup));
+		res = 0;
 	}
 
 done:
@@ -2428,7 +2420,7 @@ static int load_module(void)
 	if (!con)
 		ast_log(LOG_ERROR, "Dial virtual context 'app_dial_gosub_virtual_context' does not exist and unable to create\n");
 	else
-		ast_add_extension2(con, 1, "s", 1, NULL, NULL, "KeepAlive", ast_strdup(""), ast_free_ptr, "app_dial");
+		ast_add_extension2(con, 1, "s", 1, NULL, NULL, "NoOp", ast_strdup(""), ast_free_ptr, "app_dial");
 
 	res = ast_register_application_xml(app, dial_exec);
 	res |= ast_register_application_xml(rapp, retrydial_exec);

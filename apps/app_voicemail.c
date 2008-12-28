@@ -45,7 +45,7 @@ c-client (http://www.washington.edu/imap/
  ***/
 
 /*** MAKEOPTS
-<category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" remove_on_change="apps/app_voicemail.o apps/app_directory.o">
+<category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" remove_on_change="apps/app_voicemail.o apps/app_voicemail.so apps/app_directory.o apps/app_directory.so">
 	<member name="ODBC_STORAGE" displayname="Storage of Voicemail using ODBC">
 		<depend>odbc</depend>
 		<depend>ltdl</depend>
@@ -1462,7 +1462,9 @@ static void vm_imap_delete(int msgnum, struct ast_vm_user *vmu)
 		ast_log(LOG_DEBUG, "deleting msgnum %d, which is mailbox message %lu\n",msgnum,messageNum);
 	/* delete message */
 	snprintf (arg, sizeof(arg), "%lu",messageNum);
+	ast_mutex_lock(&vms->lock);
 	mail_setflag (vms->mailstream,arg,"\\DELETED");
+	ast_mutex_unlock(&vms->lock);
 }
 
 static int imap_retrieve_greeting (const char *dir, const int msgnum, struct ast_vm_user *vmu)
@@ -1496,10 +1498,12 @@ static int imap_retrieve_greeting (const char *dir, const int msgnum, struct ast
 	
 	/* Greetings will never have a prepended message */
 	*vms_p->introfn = '\0';
-	
+
+	ast_mutex_lock(&vms_p->lock);
 	ret = init_mailstream(vms_p, GREETINGS_FOLDER);
 	if (!vms_p->mailstream) {
 		ast_log(AST_LOG_ERROR, "IMAP mailstream is NULL\n");
+		ast_mutex_unlock(&vms_p->lock);
 		return -1;
 	}
 
@@ -1511,6 +1515,7 @@ static int imap_retrieve_greeting (const char *dir, const int msgnum, struct ast
 			attachment = ast_strdupa(body->nested.part->next->body.parameter->value);
 		} else {
 			ast_log(AST_LOG_ERROR, "There is no file attached to this IMAP message.\n");
+			ast_mutex_unlock(&vms_p->lock);
 			return -1;
 		}
 		filename = strsep(&attachment, ".");
@@ -1518,9 +1523,11 @@ static int imap_retrieve_greeting (const char *dir, const int msgnum, struct ast
 			ast_copy_string(vms_p->fn, dir, sizeof(vms_p->fn));
 			vms_p->msgArray[vms_p->curmsg] = i + 1;
 			save_body(body, vms_p, "2", attachment, 0);
+			ast_mutex_unlock(&vms_p->lock);
 			return 0;
 		}
 	}
+	ast_mutex_unlock(&vms_p->lock);
 
 	return -1;
 }
@@ -1586,7 +1593,9 @@ static int imap_retrieve_file(const char *dir, const int msgnum, const char *mai
 	}
 
 	/* This will only work for new messages... */
+	ast_mutex_lock(&vms->lock);
 	header_content = mail_fetchheader (vms->mailstream, vms->msgArray[msgnum]);
+	ast_mutex_unlock(&vms->lock);
 	/* empty string means no valid header */
 	if (ast_strlen_zero(header_content)) {
 		ast_log (LOG_ERROR,"Could not fetch header for message number %ld\n",vms->msgArray[msgnum]);
@@ -1594,8 +1603,10 @@ static int imap_retrieve_file(const char *dir, const int msgnum, const char *mai
 		goto exit;
 	}
 
+	ast_mutex_lock(&vms->lock);
 	mail_fetchstructure (vms->mailstream,vms->msgArray[msgnum],&body);
-	
+	ast_mutex_unlock(&vms->lock);
+
 	/* We have the body, now we extract the file name of the first attachment. */
 	if (body->nested.part && body->nested.part->next && body->nested.part->next->body.parameter->value) {
 		attachedfilefmt = ast_strdupa(body->nested.part->next->body.parameter->value);
@@ -1702,6 +1713,12 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 	int fold = folder_int(folder);
 	int urgent = 0;
 	
+	/* If URGENT, then look at INBOX */
+	if (fold == 11) {
+		fold = NEW_FOLDER;
+		urgent = 1;
+	}
+
 	if (ast_strlen_zero(mailbox))
 		return 0;
 
@@ -1749,25 +1766,8 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		vms_p = get_vm_state_by_mailbox(mailbox, context, 0);
 	}
 
-	/* If URGENT, then look at INBOX */
-	if (fold == 11) {
-		fold = NEW_FOLDER;
-		urgent = 1;
-	}
-
 	if (!vms_p) {
-		ast_debug(3,"Adding new vmstate for %s\n",vmu->imapuser);
-		if (!(vms_p = ast_calloc(1, sizeof(*vms_p)))) {
-			return -1;
-		}
-		ast_copy_string(vms_p->imapuser,vmu->imapuser, sizeof(vms_p->imapuser));
-		ast_copy_string(vms_p->username, mailbox, sizeof(vms_p->username)); /* save for access from interactive entry point */
-		vms_p->mailstream = NIL; /* save for access from interactive entry point */
-		ast_debug(3, "Copied %s to %s\n",vmu->imapuser,vms_p->imapuser);
-		vms_p->updated = 1;
-		ast_copy_string(vms_p->curbox, mbox(fold), sizeof(vms_p->curbox));
-		init_vm_state(vms_p);
-		vmstate_insert(vms_p);
+		vms_p = create_vm_state_from_user(vmu);
 	}
 	ret = init_mailstream(vms_p, fold);
 	if (!vms_p->mailstream) {
@@ -1775,6 +1775,7 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		return -1;
 	}
 	if (ret == 0) {
+		ast_mutex_lock(&vms_p->lock);
 		pgm = mail_newsearchpgm ();
 		hdr = mail_newsearchheader ("X-Asterisk-VM-Extension", (char *)mailbox);
 		pgm->header = hdr;
@@ -1807,10 +1808,13 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 			vms_p->urgentmessages = vms_p->vmArrayIndex;
 		/*Freeing the searchpgm also frees the searchhdr*/
 		mail_free_searchpgm(&pgm);
+		ast_mutex_unlock(&vms_p->lock);
 		vms_p->updated = 0;
 		return vms_p->vmArrayIndex;
-	} else {  
+	} else {
+		ast_mutex_lock(&vms_p->lock);
 		mail_ping(vms_p->mailstream);
+		ast_mutex_unlock(&vms_p->lock);
 	}
 	return 0;
 }
@@ -1908,8 +1912,10 @@ static int imap_store_file(char *dir, char *mailboxuser, char *mailboxcontext, i
 	ret = init_mailstream(vms, NEW_FOLDER);
 	if (ret == 0) {
 		imap_mailbox_name(mailbox, sizeof(mailbox), vms, NEW_FOLDER, 1);
+		ast_mutex_lock(&vms->lock);
 		if(!mail_append_full(vms->mailstream, mailbox, imap_flags, NIL, &str))
 			ast_log(LOG_ERROR, "Error while sending the message to %s\n", mailbox);
+		ast_mutex_unlock(&vms->lock);
 		fclose(p);
 		unlink(tmp);
 		ast_free(buf);
@@ -2073,8 +2079,12 @@ static int copy_message(struct ast_channel *chan, struct ast_vm_user *vmu, int i
 		return -1;
 	}
 	snprintf(messagestring, sizeof(messagestring), "%ld", sendvms->msgArray[msgnum]);
-	if ((mail_copy(sendvms->mailstream, messagestring, (char *) mbox(imbox)) == T))
+	ast_mutex_lock(&sendvms->lock);
+	if ((mail_copy(sendvms->mailstream, messagestring, (char *) mbox(imbox)) == T)) {
+		ast_mutex_unlock(&sendvms->lock);
 		return 0;
+	}
+	ast_mutex_unlock(&sendvms->lock);
 	ast_log(LOG_WARNING, "Unable to copy message from mailbox %s to mailbox %s\n", vmu->mailbox, recip->mailbox);
 	return -1;
 }
@@ -2210,6 +2220,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 		check_quota(vms,(char *)mbox(box));
 	}
 
+	ast_mutex_lock(&vms->lock);
 	pgm = mail_newsearchpgm();
 
 	/* Check IMAP folder for Asterisk messages only... */
@@ -2241,6 +2252,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 	vms->lastmsg = vms->vmArrayIndex - 1;
 	mail_free_searchpgm(&pgm);
 
+	ast_mutex_unlock(&vms->lock);
 	return 0;
 }
 
@@ -2249,9 +2261,9 @@ static void write_file(char *filename, char *buffer, unsigned long len)
 	FILE *output;
 
 	output = fopen (filename, "w");
-	if (fwrite(buffer, len, 1, output) < len) {
+	if (fwrite(buffer, len, 1, output) != 1) {
 		if (ferror(output)) {
-			ast_log(LOG_ERROR, "Short write while writing e-mail body.\n");
+			ast_log(LOG_ERROR, "Short write while writing e-mail body: %s.\n", strerror(errno));
 		}
 	}
 	fclose (output);
@@ -2731,7 +2743,9 @@ static int save_body(BODY *body, struct vm_state *vms, char *section, char *form
 	if (!body || body == NIL)
 		return -1;
 
+	ast_mutex_lock(&vms->lock);
 	body_content = mail_fetchbody(vms->mailstream, vms->msgArray[vms->curmsg], section, &len);
+	ast_mutex_unlock(&vms->lock);
 	if (body_content != NIL) {
 		snprintf(filename, sizeof(filename), "%s.%s", fn, format);
 		/* ast_debug(1,body_content); */
@@ -2754,6 +2768,7 @@ static int save_body(BODY *body, struct vm_state *vms, char *section, char *form
  *
  * Determines the delimiter character that is used by the underlying IMAP based mail store.
  */
+/* MUTEX should already be held */
 static void get_mailbox_delimiter(MAILSTREAM *stream) {
 	char tmp[50];
 	snprintf(tmp, sizeof(tmp), "{%s}", imapserver);
@@ -2768,6 +2783,7 @@ static void get_mailbox_delimiter(MAILSTREAM *stream) {
  * Calls imap_getquotaroot, which will populate its results into the vm_state vms input structure.
  */
 static void check_quota(struct vm_state *vms, char *mailbox) {
+	ast_mutex_lock(&vms->lock);
 	mail_parameters(NULL, SET_QUOTA, (void *) mm_parsequota);
 	ast_debug(3, "Mailbox name set to: %s, about to check quotas\n", mailbox);
 	if (vms && vms->mailstream != NULL) {
@@ -2775,6 +2791,7 @@ static void check_quota(struct vm_state *vms, char *mailbox) {
 	} else {
 		ast_log(AST_LOG_WARNING, "Mailstream not available for mailbox: %s\n", mailbox);
 	}
+	ast_mutex_unlock(&vms->lock);
 }
 
 #endif /* IMAP_STORAGE */
@@ -5329,12 +5346,14 @@ leave_vm_out:
 	/* expunge message - use UID Expunge if supported on IMAP server*/
 	ast_debug(3, "*** Checking if we can expunge, expungeonhangup set to %d\n",expungeonhangup);
 	if (expungeonhangup == 1) {
+		ast_mutex_lock(&vms->lock);
 #ifdef HAVE_IMAP_TK2006
 		if (LEVELUIDPLUS (vms->mailstream)) {
 			mail_expunge_full(vms->mailstream,NIL,EX_UID);
 		} else 
 #endif
 			mail_expunge(vms->mailstream);
+		ast_mutex_unlock(&vms->lock);
 	}
 #endif
 	
@@ -5355,17 +5374,22 @@ static int save_to_folder(struct ast_vm_user *vmu, struct vm_state *vms, int msg
 	/* simple. huh? */
 	char sequence[10];
 	char mailbox[256];
+	int res;
+
 	/* get the real IMAP message number for this message */
 	snprintf(sequence, sizeof(sequence), "%ld", vms->msgArray[msg]);
 	
 	ast_debug(3, "Copying sequence %s to mailbox %s\n", sequence, mbox(box));
+	ast_mutex_lock(&vms->lock);
 	if (box == OLD_FOLDER) {
 		mail_setflag(vms->mailstream, sequence, "\\Seen");
 	} else if (box == NEW_FOLDER) {
 		mail_clearflag(vms->mailstream, sequence, "\\Seen");
 	}
-	if (!strcasecmp(mbox(NEW_FOLDER), vms->curbox) && (box == NEW_FOLDER || box == OLD_FOLDER))
+	if (!strcasecmp(mbox(NEW_FOLDER), vms->curbox) && (box == NEW_FOLDER || box == OLD_FOLDER)) {
+		ast_mutex_unlock(&vms->lock);
 		return 0;
+	}
 	/* Create the folder if it don't exist */
 	imap_mailbox_name(mailbox, sizeof(mailbox), vms, box, 1); /* Get the full mailbox name */
 	ast_debug(5, "Checking if folder exists: %s\n",mailbox);
@@ -5373,7 +5397,9 @@ static int save_to_folder(struct ast_vm_user *vmu, struct vm_state *vms, int msg
 		ast_debug(5, "Folder exists.\n");
 	else
 		ast_log(AST_LOG_NOTICE, "Folder %s created!\n",mbox(box));
-	return !mail_copy(vms->mailstream, sequence, (char *)mbox(box));
+	res = !mail_copy(vms->mailstream, sequence, (char *)mbox(box));
+	ast_mutex_unlock(&vms->lock);
+	return res;
 #else
 	char *dir = vms->curdir;
 	char *username = vms->username;
@@ -6325,7 +6351,6 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 			int old_priority;
 			struct ast_app* directory_app;
 
-			
 			directory_app = pbx_findapp("Directory");
 			if (directory_app) {
 				char vmcontext[256];
@@ -6335,7 +6360,7 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 				old_priority = chan->priority;
 				
 				/* call the the Directory, changes the channel */
-				snprintf(vmcontext, sizeof(vmcontext), "%s||v", context ? context : "default");
+				snprintf(vmcontext, sizeof(vmcontext), "%s,,v", context ? context : "default");
 				res = pbx_exec(chan, directory_app, vmcontext);
 				
 				ast_copy_string(username, chan->exten, sizeof(username));
@@ -6344,7 +6369,6 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 				memcpy(chan->context, old_context, sizeof(chan->context));
 				memcpy(chan->exten, old_exten, sizeof(chan->exten));
 				chan->priority = old_priority;
-				
 			} else {
 				ast_log(AST_LOG_WARNING, "Could not find the Directory application, disabling directory_forward\n");
 				ast_clear_flag((&globalflags), VM_DIRECFORWARD);
@@ -6370,6 +6394,14 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 				AST_LIST_INSERT_HEAD(&extensions, receiver, list);
 				found++;
 			} else {
+				/* XXX Optimization for the future.  When we encounter a single bad extension,
+				 * bailing out on all of the extensions may not be the way to go.  We should
+				 * probably just bail on that single extension, then allow the user to enter
+				 * several more. XXX
+				 */
+				while ((receiver = AST_LIST_REMOVE_HEAD(&extensions, list))) {
+					free_user(receiver);
+				}
 				valid_extensions = 0;
 				break;
 			}
@@ -6384,10 +6416,9 @@ static int forward_message(struct ast_channel *chan, char *context, struct vm_st
 					return res;
 				}
 			} else {
-				/* Dispose just in case */
-				DISPOSE(fn, -1);
 				res = ast_say_digit_str(chan, s, ecodes, chan->language);
 			}
+			DISPOSE(fn, -1);
 
 			s = strsep(&stringp, "*");
 		}
@@ -6872,7 +6903,8 @@ static int imap_delete_old_greeting (char *dir, struct vm_state *vms)
 		ast_log(AST_LOG_ERROR, "Failed to procure file name from directory passed. You should never see this.\n");
 		return -1;
 	}
-	
+
+	ast_mutex_lock(&vms->lock);
 	for (i = 0; i < vms->mailstream->nmsgs; i++) {
 		mail_fetchstructure(vms->mailstream, i + 1, &body);
 		/* We have the body, now we extract the file name of the first attachment. */
@@ -6880,6 +6912,7 @@ static int imap_delete_old_greeting (char *dir, struct vm_state *vms)
 			attachment = ast_strdupa(body->nested.part->next->body.parameter->value);
 		} else {
 			ast_log(AST_LOG_ERROR, "There is no file attached to this IMAP message.\n");
+			ast_mutex_unlock(&vms->lock);
 			return -1;
 		}
 		filename = strsep(&attachment, ".");
@@ -6889,6 +6922,7 @@ static int imap_delete_old_greeting (char *dir, struct vm_state *vms)
 		}
 	}
 	mail_expunge(vms->mailstream);
+	ast_mutex_unlock(&vms->lock);
 	return 0;
 }
 
@@ -9445,12 +9479,14 @@ out:
 	/* expunge message - use UID Expunge if supported on IMAP server*/
 	ast_debug(3, "*** Checking if we can expunge, deleted set to %d, expungeonhangup set to %d\n",deleted,expungeonhangup);
 	if (vmu && deleted == 1 && expungeonhangup == 1 && vms.mailstream != NULL) {
+		ast_mutex_lock(&vms.lock);
 #ifdef HAVE_IMAP_TK2006
 		if (LEVELUIDPLUS (vms.mailstream)) {
 			mail_expunge_full(vms.mailstream,NIL,EX_UID);
 		} else 
 #endif
 			mail_expunge(vms.mailstream);
+		ast_mutex_unlock(&vms.lock);
 	}
 	/*  before we delete the state, we should copy pertinent info
 	 *  back to the persistent model */
@@ -9719,6 +9755,8 @@ static char *show_users_realtime(int fd, const char *context)
 	ast_cli(fd,
 		"=============================================================\n"
 		"\n");
+
+	ast_config_destroy(cfg);
 
 	return CLI_SUCCESS;
 }

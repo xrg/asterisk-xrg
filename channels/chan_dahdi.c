@@ -4425,18 +4425,31 @@ static void dahdi_handle_dtmfup(struct ast_channel *ast, int idx, struct ast_fra
 			if (strcmp(ast->exten, "fax")) {
 				const char *target_context = S_OR(ast->macrocontext, ast->context);
 
+				/* We need to unlock 'ast' here because ast_exists_extension has the
+				 * potential to start autoservice on the channel. Such action is prone
+				 * to deadlock.
+				 */
+				ast_mutex_unlock(&p->lock);
+				ast_channel_unlock(ast);
 				if (ast_exists_extension(ast, target_context, "fax", 1, ast->cid.cid_num)) {
+					ast_channel_lock(ast);
+					ast_mutex_lock(&p->lock);
 					ast_verb(3, "Redirecting %s to fax extension\n", ast->name);
 					/* Save the DID/DNIS when we transfer the fax call to a "fax" extension */
 					pbx_builtin_setvar_helper(ast, "FAXEXTEN", ast->exten);
 					if (ast_async_goto(ast, target_context, "fax", 1))
 						ast_log(LOG_WARNING, "Failed to async goto '%s' into fax of '%s'\n", ast->name, target_context);
-				} else
+				} else {
+					ast_channel_lock(ast);
+					ast_mutex_lock(&p->lock);
 					ast_log(LOG_NOTICE, "Fax detected, but no fax extension\n");
-			} else
+				}
+			} else {
 				ast_debug(1, "Already in a fax extension, not redirecting\n");
-		} else
+			}
+		} else {
 			ast_debug(1, "Fax already handled\n");
+		}
 		dahdi_confmute(p, 0);
 		p->subs[idx].f.frametype = AST_FRAME_NULL;
 		p->subs[idx].f.subclass = 0;
@@ -12030,7 +12043,9 @@ static char *handle_pri_show_debug(struct ast_cli_entry *e, int cmd, struct ast_
 	switch (cmd) {
 	case CLI_INIT:	
 		e->command = "pri show debug";
-		e->usage = "Show the debug state of pri spans\n";
+		e->usage = 
+			"Usage: pri show debug\n"
+			"	Show the debug state of pri spans\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;	
@@ -12064,7 +12079,9 @@ static char *handle_pri_version(struct ast_cli_entry *e, int cmd, struct ast_cli
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "pri show version";
-		e->usage = "Show libpri version information\n";
+		e->usage = 
+			"Usage: pri show version\n"
+			"Show libpri version information\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -12888,10 +12905,10 @@ static char *dahdi_set_dnd(struct ast_cli_entry *e, int cmd, struct ast_cli_args
 		e->command = "dahdi set dnd";
 		e->usage = 
 			"Usage: dahdi set dnd <chan#> <on|off>\n"
-			"   Sets/resets DND (Do Not Disturb) mode on a channel.\n"
-			"   Changes take effect immediately.\n"
-			"   <chan num> is the channel number\n"
-			"   <on|off> Enable or disable DND mode?\n"
+			"	Sets/resets DND (Do Not Disturb) mode on a channel.\n"
+			"	Changes take effect immediately.\n"
+			"	<chan num> is the channel number\n"
+			" 	<on|off> Enable or disable DND mode?\n"
 			;
 		return NULL;
 	case CLI_GENERATE:
@@ -13572,7 +13589,9 @@ static char *handle_ss7_version(struct ast_cli_entry *e, int cmd, struct ast_cli
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "ss7 show version";
-		e->usage = "Show the libss7 version\n";
+		e->usage = 
+			"Usage: ss7 show version\n"
+			"	Show the libss7 version\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -13884,6 +13903,10 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 				confp->chan.buf_policy = DAHDI_POLICY_WHEN_FULL;
 			} else if (!strcasecmp(policy, "immediate")) {
 				confp->chan.buf_policy = DAHDI_POLICY_IMMEDIATE;
+#ifdef HAVE_DAHDI_HALF_FULL
+			} else if (!strcasecmp(policy, "half_full")) {
+				confp->chan.buf_policy = DAHDI_POLICY_HALF_FULL;
+#endif
 			} else {
 				ast_log(LOG_WARNING, "Invalid policy name given (%s).\n", policy);
 			}

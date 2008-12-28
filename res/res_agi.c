@@ -687,7 +687,7 @@ static enum agi_result launch_asyncagi(struct ast_channel *chan, char *argv[], i
 			/* OK, we have a command, let's call the
 			   command handler. */
 			res = agi_handle_command(chan, &async_agi, cmd->cmd_buffer, 0);
-			if ((res < 0) || (res == AST_PBX_KEEPALIVE)) {
+			if (res < 0) {
 				free_agi_cmd(cmd);
 				break;
 			}
@@ -2229,12 +2229,6 @@ static int handle_speechrecognize(struct ast_channel *chan, AGI *agi, int argc, 
 	return RESULT_SUCCESS;
 }
 
-static int handle_asyncagi_break(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
-{
-	ast_agi_send(agi->fd, chan, "200 result=0\n");
-	return AST_PBX_KEEPALIVE;
-}
-
 static char usage_verbose[] =
 " Usage: VERBOSE <message> <level>\n"
 "	Sends <message> to the console via verbose message system.\n"
@@ -2395,10 +2389,6 @@ static char usage_autohangup[] =
 " future.  Of course it can be hungup before then as well. Setting to 0 will\n"
 " cause the autohangup feature to be disabled on this channel.\n";
 
-static char usage_break_aagi[] =
-" Usage: ASYNCAGI BREAK\n"
-"	Break the Async AGI loop.\n";
-
 static char usage_speechcreate[] =
 " Usage: SPEECH CREATE <engine>\n"
 "       Create a speech object to be used by the other Speech AGI commands.\n";
@@ -2480,7 +2470,6 @@ static struct agi_command commands[] = {
 	{ { "speech", "activate", "grammar", NULL }, handle_speechactivategrammar, "Activates a grammar", usage_speechactivategrammar, 0 },
 	{ { "speech", "deactivate", "grammar", NULL }, handle_speechdeactivategrammar, "Deactivates a grammar", usage_speechdeactivategrammar, 0 },
 	{ { "speech", "recognize", NULL }, handle_speechrecognize, "Recognizes speech", usage_speechrecognize, 0 },
-	{ { "asyncagi", "break", NULL }, handle_asyncagi_break, "Break AsyncAGI loop", usage_break_aagi, 0 },
 };
 
 static AST_RWLIST_HEAD_STATIC(agi_commands, agi_command);
@@ -2751,7 +2740,6 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf, int
 			ast_module_unref(c->mod);
 		switch (res) {
 		case RESULT_SHOWUSAGE: ami_res = "Usage"; resultcode = 520; break;
-		case AST_PBX_KEEPALIVE: ami_res = "KeepAlive"; resultcode = 210; break;
 		case RESULT_FAILURE: ami_res = "Failure"; resultcode = -1; break;
 		case RESULT_SUCCESS: ami_res = "Success"; resultcode = 200; break;
 		}
@@ -2767,10 +2755,6 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf, int
 			ast_agi_send(agi->fd, chan, "520-Invalid command syntax.  Proper usage follows:\n");
 			ast_agi_send(agi->fd, chan, "%s", c->usage);
 			ast_agi_send(agi->fd, chan, "520 End of proper usage.\n");
-			break;
-		case AST_PBX_KEEPALIVE:
-			/* We've been asked to keep alive, so do so */
-			return AST_PBX_KEEPALIVE;
 			break;
 		case RESULT_FAILURE:
 			/* They've already given the failure.  We've been hung up on so handle this
@@ -2810,25 +2794,34 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 	/* how many times we'll retry if ast_waitfor_nandfs will return without either
 	  channel or file descriptor in case select is interrupted by a system call (EINTR) */
 	int retry = AGI_NANDFS_RETRY;
-	const char *sighup;
+	int send_sighup;
+	const char *sighup_str;
+	
+	ast_channel_lock(chan);
+	sighup_str = pbx_builtin_getvar_helper(chan, "AGISIGHUP");
+	send_sighup = ast_strlen_zero(sighup_str) || !ast_false(sighup_str);
+	ast_channel_unlock(chan);
 
 	if (!(readf = fdopen(agi->ctrl, "r"))) {
 		ast_log(LOG_WARNING, "Unable to fdopen file descriptor\n");
-		if (pid > -1)
+		if (send_sighup && pid > -1)
 			kill(pid, SIGHUP);
 		close(agi->ctrl);
 		return AGI_RESULT_FAILURE;
 	}
+	
 	setlinebuf(readf);
 	setup_env(chan, request, agi->fd, (agi->audio > -1), argc, argv);
 	for (;;) {
 		if (needhup) {
 			needhup = 0;
 			dead = 1;
-			if (pid > -1) {
-				kill(pid, SIGHUP);
-			} else if (agi->fast) {
-				send(agi->ctrl, "HANGUP\n", 7, MSG_OOB);
+			if (send_sighup) {
+				if (pid > -1) {
+					kill(pid, SIGHUP);
+				} else if (agi->fast) {
+					send(agi->ctrl, "HANGUP\n", 7, MSG_OOB);
+				}
 			}
 		}
 		ms = -1;
@@ -2876,8 +2869,9 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 
 			if (!buf[0]) {
 				/* Program terminated */
-				if (returnstatus && returnstatus != AST_PBX_KEEPALIVE)
+				if (returnstatus) {
 					returnstatus = -1;
+				}
 				ast_verb(3, "<%s>AGI Script %s completed, returning %d\n", chan->name, request, returnstatus);
 				if (pid > 0)
 					waitpid(pid, status, 0);
@@ -2899,7 +2893,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				ast_verbose("<%s>AGI Rx << %s\n", chan->name, buf);
 			returnstatus |= agi_handle_command(chan, agi, buf, dead);
 			/* If the handle_command returns -1, we need to stop */
-			if ((returnstatus < 0) || (returnstatus == AST_PBX_KEEPALIVE)) {
+			if (returnstatus < 0) {
 				needhup = 1;
 				continue;
 			}
@@ -2912,8 +2906,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 		}
 	}
 	/* Notify process */
-	sighup = pbx_builtin_getvar_helper(chan, "AGISIGHUP");
-	if (ast_strlen_zero(sighup) || !ast_false(sighup)) {
+	if (send_sighup) {
 		if (pid > -1) {
 			if (kill(pid, SIGHUP)) {
 				ast_log(LOG_WARNING, "unable to send SIGHUP to AGI process %d: %s\n", pid, strerror(errno));
