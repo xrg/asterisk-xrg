@@ -579,7 +579,7 @@ fi
 %exclude						%{_sysconfdir}/asterisk/res_snmp.conf
 %exclude						%{_sysconfdir}/asterisk/*sql*.conf
 
-#%attr(0755,root,root)					%{_sbindir}/aelparse
+%attr(0755,root,root)					%{_sbindir}/aelparse
 %attr(0755,root,root)					%{_sbindir}/asterisk
 %attr(0755,root,root)					%{_sbindir}/astgenkey
 %attr(0755,root,root)					%{_sbindir}/astman
@@ -592,7 +592,7 @@ fi
 %attr(0755,root,root)					%{_sbindir}/streamplayer
 %attr(0755,root,root)					%{_sbindir}/astcanary
 %attr(0755,root,root)					%{_sbindir}/check_expr
-#%attr(0755,root,root)					%{_sbindir}/conf2ael
+%attr(0755,root,root)					%{_sbindir}/conf2ael
 %attr(0755,root,root)					%{_sbindir}/hashtest
 %attr(0755,root,root)					%{_sbindir}/hashtest2
 %exclude						%{_sbindir}/refcounter
