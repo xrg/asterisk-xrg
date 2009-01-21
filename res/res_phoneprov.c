@@ -34,7 +34,7 @@
 #ifdef SOLARIS
 #include <sys/sockio.h>
 #endif
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 96773 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/channel.h"
 #include "asterisk/file.h"
@@ -944,6 +944,7 @@ static int set_config(void)
 
 	if (!(phoneprov_cfg = ast_config_load("phoneprov.conf", config_flags)) || phoneprov_cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Unable to load config phoneprov.conf\n");
+		ast_config_destroy(cfg);
 		return -1;
 	}
 

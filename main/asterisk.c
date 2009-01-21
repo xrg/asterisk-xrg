@@ -81,7 +81,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #elif defined(HAVE_SYSCTL)
 #include <sys/param.h>
 #include <sys/sysctl.h>
+#if !defined(__OpenBSD__)
+#include <sys/vmmeter.h>
+#if defined(__FreeBSD__)
+#include <vm/vm_param.h>
+#endif
+#endif
+#if defined(HAVE_SWAPCTL)
 #include <sys/swap.h>
+#endif
 #endif
 #include <regex.h>
 
@@ -541,7 +549,7 @@ static int swapmode(int *used, int *total)
 #elif defined(HAVE_SYSCTL) && !defined(HAVE_SYSINFO)
 static int swapmode(int *used, int *total)
 {
-	used = total = 0;
+	*used = *total = 0;
 	return 1;
 }
 #endif
@@ -550,7 +558,7 @@ static int swapmode(int *used, int *total)
 static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int64_t physmem, freeram;
-	int totalswap, freeswap, nprocs;
+	int totalswap = 0, freeswap = 0, nprocs = 0;
 	long uptime = 0;
 #if defined(HAVE_SYSINFO)
 	struct sysinfo sys_info;
@@ -566,7 +574,7 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 	struct vmtotal vmtotal;
 	struct timeval	boottime;
 	time_t	now;
-	int mib[2], pagesize, usedswap;
+	int mib[2], pagesize, usedswap = 0;
 	size_t len;
 	/* calculate the uptime by looking at boottime */
 	time(&now);
@@ -579,7 +587,11 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 	uptime = uptime/3600;
 	/* grab total physical memory  */
 	mib[0] = CTL_HW;
+#if defined(HW_PHYSMEM64)
 	mib[1] = HW_PHYSMEM64;
+#else
+	mib[1] = HW_PHYSMEM;
+#endif
 	len = sizeof(physmem);
 	sysctl(mib, 2, &physmem, &len, NULL, 0);
 
@@ -603,10 +615,12 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 	swapmode(&usedswap, &totalswap); 
 	freeswap = (totalswap - usedswap);
 	/* grab number of processes */
+#if defined(__OpenBSD__)
 	mib[0] = CTL_KERN;
 	mib[1] = KERN_NPROCS;
 	len = sizeof(nprocs);
 	sysctl(mib, 2, &nprocs, &len, NULL, 0);
+#endif
 #endif
 
 	switch (cmd) {
@@ -1135,7 +1149,13 @@ static int read_credentials(int fd, char *buffer, size_t size, struct console *c
 	struct ucred cred;
 	socklen_t len = sizeof(cred);
 #endif
-	int result, uid, gid;
+#if defined(HAVE_GETPEEREID)
+	uid_t uid;
+	gid_t gid;
+#else
+	int uid, gid;
+#endif
+	int result;
 
 	result = read(fd, buffer, size);
 	if (result < 0) {
@@ -1210,7 +1230,9 @@ static void *netconsole(void *vconsole)
 				break;
 		}
 	}
-	ast_verb(3, "Remote UNIX connection disconnected\n");
+	if (!ast_opt_hide_connect) {
+		ast_verb(3, "Remote UNIX connection disconnected\n");
+	}
 	close(con->fd);
 	close(con->p[0]);
 	close(con->p[1]);
@@ -1287,8 +1309,9 @@ static void *listener(void *unused)
 					fdprint(s, "No more connections allowed\n");
 					ast_log(LOG_WARNING, "No more connections allowed\n");
 					close(s);
-				} else if (consoles[x].fd > -1) 
+				} else if ((consoles[x].fd > -1) && (!ast_opt_hide_connect)) {
 					ast_verb(3, "Remote UNIX connection\n");
+				}
 			}
 		}
 	}
@@ -2235,10 +2258,10 @@ static char *cli_prompt(EditLine *editline)
 					t--;
 					break;
 				}
-				t++;
 			} else {
 				ast_str_append(&prompt, 0, "%c", *t);
 			}
+			t++;
 		}
 		if (color_used) {
 			/* Force colors back to normal at end */
@@ -2951,6 +2974,8 @@ static void ast_readconfig(void)
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_LIGHT_BACKGROUND);
 		} else if (!strcasecmp(v->name, "forceblackbackground")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
+		} else if (!strcasecmp(v->name, "hideconnect")) {
+			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_HIDE_CONSOLE_CONNECT);
 		}
 	}
 	for (v = ast_variable_browse(cfg, "compat"); v; v = v->next) {

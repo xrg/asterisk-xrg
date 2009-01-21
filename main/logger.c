@@ -35,6 +35,10 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+/*
+ * WARNING: additional #include directives should NOT be placed here, they 
+ * should be placed AFTER '#undef _ASTERISK_LOGGER_H' below
+ */
 #include "asterisk/_private.h"
 #include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
 #include <signal.h>
@@ -74,6 +78,7 @@ static int syslog_level_map[] = {
 #include "asterisk/threadstorage.h"
 #include "asterisk/strings.h"
 #include "asterisk/pbx.h"
+#include "asterisk/app.h"
 
 #if defined(__linux__) && !defined(__NR_gettid)
 #include <asm/unistd.h>
@@ -576,8 +581,8 @@ static int rotate_file(const char *filename)
 		char buf[512];
 		pbx_builtin_setvar_helper(c, "filename", filename);
 		pbx_substitute_variables_helper(c, exec_after_rotate, buf, sizeof(buf));
-		if (system(buf) < 0) {
-			ast_log(LOG_WARNING, "system() failed for '%s': %s\n", buf, strerror(errno));
+		if (ast_safe_system(buf) != -1) {
+			ast_log(LOG_WARNING, "error executing '%s'\n", buf);
 		}
 		ast_channel_free(c);
 	}

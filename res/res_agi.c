@@ -1849,16 +1849,33 @@ static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, char **a
 static int handle_dbget(struct ast_channel *chan, AGI *agi, int argc, char **argv)
 {
 	int res;
-	char tmp[256];
+	struct ast_str *buf;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	res = ast_db_get(argv[2], argv[3], tmp, sizeof(tmp));
+
+	if (!(buf = ast_str_create(16))) {
+		ast_agi_send(agi->fd, chan, "200 result=-1\n");
+		return RESULT_SUCCESS;
+	}
+
+	do {
+		res = ast_db_get(argv[2], argv[3], ast_str_buffer(buf), ast_str_size(buf));
+		ast_str_update(buf);
+		if (ast_str_strlen(buf) < ast_str_size(buf) - 1) {
+			break;
+		}
+		if (ast_str_make_space(&buf, ast_str_size(buf) * 2)) {
+			break;
+		}
+	} while (1);
+	
 	if (res)
 		ast_agi_send(agi->fd, chan, "200 result=0\n");
 	else
-		ast_agi_send(agi->fd, chan, "200 result=1 (%s)\n", tmp);
+		ast_agi_send(agi->fd, chan, "200 result=1 (%s)\n", ast_str_buffer(buf));
 
+	ast_free(buf);
 	return RESULT_SUCCESS;
 }
 
@@ -2735,6 +2752,11 @@ static int agi_handle_command(struct ast_channel *chan, AGI *agi, char *buf, int
 		the module we are using */
 		if (c->mod != ast_module_info->self)
 			ast_module_ref(c->mod);
+		/* If the AGI command being executed is an actual application (using agi exec)
+		the app field will be updated in pbx_exec via handle_exec */
+		if (chan->cdr && !ast_check_hangup(chan) && strcasecmp(argv[0], "EXEC"))
+			ast_cdr_setapp(chan->cdr, "AGI", buf);
+
 		res = c->handler(chan, agi, argc, argv);
 		if (c->mod != ast_module_info->self)
 			ast_module_unref(c->mod);

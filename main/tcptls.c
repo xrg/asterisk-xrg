@@ -334,12 +334,12 @@ struct ast_tcptls_session_instance *ast_tcptls_client_start(struct ast_tcptls_se
 	struct ast_tcptls_session_instance *tcptls_session = NULL;
 
 	/* Do nothing if nothing has changed */
-	if(!memcmp(&desc->old_local_address, &desc->local_address, sizeof(desc->old_local_address))) {
+	if (!memcmp(&desc->old_address, &desc->remote_address, sizeof(desc->old_address))) {
 		ast_debug(1, "Nothing changed in %s\n", desc->name);
 		return NULL;
 	}
 
-	desc->old_local_address = desc->local_address;
+	desc->old_address = desc->remote_address;
 
 	if (desc->accept_fd != -1)
 		close(desc->accept_fd);
@@ -383,7 +383,7 @@ struct ast_tcptls_session_instance *ast_tcptls_client_start(struct ast_tcptls_se
 	tcptls_session->fd = desc->accept_fd;
 	tcptls_session->parent = desc;
 	tcptls_session->parent->worker_fn = NULL;
-	memcpy(&tcptls_session->remote_address, &desc->local_address, sizeof(tcptls_session->remote_address));
+	memcpy(&tcptls_session->remote_address, &desc->remote_address, sizeof(tcptls_session->remote_address));
 
 	tcptls_session->client = 1;
 
@@ -417,12 +417,12 @@ void ast_tcptls_server_start(struct ast_tcptls_session_args *desc)
 	int x = 1;
 	
 	/* Do nothing if nothing has changed */
-	if (!memcmp(&desc->old_local_address, &desc->local_address, sizeof(desc->old_local_address))) {
+	if (!memcmp(&desc->old_address, &desc->local_address, sizeof(desc->old_address))) {
 		ast_debug(1, "Nothing changed in %s\n", desc->name);
 		return;
 	}
 	
-	desc->old_local_address = desc->local_address;
+	desc->old_address = desc->local_address;
 	
 	/* Shutdown a running server if there is one */
 	if (desc->master != AST_PTHREADT_NULL) {

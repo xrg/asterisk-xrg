@@ -1991,6 +1991,10 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			theapp = pbx_findapp("Macro");
 
 			if (theapp && !res) { /* XXX why check res here ? */
+				/* Set peer->exten and peer->context so that MACRO_EXTEN and MACRO_CONTEXT get set */
+				ast_copy_string(peer->context, chan->context, sizeof(peer->context));
+				ast_copy_string(peer->exten, chan->exten, sizeof(peer->exten));
+
 				replace_macro_delimiter(opt_args[OPT_ARG_CALLEE_MACRO]);
 				res = pbx_exec(peer, theapp, opt_args[OPT_ARG_CALLEE_MACRO]);
 				ast_debug(1, "Macro exited with status %d\n", res);
@@ -2089,8 +2093,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 						ast_pbx_run_args(peer, &args);
 					}
 					ast_free(gosub_args);
-					if (option_debug)
-						ast_log(LOG_DEBUG, "Gosub exited with status %d\n", res9);
+					ast_debug(1, "Gosub exited with status %d\n", res9);
 				} else {
 					ast_log(LOG_ERROR, "Could not Allocate string for Gosub arguments -- Gosub Call Aborted!\n");
 				}

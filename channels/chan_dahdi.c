@@ -118,7 +118,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<synopsis>
 			Send QSIG call rerouting facility over a PRI.
 		</synopsis>
-		<syntax argsep="|">
+		<syntax argsep=",">
 			<parameter name="destination" required="true">
 				<para>Destination number.</para>	
 			</parameter>
@@ -252,7 +252,6 @@ static const char config[] = "chan_dahdi.conf";
 #define DAHDI_OVERLAPDIAL_INCOMING 2
 #define DAHDI_OVERLAPDIAL_BOTH (DAHDI_OVERLAPDIAL_INCOMING|DAHDI_OVERLAPDIAL_OUTGOING)
 
-
 #define CALLPROGRESS_PROGRESS		1
 #define CALLPROGRESS_FAX_OUTGOING	2
 #define CALLPROGRESS_FAX_INCOMING	4
@@ -265,7 +264,9 @@ static char parkinglot[AST_MAX_EXTENSION] = "";		/*!< Default parking lot for th
 
 /*! Run this script when the MWI state changes on an FXO line, if mwimonitor is enabled */
 static char mwimonitornotify[PATH_MAX] = "";
+#ifndef DAHDI_VMWI_FSK
 static int  mwisend_rpas = 0;
+#endif
 
 static char progzone[10] = "";
 
@@ -634,6 +635,7 @@ static struct dahdi_pvt {
 	unsigned int transfertobusy:1;			/*!< allow flash-transfers to busy channels */
 	unsigned int mwimonitor_neon:1;			/*!< monitor this FXO port for neon type MWI indication from other end */
 	unsigned int mwimonitor_fsk:1;			/*!< monitor this FXO port for fsk MWI indication from other end */
+	unsigned int mwimonitor_rpas:1;			/*!< monitor this FXO port for rpas precursor to fsk MWI indication */
 	unsigned int mwimonitoractive:1;		/*!< an MWI monitor thread is currently active */
 	unsigned int mwisendactive:1; 			/*!< a MWI message sending thread is active */
 	/* Channel state or unavilability flags */
@@ -728,7 +730,9 @@ static struct dahdi_pvt {
 	struct ast_event_sub *mwi_event_sub;
 	char dialdest[256];
 	int onhooktime;
+	int fxsoffhookstate;
 	int msgstate;
+	int mwisendtype;				/*!< Which VMWI methods to use */
 	int distinctivering;				/*!< Which distinctivering to use */
 	int cidrings;					/*!< Which ring to deliver CID on */
 	int dtmfrelax;					/*!< whether to run in relaxed DTMF mode */
@@ -867,7 +871,9 @@ static struct dahdi_chan_conf dahdi_chan_conf_default(void) {
 
 			.mailbox = "",
 
-
+#ifdef DAHDI_VMWI_FSK
+			.mwisendtype = DAHDI_VMWI_FSK,
+#endif
 			.polarityonanswerdelay = 600,
 
 			.sendcalleridafter = DEFAULT_CIDRINGS,
@@ -3014,11 +3020,13 @@ static int dahdi_send_callrerouting_facility_exec(struct ast_channel *chan, void
 {
 	/* Data will be our digit string */
 	struct dahdi_pvt *p;
-	char *parse, *tok, *tokb;
-	char *dest = NULL;
-	char *original = NULL;
-	char *reason = NULL;
+	char *parse;
 	int res = -1;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(destination);
+		AST_APP_ARG(original);
+		AST_APP_ARG(reason);
+	);
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_DEBUG, "No data sent to application!\n");
@@ -3032,28 +3040,22 @@ static int dahdi_send_callrerouting_facility_exec(struct ast_channel *chan, void
 		return -1;
 	}
 
-
 	parse = ast_strdupa(data);
-	tok = strtok_r(parse, "|", &tokb);
+	AST_STANDARD_APP_ARGS(args, parse);
 
-	if (!tok) {
+	if (ast_strlen_zero(args.destination)) {
 		ast_log(LOG_WARNING, "callrerouting facility requires at least destination number argument\n");
 		return -1;
 	}
-	dest = tok;	
 
-	tok = strtok_r(NULL, "|", &tokb);
-	if (!tok) {
+	if (ast_strlen_zero(args.original)) {
 		ast_log(LOG_WARNING, "Callrerouting Facility without original called number argument\n");
-	} else {
-		original = tok;
+		args.original = NULL;
 	}
 
-	tok = strtok_r(NULL, "|", &tokb);
-	if (!tok) {
+	if (ast_strlen_zero(args.reason)) {
 		ast_log(LOG_NOTICE, "Callrerouting Facility without diversion reason argument, defaulting to unknown\n");
-	} else {
-		reason = tok;
+		args.reason = NULL;
 	}
 
 	ast_mutex_lock(&p->lock);
@@ -3067,8 +3069,9 @@ static int dahdi_send_callrerouting_facility_exec(struct ast_channel *chan, void
 	switch (p->sig) {
 	case SIG_PRI:
 		if (!pri_grab(p, p->pri)) {
-			if (chan->_state == AST_STATE_RING)
-				res = pri_callrerouting_facility(p->pri->pri, p->call, dest, original, reason);
+			if (chan->_state == AST_STATE_RING) {
+				res = pri_callrerouting_facility(p->pri->pri, p->call, args.destination, args.original, args.reason);
+			}
 			pri_rel(p->pri);
 		} else {
 			ast_log(LOG_DEBUG, "Unable to grab pri to send callrerouting facility on span %d!\n", p->span);
@@ -3436,6 +3439,7 @@ static int dahdi_hangup(struct ast_channel *ast)
 					tone_zone_play_tone(p->subs[SUB_REAL].dfd, DAHDI_TONE_CONGESTION);
 				else
 					tone_zone_play_tone(p->subs[SUB_REAL].dfd, -1);
+				p->fxsoffhookstate = par.rxisoffhook;
 			}
 			break;
 		case SIG_FXSGS:
@@ -4651,6 +4655,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 			case SIG_FXOGS:
 			case SIG_FXOKS:
 				p->onhooktime = time(NULL);
+				p->fxsoffhookstate = 0;
 				p->msgstate = -1;
 				/* Check for some special conditions regarding call waiting */
 				if (idx == SUB_REAL) {
@@ -4802,6 +4807,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 			case SIG_FXOLS:
 			case SIG_FXOGS:
 			case SIG_FXOKS:
+				p->fxsoffhookstate = 1;
 				switch (ast->_state) {
 				case AST_STATE_RINGING:
 					dahdi_enable_ec(p);
@@ -7506,12 +7512,18 @@ static void *ss_thread(void *data)
 		if (flags & CID_MSGWAITING) {
 			ast_log(LOG_NOTICE, "MWI: Channel %d message waiting!\n", p->channel);
 			notify_message(p->mailbox, 1);
-			ast_hangup(chan);
+			/* If generated using Ring Pulse Alert, then ring has been answered as a call and needs to be hungup */
+			if (p->mwimonitor_rpas) {
+				ast_hangup(chan);
+			}
 			return NULL;
 		} else if (flags & CID_NOMSGWAITING) {
 			ast_log(LOG_NOTICE, "MWI: Channel %d no message waiting!\n", p->channel);
 			notify_message(p->mailbox, 0);
-			ast_hangup(chan);
+			/* If generated using Ring Pulse Alert, then ring has been answered as a call and needs to be hungup */
+			if (p->mwimonitor_rpas) {
+				ast_hangup(chan);
+			}
 			return NULL;
 		}
 
@@ -7704,13 +7716,34 @@ static int mwi_send_init(struct dahdi_pvt * pvt)
 {
 	int x, res;
 
-	pvt->mwisendactive = 1;
-	pvt->mwisend_data.mwisend_current = MWI_SEND_SPILL; /*Assume FSK only */
+#ifdef DAHDI_VMWI_FSK
 	/* Determine how this spill is to be sent */
-	if(mwisend_rpas) {
+	if (pvt->mwisendtype & DAHDI_VMWI_RPAS) {
 		pvt->mwisend_data.mwisend_current = MWI_SEND_SA;
+		pvt->mwisendactive = 1;
+	} else if (pvt->mwisendtype & DAHDI_VMWI_FSK) {
+		pvt->mwisend_data.mwisend_current = MWI_SEND_SPILL;
+		pvt->mwisendactive = 1;
+	} else {
+		pvt->mwisendactive = 0;
+		return 0;
 	}
-
+#else
+	if (mwisend_rpas) {
+		pvt->mwisend_data.mwisend_current = MWI_SEND_SA;
+	} else {
+		pvt->mwisend_data.mwisend_current = MWI_SEND_SPILL;
+	}
+	pvt->mwisendactive = 1;
+#endif
+	
+	if (pvt->cidspill) {
+		ast_log(LOG_WARNING, "cidspill already exists when trying to send FSK MWI\n");
+		ast_free(pvt->cidspill);
+		pvt->cidspill = NULL;
+		pvt->cidpos = 0;
+		pvt->cidlen = 0;
+	}
 	pvt->cidspill = ast_calloc(1, MAX_CALLERID_SIZE);
 	if (!pvt->cidspill) {
 		pvt->mwisendactive = 0;
@@ -7720,9 +7753,15 @@ static int mwi_send_init(struct dahdi_pvt * pvt)
 	res = ioctl(pvt->subs[SUB_REAL].dfd, DAHDI_FLUSH, &x);
 	x = 3000;
 	ioctl(pvt->subs[SUB_REAL].dfd, DAHDI_ONHOOKTRANSFER, &x);
-	pvt->cidlen = vmwi_generate(pvt->cidspill, has_voicemail(pvt), CID_MWI_TYPE_MDMF_FULL,
+#ifdef DAHDI_VMWI_FSK
+	if (pvt->mwisendtype & DAHDI_VMWI_FSK) {
+#endif
+		pvt->cidlen = vmwi_generate(pvt->cidspill, has_voicemail(pvt), CID_MWI_TYPE_MDMF_FULL,
 								AST_LAW(pvt), pvt->cid_name, pvt->cid_num, 0);
-	pvt->cidpos = 0;
+		pvt->cidpos = 0;
+#ifdef DAHDI_VMWI_FSK
+	}
+#endif
 	return 0;
 }
 
@@ -7739,54 +7778,62 @@ static int mwi_send_process_buffer(struct dahdi_pvt * pvt, int num_read)
 	} else if (MWI_SEND_DONE != pvt->mwisend_data.mwisend_current) {
 		/* Normal processing -- Perform mwi send action */
 		switch ( pvt->mwisend_data.mwisend_current) {
-			case MWI_SEND_SA:
-				/* Send the Ring Pulse Signal Alert */
-				res = ioctl(pvt->subs[SUB_REAL].dfd, DAHDI_SETCADENCE, &AS_RP_cadence);
-				if (res) {
-					ast_log(LOG_WARNING, "Unable to set RP-AS ring cadence: %s\n", strerror(errno));
-					goto quit;
-				}
-				res = dahdi_set_hook(pvt->subs[SUB_REAL].dfd, DAHDI_RING);
-				pvt->mwisend_data.mwisend_current = MWI_SEND_SA_WAIT;
-				break;
-			case MWI_SEND_SA_WAIT:  /* do nothing until I get RINGEROFF event */
-				break;
-			case MWI_SEND_PAUSE:  /* Wait between alert and spill - min of 500 mS*/
+		case MWI_SEND_SA:
+			/* Send the Ring Pulse Signal Alert */
+			res = ioctl(pvt->subs[SUB_REAL].dfd, DAHDI_SETCADENCE, &AS_RP_cadence);
+			if (res) {
+				ast_log(LOG_WARNING, "Unable to set RP-AS ring cadence: %s\n", strerror(errno));
+				goto quit;
+			}
+			res = dahdi_set_hook(pvt->subs[SUB_REAL].dfd, DAHDI_RING);
+			pvt->mwisend_data.mwisend_current = MWI_SEND_SA_WAIT;
+			break;
+		case MWI_SEND_SA_WAIT:  /* do nothing until I get RINGEROFF event */
+			break;
+		case MWI_SEND_PAUSE:  /* Wait between alert and spill - min of 500 mS*/
+#ifdef DAHDI_VMWI_FSK
+			if (pvt->mwisendtype & DAHDI_VMWI_FSK) {
+#endif
 				gettimeofday(&now, NULL);
 				if ((int)(now.tv_sec - pvt->mwisend_data.pause.tv_sec) * 1000000 + (int)now.tv_usec - (int)pvt->mwisend_data.pause.tv_usec > 500000) {
 					pvt->mwisend_data.mwisend_current = MWI_SEND_SPILL;
 				}
-				break;
-			case MWI_SEND_SPILL:
-				/* We read some number of bytes.  Write an equal amount of data */
-				if(0 < num_read) {
-					if (num_read > pvt->cidlen - pvt->cidpos)
-						num_read = pvt->cidlen - pvt->cidpos;
-					res = write(pvt->subs[SUB_REAL].dfd, pvt->cidspill + pvt->cidpos, num_read);
-					if (res > 0) {
-						pvt->cidpos += res;
-						if (pvt->cidpos >= pvt->cidlen) {
-							pvt->mwisend_data.mwisend_current = MWI_SEND_CLEANUP;
-						}
-					} else {
-						ast_log(LOG_WARNING, "MWI Send Write failed: %s\n", strerror(errno));
-						goto quit;
+#ifdef DAHDI_VMWI_FSK
+			} else { /* support for mwisendtype=nofsk */
+				pvt->mwisend_data.mwisend_current = MWI_SEND_CLEANUP;
+			}
+#endif
+			break;
+		case MWI_SEND_SPILL:
+			/* We read some number of bytes.  Write an equal amount of data */
+			if(0 < num_read) {
+				if (num_read > pvt->cidlen - pvt->cidpos)
+					num_read = pvt->cidlen - pvt->cidpos;
+				res = write(pvt->subs[SUB_REAL].dfd, pvt->cidspill + pvt->cidpos, num_read);
+				if (res > 0) {
+					pvt->cidpos += res;
+					if (pvt->cidpos >= pvt->cidlen) {
+						pvt->mwisend_data.mwisend_current = MWI_SEND_CLEANUP;
 					}
+				} else {
+					ast_log(LOG_WARNING, "MWI FSK Send Write failed: %s\n", strerror(errno));
+					goto quit;
 				}
-				break;
-			case MWI_SEND_CLEANUP:
-				/* For now, do nothing */
-				pvt->mwisend_data.mwisend_current = MWI_SEND_DONE;
-				break;
-			default:
-				/* Should not get here, punt*/
-				goto quit;
-				break;
+			}
+			break;
+		case MWI_SEND_CLEANUP:
+			/* For now, do nothing */
+			pvt->mwisend_data.mwisend_current = MWI_SEND_DONE;
+			break;
+		default:
+			/* Should not get here, punt*/
+			goto quit;
+			break;
 		}
 	}
 
 	if (MWI_SEND_DONE == pvt->mwisend_data.mwisend_current) {
-		if(pvt->cidspill) {
+		if (pvt->cidspill) {
 			ast_free(pvt->cidspill);
 			pvt->cidspill = NULL;
 			pvt->cidpos = 0;
@@ -7796,6 +7843,13 @@ static int mwi_send_process_buffer(struct dahdi_pvt * pvt, int num_read)
 	}
 	return 0;
 quit:
+	if (pvt->cidspill) {
+		ast_free(pvt->cidspill);
+		pvt->cidspill = NULL;
+		pvt->cidpos = 0;
+		pvt->cidlen = 0;
+	}
+	pvt->mwisendactive = 0;
 	return -1;
 }
 
@@ -7823,6 +7877,17 @@ static int mwi_send_process_event(struct dahdi_pvt * pvt, int event)
 					gettimeofday(&pvt->mwisend_data.pause, NULL);
 				}
 			}
+			break;
+		/* Going off hook, I need to punt this spill */
+		case DAHDI_EVENT_RINGOFFHOOK:
+			if (pvt->cidspill) {
+				ast_free(pvt->cidspill);
+				pvt->cidspill = NULL;
+				pvt->cidpos = 0; 
+				pvt->cidlen = 0;
+			}
+			pvt->mwisend_data.mwisend_current = MWI_SEND_DONE;
+			pvt->mwisendactive = 0;
 			break;
 		case DAHDI_EVENT_RINGERON:
 		case DAHDI_EVENT_HOOKCOMPLETE:
@@ -7879,6 +7944,7 @@ static int handle_init_event(struct dahdi_pvt *i, int event)
 		case SIG_FXOGS:
 		case SIG_FXOKS:
 			res = dahdi_set_hook(i->subs[SUB_REAL].dfd, DAHDI_OFFHOOK);
+			i->fxsoffhookstate = 1;
 			if (res && (errno == EBUSY))
 				break;
 			if (i->cidspill) {
@@ -8032,6 +8098,9 @@ static int handle_init_event(struct dahdi_pvt *i, int event)
 			res = tone_zone_play_tone(i->subs[SUB_REAL].dfd, -1);
 			return -1;
 		}
+		if (i->sig & __DAHDI_SIG_FXO) {
+			i->fxsoffhookstate = 0;
+		}
 		break;
 	case DAHDI_EVENT_POLARITY:
 		switch (i->sig) {
@@ -8174,18 +8243,33 @@ static void *do_monitor(void *data)
 				if (!found && ((i == last) || ((i == iflist) && !last))) {
 					last = i;
 					if (last) {
-						if (!last->mwisendactive &&	 last->sig & __DAHDI_SIG_FXO) {
+						/* Only allow MWI to be initiated on a quiescent fxs port */
+						if (!last->mwisendactive &&	last->sig & __DAHDI_SIG_FXO &&
+								!last->fxsoffhookstate && !last->owner &&
+								!ast_strlen_zero(last->mailbox) && (thispass - last->onhooktime > 3)) {
 							res = has_voicemail(last);
 							if (last->msgstate != res) {
+#ifndef DAHDI_VMWI_FSK
 								/* Set driver resources for signalling VMWI */
 								res2 = ioctl(last->subs[SUB_REAL].dfd, DAHDI_VMWI, &res);
 								if (res2) {
 									/* TODO: This message will ALWAYS be generated on some cards; any way to restrict it to those cards where it is interesting? */
 									ast_debug(3, "Unable to control message waiting led on channel %d: %s\n", last->channel, strerror(errno));
 								}
-								/* This channel has a new voicemail state,
-								* initiate a mechanism to send an MWI message
-								*/
+#else
+								/* New DAHDI_VMWI ioctl supports upto 65535 messages*/
+								if (res > DAHDI_VMWI_NUMBER_MASK) {
+									res2 = (last->mwisendtype | DAHDI_VMWI_NUMBER_MASK);
+								} else {
+									res2 = (last->mwisendtype | (res & DAHDI_VMWI_NUMBER_MASK));
+								}
+								res2 = ioctl(last->subs[SUB_REAL].dfd, DAHDI_VMWI, &res2);
+								if (res2) {
+									/* TODO: This message will ALWAYS be generated on some cards; any way to restrict it to those cards where it is interesting? */
+									ast_debug(3, "Unable to control MWI on channel %d: %s\n", last->channel, strerror(errno));
+								}
+#endif
+								/* If enabled for FSK spill then initiate it */
 								if (mwi_send_init(last)) {
 									ast_log(LOG_WARNING, "Unable to initiate mwi send sequence on channel %d\n", last->channel);
 								}
@@ -8271,7 +8355,7 @@ static void *do_monitor(void *data)
 					ast_debug(1, "Monitor doohicky got event %s on channel %d\n", event2str(res), i->channel);
 					/* Don't hold iflock while handling init events */
 					ast_mutex_unlock(&iflock);
-					if (0 == i->mwisendactive || 0 != mwi_send_process_event(i, res)) {
+					if (0 == i->mwisendactive || 0 == mwi_send_process_event(i, res)) {
 						handle_init_event(i, res);
 					}
 					ast_mutex_lock(&iflock);
@@ -8830,6 +8914,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		if (chan_sig & __DAHDI_SIG_FXS) {
 			tmp->mwimonitor_fsk = conf->chan.mwimonitor_fsk;
 			tmp->mwimonitor_neon = conf->chan.mwimonitor_neon;
+			tmp->mwimonitor_rpas = conf->chan.mwimonitor_rpas;
 		}
 		tmp->sig = chan_sig;
 		tmp->outsigmod = conf->chan.outsigmod;
@@ -8940,6 +9025,15 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 				AST_EVENT_IE_END);
 		}
 		tmp->msgstate = -1;
+		tmp->mwisendtype = conf->chan.mwisendtype;
+		if (chan_sig & __DAHDI_SIG_FXO) {
+			memset(&p, 0, sizeof(p));
+			res = ioctl(tmp->subs[SUB_REAL].dfd, DAHDI_GET_PARAMS, &p);
+			if (!res) {
+				tmp->fxsoffhookstate = p.rxisoffhook;
+			}
+		}
+		tmp->onhooktime = time(NULL);
 		tmp->group = conf->chan.group;
 		tmp->callgroup = conf->chan.callgroup;
 		tmp->pickupgroup= conf->chan.pickupgroup;
@@ -8950,7 +9044,6 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		tmp->rxgain = conf->chan.rxgain;
 		tmp->txgain = conf->chan.txgain;
 		tmp->tonezone = conf->chan.tonezone;
-		tmp->onhooktime = time(NULL);
 		if (tmp->subs[SUB_REAL].dfd > -1) {
 			set_actual_gain(tmp->subs[SUB_REAL].dfd, 0, tmp->rxgain, tmp->txgain, tmp->law);
 			if (tmp->dsp)
@@ -11875,9 +11968,9 @@ static char *handle_pri_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 	int level = 0;
 	switch (cmd) {
 	case CLI_INIT:	
-		e->command = "pri set debug [on|off] span";
+		e->command = "pri set debug {on|off} span";
 		e->usage = 
-			"Usage: pri set debug <level|on|off> span <span>\n"
+			"Usage: pri set debug {<level>|on|off} span <span>\n"
 			"       Enables debugging on a given PRI span\n";
 		return NULL;
 	case CLI_GENERATE:	
@@ -13333,7 +13426,7 @@ static char *handle_ss7_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 		return CLI_SUCCESS;
 	}
 	if (linksets[span-1].ss7) {
-		if (strcasecmp(a->argv[4], "on")) {
+		if (strcasecmp(a->argv[3], "on")) {
 			ss7_set_debug(linksets[span-1].ss7, SS7_DEBUG_MTP2 | SS7_DEBUG_MTP3 | SS7_DEBUG_ISUP);
 			ast_cli(a->fd, "Enabled debugging on linkset %d\n", span);
 		} else {
@@ -14077,16 +14170,22 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 		} else if (!strcasecmp(v->name, "transfertobusy")) {
 			confp->chan.transfertobusy = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "mwimonitor")) {
-			if (!strcasecmp(v->value, "neon")) {
-				confp->chan.mwimonitor_neon = 1;
-				confp->chan.mwimonitor_fsk = 0;
-			} else {
-				confp->chan.mwimonitor_neon = 0;
-				if (!strcasecmp(v->value, "fsk"))
-					confp->chan.mwimonitor_fsk = 1;
-				else 
-					confp->chan.mwimonitor_fsk = ast_true(v->value) ? 1 : 0;
+			confp->chan.mwimonitor_neon = 0;
+			confp->chan.mwimonitor_fsk  = 0;
+			confp->chan.mwimonitor_rpas = 0;
+			if (strcasestr(v->value, "fsk")) {
+				confp->chan.mwimonitor_fsk = 1;
 			}
+			if (strcasestr(v->value, "rpas")) {
+				confp->chan.mwimonitor_rpas = 1;
+			}
+			if (strcasestr(v->value, "neon")) {
+				confp->chan.mwimonitor_neon = 1;
+			}
+			/* If set to true or yes, assume that simple fsk is desired */
+			if (ast_true(v->value)) {
+				confp->chan.mwimonitor_fsk = 1;
+			} 
 		} else if (!strcasecmp(v->name, "cid_rxgain")) {
 			if (sscanf(v->value, "%f", &confp->chan.cid_rxgain) != 1) {
 				ast_log(LOG_WARNING, "Invalid cid_rxgain: %s at line %d.\n", v->value, v->lineno);
@@ -14139,11 +14238,32 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 		} else if (!strcasecmp(v->name, "mwimonitornotify")) {
 			ast_copy_string(mwimonitornotify, v->value, sizeof(mwimonitornotify));
 		} else if (!strcasecmp(v->name, "mwisendtype")) {
+#ifndef DAHDI_VMWI_FSK  /* backward compatibility for older dahdi VMWI implementation */
 			if (!strcasecmp(v->value, "rpas")) { /* Ring Pulse Alert Signal */
 				mwisend_rpas = 1;
 			} else {
 				mwisend_rpas = 0;
 			}
+#else
+			/* Default is fsk, to turn it off you must specify nofsk */
+			if (strcasestr(v->value, "nofsk")) { 		/* NoFSK */
+				confp->chan.mwisendtype = 0;
+			} else {					/* Default FSK */
+				confp->chan.mwisendtype = DAHDI_VMWI_FSK;
+			}
+			if (strcasestr(v->value, "rpas")) { 		/* Ring Pulse Alert Signal, normally followed by FSK */
+				confp->chan.mwisendtype |= DAHDI_VMWI_RPAS;
+			}
+			if (strcasestr(v->value, "lrev")) { 		/* Line Reversal */
+				confp->chan.mwisendtype |= DAHDI_VMWI_LREV;
+			}
+			if (strcasestr(v->value, "hvdc")) { 		/* HV 90VDC */
+				confp->chan.mwisendtype |= DAHDI_VMWI_HVDC;
+			}
+			if ( (strcasestr(v->value, "neon")) || (strcasestr(v->value, "hvac")) ){ 	/* 90V DC pulses */
+				confp->chan.mwisendtype |= DAHDI_VMWI_HVAC;
+			}
+#endif
 		} else if (reload != 1) {
 			 if (!strcasecmp(v->name, "signalling") || !strcasecmp(v->name, "signaling")) {
 				int orig_radio = confp->chan.radio;
