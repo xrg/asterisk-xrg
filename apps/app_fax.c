@@ -1150,7 +1150,14 @@ static int app_t38gateway_exec(struct ast_channel *chan, void *data)
 		exten=ast_strdupa(chan->exten);
 	priority=chan->priority;
 
-	LOAD_OH(oh); 
+	oh.context = context;
+	oh.exten = exten;
+	oh.priority = priority;
+	oh.cid_num = cid_num;
+	oh.cid_name = cid_name;
+	oh.account = account;
+	oh.vars = vars;
+
 	oh.parent_channel=chan;
 	if (!(s->peer = __ast_request_and_dial(tech, AST_FORMAT_SLINEAR, numsubst, timeout, &state, chan->cid.cid_num, chan->cid.cid_name, &oh))) {
 		chan->hangupcause = state;
@@ -1185,7 +1192,6 @@ static int app_t38gateway_exec(struct ast_channel *chan, void *data)
         if (chan->cdr)
                 ast_cdr_setdestchan(chan->cdr, s->peer->name);
 
-	ast_mutex_lock(&s->peer->lock);
 	/* Copy important bits from incoming to outgoing */
 /*
 	s->peer->appl = app_faxgw_name;
@@ -1216,8 +1222,6 @@ static int app_t38gateway_exec(struct ast_channel *chan, void *data)
         /* Clear all channel variables which to be set by the application.
            Pre-set status to error so in case of any problems we can just leave */
 	pbx_builtin_setvar_helper(s->peer, "DIALEDPEERNUMBER", numsubst);
-
-	ast_mutex_unlock(&s->peer->lock);
 
         pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
         pbx_builtin_setvar_helper(chan, "FAXERROR", "Channel problems");
