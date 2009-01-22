@@ -5,7 +5,17 @@
  * 
  * 2007-2008, Dmitry Andrianov <asterisk@dima.spb.ru>
  *
+ * Initial T.38 gateway code
+ *
+ * 2008, Daniel Ferenci <daniel.ferenci@nethemba.com>
+ * Created by Nethemba s.r.o. http://www.nethemba.com
+ * Sponsored by IPEX a.s. http://www.ipex.cz
  * Code based on original implementation by Steve Underwood <steveu@coppice.org>
+ *
+ * T.38 Integration into asterisk app_fax and rework
+ *
+ * 2008, Gregory Hinton Nietsky <gregory@dnstelecom.co.za>
+ * dns Telecom http://www.dnstelecom.co.za
  *
  * This program is free software, distributed under the terms of
  * the GNU General Public License
@@ -45,6 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/stasis.h"
 #include "asterisk/stasis_channels.h"
+#include "asterisk/monitor.h"
 #include "asterisk/format_cache.h"
 
 /*** DOCUMENTATION
@@ -147,6 +158,24 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static const char app_sndfax_name[] = "SendFAX";
 static const char app_rcvfax_name[] = "ReceiveFAX";
 
+static char *app_t38gateway_name = "FaxGateway";
+static char *app_t38gateway_synopsis = "T38 FAX Gateway";
+static char *app_t38gateway_desc = 
+"  FaxGateway(technology/dialstring[, timeout]):\n"
+"\n"
+"Create a channel, connect to the dialstring and negotiate T.38 capabilities.\n"
+"If required  T.30 <-> T.38 gateway mode is enabled.\n"
+"\n"
+"The default timeout (seconds) for answer is 35s as per T.30 specification\n"
+"\n"
+"This application sets the following channel variables upon completion:\n"
+"     FAXSTATUS - status of operation:\n"
+"		  SUCCESS | FAILED\n"
+"     FAXERROR	- Error when FAILED\n"
+"\n"
+"Returns -1 in case of user hang up or any channel error.\n"
+"Returns 0 on success.\n";
+
 #define MAX_SAMPLES 240
 
 /* Watchdog. I have seen situations when remote fax disconnects (because of poor line
@@ -160,6 +189,7 @@ static const char app_rcvfax_name[] = "ReceiveFAX";
 
 typedef struct {
 	struct ast_channel *chan;
+	struct ast_channel *peer;
 	enum ast_t38_state t38state;	/* T38 state of the channel */
 	int direction;			/* Fax direction: 0 - receiving, 1 - sending */
 	int caller_mode;
@@ -902,7 +932,340 @@ static int sndfax_exec(struct ast_channel *chan, const char *data)
 	return res;
 }
 
+static void ast_t38_gateway(fax_session *s)
+{
+	int samples, len, timeout;
+	struct ast_channel	*active = NULL;
+	struct ast_frame	*f;
+ 	t38_core_state_t	*t38dsp;
+	struct ast_channel	*channels[2];
+	int16_t buffer[T38_MAX_HDLC_LEN];
+
+	struct ast_frame outf = {
+		.frametype = AST_FRAME_VOICE,
+		.subclass = AST_FORMAT_SLINEAR,
+		.src = "T38Gateway",
+	};
+
+	if (ast_channel_get_t38_state(s->chan) == T38_STATE_NEGOTIATED) {
+		channels[0]=s->chan;
+		channels[1]=s->peer;
+	} else {
+		channels[0]=s->peer;
+		channels[1]=s->chan;
+	}
+
+	t38_gateway_state_t t38_state;
+	t38_stats_t t38_stats;
+
+#if SPANDSP_RELEASE_DATE >= 20081012
+	/* for spandsp shaphots 0.0.6 and higher */
+	t38dsp=&t38_state.t38x.t38;
+#else
+	/* for spandsp release 0.0.5 */
+	t38dsp=&t38_state.t38;
+#endif
+
+	if (t38_gateway_init(&t38_state, t38_tx_packet_handler, channels[0])) {
+		ast_debug(1, "T.38 Gateway Starting chan %s peer %s\n", s->chan->name, s->peer->name);
+
+		t38_gateway_set_transmit_on_idle(&t38_state, TRUE);
+
+		span_log_set_message_handler(&t38_state.logging, span_message);
+		span_log_set_message_handler(&t38dsp->logging, span_message);
+		span_log_set_level(&t38_state.logging, SPAN_LOG_WARNING + option_debug);
+		span_log_set_level(&t38dsp->logging, SPAN_LOG_WARNING + option_debug);
+
+		t38_set_t38_version(t38dsp, 0);
+		t38_gateway_set_ecm_capability(&t38_state, TRUE);
+		t38_set_sequence_number_handling(t38dsp, TRUE);
+		t38_gateway_set_supported_modems(&t38_state, T30_SUPPORT_V27TER | T30_SUPPORT_V17 | T30_SUPPORT_V29); 
+
+		s->finished=1;
+		for(;;) {
+			timeout=20;
+			active = ast_waitfor_n(channels, 2, &timeout);
+			if (active) {
+				f = ast_read(active);
+				if (f) {
+					if (active == channels[0]) {
+						if (f->frametype == AST_FRAME_MODEM && f->subclass == AST_MODEM_T38)
+							t38_core_rx_ifp_packet(t38dsp, f->data.ptr, f->datalen, f->seqno);
+					} else if (active) {
+						/* we should not be T.38 if we are something went wrong with T.38 negotiation*/
+						if (f->frametype == AST_FRAME_MODEM && f->subclass == AST_MODEM_T38) {
+							s->finished=-1;
+							break;
+						}
+						t38_gateway_rx(&t38_state, f->data.ptr, f->samples);
+						samples = (f->samples <= T38_MAX_HDLC_LEN)  ?  f->samples : T38_MAX_HDLC_LEN;
+						if ((len = t38_gateway_tx(&t38_state, buffer, samples))) {
+							AST_FRAME_SET_BUFFER(&outf, buffer, 0, len*sizeof(int16_t));
+							outf.samples=len;
+							ast_write(channels[1], &outf);
+						}
+					}
+					ast_frfree(f);
+				} else
+					break;
+			}
+		}
+		t38_gateway_get_transfer_statistics(&t38_state, &t38_stats);
+		ast_debug(1, "Connection Statistics\n\tBit Rate :%i\n\tECM : %s\n\tPages : %i\n",t38_stats.bit_rate, (t38_stats.error_correcting_mode?"Yes":"No"), t38_stats.pages_transferred);
+	} else {
+		ast_log(LOG_ERROR, "T.38 gateway failed to init\n");
+		s->finished=-1;
+	}
+}
+
+static void ast_bridge_frames(fax_session *s)
+{
+	struct ast_dsp *dsp;
+	struct ast_channel *active = NULL;
+	struct ast_channel *inactive = NULL;
+	struct ast_channel *channels[2]={s->chan, s->peer};
+	enum ast_t38_state state[2];
+	enum ast_t38_state cstate[2];
+	struct ast_frame *f;
+	int timeout, ftone=0;
+	enum ast_control_t38 t38control = AST_T38_REQUEST_NEGOTIATE;
+
+	state[0]=ast_channel_get_t38_state(s->chan);
+	state[1]=ast_channel_get_t38_state(s->peer);
+
+	/* Setup DSP CNG/CED processing */
+	if ((dsp=ast_dsp_new())) {
+		ast_dsp_set_features(dsp, DSP_FEATURE_FAX_DETECT);
+		ast_dsp_set_faxmode(dsp, DSP_FAXMODE_DETECT_CNG | DSP_FAXMODE_DETECT_CED);
+	} else
+		ast_debug(1, "Unable to allocate Fax Detect DSP This may lead to problems with T.38 switchover!\n");
+
+	for(;;) {
+		timeout=20;
+		if ((active = ast_waitfor_n(channels, 2, &timeout))) {
+			inactive = (active == channels[0])  ?   channels[1]  :  channels[0];
+			cstate[0] = (active == channels[0])  ? state[0] : state[1];
+			cstate[1] = (active == channels[0])  ? state[1] : state[0];
+
+			/* update channel status if T.38 is still Possible*/
+			if ((cstate[0] == T38_STATE_UNKNOWN ) || (cstate[0] == T38_STATE_NEGOTIATING ))
+				cstate[0] = ast_channel_get_t38_state(active);
+			if ((cstate[1] == T38_STATE_UNKNOWN ) || (cstate[1] == T38_STATE_NEGOTIATING ))
+				cstate[1] = ast_channel_get_t38_state(inactive);
+
+			/* Leave and gateway if all channels are in a stable T.38 state and both are not T.38 */
+			if (((cstate[0] == T38_STATE_REJECTED) || (cstate[1] == T38_STATE_REJECTED) ||
+		             (cstate[0] == T38_STATE_UNAVAILABLE) || (cstate[1] == T38_STATE_UNAVAILABLE)) &&
+			    ((cstate[0] != T38_STATE_UNKNOWN) && (cstate[1] != T38_STATE_UNKNOWN) &&
+			     (cstate[0] != T38_STATE_NEGOTIATING) && (cstate[1] != T38_STATE_NEGOTIATING)) &&
+			    (cstate[0] != cstate[1]))
+				break;
+			if ((f = ast_read(active))) {
+				/* Dont send packets to a channel negotiating T.38 ignore them*/
+				if ((cstate[1] != T38_STATE_NEGOTIATED) && (cstate[1] != T38_STATE_NEGOTIATING)) {
+					if ((dsp) && (cstate[1] == T38_STATE_UNKNOWN)) {
+						f = ast_dsp_process(active, dsp, f);
+						if ((f->frametype == AST_FRAME_DTMF) &&
+						    ((f->subclass == 'f') || (f->subclass == 'e'))) {
+							switch (f->subclass) {
+								case 'f':ftone=1;
+								case 'e':ftone=2;
+							}
+							/* tickle the channel as we have fax tone */
+							ast_indicate_data(inactive, AST_CONTROL_T38, &t38control, sizeof(t38control));
+							t38control = AST_T38_REQUEST_NEGOTIATE;
+							ast_debug(1, "Fax %s Tone Detected On %s\n", (ftone == 1) ? "CNG" : "CED", active->name);
+						} else {
+							ast_write(inactive, f);
+						}
+					} else
+						ast_write(inactive, f);
+				}
+				ast_frfree(f);
+			} else {
+				s->finished=1;
+				break;
+			}
+		}
+	}
+        if (dsp)
+		ast_dsp_free(dsp);
+}
+
+static int app_t38gateway_exec(struct ast_channel *chan, void *data)
+{
+	int res = 0;
+	char *parse;
+	fax_session *s=ast_malloc(sizeof(fax_session));
+	int state, priority, timeout, fdtimeout;
+	const char *account=NULL, *cid_name=NULL, *cid_num=NULL, *context=NULL, *exten=NULL;
+	struct ast_variable *vars=NULL;
+	struct outgoing_helper oh;
+
+	if (!chan || !s) {
+		ast_debug(1, "Fax channel is NULL Or No Fax Handler Possible. Giving up.\n");
+		ast_free(s);
+		return -1;
+	}
+
+	s->chan = chan;
+	
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(dest);
+		AST_APP_ARG(timeout);
+		AST_APP_ARG(fdtimeout);
+	);
+	parse = ast_strdupa(data);
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	/* Get a technology/[device:]number pair */
+	char *number = args.dest;
+	char *tech = strsep(&number, "/");
+	if (args.timeout)
+		timeout = atoi(args.timeout) * 1000;
+	else
+		timeout = 35000;
+
+	if (args.fdtimeout)
+		fdtimeout = atoi(args.fdtimeout) * 1000;
+	else
+		fdtimeout = 4000;
+
+	if (!number) {
+		ast_debug(1, "dialstring argument takes format (technology/[device:]number1)\n");
+		ast_free(s);
+		return -1;
+	}
+	char numsubst[256];
+	ast_copy_string(numsubst, number, sizeof(numsubst));
+
+	/* Setup the outgoing helper and dial waiting for timeout or answer*/
+	if (!ast_strlen_zero(chan->cid.cid_num))
+		cid_num=ast_strdupa(chan->cid.cid_num);
+	if (!ast_strlen_zero(chan->cid.cid_name))
+		cid_name=ast_strdupa(chan->cid.cid_name);
+	if (!ast_strlen_zero(chan->context))
+		context=ast_strdupa(chan->context);
+	if (!ast_strlen_zero(chan->exten))
+		exten=ast_strdupa(chan->exten);
+	priority=chan->priority;
+
+	LOAD_OH(oh); 
+	oh.parent_channel=chan;
+	if (!(s->peer = __ast_request_and_dial(tech, AST_FORMAT_SLINEAR, numsubst, timeout, &state, chan->cid.cid_num, chan->cid.cid_name, &oh))) {
+		chan->hangupcause = state;
+		ast_free(s);
+		return -1;
+	}
+
+	/* pick up originating call */
+	if (chan->_state != AST_STATE_UP) {
+		res = ast_answer(chan);
+		if (res) {
+			ast_debug(1, "Could not answer channel '%s' cant run a gateway on a down channel\n", chan->name);
+			ast_free(s);
+			return res;
+		}
+	}
+
+	pbx_builtin_setvar_helper(chan, "DIALSTATUS", ast_strdup(ast_cause2str(state)));
+	manager_event(EVENT_FLAG_CALL, "Dial",
+		"SubEvent: Begin\r\n"
+		"Channel: %s\r\n"
+		"Destination: %s\r\n"
+		"CallerIDNum: %s\r\n"
+		"CallerIDName: %s\r\n"
+		"UniqueID: %s\r\n"
+		"DestUniqueID: %s\r\n"
+		"Dialstring: %s\r\n",
+		chan->name, s->peer->name, S_OR(chan->cid.cid_num, "<unknown>"),
+		S_OR(chan->cid.cid_name, "<unknown>"), chan->uniqueid,
+		s->peer->uniqueid, number ? number : "");
+
+        if (chan->cdr)
+                ast_cdr_setdestchan(chan->cdr, s->peer->name);
+
+	ast_mutex_lock(&s->peer->lock);
+	/* Copy important bits from incoming to outgoing */
+/*
+	s->peer->appl = app_faxgw_name;
+	ast_string_field_set(s->peer, language, chan->language);
+	ast_string_field_set(s->peer, accountcode, chan->accountcode);
+
+	s->peer->cdrflags = chan->cdrflags;
+	if (ast_strlen_zero(s->peer->musicclass))
+		ast_string_field_set(s->peer, musicclass, chan->musicclass);
+	s->peer->adsicpe = chan->adsicpe;
+	s->peer->transfercapability = chan->transfercapability;
+
+	if (chan->cid.cid_rdnis)
+		s->peer->cid.cid_rdnis=ast_strdup(chan->cid.cid_rdnis);
+	s->peer->cid.cid_pres = chan->cid.cid_pres;
+	s->peer->cid.cid_ton = chan->cid.cid_ton;
+	s->peer->cid.cid_tns = chan->cid.cid_tns;
+	s->peer->cid.cid_ani2 = chan->cid.cid_ani2;
+
+*/
+	/* Inherit context and extension */
+	if (!ast_strlen_zero(chan->macrocontext))
+		ast_copy_string(s->peer->dialcontext, chan->macrocontext, sizeof(s->peer->dialcontext));
+	if (!ast_strlen_zero(chan->macroexten))
+		ast_copy_string(s->peer->exten, chan->macroexten, sizeof(s->peer->exten));
+	s->peer->macropriority=chan->macropriority;
+
+        /* Clear all channel variables which to be set by the application.
+           Pre-set status to error so in case of any problems we can just leave */
+	pbx_builtin_setvar_helper(s->peer, "DIALEDPEERNUMBER", numsubst);
+
+	ast_mutex_unlock(&s->peer->lock);
+
+        pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
+        pbx_builtin_setvar_helper(chan, "FAXERROR", "Channel problems");
+
+	/* Stop monitor and set channels to signed linear codec */
+	ast_monitor_stop(chan, 1);
+	ast_set_write_format(s->chan, AST_FORMAT_SLINEAR);
+	ast_set_read_format(s->chan, AST_FORMAT_SLINEAR);
+	ast_set_write_format(s->peer, AST_FORMAT_SLINEAR);
+	ast_set_read_format(s->peer, AST_FORMAT_SLINEAR);
+
+	ast_channel_make_compatible(s->chan, s->peer);
+
+	/* start the gateway*/
+	s->finished = 0;
+
+	/* Start bridging packets until all sides have negotiated T.38 capabilities and only one is capable*/
+	ast_bridge_frames(s);
+
+	/* We are now T.38 One Side Gateway*/
+	if (!s->finished)
+		ast_t38_gateway(s);
+
+	if (s->finished < 0) {
+		ast_log(LOG_WARNING, "Transmission failed\n");
+		pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED"); 
+		pbx_builtin_setvar_helper(chan, "FAXERROR", "Channel problems"); 
+		res = -1;
+	} else if (s->finished > 0) {
+		ast_debug(1, "Transmission finished Ok\n");
+		pbx_builtin_setvar_helper(chan, "FAXSTATUS", "PASSED"); 
+		pbx_builtin_setvar_helper(chan, "FAXERROR", "OK"); 
+		res = 0;
+	} else {
+		ast_log(LOG_WARNING, "Transmission error\n");
+		pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED"); 
+		pbx_builtin_setvar_helper(chan, "FAXERROR", "Transmission error"); 
+		res = -1;
+	}
+	if (s->peer) {
+		ast_hangup(s->peer);
+	}
+	ast_free(s);
+	return res;
+}
+
 static int rcvfax_exec(struct ast_channel *chan, const char *data)
+
 {
 	int res = 0;
 	char *parse;
@@ -977,6 +1340,7 @@ static int unload_module(void)
 
 	res = ast_unregister_application(app_sndfax_name);	
 	res |= ast_unregister_application(app_rcvfax_name);	
+	res |= ast_unregister_application(app_t38gateway_name);
 
 	return res;
 }
@@ -987,6 +1351,8 @@ static int load_module(void)
 
 	res = ast_register_application_xml(app_sndfax_name, sndfax_exec);
 	res |= ast_register_application_xml(app_rcvfax_name, rcvfax_exec);
+	/* TODO: write synopsis,description in XML */
+	res |= ast_register_application(app_t38gateway_name, app_t38gateway_exec, app_t38gateway_synopsis, app_t38gateway_desc);
 
 	/* The default SPAN message handler prints to stderr. It is something we do not want */
 	span_set_message_handler(NULL);
