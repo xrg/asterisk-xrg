@@ -36,6 +36,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/time.h>       /* for getrlimit(2) */
 #include <sys/resource.h>   /* for getrlimit(2) */
 #include <stdlib.h>         /* for closefrom(3) */
+#ifdef HAVE_CAP
+#include <sys/capability.h>
+#endif /* HAVE_CAP */
 
 #include "asterisk/paths.h"	/* use ast_config_AST_DATA_DIR */
 #include "asterisk/channel.h"
@@ -1827,7 +1830,7 @@ int ast_get_encoded_char(const char *stream, char *result, size_t *consumed)
 	return 0;
 }
 
-int ast_get_encoded_str(const char *stream, char *result, size_t result_size)
+char *ast_get_encoded_str(const char *stream, char *result, size_t result_size)
 {
 	char *cur = result;
 	size_t consumed;
@@ -1837,7 +1840,7 @@ int ast_get_encoded_str(const char *stream, char *result, size_t result_size)
 		stream += consumed;
 	}
 	*cur = '\0';
-	return 0;
+	return result;
 }
 
 void ast_close_fds_above_n(int n)
@@ -1883,6 +1886,14 @@ int ast_safe_fork(int stop_reaper)
 		return pid;
 	} else {
 		/* Child */
+#ifdef HAVE_CAP
+		cap_t cap = cap_from_text("cap_net_admin-eip");
+
+		if (cap_set_proc(cap)) {
+			ast_log(LOG_WARNING, "Unable to remove capabilities.\n");
+		}
+		cap_free(cap);
+#endif
 
 		/* Before we unblock our signals, return our trapped signals back to the defaults */
 		signal(SIGHUP, SIG_DFL);

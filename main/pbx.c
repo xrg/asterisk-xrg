@@ -3774,6 +3774,8 @@ static int handle_statechange(void *datap)
 {
 	struct ast_hint *hint;
 	struct statechange *sc = datap;
+
+	ast_rdlock_contexts();
 	AST_RWLIST_RDLOCK(&hints);
 
 	AST_RWLIST_TRAVERSE(&hints, hint, list) {
@@ -3812,6 +3814,7 @@ static int handle_statechange(void *datap)
 		hint->laststate = state;	/* record we saw the change */
 	}
 	AST_RWLIST_UNLOCK(&hints);
+	ast_unlock_contexts();
 	ast_free(sc);
 	return 0;
 }
@@ -4350,6 +4353,9 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 			!ast_test_flag(c, AST_FLAG_BRIDGE_HANGUP_RUN) && 
 			ast_exists_extension(c, c->context, "h", 1, c->cid.cid_num)) {
 		set_ext_pri(c, "h", 1);
+		if (c->cdr && ast_opt_end_cdr_before_h_exten) {
+			ast_cdr_end(c->cdr);
+		}
 		while ((res = ast_spawn_extension(c, c->context, c->exten, c->priority, c->cid.cid_num, &found, 1)) == 0) {
 			c->priority++;
 		}
@@ -8641,7 +8647,7 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 			ast_stopstream(chan);
 		}
 	}
-	if (args.context != chan->context && res) {
+	if (strcmp(args.context, chan->context) && res) {
 		snprintf(chan->exten, sizeof(chan->exten), "%c", res);
 		ast_copy_string(chan->context, args.context, sizeof(chan->context));
 		chan->priority = 0;

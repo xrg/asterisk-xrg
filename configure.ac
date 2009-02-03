@@ -174,14 +174,18 @@ AC_PATH_PROG([SHELL], [sh], :)
 AC_PATH_PROG([LN], [ln], :)
 AC_PATH_PROG([DOT], [dot], :)
 AC_PATH_PROG([WGET], [wget], :)
+AC_PATH_PROG([CURL], [curl], :)
 AC_PATH_PROG([RUBBER], [rubber], :)
 AC_PATH_PROG([KPATHSEA], [kpsewhich], :)
 AC_PATH_PROG([XMLSTARLET], [xmlstarlet], :)
 if test "${WGET}" != ":" ; then
   DOWNLOAD=${WGET}
+else if test "${CURL}" != ":" ; then
+  DOWNLOAD="${CURL} -O --progress-bar -w \"%{url_effective}\n\""
 else
   AC_PATH_PROG([FETCH], [fetch], [:])
   DOWNLOAD=${FETCH}
+fi
 fi
 AC_SUBST(DOWNLOAD)
 
@@ -481,6 +485,7 @@ AST_GCC_ATTRIBUTE(deprecated)
 AST_GCC_ATTRIBUTE(sentinel)
 AST_GCC_ATTRIBUTE(warn_unused_result)
 AST_GCC_ATTRIBUTE(weak)
+AST_GCC_ATTRIBUTE(weak_import)
 AST_GCC_ATTRIBUTE(alias, [alias("foo")])
 
 AC_MSG_CHECKING(for -ffunction-sections support)
@@ -616,6 +621,8 @@ fi
 AST_C_DEFINE_CHECK([DAHDI], [DAHDI_CODE], [dahdi/user.h])
 
 AST_C_DEFINE_CHECK([DAHDI_HALF_FULL], [DAHDI_POLICY_HALF_FULL], [dahdi/user.h])
+
+AST_C_COMPILE_CHECK([DAHDI_LINEREVERSE_VMWI], [struct dahdi_vmwi_info booger], [dahdi/user.h], , [enhanced dahdi vmwi support])
 
 # BSD might not have exp2, and/or log2
 AST_EXT_LIB_CHECK([EXP2L], [m], [exp2l])

@@ -9627,6 +9627,11 @@ static int acf_mailbox_exists(struct ast_channel *chan, const char *cmd, char *a
 
 	AST_NONSTANDARD_APP_ARGS(arg, args, '@');
 
+	if (ast_strlen_zero(arg.mbox)) {
+		ast_log(LOG_ERROR, "MAILBOX_EXISTS requires an argument (<mailbox>[@<context>])\n");
+		return -1;
+	}
+
 	ast_copy_string(buf, find_user(&svm, ast_strlen_zero(arg.context) ? "default" : arg.context, arg.mbox) ? "1" : "0", len);
 	return 0;
 }
@@ -10191,6 +10196,8 @@ static const char *substitute_escapes(const char *value)
 	/* Add 16 for fudge factor */
 	struct ast_str *str = ast_str_thread_get(&global_app_buf, strlen(value) + 16);
 
+	ast_str_reset(str);
+	
 	/* Substitute strings \r, \n, and \t into the appropriate characters */
 	for (current = (char *) value; *current; current++) {
 		if (*current == '\\') {

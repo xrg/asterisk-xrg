@@ -568,8 +568,12 @@ static void hanguptree(struct chanlist *outgoing, struct ast_channel *exception,
 	while (outgoing) {
 		/* Hangup any existing lines we have open */
 		if (outgoing->chan && (outgoing->chan != exception)) {
-			if (answered_elsewhere)
+			if (answered_elsewhere) {
+				/* The flag is used for local channel inheritance and stuff */
 				ast_set_flag(outgoing->chan, AST_FLAG_ANSWERED_ELSEWHERE);
+				/* This is for the channel drivers */
+				outgoing->chan->hangupcause = AST_CAUSE_ANSWERED_ELSEWHERE;
+			}
 			ast_hangup(outgoing->chan);
 		}
 		oo = outgoing;
@@ -775,6 +779,9 @@ static void do_forward(struct chanlist *o,
 			}
 			/* Hangup the original channel now, in case we needed it */
 			ast_hangup(original);
+		}
+		if (single) {
+			ast_indicate(in, -1);
 		}
 	}
 }
@@ -1454,19 +1461,6 @@ static int setup_privacy_args(struct privacy_args *pa,
 	return 1; /* success */
 }
 
-static void set_dial_features(struct ast_flags64 *opts, struct ast_dial_features *features)
-{
-	struct ast_flags64 perm_opts = {.flags = 0};
-
-	ast_copy_flags64(&perm_opts, opts,
-		OPT_CALLER_TRANSFER | OPT_CALLER_PARK | OPT_CALLER_MONITOR | OPT_CALLER_MIXMONITOR | OPT_CALLER_HANGUP |
-		OPT_CALLEE_TRANSFER | OPT_CALLEE_PARK | OPT_CALLEE_MONITOR | OPT_CALLEE_MIXMONITOR | OPT_CALLEE_HANGUP);
-
-	memset(features->options, 0, sizeof(features->options));
-
-	ast_app_options2str64(dial_exec_options, &perm_opts, features->options, sizeof(features->options));
-}
-
 static void end_bridge_callback(void *data)
 {
 	char buf[80];
@@ -1530,9 +1524,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	struct ast_flags64 opts = { 0, };
 	char *opt_args[OPT_ARG_ARRAY_SIZE];
 	struct ast_datastore *datastore = NULL;
-	struct ast_datastore *ds_caller_features = NULL;
-	struct ast_datastore *ds_callee_features = NULL;
-	struct ast_dial_features *caller_features;
 	int fulldial = 0, num_dialed = 0;
 
 	/* Reset all DIAL variables back to blank, to prevent confusion (in case we don't reset all of them). */
@@ -1563,6 +1554,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 		goto done;
 	}
+
 
 	if (ast_test_flag64(&opts, OPT_OPERMODE)) {
 		opermode = ast_strlen_zero(opt_args[OPT_ARG_OPERMODE]) ? 1 : atoi(opt_args[OPT_ARG_OPERMODE]);
@@ -1616,28 +1608,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	ast_channel_unlock(chan);	
 	ast_copy_flags64(peerflags, &opts, OPT_DTMF_EXIT | OPT_GO_ON | OPT_ORIGINAL_CLID | OPT_CALLER_HANGUP | OPT_IGNORE_FORWARDING);
 
-	/* Create datastore for channel dial features for caller */
-	if (!(ds_caller_features = ast_datastore_alloc(&dial_features_info, NULL))) {
-		ast_log(LOG_WARNING, "Unable to create channel datastore for dial features. Aborting!\n");
-		goto out;
-	}
-
-	if (!(caller_features = ast_malloc(sizeof(*caller_features)))) {
-		ast_log(LOG_WARNING, "Unable to allocate memory for feature flags. Aborting!\n");
-		goto out;
-	}
-
-	ast_copy_flags(&(caller_features->features_callee), &(config.features_caller), AST_FLAGS_ALL);
-	caller_features->is_caller = 1;
-	set_dial_features(&opts, caller_features);
-
-	ds_caller_features->inheritance = DATASTORE_INHERIT_FOREVER;
-	ds_caller_features->data = caller_features;
-
-	ast_channel_lock(chan);
-	ast_channel_datastore_add(chan, ds_caller_features);
-	ast_channel_unlock(chan);
-
 	/* loop through the list of dial destinations */
 	rest = args.peers;
 	while ((cur = strsep(&rest, "&")) ) {
@@ -1649,7 +1619,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		char *tech = strsep(&number, "/");
 		/* find if we already dialed this interface */
 		struct ast_dialed_interface *di;
-		struct ast_dial_features *callee_features;
 		AST_LIST_HEAD(, ast_dialed_interface) *dialed_interfaces;
 		num_dialed++;
 		if (!number) {
@@ -1777,6 +1746,14 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		/* If we have an outbound group, set this peer channel to it */
 		if (outbound_group)
 			ast_app_group_set_channel(tc, outbound_group);
+		/* If the calling channel has the ANSWERED_ELSEWHERE flag set, inherit it. This is to support local channels */
+		if (ast_test_flag(chan, AST_FLAG_ANSWERED_ELSEWHERE))
+			ast_set_flag(tc, AST_FLAG_ANSWERED_ELSEWHERE);
+
+		/* Check if we're forced by configuration */
+		if (ast_test_flag64(&opts, OPT_CANCEL_ELSEWHERE))
+			 ast_set_flag(tc, AST_FLAG_ANSWERED_ELSEWHERE);
+
 
 		/* Inherit context and extension */
 		ast_string_field_set(tc, dialcontext, ast_strlen_zero(chan->macrocontext) ? chan->context : chan->macrocontext);
@@ -1784,30 +1761,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			ast_copy_string(tc->exten, chan->macroexten, sizeof(tc->exten));
 		else
 			ast_copy_string(tc->exten, chan->exten, sizeof(tc->exten));
-
-		/* Save callee features */
-		if (!(ds_callee_features = ast_datastore_alloc(&dial_features_info, NULL))) {
-			ast_log(LOG_WARNING, "Unable to create channel datastore for dial features. Aborting!\n");
-			ast_free(tmp);
-			goto out;
-		}
-
-		if (!(callee_features = ast_malloc(sizeof(*callee_features)))) {
-			ast_log(LOG_WARNING, "Unable to allocate memory for feature flags. Aborting!\n");
-			ast_free(tmp);
-			goto out;
-		}
-
-		ast_copy_flags(&(callee_features->features_callee), &(config.features_callee), AST_FLAGS_ALL);
-		callee_features->is_caller = 0;
-		set_dial_features(&opts, callee_features);
-
-		ds_callee_features->inheritance = DATASTORE_INHERIT_FOREVER;
-		ds_callee_features->data = callee_features;
-
-		ast_channel_lock(chan);
-		ast_channel_datastore_add(tc, ds_callee_features);
-		ast_channel_unlock(chan);
 
 		res = ast_call(tc, numsubst, 0); /* Place the call, but don't wait on the answer */
 

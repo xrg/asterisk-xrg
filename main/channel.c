@@ -939,6 +939,8 @@ alertpipe_failed:
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n"
 			"AccountCode: %s\r\n"
+			"Exten: %s\r\n"
+			"Context: %s\r\n"
 			"Uniqueid: %s\r\n",
 			tmp->name, 
 			state, 
@@ -946,6 +948,8 @@ alertpipe_failed:
 			S_OR(cid_num, ""),
 			S_OR(cid_name, ""),
 			tmp->accountcode,
+			S_OR(exten, ""),
+			S_OR(context, ""),
 			tmp->uniqueid);
 	}
 
@@ -1759,6 +1763,7 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay)
 		break;
 	}
 
+	ast_indicate(chan, -1);
 	chan->visible_indication = 0;
 
 	return res;
@@ -4104,7 +4109,7 @@ int ast_do_masquerade(struct ast_channel *original)
 	/* XXX What about blocking, softhangup, blocker, and lock and blockproc? XXX */
 	/* Application and data remain the same */
 	/* Clone exception  becomes real one, as with fdno */
-	ast_copy_flags(original, clonechan, AST_FLAG_EXCEPTION | AST_FLAG_OUTGOING);
+	ast_set_flag(original, ast_test_flag(clonechan, AST_FLAG_OUTGOING | AST_FLAG_EXCEPTION));
 	original->fdno = clonechan->fdno;
 	/* Schedule context remains the same */
 	/* Stream stuff stays the same */

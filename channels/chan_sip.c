@@ -40,6 +40,11 @@
  * \todo Transaction support
  * \todo Asterisk should send a non-100 provisional response every minute to keep proxies
  *  from cancelling the transaction (RFC 3261 13.3.1.1). See bug #11157.
+ * 
+ * ******** Wishlist: Improvements
+ * - Support of SIP domains for devices, so that we match on username@domain in the From: header
+ * - Connect registrations with a specific device on the incoming call. It's not done
+ *   automatically in Asterisk
  *
  * \ingroup channel_drivers
  *
@@ -485,7 +490,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define	FINDALLDEVICES	FALSE
 #define FINDONLYUSERS	TRUE
 
-
 #define	SIPBUFSIZE		512		/*!< Buffer size for many operations */
 
 #define XMIT_ERROR		-2
@@ -522,8 +526,6 @@ static int mwi_expiry = DEFAULT_MWI_EXPIRY;
 #define DEFAULT_QUALIFY_GAP   100
 #define DEFAULT_QUALIFY_PEERS 1
 
-static int global_qualify_gap = DEFAULT_QUALIFY_GAP;              /*!< Time between our group of peer pokes */
-static int global_qualify_peers = DEFAULT_QUALIFY_PEERS;          /*!< Number of peers to poke at a given time */
 
 #define CALLERID_UNKNOWN        "Unknown"
 
@@ -543,6 +545,7 @@ static int global_qualify_peers = DEFAULT_QUALIFY_PEERS;          /*!< Number of
 #define SIP_MAX_HEADERS              64               /*!< Max amount of SIP headers to read */
 #define SIP_MAX_LINES                64               /*!< Max amount of lines in SIP attachment (like SDP) */
 #define SIP_MIN_PACKET               4096             /*!< Initialize size of memory to allocate for packets */
+#define MAX_HISTORY_ENTRIES 	     50	              /*!< Max entires in the history list for a sip_pvt */
 
 #define INITIAL_CSEQ                 101              /*!< Our initial sip sequence number */
 
@@ -753,7 +756,7 @@ enum sip_transport {
  * For outbound proxies, a sip_peer will contain a reference to a 
  * dynamically allocated instance of a sip_proxy. A sip_pvt may also
  * contain a reference to a peer's outboundproxy, or it may contain
- * a reference to the global_outboundproxy.
+ * a reference to the sip_cfg.outboundproxy.
  */
 struct sip_proxy {
 	char name[MAXHOSTNAMELEN];      /*!< DNS name of domain/host or IP */
@@ -1015,8 +1018,6 @@ static const struct cfsip_options {
 	configuring devices 
 */
 /*@{*/ 
-static char default_context[AST_MAX_CONTEXT];
-static char default_subscribecontext[AST_MAX_CONTEXT];
 static char default_language[MAX_LANGUAGE];
 static char default_callerid[AST_MAX_EXTENSION];
 static char default_fromdomain[AST_MAX_EXTENSION];
@@ -1040,6 +1041,9 @@ static unsigned int default_primary_transport;		/*!< Default primary Transport (
 */
 /*@{*/ 
 /*! \brief a place to store all global settings for the sip channel driver 
+	These are settings that will be possibly to apply on a group level later on.
+	\note Do not add settings that only apply to the channel itself and can't
+	      be applied to devices (trunks, services, phones)
 */
 struct sip_settings {
 	int peer_rtupdate;		/*!< G: Update database with registration data for peer? */
@@ -1058,15 +1062,21 @@ struct sip_settings {
 	int callevents;			/*!< Whether we send manager events or not */
 	int regextenonqualify;  	/*!< Whether to add/remove regexten when qualifying peers */
 	int matchexterniplocally;	/*!< Match externip/externhost setting against localnet setting */
+	int notifyringing;		/*!< Send notifications on ringing */
+	int notifyhold;			/*!< Send notifications on hold */
+	enum notifycid_setting notifycid; /*!< Send CID with ringing notifications */
+	enum transfermodes allowtransfer;	/*!< SIP Refer restriction scheme */
+	int allowsubscribe;	        /*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE 
+					    the global setting is in globals_flags[1] */
+	char realm[MAXHOSTNAMELEN]; 		/*!< Default realm */
+	struct sip_proxy outboundproxy;	/*!< Outbound proxy */
+	char default_context[AST_MAX_CONTEXT];
+	char default_subscribecontext[AST_MAX_CONTEXT];
 };
 
 static struct sip_settings sip_cfg;
 
-static int global_notifyringing;	/*!< Send notifications on ringing */
-static int global_notifyhold;		/*!< Send notifications on hold */
 static int global_match_auth_username;		/*!< Match auth username if available instead of From: Default off. */
-
-static enum notifycid_setting global_notifycid; /*!< Send CID with ringing notifications */
 
 static int global_relaxdtmf;		/*!< Relax DTMF */
 static int global_rtptimeout;		/*!< Time out call if no RTP */
@@ -1077,9 +1087,6 @@ static int global_regattempts_max;	/*!< Registration attempts before giving up *
 static int global_callcounter;		/*!< Enable call counters for all devices. This is currently enabled by setting the peer
 						call-limit to 999. When we remove the call-limit from the code, we can make it
 						with just a boolean flag in the device structure */
-static enum transfermodes global_allowtransfer;	/*!< SIP Refer restriction scheme */
-static int global_allowsubscribe;	/*!< Flag for disabling ALL subscriptions, this is FALSE only if all peers are FALSE 
-					    the global setting is in globals_flags[1] */
 static unsigned int global_tos_sip;		/*!< IP type of service for SIP packets */
 static unsigned int global_tos_audio;		/*!< IP type of service for audio RTP packets */
 static unsigned int global_tos_video;		/*!< IP type of service for video RTP packets */
@@ -1090,7 +1097,6 @@ static unsigned int global_cos_video;		/*!< 802.1p class of service for video RT
 static unsigned int global_cos_text;		/*!< 802.1p class of service for text RTP packets */
 static int recordhistory;		/*!< Record SIP history. Off by default */
 static int dumphistory;			/*!< Dump history to verbose before destroying SIP dialog */
-static char global_realm[MAXHOSTNAMELEN]; 		/*!< Default realm */
 static char global_regcontext[AST_MAX_CONTEXT];		/*!< Context for auto-extensions */
 static char global_useragent[AST_MAX_EXTENSION];	/*!< Useragent for the SIP channel */
 static char global_sdpsession[AST_MAX_EXTENSION];	/*!< SDP session name for the SIP channel */
@@ -1100,8 +1106,9 @@ static int global_t1;			/*!< T1 time */
 static int global_t1min;		/*!< T1 roundtrip time minimum */
 static int global_timer_b;    			/*!< Timer B - RFC 3261 Section 17.1.1.2 */
 static int global_autoframing;          	/*!< Turn autoframing on or off. */
-static struct sip_proxy global_outboundproxy;	/*!< Outbound proxy */
 static int global_qualifyfreq;			/*!< Qualify frequency */
+static int global_qualify_gap;              /*!< Time between our group of peer pokes */
+static int global_qualify_peers;          /*!< Number of peers to poke at a given time */
 
 
 /*! \brief Codecs that we support by default: */
@@ -1705,12 +1712,11 @@ struct sip_pvt {
 	struct sip_st_dlg *stimer;		/*!< SIP Session-Timers */              
   
 	int red; 				/*!< T.140 RTP Redundancy */
+	int hangupcause;			/*!< Storage of hangupcause copied from our owner before we disconnect from the AST channel (only used at hangup) */
 
 	struct sip_subscription_mwi *mwi;       /*!< If this is a subscription MWI dialog, to which subscription */
-};
+}; 
 
-/*! Max entires in the history list for a sip_pvt */
-#define MAX_HISTORY_ENTRIES 50
 
 /*! \brief
  * Here we implement the container for dialogs (sip_pvt), defining
@@ -1803,6 +1809,11 @@ struct sip_mailbox {
 	AST_LIST_ENTRY(sip_mailbox) entry;
 };
 
+enum sip_peer_type {
+	SIP_TYPE_PEER = (1 << 0),
+	SIP_TYPE_USER = (1 << 1),
+};
+
 /*! \brief Structure for SIP peer data, we place calls to peers if registered  or fixed IP address (host) 
 */
 /* XXX field 'name' must be first otherwise sip_addrcmp() will fail, as will astobj2 hashing of the structure */
@@ -1851,10 +1862,9 @@ struct sip_peer {
 
 	/* things that don't belong in flags */
 	char is_realtime;		/*!< this is a 'realtime' peer */
-	char rt_fromcontact;		/*!< P: copy fromcontact from realtime */
-	char host_dynamic;		/*!< P: Dynamic Peers register with Asterisk */
-	char selfdestruct;		/*!< P: Automatic peers need to destruct themselves */
-	char onlymatchonip;		/*!< P: Only match on IP for incoming calls (old type=peer) */
+	char rt_fromcontact;		/*!< copy fromcontact from realtime */
+	char host_dynamic;		/*!< Dynamic Peers register with Asterisk */
+	char selfdestruct;		/*!< Automatic peers need to destruct themselves */
 	char the_mark;			/*!< moved out of ASTOBJ into struct proper; That which bears the_mark should be deleted! */
 
 	int expire;			/*!<  When to expire this peer registration */
@@ -1886,6 +1896,10 @@ struct sip_peer {
 	int timer_t1;			/*!<  The maximum T1 value for the peer */
 	int timer_b;			/*!<  The maximum timer B (transaction timeouts) */
 	int deprecated_username; /*!< If it's a realtime peer, are they using the deprecated "username" instead of "defaultuser" */
+	
+	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
+	enum sip_peer_type type; /*!< Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */
+	char onlymatchonip;		/*!< Only match on IP for incoming calls (old type=peer) */
 };
 
 
@@ -2218,7 +2232,7 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *unsupported);
 static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
 static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
-static void transmit_fake_auth_response(struct sip_pvt *p, struct sip_request *req, int reliable);
+static void transmit_fake_auth_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable);
 static int transmit_request(struct sip_pvt *p, int sipmethod, int inc, enum xmittype reliable, int newbranch);
 static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqno, enum xmittype reliable, int newbranch);
 static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init);
@@ -2312,6 +2326,7 @@ static int expire_register(const void *data);
 static void *do_monitor(void *data);
 static int restart_monitor(void);
 static void peer_mailboxes_to_str(struct ast_str **mailbox_str, struct sip_peer *peer);
+static struct ast_variable *copy_vars(struct ast_variable *src);
 /* static int sip_addrcmp(char *name, struct sockaddr_in *sin);	Support for peer matching */
 static int sip_refer_allocate(struct sip_pvt *p);
 static void ast_quiet_chan(struct ast_channel *chan);
@@ -2692,6 +2707,21 @@ static struct ast_rtp_protocol sip_rtp = {
 	.get_codec = sip_get_codec,
 };
 
+/*!
+ * duplicate a list of channel variables, \return the copy.
+ */
+static struct ast_variable *copy_vars(struct ast_variable *src)
+{
+	struct ast_variable *res = NULL, *tmp, *v = NULL;
+
+	for (v = src ; v ; v = v->next) {
+		if ((tmp = ast_variable_new(v->name, v->value, v->file))) {
+			tmp->next = res;
+			res = tmp;
+		}
+	}
+	return res;
+}
 
 /*! \brief SIP TCP connection handler */
 static void *sip_tcp_worker_fn(void *data)
@@ -2858,14 +2888,14 @@ static struct sip_peer *ref_peer(struct sip_peer *peer, char *tag)
 static void ref_proxy(struct sip_pvt *pvt, struct sip_proxy *proxy)
 {
 	struct sip_proxy *old_obproxy = pvt->outboundproxy;
-	/* The global_outboundproxy is statically allocated, and so
+	/* The sip_cfg.outboundproxy is statically allocated, and so
 	 * we don't ever need to adjust refcounts for it
 	 */
-	if (proxy && proxy != &global_outboundproxy) {
+	if (proxy && proxy != &sip_cfg.outboundproxy) {
 		ao2_ref(proxy, +1);
 	}
 	pvt->outboundproxy = proxy;
-	if (old_obproxy && old_obproxy != &global_outboundproxy) {
+	if (old_obproxy && old_obproxy != &sip_cfg.outboundproxy) {
 		ao2_ref(old_obproxy, -1);
 	}
 }
@@ -3033,11 +3063,11 @@ static struct sip_proxy *obproxy_get(struct sip_pvt *dialog, struct sip_peer *pe
 		append_history(dialog, "OBproxy", "Using peer obproxy %s", peer->outboundproxy->name);
 		return peer->outboundproxy;
 	}
-	if (global_outboundproxy.name[0]) {
+	if (sip_cfg.outboundproxy.name[0]) {
 		if (sipdebug)
 			ast_debug(1, "OBPROXY: Applying global OBproxy to this call\n");
-		append_history(dialog, "OBproxy", "Using global obproxy %s", global_outboundproxy.name);
-		return &global_outboundproxy;
+		append_history(dialog, "OBproxy", "Using global obproxy %s", sip_cfg.outboundproxy.name);
+		return &sip_cfg.outboundproxy;
 	}
 	if (sipdebug)
 		ast_debug(1, "OBPROXY: Not applying OBproxy to this call\n");
@@ -4660,6 +4690,7 @@ static void copy_socket_data(struct sip_socket *to_sock, const struct sip_socket
  */
 static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 {
+
 	/* this checks that the dialog is contacting the peer on a valid
 	 * transport type based on the peers transport configuration,
 	 * otherwise, this function bails out */
@@ -4788,6 +4819,8 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	if (peer->call_limit)
 		ast_set_flag(&dialog->flags[0], SIP_CALL_LIMIT);
 	
+	dialog->chanvars = copy_vars(peer->chanvars);
+
 	return 0;
 }
 
@@ -5236,7 +5269,7 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 		/* Decrement onhold count if applicable */
 		sip_pvt_lock(fup);
 		ao2_lock(p);
-		if (ast_test_flag(&fup->flags[1], SIP_PAGE2_CALL_ONHOLD) && global_notifyhold) {
+		if (ast_test_flag(&fup->flags[1], SIP_PAGE2_CALL_ONHOLD) && sip_cfg.notifyhold) {
 			ast_clear_flag(&fup->flags[1], SIP_PAGE2_CALL_ONHOLD);
 			ao2_unlock(p);
 			sip_pvt_unlock(fup);
@@ -5500,11 +5533,18 @@ static int sip_hangup(struct ast_channel *ast)
 		ast_debug(1, "Asked to hangup channel that was not connected\n");
 		return 0;
 	}
-	if (ast_test_flag(ast, AST_FLAG_ANSWERED_ELSEWHERE)) {
+	if (ast_test_flag(ast, AST_FLAG_ANSWERED_ELSEWHERE) || ast->hangupcause == AST_CAUSE_ANSWERED_ELSEWHERE) {
 		ast_debug(1, "This call was answered elsewhere");
+		if (ast->hangupcause == AST_CAUSE_ANSWERED_ELSEWHERE) {
+			ast_debug(1, "####### It's the cause code, buddy. The cause code!!!\n");
+		}
 		append_history(p, "Cancel", "Call answered elsewhere");
 		p->answered_elsewhere = TRUE;
 	}
+
+	/* Store hangupcause locally in PVT so we still have it before disconnect */
+	if (p->owner)
+		p->hangupcause = p->owner->hangupcause;
 
 	if (ast_test_flag(&p->flags[0], SIP_DEFER_BYE_ON_TRANSFER)) {
 		if (ast_test_flag(&p->flags[0], SIP_INC_COUNT) || ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
@@ -5555,7 +5595,7 @@ static int sip_hangup(struct ast_channel *ast)
 
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
 
-	append_history(p, needcancel ? "Cancel" : "Hangup", "Cause %s", p->owner ? ast_cause2str(p->owner->hangupcause) : "Unknown");
+	append_history(p, needcancel ? "Cancel" : "Hangup", "Cause %s", p->owner ? ast_cause2str(p->hangupcause) : "Unknown");
 
 	/* Disconnect */
 	if (p->vad)
@@ -5606,7 +5646,7 @@ static int sip_hangup(struct ast_channel *ast)
 				}
 			} else {	/* Incoming call, not up */
 				const char *res;
-				if (ast->hangupcause && (res = hangup_cause2sip(ast->hangupcause)))
+				if (p->hangupcause && (res = hangup_cause2sip(p->hangupcause)))
 					transmit_response_reliable(p, res, &p->initreq);
 				else 
 					transmit_response_reliable(p, "603 Declined", &p->initreq);
@@ -6228,8 +6268,10 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 		pbx_builtin_setvar_helper(tmp, "_T38CALL", "1");
 
 	/* Set channel variables for this call from configuration */
-	for (v = i->chanvars ; v ; v = v->next)
-		pbx_builtin_setvar_helper(tmp, v->name, v->value);
+	for (v = i->chanvars ; v ; v = v->next) {
+		char valuebuf[1024];
+		pbx_builtin_setvar_helper(tmp, v->name, ast_get_encoded_str(v->value, valuebuf, sizeof(valuebuf)));
+	}
 
 	if (state != AST_STATE_DOWN && ast_pbx_start(tmp)) {
 		ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmp->name);
@@ -6679,7 +6721,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
 	p->capability = global_capability;
-	p->allowtransfer = global_allowtransfer;
+	p->allowtransfer = sip_cfg.allowtransfer;
 	if ((ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
 	    (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO))
 		p->noncodeccapability |= AST_RTP_DTMF;
@@ -6688,7 +6730,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 		set_t38_capabilities(p);
 		p->t38.jointcapability = p->t38.capability;
 	}
-	ast_string_field_set(p, context, default_context);
+	ast_string_field_set(p, context, sip_cfg.default_context);
 	ast_string_field_set(p, parkinglot, default_parkinglot);
 
 	AST_LIST_HEAD_INIT_NOLOCK(&p->request_queue);
@@ -6886,7 +6928,6 @@ static int sip_register(const char *value, int lineno)
 	enum sip_transport transport = SIP_TRANSPORT_UDP;
 	char buf[256] = "";
 	char *username = NULL;
-	char *port = NULL;
 	char *hostname=NULL, *secret=NULL, *authuser=NULL, *expire=NULL;
 	char *callback=NULL;
 
@@ -6894,6 +6935,16 @@ static int sip_register(const char *value, int lineno)
 		return -1;
 
 	ast_copy_string(buf, value, sizeof(buf));
+
+	/* split [/contact][~expiry] */
+	expire = strchr(buf, '~');
+	if (expire)
+		*expire++ = '\0';
+	callback = strchr(buf, '/');
+	if (callback)
+		*callback++ = '\0';
+	if (ast_strlen_zero(callback))
+		callback = "s";
 
 	sip_parse_host(buf, lineno, &username, &portnum, &transport);
 
@@ -6923,25 +6974,6 @@ static int sip_register(const char *value, int lineno)
  	if ((secret) && (ast_strlen_zero(secret)))
 		secret = NULL;
 
-	/* split host[:port][/contact] */
-	expire = strchr(hostname, '~');
-	if (expire)
-		*expire++ = '\0';
-	callback = strchr(hostname, '/');
-	if (callback)
-		*callback++ = '\0';
-	if (ast_strlen_zero(callback))
-		callback = "s";
-	/* Separate host from port when checking for reserved characters
-	 */
-	if ((port = strchr(hostname, ':'))) {
-		*port = '\0';
-	}
-	/* And then re-merge the host and port so they are stored correctly
-	 */
-	if (port) {
-		*port = ':';
-	}
 	if (!(reg = ast_calloc(1, sizeof(*reg)))) {
 		ast_log(LOG_ERROR, "Out of memory. Can't allocate SIP registry entry\n");
 		return -1;
@@ -8041,7 +8073,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				      "Uniqueid: %s\r\n",
 				      p->owner->name,
 				      p->owner->uniqueid);
-		if (global_notifyhold)
+		if (sip_cfg.notifyhold)
 			sip_peer_hold(p, FALSE);
 		ast_clear_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD); /* Clear both flags */
 	} else if (!sin.sin_addr.s_addr || (sendonly && sendonly != -1)) {
@@ -8070,7 +8102,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 			ast_set_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD_INACTIVE);
 		else
 			ast_set_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD_ACTIVE);
-		if (global_notifyhold && !already_on_hold)
+		if (sip_cfg.notifyhold && !already_on_hold)
 			sip_peer_hold(p, TRUE);
 	}
 	
@@ -8746,7 +8778,7 @@ static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const
 	}
 	/* Stale means that they sent us correct authentication, but 
 	   based it on an old challenge (nonce) */
-	snprintf(tmp, sizeof(tmp), "Digest algorithm=MD5, realm=\"%s\", nonce=\"%s\"%s", global_realm, randdata, stale ? ", stale=true" : "");
+	snprintf(tmp, sizeof(tmp), "Digest algorithm=MD5, realm=\"%s\", nonce=\"%s\"%s", sip_cfg.realm, randdata, stale ? ", stale=true" : "");
 	respprep(&resp, p, msg, req);
 	add_header(&resp, header, tmp);
 	add_header_contentLength(&resp, 0);
@@ -9836,7 +9868,8 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init)
 	if (init > 1)
 		initreqprep(&req, p, sipmethod);
 	else
-		reqprep(&req, p, sipmethod, 0, 1);
+		/* If init=1, we should not generate a new branch. If it's 0, we need a new branch. */
+		reqprep(&req, p, sipmethod, 0, init ? 0 : 1);
 		
 	if (p->options && p->options->auth)
 		add_header(&req, p->options->authheader, p->options->auth);
@@ -10044,7 +10077,7 @@ static int find_calling_channel(struct ast_channel *c, void *data) {
 
 	return (c->pbx &&
 			(!strcasecmp(c->macroexten, p->exten) || !strcasecmp(c->exten, p->exten)) &&
-			(global_notifycid == IGNORE_CONTEXT || !strcasecmp(c->context, p->context)));
+			(sip_cfg.notifycid == IGNORE_CONTEXT || !strcasecmp(c->context, p->context)));
 }
 
 /*! \brief Used in the SUBSCRIBE notification subsystem (RFC3265) */
@@ -10066,7 +10099,7 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 
 	switch (state) {
 	case (AST_EXTENSION_RINGING | AST_EXTENSION_INUSE):
-		statestring = (global_notifyringing) ? "early" : "confirmed";
+		statestring = (sip_cfg.notifyringing) ? "early" : "confirmed";
 		local_state = NOTIFY_INUSE;
 		pidfstate = "busy";
 		pidfnote = "Ringing";
@@ -10205,18 +10238,21 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 	case DIALOG_INFO_XML: /* SNOM subscribes in this format */
 		ast_str_append(&tmp, 0, "<?xml version=\"1.0\"?>\n");
 		ast_str_append(&tmp, 0, "<dialog-info xmlns=\"urn:ietf:params:xml:ns:dialog-info\" version=\"%d\" state=\"%s\" entity=\"%s\">\n", p->dialogver++, full ? "full" : "partial", mto);
-		if ((state & AST_EXTENSION_RINGING) && global_notifyringing) {
-			const char *local_display = p->exten, *local_target = mto;
+		if ((state & AST_EXTENSION_RINGING) && sip_cfg.notifyringing) {
+			const char *local_display = p->exten;
+			char *local_target = mto;
 
 			/* There are some limitations to how this works.  The primary one is that the
 			   callee must be dialing the same extension that is being monitored.  Simply dialing
 			   the hint'd device is not sufficient. */
-			if (global_notifycid) {
+			if (sip_cfg.notifycid) {
 				struct ast_channel *caller = ast_channel_search_locked(find_calling_channel, p);
 
 				if (caller) {
+					int need = strlen(caller->cid.cid_num) + strlen(p->fromdomain) + sizeof("sip:@");
+					local_target = alloca(need);
+					snprintf(local_target, need, "sip:%s@%s", caller->cid.cid_num, p->fromdomain);
 					local_display = ast_strdupa(caller->cid.cid_name);
-					local_target = ast_strdupa(caller->cid.cid_num);
 					ast_channel_unlock(caller);
 					caller = NULL;
 				}
@@ -10948,11 +10984,11 @@ static int transmit_request_with_auth(struct sip_pvt *p, int sipmethod, int seqn
 	}
 	/* If we are hanging up and know a cause for that, send it in clear text to make
 		debugging easier. */
-	if (sipmethod == SIP_BYE && p->owner && p->owner->hangupcause)	{
+	if (sipmethod == SIP_BYE)	{
 		char buf[10];
 
-		add_header(&resp, "X-Asterisk-HangupCause", ast_cause2str(p->owner->hangupcause));
-		snprintf(buf, sizeof(buf), "%d", p->owner->hangupcause);
+		add_header(&resp, "X-Asterisk-HangupCause", ast_cause2str(p->hangupcause));
+		snprintf(buf, sizeof(buf), "%d", p->hangupcause);
 		add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 	}
 
@@ -11619,7 +11655,7 @@ static enum check_auth_result check_auth(struct sip_pvt *p, struct sip_request *
 		ast_copy_string(a1_hash, md5secret, sizeof(a1_hash));
 	else {
 		char a1[256];
-		snprintf(a1, sizeof(a1), "%s:%s:%s", username, global_realm, secret);
+		snprintf(a1, sizeof(a1), "%s:%s:%s", username, sip_cfg.realm, secret);
 		ast_md5_hash(a1_hash, a1);
 	}
 
@@ -11747,7 +11783,7 @@ static int cb_extensionstate(char *context, char* exten, int state, void *data)
 /*! \brief Send a fake 401 Unauthorized response when the administrator
   wants to hide the names of local devices  from fishers
  */
-static void transmit_fake_auth_response(struct sip_pvt *p, struct sip_request *req, int reliable)
+static void transmit_fake_auth_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable)
 {
 	ast_string_field_build(p, randdata, "%08lx", ast_random());	/* Create nonce for challenge */
 	transmit_response_with_auth(p, "401 Unauthorized", req, p->randdata, reliable, "WWW-Authenticate", 0);
@@ -11952,7 +11988,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct sockaddr
 		case AUTH_PEER_NOT_DYNAMIC:
 		case AUTH_ACL_FAILED:
 			if (sip_cfg.alwaysauthreject) {
-				transmit_fake_auth_response(p, &p->initreq, 1);
+				transmit_fake_auth_response(p, &p->initreq, XMIT_UNRELIABLE);
 			} else {
 				/* URI not found */
 				if (res == AUTH_PEER_NOT_DYNAMIC) {
@@ -12459,7 +12495,7 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 	/* By default, use the context in the channel sending the REFER */
 	if (ast_strlen_zero(transfer_context)) {
 		transfer_context = S_OR(transferer->owner->macrocontext,
-					S_OR(transferer->context, default_context));
+					S_OR(transferer->context, sip_cfg.default_context));
 	}
 
 	ast_copy_string(referdata->refer_to_context, transfer_context, sizeof(referdata->refer_to_context));
@@ -12527,7 +12563,7 @@ static int get_also_info(struct sip_pvt *p, struct sip_request *oreq)
 	/* By default, use the context in the channel sending the REFER */
 	if (ast_strlen_zero(transfer_context)) {
 		transfer_context = S_OR(p->owner->macrocontext,
-					S_OR(p->context, default_context));
+					S_OR(p->context, sip_cfg.default_context));
 	}
 	if (ast_exists_extension(NULL, transfer_context, c, 1, NULL)) {
 		/* This is a blind transfer */
@@ -12712,21 +12748,6 @@ static int get_rpid_num(const char *input, char *output, int maxlen)
 	return 0;
 }
 
-/*!
- * duplicate a list of channel variables, \return the copy.
- */
-static struct ast_variable *copy_vars(struct ast_variable *src)
-{
-	struct ast_variable *res = NULL, *tmp, *v = NULL;
-
-	for (v = src ; v ; v = v->next) {
-		if ((tmp = ast_variable_new(v->name, v->value, v->file))) {
-			tmp->next = res;
-			res = tmp;
-		}
-	}
-	return res;
-}
 
 /*! \brief helper function for check_{user|peer}_ok() */
 static void replace_cid(struct sip_pvt *p, const char *rpid_num, const char *calleridname)
@@ -13346,7 +13367,7 @@ static char *sip_show_users(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 	user_iter = ao2_iterator_init(peers, 0);
 	while ((user = ao2_iterator_next(&user_iter))) {
 		ao2_lock(user);
-		if (user->onlymatchonip == TRUE) {
+		if (!(user->type & SIP_TYPE_USER)) {
 			ao2_unlock(user);
 			unref_peer(user, "sip show users");
 			continue;
@@ -13538,7 +13559,7 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 	while ((peer = ao2_t_iterator_next(&i, "iterate thru peers table"))) {	
 		ao2_lock(peer);
 
-		if (peer->onlymatchonip == FALSE) {
+		if (!(peer->type & SIP_TYPE_PEER)) {
 			ao2_unlock(peer);
 			unref_peer(peer, "unref peer because it's actually a user");
 			continue;
@@ -14417,7 +14438,7 @@ static char *complete_sip_user(const char *word, int state)
 	user_iter = ao2_iterator_init(peers, 0);
 	while ((user = ao2_iterator_next(&user_iter))) {
 		ao2_lock(user);
-		if (user->onlymatchonip == TRUE) {
+		if (!(user->type & SIP_TYPE_USER)) {
 			ao2_unlock(user);
 			unref_peer(user, "complete sip user");
 			continue;
@@ -14883,7 +14904,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Enable call counters:   %s\n", cli_yesno(global_callcounter));
 	ast_cli(a->fd, "  SIP domain support:     %s\n", cli_yesno(!AST_LIST_EMPTY(&domain_list)));
 	ast_cli(a->fd, "  Realm. auth:            %s\n", cli_yesno(authl != NULL));
-	ast_cli(a->fd, "  Our auth realm          %s\n", global_realm);
+	ast_cli(a->fd, "  Our auth realm          %s\n", sip_cfg.realm);
 	ast_cli(a->fd, "  Call to non-local dom.: %s\n", cli_yesno(sip_cfg.allow_external_domains));
 	ast_cli(a->fd, "  URI user is phone no:   %s\n", cli_yesno(ast_test_flag(&global_flags[0], SIP_USEREQPHONE)));
  	ast_cli(a->fd, "  Always auth rejects:    %s\n", cli_yesno(sip_cfg.alwaysauthreject));
@@ -14979,18 +15000,18 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Reg. default duration:  %d secs\n", default_expiry);
 	ast_cli(a->fd, "  Outbound reg. timeout:  %d secs\n", global_reg_timeout);
 	ast_cli(a->fd, "  Outbound reg. attempts: %d\n", global_regattempts_max);
-	ast_cli(a->fd, "  Notify ringing state:   %s\n", cli_yesno(global_notifyringing));
-	if (global_notifyringing) {
+	ast_cli(a->fd, "  Notify ringing state:   %s\n", cli_yesno(sip_cfg.notifyringing));
+	if (sip_cfg.notifyringing) {
 		ast_cli(a->fd, "    Include CID:          %s%s\n",
-				cli_yesno(global_notifycid),
-				global_notifycid == IGNORE_CONTEXT ? " (Ignoring context)" : "");
+				cli_yesno(sip_cfg.notifycid),
+				sip_cfg.notifycid == IGNORE_CONTEXT ? " (Ignoring context)" : "");
 	}
-	ast_cli(a->fd, "  Notify hold state:      %s\n", cli_yesno(global_notifyhold));
-	ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(global_allowtransfer));
+	ast_cli(a->fd, "  Notify hold state:      %s\n", cli_yesno(sip_cfg.notifyhold));
+	ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(sip_cfg.allowtransfer));
 	ast_cli(a->fd, "  Max Call Bitrate:       %d kbps\n", default_maxcallbitrate);
 	ast_cli(a->fd, "  Auto-Framing:           %s\n", cli_yesno(global_autoframing));
-	ast_cli(a->fd, "  Outb. proxy:            %s %s\n", ast_strlen_zero(global_outboundproxy.name) ? "<not set>" : global_outboundproxy.name,
-							global_outboundproxy.force ? "(forced)" : "");
+	ast_cli(a->fd, "  Outb. proxy:            %s %s\n", ast_strlen_zero(sip_cfg.outboundproxy.name) ? "<not set>" : sip_cfg.outboundproxy.name,
+							sip_cfg.outboundproxy.force ? "(forced)" : "");
 	ast_cli(a->fd, "  Session Timers:         %s\n", stmode2str(global_st_mode));
 	ast_cli(a->fd, "  Session Refresher:      %s\n", strefresher2str (global_st_refresher));
 	ast_cli(a->fd, "  Session Expires:        %d secs\n", global_max_se);
@@ -15003,7 +15024,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "-----------------\n");
 	ast_cli(a->fd, "  Allowed transports:     %s\n", get_transport_list(default_transports)); 
 	ast_cli(a->fd, "  Outbound transport:	  %s\n", get_transport(default_primary_transport));
-	ast_cli(a->fd, "  Context:                %s\n", default_context);
+	ast_cli(a->fd, "  Context:                %s\n", sip_cfg.default_context);
 	ast_cli(a->fd, "  Nat:                    %s\n", nat2str(ast_test_flag(&global_flags[0], SIP_NAT)));
 	ast_cli(a->fd, "  DTMF:                   %s\n", dtmfmode2str(ast_test_flag(&global_flags[0], SIP_DTMF)));
 	ast_cli(a->fd, "  Qualify:                %d\n", default_qualify);
@@ -16240,9 +16261,11 @@ static int function_sippeer(struct ast_channel *chan, const char *cmd, char *dat
 		struct ast_variable *v;
 	
 		chanvar = strsep(&chanvar, "]");
-		for (v = peer->chanvars ; v ; v = v->next)
-			if (!strcasecmp(v->name, chanvar))
+		for (v = peer->chanvars ; v ; v = v->next) {
+			if (!strcasecmp(v->name, chanvar)) {
 				ast_copy_string(buf, v->value, len);
+			}
+		}
 	} else  if (!strncasecmp(colname, "codec[", 6)) {
 		char *codecnum;
 		int codec = 0;
@@ -18081,7 +18104,7 @@ static int handle_request_options(struct sip_pvt *p, struct sip_request *req)
 	build_contact(p);
 
 	if (ast_strlen_zero(p->context))
-		ast_string_field_set(p, context, default_context);
+		ast_string_field_set(p, context, sip_cfg.default_context);
 
 	if (ast_shutting_down())
 		transmit_response_with_allow(p, "503 Unavailable", req, 0);
@@ -18838,7 +18861,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		if (res < 0) { /* Something failed in authentication */
 			if (res == AUTH_FAKE_AUTH) {
 				ast_log(LOG_NOTICE, "Sending fake auth rejection for device %s\n", get_header(req, "From"));
-				transmit_fake_auth_response(p, req, 1);
+				transmit_fake_auth_response(p, req, XMIT_RELIABLE);
 			} else {
 				ast_log(LOG_NOTICE, "Failed to authenticate device %s\n", get_header(req, "From"));
 				transmit_response_reliable(p, "403 Forbidden", req);
@@ -18872,7 +18895,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 		/* Initialize the context if it hasn't been already */
 		if (ast_strlen_zero(p->context))
-			ast_string_field_set(p, context, default_context);
+			ast_string_field_set(p, context, sip_cfg.default_context);
 
 
 		/* Check number of concurrent calls -vs- incoming limit HERE */
@@ -19520,7 +19543,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		return 0;
 	}
 	if (ast_strlen_zero(p->context))
-		ast_string_field_set(p, context, default_context);
+		ast_string_field_set(p, context, sip_cfg.default_context);
 
 	/* If we do not support SIP domains, all transfers are local */
 	if (sip_cfg.allow_external_domains && check_sip_domain(p->refer->refer_to_domain, NULL, 0)) {
@@ -19953,7 +19976,7 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 		ast_log(LOG_NOTICE, "Client '%s' using deprecated BYE/Also transfer method.  Ask vendor to support REFER instead\n",
 			ast_inet_ntoa(p->recv.sin_addr));
 		if (ast_strlen_zero(p->context))
-			ast_string_field_set(p, context, default_context);
+			ast_string_field_set(p, context, sip_cfg.default_context);
 		res = get_also_info(p, req);
 		if (!res) {
 			c = p->owner;
@@ -20041,7 +20064,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 	/* Check if we have a global disallow setting on subscriptions. 
 		if so, we don't have to check peer settings after auth, which saves a lot of processing
 	*/
-	if (!global_allowsubscribe) {
+	if (!sip_cfg.allowsubscribe) {
  		transmit_response(p, "403 Forbidden (policy)", req);
 		pvt_set_needdestroy(p, "forbidden");
 		return 0;
@@ -20095,7 +20118,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 	if (res < 0) {
 		if (res == AUTH_FAKE_AUTH) {
 			ast_log(LOG_NOTICE, "Sending fake auth rejection for device %s\n", get_header(req, "From"));
-			transmit_fake_auth_response(p, req, 1);
+			transmit_fake_auth_response(p, req, XMIT_UNRELIABLE);
 		} else {
 			ast_log(LOG_NOTICE, "Failed to authenticate device %s for SUBSCRIBE\n", get_header(req, "From"));
 			transmit_response_reliable(p, "403 Forbidden", req);
@@ -21151,7 +21174,7 @@ static void check_rtp_timeout(struct sip_pvt *dialog, time_t t)
 		/* Might be a timeout now -- see if we're on hold */
 		struct sockaddr_in sin;
 		ast_rtp_get_peer(dialog->rtp, &sin);
-		if (sin.sin_addr.s_addr || (ast_rtp_get_rtpholdtimeout(dialog->rtp) &&
+		if (!ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD) || (ast_rtp_get_rtpholdtimeout(dialog->rtp) &&
 		     (t > dialog->lastrtprx + ast_rtp_get_rtpholdtimeout(dialog->rtp)))) {
 			/* Needs a hangup */
 			if (ast_rtp_get_rtptimeout(dialog->rtp)) {
@@ -22325,8 +22348,8 @@ static void set_peer_defaults(struct sip_peer *peer)
 	}
 	ast_copy_flags(&peer->flags[0], &global_flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&peer->flags[1], &global_flags[1], SIP_PAGE2_FLAGS_TO_COPY);
-	ast_string_field_set(peer, context, default_context);
-	ast_string_field_set(peer, subscribecontext, default_subscribecontext);
+	ast_string_field_set(peer, context, sip_cfg.default_context);
+	ast_string_field_set(peer, subscribecontext, sip_cfg.default_subscribecontext);
 	ast_string_field_set(peer, language, default_language);
 	ast_string_field_set(peer, mohinterpret, default_mohinterpret);
 	ast_string_field_set(peer, mohsuggest, default_mohsuggest);
@@ -22337,7 +22360,7 @@ static void set_peer_defaults(struct sip_peer *peer)
 	peer->rtptimeout = global_rtptimeout;
 	peer->rtpholdtimeout = global_rtpholdtimeout;
 	peer->rtpkeepalive = global_rtpkeepalive;
-	peer->allowtransfer = global_allowtransfer;
+	peer->allowtransfer = sip_cfg.allowtransfer;
 	peer->autoframing = global_autoframing;
 	peer->qualifyfreq = global_qualifyfreq;
 	if (global_callcounter)
@@ -22524,8 +22547,16 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				ast_str_set(&fullcontact, 0, "%s", v->value);
 			}
 		} else if (!strcasecmp(v->name, "type")) {
-			if (!strcasecmp(v->value, "peer")) 
+			if (!strcasecmp(v->value, "peer")) {
 				peer->onlymatchonip = TRUE;		/* For realtime support, add type=peer in the table */
+				peer->type = SIP_TYPE_PEER;
+			} else if (!strcasecmp(v->value, "user")) {
+				peer->onlymatchonip = FALSE;
+				peer->type = SIP_TYPE_USER;
+			} else if (!strcasecmp(v->value, "friend")) {
+				peer->onlymatchonip = FALSE;
+				peer->type = SIP_TYPE_USER | SIP_TYPE_PEER;
+			}
 		} else if (!strcasecmp(v->name, "remotesecret")) {
 			ast_string_field_set(peer, remotesecret, v->value);
 		} else if (!strcasecmp(v->name, "secret")) {
@@ -22851,7 +22882,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	ast_copy_flags(&peer->flags[0], &peerflags[0], mask[0].flags);
 	ast_copy_flags(&peer->flags[1], &peerflags[1], mask[1].flags);
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE))
-		global_allowsubscribe = TRUE;	/* No global ban any more */
+		sip_cfg.allowsubscribe = TRUE;	/* No global ban any more */
 	if (!found && peer->host_dynamic && !peer->is_realtime)
 		reg_source_db(peer);
 
@@ -23022,10 +23053,10 @@ static int reload_config(enum channelreloadreason reason)
 	memset(&localaddr, 0, sizeof(localaddr));
 	memset(&externip, 0, sizeof(externip));
 	memset(&default_prefs, 0 , sizeof(default_prefs));
-	memset(&global_outboundproxy, 0, sizeof(struct sip_proxy));
-	global_outboundproxy.ip.sin_port = htons(STANDARD_SIP_PORT);
-	global_outboundproxy.ip.sin_family = AF_INET;	/*!< Type of address: IPv4 */
-	global_outboundproxy.force = FALSE;		/*!< Don't force proxy usage, use route: headers */
+	memset(&sip_cfg.outboundproxy, 0, sizeof(struct sip_proxy));
+	sip_cfg.outboundproxy.ip.sin_port = htons(STANDARD_SIP_PORT);
+	sip_cfg.outboundproxy.ip.sin_family = AF_INET;	/*!< Type of address: IPv4 */
+	sip_cfg.outboundproxy.force = FALSE;		/*!< Don't force proxy usage, use route: headers */
 	default_transports = 0;				/*!< Reset default transport to zero here, default value later on */
 	default_primary_transport = 0;			/*!< Reset default primary transport to zero here, default value later on */
 	ourport_tcp = STANDARD_SIP_PORT;
@@ -23049,17 +23080,17 @@ static int reload_config(enum channelreloadreason reason)
 	sip_cfg.allow_external_domains = DEFAULT_ALLOW_EXT_DOM;				/* Allow external invites */
 	global_regcontext[0] = '\0';
 	sip_cfg.regextenonqualify = DEFAULT_REGEXTENONQUALIFY;
-	global_notifyringing = DEFAULT_NOTIFYRINGING;
-	global_notifycid = DEFAULT_NOTIFYCID;
-	global_notifyhold = FALSE;		/*!< Keep track of hold status for a peer */
+	sip_cfg.notifyringing = DEFAULT_NOTIFYRINGING;
+	sip_cfg.notifycid = DEFAULT_NOTIFYCID;
+	sip_cfg.notifyhold = FALSE;		/*!< Keep track of hold status for a peer */
 	sip_cfg.directrtpsetup = FALSE;		/* Experimental feature, disabled by default */
 	sip_cfg.alwaysauthreject = DEFAULT_ALWAYSAUTHREJECT;
-	global_allowsubscribe = FALSE;
+	sip_cfg.allowsubscribe = FALSE;
 	snprintf(global_useragent, sizeof(global_useragent), "%s %s", DEFAULT_USERAGENT, ast_get_version());
 	snprintf(global_sdpsession, sizeof(global_sdpsession), "%s %s", DEFAULT_SDPSESSION, ast_get_version());
 	snprintf(global_sdpowner, sizeof(global_sdpowner), "%s", DEFAULT_SDPOWNER);
 	ast_copy_string(default_notifymime, DEFAULT_NOTIFYMIME, sizeof(default_notifymime));
-	ast_copy_string(global_realm, S_OR(ast_config_AST_SYSTEM_NAME, DEFAULT_REALM), sizeof(global_realm));
+	ast_copy_string(sip_cfg.realm, S_OR(ast_config_AST_SYSTEM_NAME, DEFAULT_REALM), sizeof(sip_cfg.realm));
 	ast_copy_string(default_callerid, DEFAULT_CALLERID, sizeof(default_callerid));
 	sip_cfg.compactheaders = DEFAULT_COMPACTHEADERS;
 	global_reg_timeout = DEFAULT_REGISTRATION_TIMEOUT;
@@ -23073,7 +23104,7 @@ static int reload_config(enum channelreloadreason reason)
 	global_rtptimeout = 0;
 	global_rtpholdtimeout = 0;
 	global_rtpkeepalive = DEFAULT_RTPKEEPALIVE;
-	global_allowtransfer = TRANSFER_OPENFORALL;	/* Merrily accept all transfers by default */
+	sip_cfg.allowtransfer = TRANSFER_OPENFORALL;	/* Merrily accept all transfers by default */
 	sip_cfg.rtautoclear = 120;
 	ast_set_flag(&global_flags[1], SIP_PAGE2_ALLOWSUBSCRIBE);	/* Default for all devices: TRUE */
 	ast_set_flag(&global_flags[1], SIP_PAGE2_ALLOWOVERLAP);		/* Default for all devices: TRUE */
@@ -23090,8 +23121,8 @@ static int reload_config(enum channelreloadreason reason)
 	global_qualify_peers = DEFAULT_QUALIFY_PEERS;
 
 	/* Initialize some reasonable defaults at SIP reload (used both for channel and as default for devices */
-	ast_copy_string(default_context, DEFAULT_CONTEXT, sizeof(default_context));
-	default_subscribecontext[0] = '\0';
+	ast_copy_string(sip_cfg.default_context, DEFAULT_CONTEXT, sizeof(sip_cfg.default_context));
+	sip_cfg.default_subscribecontext[0] = '\0';
 	default_language[0] = '\0';
 	default_fromdomain[0] = '\0';
 	default_qualify = DEFAULT_QUALIFY;
@@ -23137,15 +23168,15 @@ static int reload_config(enum channelreloadreason reason)
 			continue;
 
 		if (!strcasecmp(v->name, "context")) {
-			ast_copy_string(default_context, v->value, sizeof(default_context));
+			ast_copy_string(sip_cfg.default_context, v->value, sizeof(sip_cfg.default_context));
 		} else if (!strcasecmp(v->name, "subscribecontext")) {
-			ast_copy_string(default_subscribecontext, v->value, sizeof(default_subscribecontext));
+			ast_copy_string(sip_cfg.default_subscribecontext, v->value, sizeof(sip_cfg.default_subscribecontext));
   		} else if (!strcasecmp(v->name, "callcounter")) {
 			global_callcounter = ast_true(v->value) ? 1 : 0;
   		} else if (!strcasecmp(v->name, "allowguest")) {
 			sip_cfg.allowguest = ast_true(v->value) ? 1 : 0;
 		} else if (!strcasecmp(v->name, "realm")) {
-			ast_copy_string(global_realm, v->value, sizeof(global_realm));
+			ast_copy_string(sip_cfg.realm, v->value, sizeof(sip_cfg.realm));
 		} else if (!strcasecmp(v->name, "useragent")) {
 			ast_copy_string(global_useragent, v->value, sizeof(global_useragent));
 			ast_debug(1, "Setting SIP channel User-Agent Name to %s\n", global_useragent);
@@ -23158,7 +23189,7 @@ static int reload_config(enum channelreloadreason reason)
 			else
 				ast_log(LOG_WARNING, "'%s' must not contain spaces at line %d.  Using default.\n", v->value, v->lineno);
 		} else if (!strcasecmp(v->name, "allowtransfer")) {
-			global_allowtransfer = ast_true(v->value) ? TRANSFER_OPENFORALL : TRANSFER_CLOSED;
+			sip_cfg.allowtransfer = ast_true(v->value) ? TRANSFER_OPENFORALL : TRANSFER_CLOSED;
 		} else if (!strcasecmp(v->name, "rtcachefriends")) {
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_RTCACHEFRIENDS);	
 		} else if (!strcasecmp(v->name, "rtsavesysname")) {
@@ -23271,14 +23302,14 @@ static int reload_config(enum channelreloadreason reason)
 		} else if (!strcasecmp(v->name, "directrtpsetup")) {
 			sip_cfg.directrtpsetup = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifyringing")) {
-			global_notifyringing = ast_true(v->value);
+			sip_cfg.notifyringing = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifyhold")) {
-			global_notifyhold = ast_true(v->value);
+			sip_cfg.notifyhold = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "notifycid")) {
 			if (!strcasecmp(v->value, "ignore-context")) {
-				global_notifycid = IGNORE_CONTEXT;
+				sip_cfg.notifycid = IGNORE_CONTEXT;
 			} else {
-				global_notifycid = ast_true(v->value);
+				sip_cfg.notifycid = ast_true(v->value);
 			}
 		} else if (!strcasecmp(v->name, "alwaysauthreject")) {
 			sip_cfg.alwaysauthreject = ast_true(v->value);
@@ -23316,25 +23347,25 @@ static int reload_config(enum channelreloadreason reason)
 
 			tok = ast_skip_blanks(strtok(ast_strdupa(v->value), ","));
 
-			sip_parse_host(tok, v->lineno, &proxyname, &portnum, &global_outboundproxy.transport);
+			sip_parse_host(tok, v->lineno, &proxyname, &portnum, &sip_cfg.outboundproxy.transport);
 
-			global_outboundproxy.ip.sin_port = htons(portnum);
+			sip_cfg.outboundproxy.ip.sin_port = htons(portnum);
 	
 			if ((tok = strtok(NULL, ","))) {
-				global_outboundproxy.force = !strncasecmp(ast_skip_blanks(tok), "force", 5);
+				sip_cfg.outboundproxy.force = !strncasecmp(ast_skip_blanks(tok), "force", 5);
 			} else {
-				global_outboundproxy.force = FALSE;
+				sip_cfg.outboundproxy.force = FALSE;
 			}
 
 			if (ast_strlen_zero(proxyname)) {
 				ast_log(LOG_WARNING, "you must specify a name for the outboundproxy on line %d of sip.conf.", v->lineno);
-				global_outboundproxy.name[0] = '\0';
+				sip_cfg.outboundproxy.name[0] = '\0';
 				continue;
 			}
 
-			ast_copy_string(global_outboundproxy.name, proxyname, sizeof(global_outboundproxy.name));
+			ast_copy_string(sip_cfg.outboundproxy.name, proxyname, sizeof(sip_cfg.outboundproxy.name));
 
-			proxy_update(&global_outboundproxy);
+			proxy_update(&sip_cfg.outboundproxy);
 		} else if (!strcasecmp(v->name, "autocreatepeer")) {
 			sip_cfg.autocreatepeer = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "match_auth_username")) {

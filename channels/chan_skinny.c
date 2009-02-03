@@ -2243,6 +2243,9 @@ static void transmit_displaymessage(struct skinny_device *d, const char *text, i
 		//req->data.clearpromptstatus.lineInstance = instance;
 		//req->data.clearpromptstatus.callReference = reference;
 
+		/* send datetime message. We have to do it here because it will clear the display on the phone if we do it elsewhere */
+		handle_time_date_req_message(NULL, d->session);
+
 		if (skinnydebug)
 			ast_verb(1, "Clearing Display\n");
 	} else {
@@ -2510,42 +2513,38 @@ static void mwi_event_cb(const struct ast_event *event, void *userdata)
 {
 	struct skinny_line *l = userdata;
 	struct skinny_device *d = l->device;
-	struct skinnysession *s = d->session;
-	struct skinny_line *l2;
-	int new_msgs = 0;
-	int dev_msgs = 0;
+	if (d) {
+		struct skinnysession *s = d->session;
+		struct skinny_line *l2;
+		int new_msgs = 0;
+		int dev_msgs = 0;
 
-	if (s) {
-		if (event) {
-			l->newmsgs = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
-		}
-
-		if (l->newmsgs) {
-			transmit_lamp_indication(d, STIMULUS_VOICEMAIL, l->instance, l->mwiblink?SKINNY_LAMP_BLINK:SKINNY_LAMP_ON);
-		} else {
-			transmit_lamp_indication(d, STIMULUS_VOICEMAIL, l->instance, SKINNY_LAMP_OFF);
-		}
-
-		/* find out wether the device lamp should be on or off */
-		AST_LIST_TRAVERSE(&d->lines, l2, list) {
-			if (l2->newmsgs) {
-				dev_msgs++;
+		if (s) {
+			if (event) {
+				l->newmsgs = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
 			}
-		}
 
-		if (dev_msgs) {
-			transmit_lamp_indication(d, STIMULUS_VOICEMAIL, 0, d->mwiblink?SKINNY_LAMP_BLINK:SKINNY_LAMP_ON);
-		} else {
-			transmit_lamp_indication(d, STIMULUS_VOICEMAIL, 0, SKINNY_LAMP_OFF);
+			if (l->newmsgs) {
+				transmit_lamp_indication(d, STIMULUS_VOICEMAIL, l->instance, l->mwiblink?SKINNY_LAMP_BLINK:SKINNY_LAMP_ON);
+			} else {
+				transmit_lamp_indication(d, STIMULUS_VOICEMAIL, l->instance, SKINNY_LAMP_OFF);
+			}
+
+			/* find out wether the device lamp should be on or off */
+			AST_LIST_TRAVERSE(&d->lines, l2, list) {
+				if (l2->newmsgs) {
+					dev_msgs++;
+				}
+			}
+
+			if (dev_msgs) {
+				transmit_lamp_indication(d, STIMULUS_VOICEMAIL, 0, d->mwiblink?SKINNY_LAMP_BLINK:SKINNY_LAMP_ON);
+			} else {
+				transmit_lamp_indication(d, STIMULUS_VOICEMAIL, 0, SKINNY_LAMP_OFF);
+			}
+			ast_verb(3, "Skinny mwi_event_cb found %d new messages\n", new_msgs);
 		}
-		ast_verb(3, "Skinny mwi_event_cb found %d new messages\n", new_msgs);
 	}
-}
-
-static void do_housekeeping(struct skinnysession *s)
-{
-	/* Update time on device */
-	handle_time_date_req_message(NULL, s);
 }
 
 /* I do not believe skinny can deal with video.
@@ -3492,6 +3491,7 @@ static int skinny_hangup(struct ast_channel *ast)
 				transmit_stopmediatransmission(d, sub);
 				transmit_speaker_mode(d, SKINNY_SPEAKEROFF);
 				transmit_ringer_mode(d, SKINNY_RING_OFF);
+				transmit_displaymessage(d, NULL, l->instance, sub->callid); /* clear display */
 				transmit_tone(d, SKINNY_SILENCE, l->instance, sub->callid);
 				/* we should check to see if we can start the ringer if another line is ringing */
 			}
@@ -4155,7 +4155,6 @@ static int handle_keep_alive_message(struct skinny_req *req, struct skinnysessio
 		return -1;
 
 	transmit_response(s->device, req);
-	do_housekeeping(s);
 	return 1;
 }
 
@@ -4845,10 +4844,6 @@ static int handle_onhook_message(struct skinny_req *req, struct skinnysession *s
 			ast_log(LOG_WARNING, "Skinny(%s@%s-%d) channel already destroyed\n",
 				l->name, d->name, sub->callid);
 		}
-	}
-	/* The bit commented below gives a very occasional core dump. */
-	if ((l->hookstate == SKINNY_ONHOOK) && (AST_LIST_NEXT(sub, list) /*&& !AST_LIST_NEXT(sub, list)->rtp*/)) {
-		do_housekeeping(s);
 	}
 	return 1;
 }
@@ -5568,7 +5563,6 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 				}
 			}
 			if ((l->hookstate == SKINNY_ONHOOK) && (AST_LIST_NEXT(sub, list) && !AST_LIST_NEXT(sub, list)->rtp)) {
-				do_housekeeping(s);
 				ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Skinny/%s@%s", l->name, d->name);
 			}
 		}

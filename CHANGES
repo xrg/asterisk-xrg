@@ -28,8 +28,8 @@ SIP Changes
  * Added a new 'faxdetect=yes|no' configuration option to sip.conf.  When this
    option is enabled, a SIP channel will go to the fax extension (if it exists)
    after T38 is negotiated.  This option is disabled by default.
- * If ATTENDED_TRANSFER_COMPLETE_SOUND is set, the sound will be played to the
-   target of an attended transfer
+ * If the channel variable  ATTENDED_TRANSFER_COMPLETE_SOUND is set, 
+   the sound will be played to the target of an attended transfer
  * Added two new configuration options, "qualifygap" and "qualifypeers", which allow
    finer control over how many peers Asterisk will qualify and the gap between them
    when all peers need to be qualified at the same time.
@@ -46,6 +46,8 @@ SIP Changes
    information
  * Added a function to remove SIP headers added in the dialplan before the
    first INVITE is generated - SIPRemoveHeader()
+ * Channel variables set with setvar= in a device configuration is now 
+   set both for inbound and outbound calls.
 
 Skinny Changes
 --------------
@@ -78,6 +80,10 @@ Dialplan Functions
    Totally.  Hopefully, that means more to you than it does to me.
  * Added AUDIOHOOK_INHERIT. For information on its use, please see the output
    of "core show function AUDIOHOOK_INHERIT" from the CLI
+ * Added AES_ENCRYPT. For information on its use, please see the output
+   of "core show function AES_ENCRYPT" from the CLI
+ * Added AES_DECRYPT. For information on its use, please see the output
+   of "core show function AES_DECRYPT" from the CLI
 
 Applications
 ------------
@@ -327,6 +333,9 @@ Queue changes
   * A new configuration option, "timeoutpriority" has been added. Please see the section labeled
     "QUEUE TIMING OPTIONS" in configs/queues.conf.sample for a detailed explanation of the option
     as well as an explanation about timeout options in general
+  * Added a new option - C - for forcing the "answered elsewhere" flag on
+    cancellation of calls in to members of the queue. This is to avoid the
+    call to a member of a queue having the call listed as a "missed call".
 
 Realtime changes
 ----------------
@@ -854,6 +863,13 @@ AEL Changes
 Call Features (res_features) Changes
 ------------------------------------
   * Added the parkedcalltransfers option to features.conf
+  * Added parkedcallparking option to control one touch parking w/ parking
+    pickup
+  * Added parkedcallhangup option to control disconnect feature w/ parking
+    pickup
+  * Added parkedcallrecording option to control one-touch record w/ parking
+    pickup
+  * Added BRIDGE_FEATURES variable to set available features for a channel
   * The built-in method for doing attended transfers has been updated to
      include some new options that allow you to have the transferee sent
      back to the person that did the transfer if the transfer is not successful.
