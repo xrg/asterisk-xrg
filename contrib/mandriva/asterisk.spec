@@ -416,6 +416,7 @@ export ASTCFLAGS="%{optflags}"
 #	./configure --prefix=%{_prefix}
 #popd
 
+%make -j1 cleantest
 %make
 
 %if %{build_docs}
