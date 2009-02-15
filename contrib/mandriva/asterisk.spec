@@ -336,7 +336,11 @@ done
 cat %{SOURCE1} > asterisk.init
 cat %{SOURCE2} > asterisk.sysconfig
 
+%if %mdkversion < 200900
+cp contrib/mandriva/menuselect.makeopts.2008 ./menuselect.makeopts
+%else
 cp contrib/mandriva/menuselect.makeopts ./
+%endif
 
 # lib64 fix
 find -name "Makefile" | xargs perl -pi -e "s|/usr/lib|%{_libdir}|g"
