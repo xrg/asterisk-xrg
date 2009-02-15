@@ -97,7 +97,11 @@ BuildRequires:	portaudio-devel
 BuildRequires:  libjack-devel
 BuildRequires:	bison
 BuildRequires:	flex
+%if %mdkversion < 200900
+BuildRequires: imap-devel
+%else
 BuildRequires:	c-client-devel
+%endif
 BuildRequires:	krb5-devel
 BuildRequires:	pam-devel
 BuildRequires:	gmime-devel
