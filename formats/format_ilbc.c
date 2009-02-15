@@ -24,10 +24,14 @@
  * \arg File name extension: ilbc
  * \ingroup formats
  */
- 
+
+/*** MODULEINFO
+        <defaultenabled>no</defaultenabled>
+ ***/
+
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 40722 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unistd.h>
 #include <netinet/in.h>
