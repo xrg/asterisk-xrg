@@ -318,6 +318,7 @@ This package contains a couple of testing utilities:
 %prep
 %git_get_source
 %setup -q -a3
+%git_gen_changelog -n 100
 
 find . -type d -perm 0700 -exec chmod 755 {} \;
 find . -type d -perm 0555 -exec chmod 755 {} \;
@@ -782,11 +783,5 @@ fi
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/test_dlinklists.so
 %attr(0755,root,root)                                   %{_sbindir}/refcounter
 
-%changelog
-* Tue May 01 2007 P. Christeas <p_christeas@yahoo.com> 1.4.4-xrg1
-  + 1.4.4
-
-* Sun Mar 04 2007 P. Christeas <p_christeas@yahoo.com> 1.4.1-xrg1
-  + Latest revision from svn
-  - Apply all patches with git to the svn tree.
+%changelog -f Changelog.git.txt
 
