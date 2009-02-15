@@ -318,6 +318,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <signal.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
@@ -599,8 +600,8 @@ struct rpt_tele
 	int	mode;
 	struct rpt_link mylink;
 	char param[TELEPARAMSIZE];
-	int	submode;
-	unsigned int parrot;
+	intptr_t submode;
+	uintptr_t  parrot;
 	pthread_t threadid;
 } ;
 
@@ -4971,7 +4972,7 @@ struct dahdi_params par;
 
 	    case PARROT: /* Repeat stuff */
 
-		sprintf(mystr,PARROTFILE,myrpt->name,mytele->parrot);
+		sprintf(mystr,PARROTFILE,myrpt->name,(unsigned int)mytele->parrot);
 		if (ast_fileexists(mystr,NULL,mychannel->language) <= 0)
 		{
 			imdone = 1;
@@ -4979,14 +4980,14 @@ struct dahdi_params par;
 			break;
 		}
 		wait_interval(myrpt, DLY_PARROT, mychannel);
-		sprintf(mystr,PARROTFILE,myrpt->name,mytele->parrot);
+		sprintf(mystr,PARROTFILE,myrpt->name,(unsigned int)mytele->parrot);
 		res = ast_streamfile(mychannel, mystr, mychannel->language);
 		if (!res) 
 			res = ast_waitstream(mychannel, "");
 		else
 			 ast_log(LOG_WARNING, "ast_streamfile failed on %s\n", mychannel->name);
 		ast_stopstream(mychannel);
-		sprintf(mystr,PARROTFILE,myrpt->name,mytele->parrot);
+		sprintf(mystr,PARROTFILE,myrpt->name,(unsigned int)mytele->parrot);
 		strcat(mystr,".wav");
 		unlink(mystr);			
 		imdone = 1;
@@ -5254,7 +5255,7 @@ char *v1, *v2;
 	memset((char *)tele,0,sizeof(struct rpt_tele));
 	tele->rpt = myrpt;
 	tele->mode = mode;
-	if (mode == PARROT) tele->parrot = (unsigned int) data;
+	if (mode == PARROT) tele->parrot = (uintptr_t) data;
 	else mylink = (struct rpt_link *) data;
 	rpt_mutex_lock(&myrpt->lock);
 	if((mode == CONNFAIL) || (mode == REMDISC) || (mode == CONNECTED) ||
@@ -5268,7 +5269,7 @@ char *v1, *v2;
 		strncpy(tele->param, (char *) data, TELEPARAMSIZE - 1);
 		tele->param[TELEPARAMSIZE - 1] = 0;
 	}
-	if (mode == REMXXX) tele->submode = (int) data;
+	if (mode == REMXXX) tele->submode = (intptr_t) data;
 	insque((struct qelem *)tele, (struct qelem *)myrpt->tele.next);
 	rpt_mutex_unlock(&myrpt->lock);
         pthread_attr_init(&attr);
@@ -6375,6 +6376,7 @@ static int function_playback(struct rpt *myrpt, char *param, char *digitbuf, int
 static int function_cop(struct rpt *myrpt, char *param, char *digitbuf, int command_source, struct rpt_link *mylink)
 {
 	char string[16];
+	int res;
 
 	int i, r;
 
@@ -6383,7 +6385,7 @@ static int function_cop(struct rpt *myrpt, char *param, char *digitbuf, int comm
 	
 	switch(myatoi(param)){
 		case 1: /* System reset */
-			system("killall -9 asterisk");
+			res = system("killall -9 asterisk");
 			return DC_COMPLETE;
 
 		case 2:
@@ -9636,7 +9638,8 @@ static int channel_revert(struct rpt *myrpt)
 static int function_remote(struct rpt *myrpt, char *param, char *digitbuf, int command_source, struct rpt_link *mylink)
 {
 	char *s,*s1,*s2;
-	int i,j,p,r,ht,k,l,ls2,m,d,offset,offsave, modesave, defmode;
+	int i,j,r,ht,k,l,ls2,m,d,offset,offsave, modesave, defmode=0;
+	intptr_t p;
 	char multimode = 0;
 	char oc,*cp,*cp1,*cp2;
 	char tmp[20], freq[20] = "", savestr[20] = "";
@@ -11988,7 +11991,7 @@ char tmpstr[300],lstr[MAXLINKLIST];
 				ast_closestream(myrpt->parrotstream);
 			myrpt->parrotstream = NULL;
 			myrpt->parrotstate = 2;
-			rpt_telemetry(myrpt,PARROT,(struct rpt_link *) myrpt->parrotcnt++); 
+			rpt_telemetry(myrpt,PARROT,(void *) ((intptr_t)myrpt->parrotcnt++)); 
 		}			
 		if (myrpt->cmdAction.state == CMD_STATE_READY)
 		{ /* there is a command waiting to be processed */
@@ -13661,7 +13664,7 @@ static int rpt_exec(struct ast_channel *chan, void *data)
 			donodelog(myrpt,str);
 		}
 		if (!phone_mode) send_newkey(chan);
-		return AST_PBX_KEEPALIVE;
+		return 0;
 	}
 	/* well, then it is a remote */
 	rpt_mutex_lock(&myrpt->lock);

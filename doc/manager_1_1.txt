@@ -202,6 +202,23 @@ Changes to manager version 1.1:
 	Variables:
 	  ActionId: <id>		Action ID for this transaction. Will be returned.
 
+- Action: QueueReload
+	Modules: app_queue
+	Purpose:
+		To reload queue rules, a queue's members, a queue's parameters, or all of the aforementioned
+	Variable:
+		Queuename: <name> The name of the queue to take action on. If no queue name is specified, then all queues are affected
+		Rules: <yes or no> Whether to reload queue_rules.conf
+		Members: <yes or no> Whether to reload the queue's members
+		Parameters: <yes or no> Whether to reload the other queue options
+
+- Action: QueueReset
+	Modules: app_queue
+	Purpose:
+		Reset the statistics for a queue
+	Variables:
+		Queuename: <name> The name of the queue on which to reset statistics
+
 * NEW EVENTS
 ------------
 
@@ -336,6 +353,21 @@ Changes to manager version 1.1:
 		RegistrationTime: 1219161830
 	If an actionID was specified for the SipShowRegistry action, it will be appended as the
 	last line of the RegistrationsComplete event.
+
+- Event: ChanSpyStart
+	Modules: app_chanspy
+	Purpose: Reports when an active channel starts to be monitored by someone.
+	Example:
+		Event: ChanSpyStart
+		SpyerChannel: SIP/4321-13bba124
+		SpyeeChannel: SIP/1234-56ecc098
+
+- Event: ChanSpyStop
+	Modules: app_chanspy
+	Purpose: Reports when an active channel stops to be monitored by someone.
+	Example:
+		Event: ChanSpyStop
+		SpyeeChannel: SIP/1234-56ecc098
 
 * TODO
 ------

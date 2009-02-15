@@ -46,6 +46,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/say.h"
 #include "asterisk/pbx.h"
 #include "asterisk/translate.h"
+#include "asterisk/manager.h"
 #include "asterisk/module.h"
 #include "asterisk/lock.h"
 #include "asterisk/options.h"
@@ -456,8 +457,9 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	}
 	ast_mutex_unlock(&spyee_chanspy_ds->lock);
 
-	if (!spyee)
+	if (!spyee) {
 		return 0;
+	}
 
 	/* We now hold the channel lock on spyee */
 
@@ -467,7 +469,12 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	}
 
 	name = ast_strdupa(spyee->name);
+
 	ast_verb(2, "Spying on channel %s\n", name);
+	manager_event(EVENT_FLAG_CALL, "ChanSpyStart",
+			"SpyerChannel: %s\r\n"
+			"SpyeeChannel: %s\r\n",
+			spyer_name, name);
 
 	memset(&csth, 0, sizeof(csth));
 
@@ -611,19 +618,15 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	ast_clear_flag(chan, AST_FLAG_END_DTMF_ONLY);
 	ast_channel_unlock(chan);
 
-	if (ast_test_flag(flags, OPTION_WHISPER)) {
-		ast_audiohook_lock(&csth.whisper_audiohook);
-		ast_audiohook_detach(&csth.whisper_audiohook);
-		ast_audiohook_unlock(&csth.whisper_audiohook);
-		ast_audiohook_destroy(&csth.whisper_audiohook);
-	}
-
-	if (ast_test_flag(flags, OPTION_BARGE)) {
-		ast_audiohook_lock(&csth.bridge_whisper_audiohook);
-		ast_audiohook_detach(&csth.bridge_whisper_audiohook);
-		ast_audiohook_unlock(&csth.bridge_whisper_audiohook);
-		ast_audiohook_destroy(&csth.bridge_whisper_audiohook);
-	}
+	ast_audiohook_lock(&csth.whisper_audiohook);
+	ast_audiohook_detach(&csth.whisper_audiohook);
+	ast_audiohook_unlock(&csth.whisper_audiohook);
+	ast_audiohook_destroy(&csth.whisper_audiohook);
+	
+	ast_audiohook_lock(&csth.bridge_whisper_audiohook);
+	ast_audiohook_detach(&csth.bridge_whisper_audiohook);
+	ast_audiohook_unlock(&csth.bridge_whisper_audiohook);
+	ast_audiohook_destroy(&csth.bridge_whisper_audiohook);
 
 	ast_audiohook_lock(&csth.spy_audiohook);
 	ast_audiohook_detach(&csth.spy_audiohook);
@@ -631,6 +634,7 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	ast_audiohook_destroy(&csth.spy_audiohook);
 	
 	ast_verb(2, "Done Spying on channel %s\n", name);
+	manager_event(EVENT_FLAG_CALL, "ChanSpyStop", "SpyeeChannel: %s\r\n", name);
 
 	return running;
 }
@@ -833,22 +837,9 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 			 chanspy_ds_free(peer_chanspy_ds), prev = peer,
 		     peer_chanspy_ds = next_chanspy_ds ? next_chanspy_ds : 
 			 	next_channel(chan, prev, spec, exten, context, &chanspy_ds), next_chanspy_ds = NULL) {
-			const char *group;
 			int igrp = !mygroup;
-			char *groups[NUM_SPYGROUPS];
-			char *mygroups[NUM_SPYGROUPS];
-			int num_groups = 0;
-			char dup_group[512];
-			int num_mygroups = 0;
-			char *dup_mygroup;
-			int x;
-			int y;
-			char *s;
-			char *buffer;
-			char *end;
-			char *ext;
-			char *form_enforced;
 			int ienf = !myenforced;
+			char *s;
 
 			peer = peer_chanspy_ds->chan;
 
@@ -877,7 +868,16 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 			}
 
 			if (mygroup) {
-				dup_mygroup = ast_strdupa(mygroup);
+				int num_groups = 0;
+				int num_mygroups = 0;
+				char dup_group[512];
+				char dup_mygroup[512];
+				char *groups[NUM_SPYGROUPS];
+				char *mygroups[NUM_SPYGROUPS];
+				const char *group;
+				int x;
+				int y;
+				ast_copy_string(dup_mygroup, mygroup, sizeof(dup_mygroup));
 				num_mygroups = ast_app_separate_args(dup_mygroup, ':', mygroups,
 					ARRAY_LEN(mygroups));
 
@@ -903,35 +903,28 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 			}
 
 			if (myenforced) {
+				char ext[AST_CHANNEL_NAME + 3];
+				char buffer[512];
+				char *end;
 
-				/* We don't need to allocate more space than just the
-				length of (peer->name) for ext as we will cut the
-				channel name's ending before copying into ext */
+				snprintf(buffer, sizeof(buffer) - 1, ":%s:", myenforced);
 
-				ext = alloca(strlen(peer->name));
-
-				form_enforced = alloca(strlen(myenforced) + 3);
-
-				strcpy(form_enforced, ":");
-				strcat(form_enforced, myenforced);
-				strcat(form_enforced, ":");
-
-				buffer = ast_strdupa(peer->name);
-				
-				if ((end = strchr(buffer, '-'))) {
+				ast_copy_string(ext + 1, peer->name, sizeof(ext) - 1);
+				if ((end = strchr(ext, '-'))) {
 					*end++ = ':';
 					*end = '\0';
 				}
 
-				strcpy(ext, ":");
-				strcat(ext, buffer);
+				ext[0] = ':';
 
-				if (strcasestr(form_enforced, ext))
+				if (strcasestr(buffer, ext)) {
 					ienf = 1;
+				}
 			}
 
-			if (!ienf)
+			if (!ienf) {
 				continue;
+			}
 
 			strcpy(peer_name, "spy-");
 			strncat(peer_name, peer->name, AST_NAME_STRLEN - 4 - 1);

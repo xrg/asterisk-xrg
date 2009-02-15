@@ -2287,10 +2287,10 @@ static const char* get_sdp_iterate(int* start, struct sip_request *req, const ch
 static const char *get_sdp(struct sip_request *req, const char *name);
 static int find_sdp(struct sip_request *req);
 static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action);
-static void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate,
+static void add_codec_to_sdp(const struct sip_pvt *p, int codec,
 			     struct ast_str **m_buf, struct ast_str **a_buf,
 			     int debug, int *min_packet_size);
-static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_rate,
+static void add_noncodec_to_sdp(const struct sip_pvt *p, int format,
 				struct ast_str **m_buf, struct ast_str **a_buf,
 				int debug);
 static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int oldsdp);
@@ -2518,6 +2518,7 @@ static int init_req(struct sip_request *req, int sipmethod, const char *recip);
 static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, int seqno, int newbranch);
 static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod);
 static int init_resp(struct sip_request *resp, const char *msg);
+static inline int resp_needs_contact(const char *msg, enum sipmethod method);
 static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static const struct sockaddr_in *sip_real_dst(const struct sip_pvt *p);
 static void build_via(struct sip_pvt *p);
@@ -4833,7 +4834,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct sockadd
 	struct ast_hostent ahp;
 	struct sip_peer *peer;
 	char *port;
-	int portno;
+	int portno = 0;
 	char host[MAXHOSTNAMELEN], *hostn;
 	char peername[256];
 	int srv_ret = 0;
@@ -4888,8 +4889,10 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct sockadd
 			  In the future, we should first check NAPTR to find out transport preference
 		 */
 		hostn = peername;
-		portno = port ? atoi(port) : (dialog->socket.type & SIP_TRANSPORT_TLS) ? STANDARD_TLS_PORT : STANDARD_SIP_PORT;
-		if (sip_cfg.srvlookup) {
+ 		/* Section 4.2 of RFC 3263 specifies that if a port number is specified, then
+		 * an A record lookup should be used instead of SRV.
+		 */
+		if (!port && sip_cfg.srvlookup) {
 			char service[MAXHOSTNAMELEN];
 			int tportno;
 	
@@ -4900,7 +4903,8 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct sockadd
 				portno = tportno;
 			}
 		}
-
+	 	if (!portno)
+			portno = port ? atoi(port) : (dialog->socket.type & SIP_TRANSPORT_TLS) ? STANDARD_TLS_PORT : STANDARD_SIP_PORT;
 		hp = ast_gethostbyname(hostn, &ahp);
 		if (!hp) {
 			ast_log(LOG_WARNING, "No such host: %s\n", peername);
@@ -5242,9 +5246,11 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 		if (inuse) {
 			sip_pvt_lock(fup);
 			ao2_lock(p);
-			if ((*inuse > 0) && ast_test_flag(&fup->flags[0], SIP_INC_COUNT)) {
-				(*inuse)--;
-				ast_clear_flag(&fup->flags[0], SIP_INC_COUNT);
+			if (*inuse > 0) {
+				if (ast_test_flag(&fup->flags[0], SIP_INC_COUNT)) {
+					(*inuse)--;
+					ast_clear_flag(&fup->flags[0], SIP_INC_COUNT);
+				}
 			} else {
 				*inuse = 0;
 			}
@@ -5256,9 +5262,11 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 		if (inringing) {
 			sip_pvt_lock(fup);
 			ao2_lock(p);
-			if ((*inringing > 0)&& ast_test_flag(&fup->flags[0], SIP_INC_RINGING)) {
-				(*inringing)--;
-				ast_clear_flag(&fup->flags[0], SIP_INC_RINGING);
+			if (*inringing > 0) {
+				if (ast_test_flag(&fup->flags[0], SIP_INC_RINGING)) {
+					(*inringing)--;
+					ast_clear_flag(&fup->flags[0], SIP_INC_RINGING);
+				}
 			} else {
 			   *inringing = 0;
 			}
@@ -5322,7 +5330,9 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 			sip_pvt_lock(fup);
 			ao2_lock(p);
 			if (ast_test_flag(&fup->flags[0], SIP_INC_RINGING)) {
-				(*inringing)--;
+				if (*inringing > 0) {
+					(*inringing)--;
+				}
 				ast_clear_flag(&fup->flags[0], SIP_INC_RINGING);
 			}
 			ao2_unlock(p);
@@ -7684,22 +7694,17 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	/* XXX This needs to be done per media stream, since it's media stream specific */
 	iterator = req->sdp_start;
 	while ((a = get_sdp_iterate(&iterator, req, "a"))[0] != '\0') {
-		char* mimeSubtype = ast_strdupa(a); /* ensures we have enough space */
+		char mimeSubtype[128];
+		char fmtp_string[64];
+		unsigned int sample_rate;
+
 		if (option_debug > 1) {
 			int breakout = FALSE;
-		
+
 			/* If we're debugging, check for unsupported sdp options */
 			if (!strncasecmp(a, "rtcp:", (size_t) 5)) {
 				if (debug)
 					ast_verbose("Got unsupported a:rtcp in SDP offer \n");
-				breakout = TRUE;
-			} else if (!strncasecmp(a, "fmtp:", (size_t) 5)) {
-				/* Format parameters:  Not supported */
-				/* Note: This is used for codec parameters, like bitrate for
-					G722 and video formats for H263 and H264 
-					See RFC2327 for an example */
-				if (debug)
-					ast_verbose("Got unsupported a:fmtp in SDP offer \n");
 				breakout = TRUE;
 			} else if (!strncasecmp(a, "framerate:", (size_t) 10)) {
 				/* Video stuff:  Not supported */
@@ -7720,21 +7725,29 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 			if (breakout)	/* We have a match, skip to next header */
 				continue;
 		}
+
 		if (!strcasecmp(a, "sendonly")) {
 			if (sendonly == -1)
 				sendonly = 1;
 			continue;
-		} else if (!strcasecmp(a, "inactive")) {
+		}
+
+		if (!strcasecmp(a, "inactive")) {
 			if (sendonly == -1)
 				sendonly = 2;
 			continue;
-		}  else if (!strcasecmp(a, "sendrecv")) {
+		}
+
+		if (!strcasecmp(a, "sendrecv")) {
 			if (sendonly == -1)
 				sendonly = 0;
 			continue;
-		} else if (strlen(a) > 5 && !strncasecmp(a, "ptime", 5)) {
+		}
+
+		if (!strncasecmp(a, "ptime", 5)) {
 			char *tmp = strrchr(a, ':');
 			long int framing = 0;
+
 			if (tmp) {
 				tmp++;
 				framing = strtol(tmp, NULL, 10);
@@ -7758,8 +7771,9 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				ast_rtp_codec_setpref(p->rtp, pref);
 			}
 			continue;
-			
-		} else if (!strncmp(a, red_fmtp, strlen(red_fmtp))) {
+		}
+
+		if (!strncmp(a, red_fmtp, strlen(red_fmtp))) {
 			/* count numbers of generations in fmtp */
 			red_cp = &red_fmtp[strlen(red_fmtp)];
 			strncpy(red_fmtp, a, 100);
@@ -7771,15 +7785,59 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				red_cp = strtok(NULL, "/");
 			}
 			red_cp = red_fmtp;
+			continue;
+		}
 
-		} else if (sscanf(a, "rtpmap: %u %[^/]/", &codec, mimeSubtype) == 2) {
+		if (sscanf(a, "fmtp: %u %63s", &codec, fmtp_string) == 2) {
+			struct rtpPayloadType payload;
+			unsigned int handled = 0;
+
+			payload = ast_rtp_lookup_pt(newaudiortp, codec);
+			if (!payload.code) {
+				/* it wasn't found, try the video rtp */
+				payload = ast_rtp_lookup_pt(newvideortp, codec);
+			}
+			if (payload.code && payload.isAstFormat) {
+				unsigned int bit_rate;
+
+				switch (payload.code) {
+				case AST_FORMAT_SIREN7:
+					if (sscanf(fmtp_string, "bitrate=%u", &bit_rate) == 1) {
+						if (bit_rate != 32000) {
+							ast_log(LOG_WARNING, "Got Siren7 offer at %d bps, but only 32000 bps supported; ignoring.\n", bit_rate);
+							ast_rtp_unset_m_type(newaudiortp, codec);
+						} else {
+							handled = 1;
+						}
+					}
+					break;
+				case AST_FORMAT_SIREN14:
+					if (sscanf(fmtp_string, "bitrate=%u", &bit_rate) == 1) {
+						if (bit_rate != 48000) {
+							ast_log(LOG_WARNING, "Got Siren14 offer at %d bps, but only 48000 bps supported; ignoring.\n", bit_rate);
+							ast_rtp_unset_m_type(newaudiortp, codec);
+						} else {
+							handled = 1;
+						}
+					}
+					break;
+				}
+			}
+
+			if (!handled) {
+				ast_debug(1, "Got unsupported a:%s in SDP offer\n", a);
+			}
+			continue;
+		}
+
+		if (sscanf(a, "rtpmap: %u %127[^/]/%u", &codec, mimeSubtype, &sample_rate) == 3) {
 			/* We have a rtpmap to handle */
 
 			if (last_rtpmap_codec < SDP_MAX_RTPMAP_CODECS) {
-				/* Note: should really look at the 'freq' and '#chans' params too */
+				/* Note: should really look at the '#chans' params too */
 				/* Note: This should all be done in the context of the m= above */
 				if (!strncasecmp(mimeSubtype, "H26", 3) || !strncasecmp(mimeSubtype, "MP4", 3)) {         /* Video */
-					if(ast_rtp_set_rtpmap_type(newvideortp, codec, "video", mimeSubtype, 0) != -1) {
+					if (ast_rtp_set_rtpmap_type_rate(newvideortp, codec, "video", mimeSubtype, 0, sample_rate) != -1) {
 						if (debug)
 							ast_verbose("Found video description format %s for ID %d\n", mimeSubtype, codec);
 						found_rtpmap_codecs[last_rtpmap_codec] = codec;
@@ -7801,11 +7859,12 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 						sprintf(red_fmtp, "fmtp:%d ", red_pt); 
 
 						if (debug)
-							ast_verbose("Red submimetype has payload type: %d\n", red_pt);
+							ast_verbose("RED submimetype has payload type: %d\n", red_pt);
 					}
 				} else {                                          /* Must be audio?? */
-					if(ast_rtp_set_rtpmap_type(newaudiortp, codec, "audio", mimeSubtype,
-								   ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0) != -1) {
+					if (ast_rtp_set_rtpmap_type_rate(newaudiortp, codec, "audio", mimeSubtype,
+									 ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0,
+									 sample_rate) != -1) {
 						if (debug)
 							ast_verbose("Found audio description format %s for ID %d\n", mimeSubtype, codec);
 						found_rtpmap_codecs[last_rtpmap_codec] = codec;
@@ -8402,6 +8461,66 @@ static int init_req(struct sip_request *req, int sipmethod, const char *recip)
 	return 0;
 }
 
+/*! \brief Test if this response needs a contact header */
+static inline int resp_needs_contact(const char *msg, enum sipmethod method) {
+	/* Requirements for Contact header inclusion in responses generated
+	 * from the header tables found in the following RFCs.  Where the
+	 * Contact header was marked mandatory (m) or optional (o) this
+	 * function returns 1.
+	 *
+	 * - RFC 3261 (ACK, BYE, CANCEL, INVITE, OPTIONS, REGISTER)
+	 * - RFC 2976 (INFO)
+	 * - RFC 3262 (PRACK)
+	 * - RFC 3265 (SUBSCRIBE, NOTIFY)
+	 * - RFC 3311 (UPDATE)
+	 * - RFC 3428 (MESSAGE)
+	 * - RFC 3515 (REFER)
+	 * - RFC 3903 (PUBLISH)
+	 */
+
+	switch (method) {
+		/* 1xx, 2xx, 3xx, 485 */
+		case SIP_INVITE:
+		case SIP_UPDATE:
+		case SIP_SUBSCRIBE:
+		case SIP_NOTIFY:
+			if ((msg[0] >= '1' && msg[0] <= '3') || !strncmp(msg, "485", 3))
+				return 1;
+			break;
+
+		/* 2xx, 3xx, 485 */
+		case SIP_REGISTER:
+		case SIP_OPTIONS:
+			if (msg[0] == '2' || msg[0] == '3' || !strncmp(msg, "485", 3))
+				return 1;
+			break;
+
+		/* 3xx, 485 */
+		case SIP_BYE:
+		case SIP_PRACK:
+		case SIP_MESSAGE:
+		case SIP_PUBLISH:
+			if (msg[0] == '3' || !strncmp(msg, "485", 3))
+				return 1;
+			break;
+
+		/* 2xx, 3xx, 4xx, 5xx, 6xx */
+		case SIP_REFER:
+			if (msg[0] >= '2' && msg[0] <= '6')
+				return 1;
+			break;
+
+		/* contact will not be included for everything else */
+		case SIP_ACK:
+		case SIP_CANCEL:
+		case SIP_INFO:
+		case SIP_PING:
+		default:
+			return 0;
+	}
+	return 0;
+}
+
 
 /*! \brief Prepare SIP response packet */
 static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg, const struct sip_request *req)
@@ -8455,7 +8574,7 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 			snprintf(contact, sizeof(contact), "%s;expires=%d", p->our_contact, p->expiry);
 			add_header(resp, "Contact", contact);	/* Not when we unregister */
 		}
-	} else if (msg[0] != '4' && !ast_strlen_zero(p->our_contact)) {
+	} else if (!ast_strlen_zero(p->our_contact) && resp_needs_contact(msg, p->method)) {
 		add_header(resp, "Contact", p->our_contact);
 	}
 
@@ -8849,7 +8968,7 @@ static int add_vidupdate(struct sip_request *req)
 }
 
 /*! \brief Add codec offer to SDP offer/answer body in INVITE or 200 OK */
-static void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate,
+static void add_codec_to_sdp(const struct sip_pvt *p, int codec,
 			     struct ast_str **m_buf, struct ast_str **a_buf,
 			     int debug, int *min_packet_size)
 {
@@ -8869,18 +8988,31 @@ static void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate
 		return;
 	ast_str_append(m_buf, 0, " %d", rtp_code);
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
-			 ast_rtp_lookup_mime_subtype(1, codec,
-						     ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0),
-			 sample_rate);
-	if (codec == AST_FORMAT_G729A) {
+		       ast_rtp_lookup_mime_subtype(1, codec,
+						   ast_test_flag(&p->flags[0], SIP_G726_NONSTANDARD) ? AST_RTP_OPT_G726_NONSTANDARD : 0),
+		       ast_rtp_lookup_sample_rate(1, codec));
+
+	switch (codec) {
+	case AST_FORMAT_G729A:
 		/* Indicate that we don't support VAD (G.729 annex B) */
 		ast_str_append(a_buf, 0, "a=fmtp:%d annexb=no\r\n", rtp_code);
-	} else if (codec == AST_FORMAT_G723_1) {
+		break;
+	case AST_FORMAT_G723_1:
 		/* Indicate that we don't support VAD (G.723.1 annex A) */
 		ast_str_append(a_buf, 0, "a=fmtp:%d annexa=no\r\n", rtp_code);
-	} else if (codec == AST_FORMAT_ILBC) {
+		break;
+	case AST_FORMAT_ILBC:
 		/* Add information about us using only 20/30 ms packetization */
 		ast_str_append(a_buf, 0, "a=fmtp:%d mode=%d\r\n", rtp_code, fmt.cur_ms);
+		break;
+	case AST_FORMAT_SIREN7:
+		/* Indicate that we only expect 32Kbps */
+		ast_str_append(a_buf, 0, "a=fmtp:%d bitrate=32000\r\n", rtp_code);
+		break;
+	case AST_FORMAT_SIREN14:
+		/* Indicate that we only expect 48Kbps */
+		ast_str_append(a_buf, 0, "a=fmtp:%d bitrate=48000\r\n", rtp_code);
+		break;
 	}
 
 	if (fmt.cur_ms && (fmt.cur_ms < *min_packet_size))
@@ -8893,7 +9025,7 @@ static void add_codec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate
 
 /*! \brief Add video codec offer to SDP offer/answer body in INVITE or 200 OK */
 /* This is different to the audio one now so we can add more caps later */
-static void add_vcodec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate,
+static void add_vcodec_to_sdp(const struct sip_pvt *p, int codec,
 			     struct ast_str **m_buf, struct ast_str **a_buf,
 			     int debug, int *min_packet_size)
 {
@@ -8910,12 +9042,13 @@ static void add_vcodec_to_sdp(const struct sip_pvt *p, int codec, int sample_rat
 
 	ast_str_append(m_buf, 0, " %d", rtp_code);
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
-			 ast_rtp_lookup_mime_subtype(1, codec, 0), sample_rate);
+		       ast_rtp_lookup_mime_subtype(1, codec, 0),
+		       ast_rtp_lookup_sample_rate(1, codec));
 	/* Add fmtp code here */
 }
 
 /*! \brief Add text codec offer to SDP offer/answer body in INVITE or 200 OK */
-static void add_tcodec_to_sdp(const struct sip_pvt *p, int codec, int sample_rate,
+static void add_tcodec_to_sdp(const struct sip_pvt *p, int codec,
 			     struct ast_str **m_buf, struct ast_str **a_buf,
 			     int debug, int *min_packet_size)
 {
@@ -8932,11 +9065,12 @@ static void add_tcodec_to_sdp(const struct sip_pvt *p, int codec, int sample_rat
 
 	ast_str_append(m_buf, 0, " %d", rtp_code);
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
-			 ast_rtp_lookup_mime_subtype(1, codec, 0), sample_rate);
+		       ast_rtp_lookup_mime_subtype(1, codec, 0),
+		       ast_rtp_lookup_sample_rate(1, codec));
 	/* Add fmtp code here */
 
 	if (codec == AST_FORMAT_T140RED) {
-		ast_str_append(a_buf, 0, "a=fmtp:%d %d/%d/%d\r\n", rtp_code, 
+		ast_str_append(a_buf, 0, "a=fmtp:%d %d/%d/%d\r\n", rtp_code,
 			 ast_rtp_lookup_code(p->trtp, 1, AST_FORMAT_T140),
 			 ast_rtp_lookup_code(p->trtp, 1, AST_FORMAT_T140),
 			 ast_rtp_lookup_code(p->trtp, 1, AST_FORMAT_T140));
@@ -9061,7 +9195,7 @@ static int add_t38_sdp(struct sip_request *resp, struct sip_pvt *p)
 
 
 /*! \brief Add RFC 2833 DTMF offer to SDP */
-static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_rate,
+static void add_noncodec_to_sdp(const struct sip_pvt *p, int format,
 				struct ast_str **m_buf, struct ast_str **a_buf,
 				int debug)
 {
@@ -9074,8 +9208,8 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format, int sample_
 
 	ast_str_append(m_buf, 0, " %d", rtp_code);
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
-			 ast_rtp_lookup_mime_subtype(0, format, 0),
-			 sample_rate);
+		       ast_rtp_lookup_mime_subtype(0, format, 0),
+		       ast_rtp_lookup_sample_rate(0, format));
 	if (format == AST_RTP_DTMF)	/* Indicate we support DTMF and FLASH... */
 		ast_str_append(a_buf, 0, "a=fmtp:%d 0-16\r\n", rtp_code);
 }
@@ -9115,13 +9249,6 @@ static void get_our_media_address(struct sip_pvt *p, int needvideo,
 	}
 
 }
-
-/*!
- * \note G.722 actually is supposed to specified as 8 kHz, even though it is
- * really 16 kHz.  Update this macro for other formats as they are added in
- * the future.
- */
-#define SDP_SAMPLE_RATE(x) 8000
 
 /*! \brief Add Session Description Protocol message 
 
@@ -9294,9 +9421,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 	if (capability & p->prefcodec) {
 		int codec = p->prefcodec & AST_FORMAT_AUDIO_MASK;
 
-		add_codec_to_sdp(p, codec, SDP_SAMPLE_RATE(codec),
-				 &m_audio, &a_audio,
-				 debug, &min_audio_packet_size);
+		add_codec_to_sdp(p, codec, &m_audio, &a_audio, debug, &min_audio_packet_size);
 		alreadysent |= codec;
 	}
 
@@ -9313,9 +9438,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		if (alreadysent & codec)
 			continue;
 
-		add_codec_to_sdp(p, codec, SDP_SAMPLE_RATE(codec),
-				 &m_audio, &a_audio,
-				 debug, &min_audio_packet_size);
+		add_codec_to_sdp(p, codec, &m_audio, &a_audio, debug, &min_audio_packet_size);
 		alreadysent |= codec;
 	}
 
@@ -9328,14 +9451,11 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 			continue;
 
 		if (x & AST_FORMAT_AUDIO_MASK)
-			add_codec_to_sdp(p, x, SDP_SAMPLE_RATE(x),
-				 &m_audio, &a_audio, debug, &min_audio_packet_size);
-		else if (x & AST_FORMAT_VIDEO_MASK) 
-			add_vcodec_to_sdp(p, x, 90000,
-				 &m_video, &a_video, debug, &min_video_packet_size);
+			add_codec_to_sdp(p, x, &m_audio, &a_audio, debug, &min_audio_packet_size);
+		else if (x & AST_FORMAT_VIDEO_MASK)
+			add_vcodec_to_sdp(p, x, &m_video, &a_video, debug, &min_video_packet_size);
 		else if (x & AST_FORMAT_TEXT_MASK)
-			add_tcodec_to_sdp(p, x, 1000,
-				 &m_text, &a_text, debug, &min_text_packet_size);
+			add_tcodec_to_sdp(p, x, &m_text, &a_text, debug, &min_text_packet_size);
 	}
 
 	/* Now add DTMF RFC2833 telephony-event as a codec */
@@ -9343,7 +9463,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		if (!(p->jointnoncodeccapability & x))
 			continue;
 
-		add_noncodec_to_sdp(p, x, 8000, &m_audio, &a_audio, debug);
+		add_noncodec_to_sdp(p, x, &m_audio, &a_audio, debug);
 	}
 
 	ast_debug(3, "-- Done with adding codecs to SDP\n");
@@ -12414,49 +12534,46 @@ static int get_refer_info(struct sip_pvt *transferer, struct sip_request *outgoi
 	}
 
 	/* Check for arguments in the refer_to header */
-	if ((ptr = strchr(refer_to, '?'))) { /* Search for arguments */
-		*ptr++ = '\0';
-		if (!strncasecmp(ptr, "REPLACES=", 9)) {
-			char *to = NULL, *from = NULL;
-
-			/* This is an attended transfer */
-			referdata->attendedtransfer = 1;
-			ast_copy_string(referdata->replaces_callid, ptr+9, sizeof(referdata->replaces_callid));
-			ast_uri_decode(referdata->replaces_callid);
-			if ((ptr = strchr(referdata->replaces_callid, ';'))) 	/* Find options */ {
-				*ptr++ = '\0';
-			}
-
-			if (ptr) {
-				/* Find the different tags before we destroy the string */
-				to = strcasestr(ptr, "to-tag=");
-				from = strcasestr(ptr, "from-tag=");
-			}
-
-			/* Grab the to header */
-			if (to) {
-				ptr = to + 7;
-				if ((to = strchr(ptr, '&')))
-					*to = '\0';
-				if ((to = strchr(ptr, ';')))
-					*to = '\0';
-				ast_copy_string(referdata->replaces_callid_totag, ptr, sizeof(referdata->replaces_callid_totag));
-			}
-
-			if (from) {
-				ptr = from + 9;
-				if ((to = strchr(ptr, '&')))
-					*to = '\0';
-				if ((to = strchr(ptr, ';')))
-					*to = '\0';
-				ast_copy_string(referdata->replaces_callid_fromtag, ptr, sizeof(referdata->replaces_callid_fromtag));
-			}
-
-			if (!sip_cfg.pedanticsipchecking)
-				ast_debug(2, "Attended transfer: Will use Replace-Call-ID : %s (No check of from/to tags)\n", referdata->replaces_callid );
-			else
-				ast_debug(2, "Attended transfer: Will use Replace-Call-ID : %s F-tag: %s T-tag: %s\n", referdata->replaces_callid, referdata->replaces_callid_fromtag ? referdata->replaces_callid_fromtag : "<none>", referdata->replaces_callid_totag ? referdata->replaces_callid_totag : "<none>" );
+	if ((ptr = strcasestr(refer_to, "replaces="))) {
+		char *to = NULL, *from = NULL;
+		
+		/* This is an attended transfer */
+		referdata->attendedtransfer = 1;
+		ast_copy_string(referdata->replaces_callid, ptr+9, sizeof(referdata->replaces_callid));
+		ast_uri_decode(referdata->replaces_callid);
+		if ((ptr = strchr(referdata->replaces_callid, ';'))) 	/* Find options */ {
+			*ptr++ = '\0';
 		}
+		
+		if (ptr) {
+			/* Find the different tags before we destroy the string */
+			to = strcasestr(ptr, "to-tag=");
+			from = strcasestr(ptr, "from-tag=");
+		}
+		
+		/* Grab the to header */
+		if (to) {
+			ptr = to + 7;
+			if ((to = strchr(ptr, '&')))
+				*to = '\0';
+			if ((to = strchr(ptr, ';')))
+				*to = '\0';
+			ast_copy_string(referdata->replaces_callid_totag, ptr, sizeof(referdata->replaces_callid_totag));
+		}
+		
+		if (from) {
+			ptr = from + 9;
+			if ((to = strchr(ptr, '&')))
+				*to = '\0';
+			if ((to = strchr(ptr, ';')))
+				*to = '\0';
+			ast_copy_string(referdata->replaces_callid_fromtag, ptr, sizeof(referdata->replaces_callid_fromtag));
+		}
+		
+		if (!sip_cfg.pedanticsipchecking)
+			ast_debug(2, "Attended transfer: Will use Replace-Call-ID : %s (No check of from/to tags)\n", referdata->replaces_callid );
+		else
+			ast_debug(2, "Attended transfer: Will use Replace-Call-ID : %s F-tag: %s T-tag: %s\n", referdata->replaces_callid, referdata->replaces_callid_fromtag ? referdata->replaces_callid_fromtag : "<none>", referdata->replaces_callid_totag ? referdata->replaces_callid_totag : "<none>" );
 	}
 	
 	if ((ptr = strchr(refer_to, '@'))) {	/* Separate domain */
@@ -18295,19 +18412,32 @@ static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, in
  */
 static int sip_uri_params_cmp(const char *input1, const char *input2) 
 {
-	char *params1 = ast_strdupa(input1);
-	char *params2 = ast_strdupa(input2);
+	char *params1 = NULL;
+	char *params2 = NULL;
 	char *pos1;
 	char *pos2;
+	int zerolength1 = 0;
+	int zerolength2 = 0;
 	int maddrmatch = 0;
 	int ttlmatch = 0;
 	int usermatch = 0;
 	int methodmatch = 0;
 
+	if (ast_strlen_zero(input1)) {
+		zerolength1 = 1;
+	} else {
+		params1 = ast_strdupa(input1);
+	}
+	if (ast_strlen_zero(input2)) {
+		zerolength2 = 1;
+	} else {
+		params2 = ast_strdupa(input2);
+	}
+
 	/*Quick optimization. If both params are zero-length, then
 	 * they match
 	 */
-	if (ast_strlen_zero(params1) && ast_strlen_zero(params2)) {
+	if (zerolength1 && zerolength2) {
 		return 0;
 	}
 
@@ -18422,12 +18552,24 @@ fail:
  */
 static int sip_uri_headers_cmp(const char *input1, const char *input2)
 {
-	char *headers1 = ast_strdupa(input1);
-	char *headers2 = ast_strdupa(input2);
-	int zerolength1 = ast_strlen_zero(headers1);
-	int zerolength2 = ast_strlen_zero(headers2);
+	char *headers1 = NULL;
+	char *headers2 = NULL;
+	int zerolength1 = 0;
+	int zerolength2 = 0;
 	int different = 0;
 	char *header1;
+
+	if (ast_strlen_zero(input1)) {
+		zerolength1 = 1;
+	} else {
+		headers1 = ast_strdupa(input1);
+	}
+	
+	if (ast_strlen_zero(input2)) {
+		zerolength2 = 1;
+	} else {
+		headers2 = ast_strdupa(input2);
+	}
 
 	if ((zerolength1 && !zerolength2) ||
 			(zerolength2 && !zerolength1))
@@ -22346,6 +22488,7 @@ static void set_peer_defaults(struct sip_peer *peer)
 		peer->socket.type = SIP_TRANSPORT_UDP;
 		peer->socket.fd = -1;
 	}
+	peer->type = SIP_TYPE_PEER;
 	ast_copy_flags(&peer->flags[0], &global_flags[0], SIP_FLAGS_TO_COPY);
 	ast_copy_flags(&peer->flags[1], &global_flags[1], SIP_PAGE2_FLAGS_TO_COPY);
 	ast_string_field_set(peer, context, sip_cfg.default_context);
