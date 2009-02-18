@@ -23,8 +23,11 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  *
- * Version Info: $Id: chan_h323.h 44684 2006-10-07 14:39:34Z pcadach $
+ * Version Info: $Id$
  */
+
+#ifndef CHAN_H323_H
+#define CHAN_H323_H
 
 #include <arpa/inet.h>
 
@@ -207,10 +210,6 @@ extern int h323debug;
 #define H323_DTMF_RFC2833_PT	101
 #define H323_DTMF_CISCO_PT		121
 
-#ifndef BOOL
-#define BOOL int
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -266,4 +265,6 @@ extern "C" {
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif
