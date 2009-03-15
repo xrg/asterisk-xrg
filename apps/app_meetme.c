@@ -502,6 +502,8 @@ enum {
 	CONFFLAG_EMPTY = (1 << 18),
 	CONFFLAG_EMPTYNOPIN = (1 << 19),
 	CONFFLAG_ALWAYSPROMPT = (1 << 20),
+	/*! If set, treat talking users as muted users */
+	CONFFLAG_OPTIMIZETALKER = (1 << 21),
 	/*! If set, won't speak the extra prompt when the first person 
 	 *  enters the conference */
 	CONFFLAG_NOONLYPERSON = (1 << 22),
@@ -546,6 +548,7 @@ AST_APP_OPTIONS(meetme_opts, BEGIN_OPTIONS
 	AST_APP_OPTION('I', CONFFLAG_INTROUSERNOREVIEW ),
 	AST_APP_OPTION_ARG('M', CONFFLAG_MOH, OPT_ARG_MOH_CLASS ),
 	AST_APP_OPTION('m', CONFFLAG_STARTMUTED ),
+	AST_APP_OPTION('o', CONFFLAG_OPTIMIZETALKER ),
 	AST_APP_OPTION('P', CONFFLAG_ALWAYSPROMPT ),
 	AST_APP_OPTION_ARG('p', CONFFLAG_KEYEXIT, OPT_ARG_EXITKEYS ),
 	AST_APP_OPTION('q', CONFFLAG_QUIET ),
@@ -1973,7 +1976,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	int ms;
 	int nfds;
 	int res;
-	int flags;
 	int retrydahdi;
 	int origfd;
 	int musiconhold = 0;
@@ -2332,24 +2334,13 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
  dahdiretry:
 	origfd = chan->fds[0];
 	if (retrydahdi) {
-		fd = open("/dev/dahdi/pseudo", O_RDWR);
+		/* open pseudo in non-blocking mode */
+		fd = open("/dev/dahdi/pseudo", O_RDWR | O_NONBLOCK);
 		if (fd < 0) {
 			ast_log(LOG_WARNING, "Unable to open pseudo channel: %s\n", strerror(errno));
 			goto outrun;
 		}
 		using_pseudo = 1;
-		/* Make non-blocking */
-		flags = fcntl(fd, F_GETFL);
-		if (flags < 0) {
-			ast_log(LOG_WARNING, "Unable to get flags: %s\n", strerror(errno));
-			close(fd);
-			goto outrun;
-		}
-		if (fcntl(fd, F_SETFL, flags | O_NONBLOCK)) {
-			ast_log(LOG_WARNING, "Unable to set flags: %s\n", strerror(errno));
-			close(fd);
-			goto outrun;
-		}
 		/* Setup buffering information */
 		memset(&bi, 0, sizeof(bi));
 		bi.bufsize = CONF_SIZE / 2;
@@ -2493,7 +2484,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			x = 1;
 			ast_channel_setoption(chan, AST_OPTION_TONE_VERIFY, &x, sizeof(char), 0);
 		}	
-		if (!(confflags & CONFFLAG_MONITOR) && !(dsp = ast_dsp_new())) {
+		if ((confflags & CONFFLAG_OPTIMIZETALKER) && !(confflags & CONFFLAG_MONITOR) && !(dsp = ast_dsp_new())) {
 			ast_log(LOG_WARNING, "Unable to allocate DSP!\n");
 			res = -1;
 		}
@@ -2668,8 +2659,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				}
 			}
 
-			c = ast_waitfor_nandfds(&chan, 1, &fd, nfds, NULL, &outfd, &ms);
-
 			/* Update the struct with the actual confflags */
 			user->userflags = confflags;
 
@@ -2832,6 +2821,8 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 				break;
 			}
 
+			c = ast_waitfor_nandfds(&chan, 1, &fd, nfds, NULL, &outfd, &ms);
+
 			if (c) {
 				char dtmfstr[2] = "";
 
@@ -2864,7 +2855,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						ast_frame_adjust_volume(f, user->talk.actual);
 					}
 
-					if (!(confflags & CONFFLAG_MONITOR)) {
+					if ((confflags & CONFFLAG_OPTIMIZETALKER) && !(confflags & CONFFLAG_MONITOR)) {
 						int totalsilence;
 
 						if (user->talking == -1) {
@@ -2909,7 +2900,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						   don't want to block, but we do want to at least *try*
 						   to write out all the samples.
 						 */
-						if (user->talking) {
+						if (user->talking && !(confflags & CONFFLAG_OPTIMIZETALKER)) {
 							careful_write(fd, f->data.ptr, f->datalen, 0);
 						}
 					}
@@ -3175,10 +3166,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					fr.samples = res / 2;
 					fr.data.ptr = buf;
 					fr.offset = AST_FRIENDLY_OFFSET;
-					if (!user->listen.actual && 
-						((confflags & CONFFLAG_MONITOR) || 
+					if (!user->listen.actual &&
+						((confflags & CONFFLAG_MONITOR) ||
 						 (user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) ||
-						 (!user->talking)) ) {
+						 (!user->talking && (confflags & CONFFLAG_OPTIMIZETALKER))
+						 )) {
 						int idx;
 						for (idx = 0; idx < AST_FRAME_BITS; idx++) {
 							if (chan->rawwriteformat & (1 << idx)) {
@@ -3355,6 +3347,8 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 		char *pin = NULL, *pinadmin = NULL; /* For temp use */
 		int maxusers = 0;
 		struct timeval now;
+		char recordingfilename[256] = "";
+		char recordingformat[10] = "";
 		char currenttime[19] = "";
 		char eatime[19] = "";
 		char bookid[19] = "";
@@ -3363,6 +3357,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 		char adminopts[OPTIONS_LEN];
 		struct ast_tm tm, etm;
 		struct timeval endtime = { .tv_sec = 0 };
+		const char *var2;
 
 		if (rt_schedule) {
 			now = ast_tvnow();
@@ -3428,6 +3423,10 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 				maxusers = atoi(var->value);
 			} else if (!strcasecmp(var->name, "adminopts")) {
 				ast_copy_string(adminopts, var->value, sizeof(char[OPTIONS_LEN]));
+			} else if (!strcasecmp(var->name, "recordingfilename")) {
+				ast_copy_string(recordingfilename, var->value, sizeof(recordingfilename));
+			} else if (!strcasecmp(var->name, "recordingformat")) {
+				ast_copy_string(recordingformat, var->value, sizeof(recordingformat));
 			} else if (!strcasecmp(var->name, "endtime")) {
 				struct ast_tm endtime_tm;
 				ast_strptime(var->value, "%Y-%m-%d %H:%M:%S", &endtime_tm);
@@ -3446,9 +3445,37 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 			cnf->useropts = ast_strdup(useropts);
 			cnf->adminopts = ast_strdup(adminopts);
 			cnf->bookid = ast_strdup(bookid);
-			snprintf(recordingtmp, sizeof(recordingtmp), "%s/meetme/meetme-conf-rec-%s-%s", ast_config_AST_SPOOL_DIR, confno, bookid);
-			cnf->recordingfilename = ast_strdup(recordingtmp);
-			cnf->recordingformat = ast_strdup("wav");
+			cnf->recordingfilename = ast_strdup(recordingfilename);
+			cnf->recordingformat = ast_strdup(recordingformat);
+
+			if (strchr(cnf->useropts, 'r')) {
+				if (ast_strlen_zero(recordingfilename)) { /* If the recordingfilename in the database is empty, use the channel definition or use the default. */
+					ast_channel_lock(chan);
+					if ((var2 = pbx_builtin_getvar_helper(chan, "MEETME_RECORDINGFILE"))) {
+						ast_free(cnf->recordingfilename);
+						cnf->recordingfilename = ast_strdup(var2);
+					}
+					ast_channel_unlock(chan);
+					if (ast_strlen_zero(cnf->recordingfilename)) {
+						snprintf(recordingtmp, sizeof(recordingtmp), "meetme-conf-rec-%s-%s", cnf->confno, chan->uniqueid);
+						ast_free(cnf->recordingfilename);
+						cnf->recordingfilename = ast_strdup(recordingtmp);
+					}
+				}
+				if (ast_strlen_zero(cnf->recordingformat)) {/* If the recording format is empty, use the wav as default */
+					ast_channel_lock(chan);
+					if ((var2 = pbx_builtin_getvar_helper(chan, "MEETME_RECORDINGFORMAT"))) {
+						ast_free(cnf->recordingformat);
+						cnf->recordingformat = ast_strdup(var2);
+					}
+					ast_channel_unlock(chan);
+					if (ast_strlen_zero(cnf->recordingformat)) {
+						ast_free(cnf->recordingformat);
+						cnf->recordingformat = ast_strdup("wav");
+					}
+				}
+				ast_verb(4, "Starting recording of MeetMe Conference %s into file %s.%s.\n", cnf->confno, cnf->recordingfilename, cnf->recordingformat);
+			}
 		}
 	}
 
@@ -3824,6 +3851,7 @@ static int conf_exec(struct ast_channel *chan, void *data)
 									}
 								}
 								/* Run the conference */
+								ast_verb(4, "Starting recording of MeetMe Conference %s into file %s.%s.\n", cnf->confno, cnf->recordingfilename, cnf->recordingformat);
 								res = conf_run(chan, cnf, confflags.flags, optargs);
 								break;
 							} else {

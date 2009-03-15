@@ -23,7 +23,6 @@ AC_CONFIG_HEADER(include/asterisk/autoconfig.h)
 AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
 
-AC_GNU_SOURCE
 #AC_USE_SYSTEM_EXTENSIONS	# note- does not work on FreeBSD
 
 case "${host_os}" in
@@ -58,8 +57,10 @@ case "${host_os}" in
      ;;
 esac
 
-if test ${localstatedir} = '${prefix}/var'; then
-     localstatedir=/var
+if test ${prefix} = ${ac_default_prefix} || test ${prefix} = 'NONE'; then
+     if test ${localstatedir} = '${prefix}/var'; then
+        localstatedir=/var
+     fi
 fi
 
 BUILD_PLATFORM=${build}
@@ -243,6 +244,7 @@ AST_EXT_LIB_SETUP([HOARD], [Hoard Memory Allocator], [hoard])
 AST_EXT_LIB_SETUP([ICONV], [Iconv Library], [iconv])
 AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
 AST_EXT_LIB_SETUP([IMAP_TK], [UW IMAP Toolkit], [imap])
+AST_EXT_LIB_SETUP([INOTIFY], [inotify support], [inotify])
 AST_EXT_LIB_SETUP([IODBC], [iODBC], [iodbc])
 AST_EXT_LIB_SETUP([ISDNNET], [ISDN4Linux Library], [isdnnet])
 AST_EXT_LIB_SETUP([JACK], [Jack Audio Connection Kit], [jack])
@@ -1273,6 +1275,8 @@ fi
 
 AST_EXT_LIB_CHECK([IODBC], [iodbc], [SQLConnect], [sql.h], [-lpthread])
 
+AST_EXT_LIB_CHECK([INOTIFY], [c], [inotify_init], [sys/inotify.h])
+
 AST_EXT_LIB_CHECK([JACK], [jack], [jack_activate], [jack/jack.h])
 
 # Needed by unixodbc
@@ -1426,7 +1430,7 @@ if test "${USE_PWLIB}" != "no"; then
 		PWLIBDIR="${PWLIB_DIR}"
 	fi
 	AST_CHECK_PWLIB()
-	AST_CHECK_PWLIB_VERSION([PWLib], [PWLIB], [ptbuildopts.h], [1], [9], [2])
+	AST_CHECK_PWLIB_VERSION([PWLib], [PWLIB], [ptbuildopts.h], [1], [9], [2], [P[[WT]]LIB_VERSION])
 		
 	if test "${HAS_PWLIB:-unset}" != "unset"; then
 		AST_CHECK_PWLIB_PLATFORM()
@@ -1436,7 +1440,7 @@ if test "${USE_PWLIB}" != "no"; then
 		AST_CHECK_PWLIB_BUILD([PWLib], [PWLIB],
 			[Define if your system has the PWLib libraries.],
 			[#include "ptlib.h"],
-			[BOOL q = PTime::IsDaylightSavings();])
+			[int q = (int) PTime::IsDaylightSavings();])
 	fi
 fi
 

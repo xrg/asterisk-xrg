@@ -37,7 +37,7 @@
  *
  * \section copyright Copyright and Author
  *
- * Copyright (C) 1999 - 2008, Digium, Inc.
+ * Copyright (C) 1999 - 2009, Digium, Inc.
  * Asterisk is a <a href="http://www.digium.com/en/company/view-policy.php?id=Trademark-Policy">registered trademark</a>
  * of <a href="http://www.digium.com">Digium, Inc</a>.
  *
@@ -274,6 +274,7 @@ static int restartnow;
 static pthread_t consolethread = AST_PTHREADT_NULL;
 static int canary_pid = 0;
 static char canary_filename[128];
+static int canary_pipe = -1;
 
 static char randompool[256];
 
@@ -554,6 +555,7 @@ static int swapmode(int *used, int *total)
 }
 #endif
 
+#if defined(HAVE_SYSINFO) || defined(HAVE_SYSCTL)
 /*! \brief Give an overview of system statistics */
 static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
@@ -647,6 +649,7 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 	ast_cli(a->fd, "  Number of Processes:       %d \n\n", nprocs);
 	return CLI_SUCCESS;
 }
+#endif
 
 struct profile_entry {
 	const char *name;
@@ -3296,7 +3299,19 @@ int main(int argc, char *argv[])
 	if (isroot) {
 		ast_set_priority(ast_opt_high_priority);
 		if (ast_opt_high_priority) {
+			int cpipe[2];
+
+			/* PIPE signal ensures that astcanary dies when Asterisk dies */
+			if (pipe(cpipe)) {
+				fprintf(stderr, "Unable to open pipe for canary process: %s\n", strerror(errno));
+				exit(1);
+			}
+			canary_pipe = cpipe[0];
+
 			snprintf(canary_filename, sizeof(canary_filename), "%s/alt.asterisk.canary.tweet.tweet.tweet", ast_config_AST_RUN_DIR);
+
+			/* Don't let the canary child kill Asterisk, if it dies immediately */
+			signal(SIGPIPE, SIG_IGN);
 
 			canary_pid = fork();
 			if (canary_pid == 0) {
@@ -3305,9 +3320,14 @@ int main(int argc, char *argv[])
 
 				/* Reset signal handler */
 				signal(SIGCHLD, SIG_DFL);
+				signal(SIGPIPE, SIG_DFL);
 
-				for (fd = 0; fd < 100; fd++)
+				dup2(cpipe[1], 100);
+				close(cpipe[1]);
+
+				for (fd = 0; fd < 100; fd++) {
 					close(fd);
+				}
 
 				execlp("astcanary", "astcanary", canary_filename, (char *)NULL);
 
@@ -3322,6 +3342,7 @@ int main(int argc, char *argv[])
 				_exit(1);
 			} else if (canary_pid > 0) {
 				pthread_t dont_care;
+				close(cpipe[1]);
 				ast_pthread_create_detached(&dont_care, NULL, canary_thread, NULL);
 			}
 
@@ -3562,6 +3583,11 @@ int main(int argc, char *argv[])
 	}
 
 	if (load_pbx()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+
+	if (ast_indications_init()) {
 		printf("%s", term_quit());
 		exit(1);
 	}

@@ -115,6 +115,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/res_odbc.h"
 #endif
 
+#ifdef IMAP_STORAGE
+#include "asterisk/threadstorage.h"
+#endif
+
 /*** DOCUMENTATION
 	<application name="VoiceMail" language="en_US">
 		<synopsis>
@@ -312,6 +316,8 @@ static char delimiter = '\0';
 
 struct vm_state;
 struct ast_vm_user;
+
+AST_THREADSTORAGE(ts_vmstate);
 
 /* Forward declarations for IMAP */
 static int init_mailstream(struct vm_state *vms, int box);
@@ -556,6 +562,8 @@ struct ast_vm_user {
 	char password[80];               /*!< Secret pin code, numbers only */
 	char fullname[80];               /*!< Full name, for directory app */
 	char email[80];                  /*!< E-mail address */
+	char *emailsubject;              /*!< E-mail subject */
+	char *emailbody;                 /*!< E-mail body */
 	char pager[80];                  /*!< E-mail address to pager (no attachment) */
 	char serveremail[80];            /*!< From: Mail address */
 	char mailcmd[160];               /*!< Configurable mail command */
@@ -855,6 +863,8 @@ static void populate_defaults(struct ast_vm_user *vmu)
 	if (maxdeletedmsg)
 		vmu->maxdeletedmsg = maxdeletedmsg;
 	vmu->volgain = volgain;
+	vmu->emailsubject = NULL;
+	vmu->emailbody = NULL;
 }
 
 /*!
@@ -1112,6 +1122,10 @@ static void apply_options_full(struct ast_vm_user *retval, struct ast_variable *
 			ast_copy_string(retval->fullname, var->value, sizeof(retval->fullname));
 		} else if (!strcasecmp(var->name, "context")) {
 			ast_copy_string(retval->context, var->value, sizeof(retval->context));
+		} else if (!strcasecmp(var->name, "emailsubject")) {
+			retval->emailsubject = ast_strdup(var->value);
+		} else if (!strcasecmp(var->name, "emailbody")) {
+			retval->emailbody = ast_strdup(var->value);
 #ifdef IMAP_STORAGE
 		} else if (!strcasecmp(var->name, "imapuser")) {
 			ast_copy_string(retval->imapuser, var->value, sizeof(retval->imapuser));
@@ -1431,8 +1445,17 @@ static const char *mbox(int id)
 
 static void free_user(struct ast_vm_user *vmu)
 {
-	if (ast_test_flag(vmu, VM_ALLOCED))
+	if (ast_test_flag(vmu, VM_ALLOCED)) {
+		if (vmu->emailbody != NULL) {
+			ast_free(vmu->emailbody);
+			vmu->emailbody = NULL;
+		}
+		if (vmu->emailsubject != NULL) {
+			ast_free(vmu->emailsubject);
+			vmu->emailsubject = NULL;
+		}
 		ast_free(vmu);
+	}
 }
 
 /* All IMAP-specific functions should go in this block. This
@@ -1781,6 +1804,7 @@ static int messagecount(const char *context, const char *mailbox, const char *fo
 		ast_mutex_lock(&vms_p->lock);
 		pgm = mail_newsearchpgm ();
 		hdr = mail_newsearchheader ("X-Asterisk-VM-Extension", (char *)(!ast_strlen_zero(vmu->imapvmshareid) ? vmu->imapvmshareid : mailbox));
+		hdr->next = mail_newsearchheader("X-Asterisk-VM-Context", (char *) S_OR(context, "default"));
 		pgm->header = hdr;
 		if (fold != 1) {
 			pgm->unseen = 1;
@@ -2228,6 +2252,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 
 	/* Check IMAP folder for Asterisk messages only... */
 	hdr = mail_newsearchheader("X-Asterisk-VM-Extension", (!ast_strlen_zero(vmu->imapvmshareid) ? vmu->imapvmshareid : vmu->mailbox));
+	hdr->next = mail_newsearchheader("X-Asterisk-VM-Context", vmu->context);
 	pgm->header = hdr;
 	pgm->deleted = 0;
 	pgm->undeleted = 1;
@@ -2496,7 +2521,7 @@ static void mm_parsequota(MAILSTREAM *stream, unsigned char *msg, QUOTALIST *pqu
 		pquota = pquota->next;
 	}
 	
-	if (!(user = get_user_by_mailbox(mailbox, buf, sizeof(buf))) || !(vms = get_vm_state_by_imapuser(user, 2))) {
+	if (!(user = get_user_by_mailbox(mailbox, buf, sizeof(buf))) || (!(vms = get_vm_state_by_imapuser(user, 2)) && !(vms = get_vm_state_by_imapuser(user, 0)))) {
 		ast_log(AST_LOG_ERROR, "No state found.\n");
 		return;
 	}
@@ -2559,6 +2584,9 @@ static struct vm_state *create_vm_state_from_user(struct ast_vm_user *vmu)
 {
 	struct vm_state *vms_p;
 
+	if ((vms_p = pthread_getspecific(ts_vmstate.key)) && !strcmp(vms_p->imapuser, vmu->imapuser) && !strcmp(vms_p->username, vmu->mailbox)) {
+		return vms_p;
+	}
 	if (option_debug > 4)
 		ast_log(AST_LOG_DEBUG,"Adding new vmstate for %s\n",vmu->imapuser);
 	if (!(vms_p = ast_calloc(1, sizeof(*vms_p))))
@@ -2580,6 +2608,12 @@ static struct vm_state *create_vm_state_from_user(struct ast_vm_user *vmu)
 static struct vm_state *get_vm_state_by_imapuser(char *user, int interactive)
 {
 	struct vmstate *vlist = NULL;
+
+	if (interactive) {
+		struct vm_state *vms;
+		vms = pthread_getspecific(ts_vmstate.key);
+		return vms;
+	}
 
 	AST_LIST_LOCK(&vmstates);
 	AST_LIST_TRAVERSE(&vmstates, vlist, list) {
@@ -2609,6 +2643,12 @@ static struct vm_state *get_vm_state_by_mailbox(const char *mailbox, const char 
 
 	struct vmstate *vlist = NULL;
 	const char *local_context = S_OR(context, "default");
+
+	if (interactive) {
+		struct vm_state *vms;
+		vms = pthread_getspecific(ts_vmstate.key);
+		return vms;
+	}
 
 	AST_LIST_LOCK(&vmstates);
 	AST_LIST_TRAVERSE(&vmstates, vlist, list) {
@@ -2656,9 +2696,13 @@ static void vmstate_insert(struct vm_state *vms)
 			/* get a pointer to the persistent store */
 			vms->persist_vms = altvms;
 			/* Reuse the mailstream? */
+#ifdef REALLY_FAST_EVEN_IF_IT_MEANS_RESOURCE_LEAKS
 			vms->mailstream = altvms->mailstream;
-			/* vms->mailstream = NIL; */
+#else
+			vms->mailstream = NIL;
+#endif
 		}
+		return;
 	}
 
 	if (!(v = ast_calloc(1, sizeof(*v))))
@@ -2685,6 +2729,10 @@ static void vmstate_delete(struct vm_state *vms)
 		altvms->newmessages = vms->newmessages;
 		altvms->oldmessages = vms->oldmessages;
 		altvms->updated = 1;
+		vms->mailstream = mail_close(vms->mailstream);
+
+		/* Interactive states are not stored within the persistent list */
+		return;
 	}
 	
 	ast_debug(3, "Removing vm_state for user:%s, mailbox %s\n", vms->imapuser, vms->username);
@@ -4057,10 +4105,11 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	} else {
 		fprintf(p, "To: %s <%s>" ENDL, quote(vmu->fullname, passdata2, len_passdata2), vmu->email);
 	}
-	if (!ast_strlen_zero(emailsubject)) {
+	if (!ast_strlen_zero(emailsubject) || !ast_strlen_zero(vmu->emailsubject)) {
+		char *e_subj = !ast_strlen_zero(vmu->emailsubject) ? vmu->emailsubject : emailsubject;
 		struct ast_channel *ast;
 		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
-			int vmlen = strlen(emailsubject) * 3 + 200;
+			int vmlen = strlen(e_subj) * 3 + 200;
 			/* Only allocate more space if the previous was not large enough */
 			if (vmlen > len_passdata) {
 				passdata = alloca(vmlen);
@@ -4069,7 +4118,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 
 			memset(passdata, 0, len_passdata);
 			prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, len_passdata, category, flag);
-			pbx_substitute_variables_helper(ast, emailsubject, passdata, len_passdata);
+			pbx_substitute_variables_helper(ast, e_subj, passdata, len_passdata);
 			if (check_mime(passdata)) {
 				int first_line = 1;
 				char *ptr;
@@ -4146,15 +4195,16 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 		fprintf(p, "--%s" ENDL, bound);
 	}
 	fprintf(p, "Content-Type: text/plain; charset=%s" ENDL "Content-Transfer-Encoding: 8bit" ENDL ENDL, charset);
-	if (emailbody) {
+	if (emailbody || vmu->emailbody) {
+		char* e_body = vmu->emailbody ? vmu->emailbody : emailbody;
 		struct ast_channel *ast;
 		if ((ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "Substitution/voicemail"))) {
 			char *passdata;
-			int vmlen = strlen(emailbody)*3 + 200;
+			int vmlen = strlen(e_body) * 3 + 200;
 			passdata = alloca(vmlen);
 			memset(passdata, 0, vmlen);
 			prep_email_sub_vars(ast, vmu, msgnum + 1, context, mailbox, cidnum, cidname, dur, date, passdata, vmlen, category, flag);
-			pbx_substitute_variables_helper(ast, emailbody, passdata, vmlen);
+			pbx_substitute_variables_helper(ast, e_body, passdata, vmlen);
 			fprintf(p, "%s" ENDL, passdata);
 			ast_channel_free(ast);
 		} else
@@ -8892,6 +8942,9 @@ static int vm_execmain(struct ast_channel *chan, void *data)
 	adsi_begin(chan, &useadsi);
 
 #ifdef IMAP_STORAGE
+	pthread_once(&ts_vmstate.once, ts_vmstate.key_init);
+	pthread_setspecific(ts_vmstate.key, &vms);
+
 	vms.interactive = 1;
 	vms.updated = 1;
 	if (vmu)
@@ -9462,6 +9515,9 @@ out:
 	if (vms.heard)
 		ast_free(vms.heard);
 
+#ifdef IMAP_STORAGE
+	pthread_setspecific(ts_vmstate.key, NULL);
+#endif
 	return res;
 }
 
@@ -9530,14 +9586,21 @@ static struct ast_vm_user *find_or_create(const char *context, const char *box)
 	struct ast_vm_user *vmu;
 
 	AST_LIST_TRAVERSE(&users, vmu, list) {
-		if (ast_test_flag((&globalflags), VM_SEARCH) && !strcasecmp(box, vmu->mailbox))
-			break;
-		if (context && (!strcasecmp(context, vmu->context)) && (!strcasecmp(box, vmu->mailbox)))
-			break;
+		if (ast_test_flag((&globalflags), VM_SEARCH) && !strcasecmp(box, vmu->mailbox)) {
+			if (strcasecmp(vmu->context, context)) {
+				ast_log(LOG_WARNING, "\nIt has been detected that you have defined mailbox '%s' in separate\
+						\n\tcontexts and that you have the 'searchcontexts' option on. This type of\
+						\n\tconfiguration creates an ambiguity that you likely do not want. Please\
+						\n\tamend your voicemail.conf file to avoid this situation.\n", box);
+			}
+			ast_log(LOG_WARNING, "Ignoring duplicated mailbox %s\n", box);
+			return NULL;
+		}
+		if (!strcasecmp(context, vmu->context) && !strcasecmp(box, vmu->mailbox)) {
+			ast_log(LOG_WARNING, "Ignoring duplicated mailbox %s in context %s\n", box, context);
+			return NULL;
+		}
 	}
-
-	if (vmu)
-		return vmu;
 	
 	if (!(vmu = ast_calloc(1, sizeof(*vmu))))
 		return NULL;

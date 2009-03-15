@@ -26,7 +26,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA. 
  *
- * Version Info: $Id: compat_h323.cxx 43345 2006-09-20 17:45:25Z pcadach $
+ * Version Info: $Id$
  */
 #include <ptlib.h>
 #include <h323.h>
@@ -38,12 +38,12 @@
 MyH323TransportTCP::MyH323TransportTCP(
 				H323EndPoint & endpoint,
 				PIPSocket::Address binding,
-				BOOL listen)
+				PBoolean listen)
 	: H323TransportTCP(endpoint, binding, listen)
 {
 }
 
-BOOL MyH323TransportTCP::Connect()
+PBoolean MyH323TransportTCP::Connect()
 {
 	if (IsListening())
 		return TRUE;
@@ -91,7 +91,7 @@ BOOL MyH323TransportTCP::Connect()
 }
 #endif
 
-BOOL MyH323TransportUDP::DiscoverGatekeeper(H323Gatekeeper &gk, H323RasPDU &pdu, const H323TransportAddress &address)
+PBoolean MyH323TransportUDP::DiscoverGatekeeper(H323Gatekeeper &gk, H323RasPDU &pdu, const H323TransportAddress &address)
 {
 	PThread *thd = PThread::Current();
 

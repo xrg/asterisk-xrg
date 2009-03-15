@@ -398,7 +398,6 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with);
 
 long int ast_random(void);
 
-#define ast_free free
 
 /*! 
  * \brief free() wrapper
@@ -413,6 +412,7 @@ static void ast_free_ptr(void *ptr)
 	ast_free(ptr);
 }
 #else
+#define ast_free free
 #define ast_free_ptr ast_free
 #endif
 
@@ -598,19 +598,6 @@ int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, c
 }
 )
 
-#else
-
-/* If astmm is in use, let it handle these.  Otherwise, it will report that
-   all allocations are coming from this header file */
-
-#define ast_malloc(a)		malloc(a)
-#define ast_calloc(a,b)		calloc(a,b)
-#define ast_realloc(a,b)	realloc(a,b)
-#define ast_strdup(a)		strdup(a)
-#define ast_strndup(a,b)	strndup(a,b)
-#define ast_asprintf(a,b,...)	asprintf(a,b,__VA_ARGS__)
-#define ast_vasprintf(a,b,c)	vasprintf(a,b,c)
-
 #endif /* AST_DEBUG_MALLOC */
 
 #if !defined(ast_strdupa) && defined(__GNUC__)
@@ -705,11 +692,13 @@ extern struct ast_eid g_eid;
 
 /*!
  * \brief Fill in an ast_eid with the default eid of this machine
+ * \since 1.6.1
  */
 void ast_set_default_eid(struct ast_eid *eid);
 
 /*!
  * /brief Convert an EID to a string
+ * \since 1.6.1
  */
 char *ast_eid_to_str(char *s, int maxlen, struct ast_eid *eid);
 
@@ -720,6 +709,7 @@ char *ast_eid_to_str(char *s, int maxlen, struct ast_eid *eid);
  *    00:11:22:33:44:55
  *
  * \return 0 success, non-zero failure
+ * \since 1.6.1
  */
 int ast_str_to_eid(struct ast_eid *eid, const char *s);
 
@@ -727,6 +717,7 @@ int ast_str_to_eid(struct ast_eid *eid, const char *s);
  * \brief Compare two EIDs
  *
  * \return 0 if the two are the same, non-zero otherwise
+ * \since 1.6.1
  */
 int ast_eid_cmp(const struct ast_eid *eid1, const struct ast_eid *eid2);
 

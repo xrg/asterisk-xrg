@@ -18,7 +18,7 @@ all: asterisk
 include $(ASTTOPDIR)/Makefile.moddir_rules
 
 OBJS= tcptls.o io.o sched.o logger.o frame.o loader.o config.o channel.o \
-	translate.o file.o pbx.o cli.o md5.o term.o \
+	translate.o file.o pbx.o cli.o md5.o term.o heap.o \
 	ulaw.o alaw.o callerid.o fskmodem.o image.o app.o \
 	cdr.o tdd.o acl.o rtp.o udptl.o manager.o asterisk.o \
 	dsp.o chanvars.o indications.o autoservice.o db.o privacy.o \
@@ -29,7 +29,7 @@ OBJS= tcptls.o io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	strcompat.o threadstorage.o dial.o event.o adsistub.o audiohook.o \
 	astobj2.o hashtab.o global_datastores.o version.o \
 	features.o taskprocessor.o timing.o datastore.o xml.o xmldoc.o \
-	strings.o
+	strings.o bridging.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -124,7 +124,7 @@ ast_expr2.c ast_expr2.h:
 	bison -o $@ -d --name-prefix=ast_yy ast_expr2.y
 
 ast_expr2f.c:
-	flex -o $@ --full ast_expr2.fl
+	flex -o $@ ast_expr2.fl
 	sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' $@ > $@.fix
 	echo "#include \"asterisk.h\"" > $@
 	echo >> $@

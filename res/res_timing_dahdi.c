@@ -25,8 +25,6 @@
 
 /*** MODULEINFO
 	<depend>dahdi</depend>
-	<conflict>res_timing_timerfd</conflict>
-	<conflict>res_timing_pthread</conflict>
  ***/
 
 #include "asterisk.h"
@@ -52,10 +50,12 @@ static int dahdi_timer_set_rate(int handle, unsigned int rate);
 static void dahdi_timer_ack(int handle, unsigned int quantity);
 static int dahdi_timer_enable_continuous(int handle);
 static int dahdi_timer_disable_continuous(int handle);
-static enum ast_timing_event dahdi_timer_get_event(int handle);
+static enum ast_timer_event dahdi_timer_get_event(int handle);
 static unsigned int dahdi_timer_get_max_rate(int handle);
 
-static struct ast_timing_functions dahdi_timing_functions = {
+static struct ast_timing_interface dahdi_timing = {
+	.name = "DAHDI",
+	.priority = 100,
 	.timer_open = dahdi_timer_open,
 	.timer_close = dahdi_timer_close,
 	.timer_set_rate = dahdi_timer_set_rate,
@@ -112,7 +112,7 @@ static int dahdi_timer_disable_continuous(int handle)
 	return ioctl(handle, DAHDI_TIMERPONG, &flags) ? -1 : 0;
 }
 
-static enum ast_timing_event dahdi_timer_get_event(int handle)
+static enum ast_timer_event dahdi_timer_get_event(int handle)
 {
 	int res;
 	int event;
@@ -137,6 +137,8 @@ static unsigned int dahdi_timer_get_max_rate(int handle)
 	return 1000;
 }
 
+#define SEE_TIMING "For more information on Asterisk timing modules, including ways to potentially fix this problem, please see doc/timing.txt\n"
+
 static int dahdi_test_timer(void)
 {
 	int fd;
@@ -149,13 +151,13 @@ static int dahdi_test_timer(void)
 	}
 
 	if (ioctl(fd, DAHDI_TIMERCONFIG, &x)) {
-		ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer test failed to set DAHDI_TIMERCONFIG to %d.\n", x);
+		ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer test failed to set DAHDI_TIMERCONFIG to %d.\n" SEE_TIMING, x);
 		close(fd);
 		return -1;
 	}
 
 	if ((x = ast_wait_for_input(fd, 300)) < 0) {
-		ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer could not be polled during the DAHDI timer test.\n");
+		ast_log(LOG_ERROR, "You have DAHDI built and drivers loaded, but the DAHDI timer could not be polled during the DAHDI timer test.\n" SEE_TIMING);
 		close(fd);
 		return -1;
 	}
@@ -167,7 +169,7 @@ static int dahdi_test_timer(void)
 			"\n\t2. You only have to load DAHDI drivers if you want to take advantage of DAHDI services.  One option is to unload DAHDI modules if you don't need them."
 			"\n\t3. If you need DAHDI services, you must correctly configure DAHDI."
 		};
-		ast_log(LOG_ERROR, "%s\n", dahdi_timer_error);
+		ast_log(LOG_ERROR, "%s\n" SEE_TIMING, dahdi_timer_error);
 		usleep(100);
 		close(fd);
 		return -1;
@@ -184,17 +186,13 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	return (timing_funcs_handle = ast_install_timing_functions(&dahdi_timing_functions)) ?
+	return (timing_funcs_handle = ast_register_timing_interface(&dahdi_timing)) ?
 		AST_MODULE_LOAD_SUCCESS : AST_MODULE_LOAD_DECLINE;
 }
 
 static int unload_module(void)
 {
-	/* ast_uninstall_timing_functions(timing_funcs_handle); */
-
-	/* This module can not currently be unloaded.  No use count handling is being done. */
-
-	return -1;
+	return ast_unregister_timing_interface(timing_funcs_handle);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "DAHDI Timing Interface");

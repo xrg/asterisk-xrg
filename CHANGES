@@ -44,11 +44,19 @@ SIP Changes
  * The parsing of register => lines in sip.conf has been modified to allow a port
    to be present in the "user" portion. Please see the sip.conf.sample file for more
    information
+ * Added support for subscribing to MWI on a remote server and making the status available
+   as a mailbox. Please see the sip.conf.sample file for more information.
  * Added a function to remove SIP headers added in the dialplan before the
    first INVITE is generated - SIPRemoveHeader()
  * Channel variables set with setvar= in a device configuration is now 
    set both for inbound and outbound calls.
  * Added support for ITU G.722.1 and G.722.1C (Siren7 and Siren14) media streams.
+
+IAX2 changes
+------------
+  * Added immediate option to iax.conf
+  * Added forceencryption option to iax.conf
+  * Added Encryption and Trunk status to manager command "iaxpeers"
 
 Skinny Changes
 --------------
@@ -92,6 +100,7 @@ Dialplan Functions
    of "core show function AES_ENCRYPT" from the CLI
  * Added AES_DECRYPT. For information on its use, please see the output
    of "core show function AES_DECRYPT" from the CLI
+ * func_odbc now supports database transactions across multiple queries.
 
 Applications
 ------------
@@ -106,6 +115,11 @@ Applications
    specified in the initial argument.
  * A new application, Originate, has been introduced, that allows asynchronous
    call origination from the dialplan.
+ * Voicemail now permits setting the emailsubject and emailbody per mailbox,
+   in addition to the setting in the "general" context.
+ * Added ConfBridge dialplan application which does conference bridges without
+   DAHDI. For information on its use, please see the output of
+   "core show application ConfBridge" from the CLI.
 
 Miscellaneous
 -------------
@@ -138,6 +152,12 @@ Miscellaneous
    externhost and localnet settings.
  * The Asterisk core now supports ITU G.722.1 and G.722.1C media streams, and
    can connect calls in passthrough mode, as well as record and play back files.
+ * Successful and unsuccessful call pickup can now be alerted through sounds, by
+   using pickupsound and pickupfailsound in features.conf.
+ * ASTVARRUNDIR is now set to $(localstatedir)/run/asterisk by default. 
+   This means the asterisk pid file will now be in /var/run/asterisk/asterisk.pid on LINUX
+   instead of the /var/run/asterisk.pid where it used to be. This will make
+   installs as non-root easier to manage.
 
 Asterisk Manager Interface
 --------------------------
@@ -153,6 +173,12 @@ Asterisk Manager Interface
    Pragma: SuppressEvents
 
    If this is included, the server supports event suppression.
+
+ * Added 4 new Actions to list skinny device(s) and line(s)
+   SKINNYdevices
+   SKINNYshowdevice
+   SKINNYlines
+   SKINNYshowline
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.0 to Asterisk 1.6.1  -------------
@@ -555,8 +581,6 @@ IAX2 changes
   * Added the srvlookup option to iax.conf
   * Added support for OSP.  The token is set and retrieved through the CHANNEL()
      dialplan function.
-  * Added immediate option to iax.conf
-  * Added forceencryption option to iax.conf
 
 XMPP Google Talk/Jingle changes
 -------------------------------

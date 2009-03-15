@@ -172,7 +172,7 @@ static int load_config(int reload)
 		/* Nothing configured */
 		ast_mutex_unlock(&lock);
 		ast_config_destroy(cfg);
-		return 0;
+		return -1;
 	}
 
 	/* Mapping must have a table name */
@@ -239,6 +239,11 @@ static int sqlite3_log(struct ast_cdr *cdr)
 	char *sql = NULL;
 	struct ast_channel dummy = { 0, };
 	int count = 0;
+
+	if (db == NULL) {
+		/* Should not have loaded, but be failsafe. */
+		return 0;
+	}
 
 	{ /* Make it obvious that only sql should be used outside of this block */
 		char *escaped;

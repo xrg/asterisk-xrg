@@ -1826,11 +1826,13 @@ static struct call_queue *load_realtime_queue(const char *queuename)
 			ast_variables_destroy(queue_vars);
 		}
 		/* update the use_weight value if the queue's has gained or lost a weight */ 
-		if (!q->weight && prev_weight) {
-			ast_atomic_fetchadd_int(&use_weight, -1);
-		}
-		if (q->weight && !prev_weight) {
-			ast_atomic_fetchadd_int(&use_weight, +1);
+		if (q) {
+			if (!q->weight && prev_weight) {
+				ast_atomic_fetchadd_int(&use_weight, -1);
+			}
+			if (q->weight && !prev_weight) {
+				ast_atomic_fetchadd_int(&use_weight, +1);
+			}
 		}
 		/* Other cases will end up with the proper value for use_weight */
 		ao2_unlock(queues);
@@ -1993,6 +1995,10 @@ static int play_file(struct ast_channel *chan, const char *filename)
 {
 	int res;
 
+	if (ast_strlen_zero(filename)) {
+		return 0;
+	}
+
 	ast_stopstream(chan);
 
 	res = ast_streamfile(chan, filename, chan->language);
@@ -2130,7 +2136,7 @@ static int say_position(struct queue_ent *qe, int ringing)
 		if (res)
 			goto playout;
 
-		if (avgholdmins > 1) {
+		if (avgholdmins >= 1) {
 			res = ast_say_number(qe->chan, avgholdmins, AST_DIGIT_ANY, qe->chan->language, NULL);
 			if (res)
 				goto playout;
@@ -2145,7 +2151,7 @@ static int say_position(struct queue_ent *qe, int ringing)
 					goto playout;
 			}
 		}
-		if (avgholdsecs > 1) {
+		if (avgholdsecs >= 1) {
 			res = ast_say_number(qe->chan, avgholdmins > 1 ? avgholdsecs : avgholdmins * 60 + avgholdsecs, AST_DIGIT_ANY, qe->chan->language, NULL);
 			if (res)
 				goto playout;
@@ -4054,7 +4060,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			application = pbx_findapp("Macro");
 
 			if (application) {
-				res = pbx_exec(qe->chan, application, macroexec);
+				res = pbx_exec(peer, application, macroexec);
 				ast_debug(1, "Macro exited with status %d\n", res);
 				res = 0;
 			} else {
@@ -7126,7 +7132,7 @@ static int load_module(void)
 		ast_log(LOG_WARNING, "devicestate taskprocessor reference failed - devicestate notifications will not occur\n");
 	}
 
-	if (!(device_state_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE_CHANGE, device_state_cb, NULL, AST_EVENT_IE_END))) {
+	if (!(device_state_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE, device_state_cb, NULL, AST_EVENT_IE_END))) {
 		res = -1;
 	}
 

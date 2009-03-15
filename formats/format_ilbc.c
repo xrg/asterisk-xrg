@@ -24,7 +24,7 @@
  * \arg File name extension: ilbc
  * \ingroup formats
  */
- 
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")

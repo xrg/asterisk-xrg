@@ -524,8 +524,6 @@ AST_APP_OPTIONS(dial_exec_options, BEGIN_OPTIONS
 	AST_APP_OPTION('i', OPT_IGNORE_FORWARDING),
 	AST_APP_OPTION('k', OPT_CALLEE_PARK),
 	AST_APP_OPTION('K', OPT_CALLER_PARK),
-	AST_APP_OPTION('k', OPT_CALLEE_PARK),
-	AST_APP_OPTION('K', OPT_CALLER_PARK),
 	AST_APP_OPTION_ARG('L', OPT_DURATION_LIMIT, OPT_ARG_DURATION_LIMIT),
 	AST_APP_OPTION_ARG('m', OPT_MUSICBACK, OPT_ARG_MUSICBACK),
 	AST_APP_OPTION_ARG('M', OPT_CALLEE_MACRO, OPT_ARG_CALLEE_MACRO),
@@ -2270,10 +2268,12 @@ static int retrydial_exec(struct ast_channel *chan, void *data)
 	parse = ast_strdupa(data);
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	if ((sleepms = atoi(args.sleep)))
+	if (!ast_strlen_zero(args.sleep) && (sleepms = atoi(args.sleep)))
 		sleepms *= 1000;
 
-	loops = atoi(args.retries);
+	if (!ast_strlen_zero(args.retries)) {
+		loops = atoi(args.retries);
+	}
 
 	if (!args.dialdata) {
 		ast_log(LOG_ERROR, "%s requires a 4th argument (dialdata)\n", rapp);

@@ -48,8 +48,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  *	ast_str_append_va(...)
  */
 
+#if (defined(MALLOC_DEBUG) && !defined(STANDALONE))
+int __ast_debug_str_helper(struct ast_str **buf, size_t max_len,
+	int append, const char *fmt, va_list ap, const char *file, int lineno, const char *function)
+#else
 int __ast_str_helper(struct ast_str **buf, size_t max_len,
 	int append, const char *fmt, va_list ap)
+#endif
 {
 	int res, need;
 	int offset = (append && (*buf)->__AST_STR_LEN) ? (*buf)->__AST_STR_USED : 0;
@@ -80,7 +85,13 @@ int __ast_str_helper(struct ast_str **buf, size_t max_len,
 			if (0) {	/* debugging */
 				ast_verbose("extend from %d to %d\n", (int)(*buf)->__AST_STR_LEN, need);
 			}
-			if (ast_str_make_space(buf, need)) {
+			if (
+#if (defined(MALLOC_DEBUG) && !defined(STANDALONE))
+					_ast_str_make_space(buf, need, file, lineno, function)
+#else
+					ast_str_make_space(buf, need)
+#endif
+				) {
 				ast_verbose("failed to extend from %d to %d\n", (int)(*buf)->__AST_STR_LEN, need);
 				return AST_DYNSTR_BUILD_FAILED;
 			}
@@ -114,8 +125,10 @@ char *__ast_str_helper2(struct ast_str **buf, size_t maxlen, const char *src, si
 	int dynamic = 0;
 	char *ptr = append ? &((*buf)->__AST_STR_STR[(*buf)->__AST_STR_USED]) : (*buf)->__AST_STR_STR;
 
-	if (!maxlen) {
-		dynamic = 1;
+	if (maxlen < 1) {
+		if (maxlen == 0) {
+			dynamic = 1;
+		}
 		maxlen = (*buf)->__AST_STR_LEN;
 	}
 
@@ -131,6 +144,7 @@ char *__ast_str_helper2(struct ast_str **buf, size_t maxlen, const char *src, si
 		(*buf)->__AST_STR_USED++;
 
 		if (dynamic && (!maxlen || (escapecommas && !(maxlen - 1)))) {
+			char *oldbase = (*buf)->__AST_STR_STR;
 			size_t old = (*buf)->__AST_STR_LEN;
 			if (ast_str_make_space(buf, (*buf)->__AST_STR_LEN * 2)) {
 				/* If the buffer can't be extended, end it. */
@@ -138,6 +152,8 @@ char *__ast_str_helper2(struct ast_str **buf, size_t maxlen, const char *src, si
 			}
 			/* What we extended the buffer by */
 			maxlen = old;
+
+			ptr += (*buf)->__AST_STR_STR - oldbase;
 		}
 	}
 	if (__builtin_expect(!(maxsrc && maxlen), 0)) {

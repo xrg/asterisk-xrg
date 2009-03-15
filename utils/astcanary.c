@@ -30,7 +30,7 @@
  * At one time, canaries were carried along with coal miners down
  * into a mine.  Their purpose was to alert the miners when they
  * had drilled into a pocket of methane gas or another noxious
- * substance.  The canary, being the most sensitive animal would
+ * substance.  The canary, being the most sensitive animal, would
  * immediately fall over.  Seeing this, the miners could take
  * action to escape the mine, seeing an imminent danger.
  *
@@ -57,6 +57,18 @@
  * the same time.  This is also why this canary must exist as a
  * completely separate process and not simply as a thread within
  * Asterisk itself.
+ *
+ * Quote:
+ * "The nice value set with setpriority() shall be applied to the
+ * process. If the process is multi-threaded, the nice value shall
+ * affect all system scope threads in the process."
+ *
+ * Source:
+ * http://www.opengroup.org/onlinepubs/000095399/functions/setpriority.html
+ *
+ * In answer to the question, what aren't system scope threads, the
+ * answer is, in Asterisk, nothing.  Process scope threads are the
+ * alternative, but they aren't supported in Linux.
  */
 
 static const char explanation[] =

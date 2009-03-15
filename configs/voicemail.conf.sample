@@ -232,6 +232,9 @@ sendvoicemail=yes ; Allow the user to compose and send a voicemail while inside
 ; searchcontexts=yes	; Current default behavior is to search only the default context
 			; if one is not specified.  The older behavior was to search all contexts.
 			; This option restores the old behavior [DEFAULT=no]
+			; Note: If you have this option enabled, then you will be required to have
+			; unique mailbox names across all contexts. Otherwise, an ambiguity is created
+			; since it is impossible to know which mailbox to retrieve when one is requested.
 ; callback=fromvm 	; Context to call back from  
 			;     if not listed, calling the sender back will not be permitted
 ; exitcontext=fromvm    ; Context to go to on user exit such as * or 0
@@ -316,7 +319,7 @@ european=Europe/Copenhagen|'vm-received' a d b 'digits/at' HM
 ;4300 => 3456,Ben Rigas,ben@american-computer.net
 ;4310 => -5432,Sales,sales@marko.net
 ;4069 => 6522,Matt Brooks,matt@marko.net,,|tz=central|attach=yes|saycid=yes|dialout=fromvm|callback=fromvm|review=yes|operator=yes|envelope=yes|moveheard=yes|sayduration=yes|saydurationm=1
-;4073 => 1099,Bianca Paige,bianca@biancapaige.com,,delete=1
+;4073 => 1099,Bianca Paige,bianca@biancapaige.com,,delete=1|emailsubject=You have a new voicemail.|emailbody=Click on the attachment to listen.
 ;4110 => 3443,Rob Flynn,rflynn@blueridge.net
 ;4235 => 1234,Jim Holmes,jim@astricon.ips,,Tz=european
 

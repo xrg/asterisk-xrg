@@ -194,9 +194,17 @@ struct ast_frame {
     for this purpose instead of having to declare one on the stack */
 extern struct ast_frame ast_null_frame;
 
-#define AST_FRIENDLY_OFFSET 	64	/*! It's polite for a a new frame to
-					  have this number of bytes for additional
-					  headers.  */
+/*! \brief Offset into a frame's data buffer.
+ *
+ * By providing some "empty" space prior to the actual data of an ast_frame,
+ * this gives any consumer of the frame ample space to prepend other necessary
+ * information without having to create a new buffer.
+ *
+ * As an example, RTP can use the data from an ast_frame and simply prepend the
+ * RTP header information into the space provided by AST_FRIENDLY_OFFSET instead
+ * of having to create a new buffer with the necessary space allocated.
+ */
+#define AST_FRIENDLY_OFFSET 	64	
 #define AST_MIN_OFFSET 		32	/*! Make sure we keep at least this much handy */
 
 /*! Need the header be free'd? */
@@ -515,6 +523,16 @@ int ast_smoother_get_flags(struct ast_smoother *smoother);
 int ast_smoother_test_flag(struct ast_smoother *s, int flag);
 void ast_smoother_free(struct ast_smoother *s);
 void ast_smoother_reset(struct ast_smoother *s, int bytes);
+
+/*!
+ * \brief Reconfigure an existing smoother to output a different number of bytes per frame
+ * \param s the smoother to reconfigure
+ * \param bytes the desired number of bytes per output frame
+ * \return nothing
+ *
+ */
+void ast_smoother_reconfigure(struct ast_smoother *s, int bytes);
+
 int __ast_smoother_feed(struct ast_smoother *s, struct ast_frame *f, int swap);
 struct ast_frame *ast_smoother_read(struct ast_smoother *s);
 #define ast_smoother_feed(s,f) __ast_smoother_feed(s, f, 0)

@@ -1,9 +1,10 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2008, Digium, Inc.
+ * Copyright (C) 2008 - 2009, Digium, Inc.
  *
  * Kevin P. Fleming <kpfleming@digium.com>
+ * Russell Bryant <russell@digium.com>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -20,6 +21,7 @@
   \file timing.h
   \brief Timing source management
   \author Kevin P. Fleming <kpfleming@digium.com>
+  \author Russell Bryant <russell@digium.com>
 
   Portions of Asterisk require a timing source, a periodic trigger
   for media handling activities. The functions in this file allow
@@ -55,7 +57,7 @@
 extern "C" {
 #endif
 
-enum ast_timing_event {
+enum ast_timer_event {
 	AST_TIMING_EVENT_EXPIRED = 1,
 	AST_TIMING_EVENT_CONTINUOUS = 2,
 };
@@ -67,43 +69,53 @@ enum ast_timing_event {
  * So, the behavior of these calls should match the documentation of the
  * public API calls.
  */
-struct ast_timing_functions {
+struct ast_timing_interface {
+	const char *name;
+	/*! This handles the case where multiple timing modules are loaded.
+	 *  The highest priority timing interface available will be used. */
+	unsigned int priority;
 	int (*timer_open)(void);
 	void (*timer_close)(int handle);
 	int (*timer_set_rate)(int handle, unsigned int rate);
 	void (*timer_ack)(int handle, unsigned int quantity);
 	int (*timer_enable_continuous)(int handle);
 	int (*timer_disable_continuous)(int handle);
-	enum ast_timing_event (*timer_get_event)(int handle);
+	enum ast_timer_event (*timer_get_event)(int handle);
 	unsigned int (*timer_get_max_rate)(int handle);
 };
 
 /*!
- * \brief Install a set of timing functions.
+ * \brief Register a set of timing functions.
  *
- * \param funcs An instance of the \c ast_timing_functions structure with pointers
+ * \param funcs An instance of the \c ast_timing_interfaces structure with pointers
  *        to the functions provided by the timing implementation.
  *
  * \retval NULL failure 
- * \retval non-Null handle to be passed to ast_uninstall_timing_functions() on success
+ * \retval non-Null handle to be passed to ast_unregister_timing_interface() on success
+ * \since 1.6.1
  */
-void *ast_install_timing_functions(struct ast_timing_functions *funcs);
+#define ast_register_timing_interface(i) _ast_register_timing_interface(i, ast_module_info->self)
+void *_ast_register_timing_interface(struct ast_timing_interface *funcs,
+		struct ast_module *mod);
 
 /*!
- * \brief Uninstall a previously-installed set of timing functions.
+ * \brief Unregister a previously registered timing interface.
  *
  * \param handle The handle returned from a prior successful call to
- *        ast_install_timing_functions().
+ *        ast_register_timing_interface().
  *
- * \return nothing
+ * \retval 0 success
+ * \retval non-zero failure
+ * \since 1.6.1
  */
-void ast_uninstall_timing_functions(void *handle);
+int ast_unregister_timing_interface(void *handle);
 
 /*!
  * \brief Open a timing fd
  *
  * \retval -1 error, with errno set
  * \retval >=0 success
+ * \since 1.6.1
  */
 int ast_timer_open(void);
 
@@ -113,6 +125,7 @@ int ast_timer_open(void);
  * \param handle timing fd returned from timer_open()
  *
  * \return nothing
+ * \since 1.6.1
  */
 void ast_timer_close(int handle);
 
@@ -128,6 +141,7 @@ void ast_timer_close(int handle);
  *
  * \retval -1 error, with errno set
  * \retval 0 success
+ * \since 1.6.1
  */
 int ast_timer_set_rate(int handle, unsigned int rate);
 
@@ -141,6 +155,7 @@ int ast_timer_set_rate(int handle, unsigned int rate);
  *       returned AST_TIMING_EVENT_EXPIRED.
  *
  * \return nothing
+ * \since 1.6.1
  */
 void ast_timer_ack(int handle, unsigned int quantity);
 
@@ -154,6 +169,7 @@ void ast_timer_ack(int handle, unsigned int quantity);
  *
  * \retval -1 failure, with errno set
  * \retval 0 success
+ * \since 1.6.1
  */
 int ast_timer_enable_continuous(int handle);
 
@@ -164,6 +180,7 @@ int ast_timer_enable_continuous(int handle);
  *
  * \retval -1 failure, with errno set
  * \retval 0 success
+ * \since 1.6.1
  */
 int ast_timer_disable_continuous(int handle);
 
@@ -176,8 +193,9 @@ int ast_timer_disable_continuous(int handle);
  * be called to find out what triggered it.
  *
  * \return which event triggered the timing fd
+ * \since 1.6.1
  */
-enum ast_timing_event ast_timer_get_event(int handle);
+enum ast_timer_event ast_timer_get_event(int handle);
 
 /*!
  * \brief Get maximum rate supported for a timing handle
@@ -185,6 +203,7 @@ enum ast_timing_event ast_timer_get_event(int handle);
  * \param handle timing fd returned by timer_open()
  *
  * \return maximum rate supported for timing handle
+ * \since 1.6.1
  */
 unsigned int ast_timer_get_max_rate(int handle);
 

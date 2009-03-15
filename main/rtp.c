@@ -1038,10 +1038,11 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 		ast_log(LOG_DEBUG, "Ignoring RTP 2833 Event: %08x. Not a DTMF Digit.\n", event);
 		return &ast_null_frame;
 	}
-	
+
 	if (ast_test_flag(rtp, FLAG_DTMF_COMPENSATE)) {
 		if ((rtp->lastevent != timestamp) || (rtp->resp && rtp->resp != resp)) {
 			rtp->resp = resp;
+			rtp->dtmfcount = 0;
 			f = send_dtmf(rtp, AST_FRAME_DTMF_END);
 			f->len = 0;
 			rtp->lastevent = timestamp;
@@ -1050,15 +1051,16 @@ static struct ast_frame *process_rfc2833(struct ast_rtp *rtp, unsigned char *dat
 		if ((!(rtp->resp) && (!(event_end & 0x80))) || (rtp->resp && rtp->resp != resp)) {
 			rtp->resp = resp;
 			f = send_dtmf(rtp, AST_FRAME_DTMF_BEGIN);
+			rtp->dtmfcount = dtmftimeout;
 		} else if ((event_end & 0x80) && (rtp->lastevent != seqno) && rtp->resp) {
 			f = send_dtmf(rtp, AST_FRAME_DTMF_END);
 			f->len = ast_tvdiff_ms(ast_samp2tv(samples, 8000), ast_tv(0, 0)); /* XXX hard coded 8kHz */
 			rtp->resp = 0;
+			rtp->dtmfcount = 0;
 			rtp->lastevent = seqno;
 		}
 	}
 
-	rtp->dtmfcount = dtmftimeout;
 	rtp->dtmfsamples = samples;
 
 	return f;
@@ -1737,13 +1739,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	rtp->lastrxformat = rtp->f.subclass = rtpPT.code;
 	rtp->f.frametype = (rtp->f.subclass & AST_FORMAT_AUDIO_MASK) ? AST_FRAME_VOICE : (rtp->f.subclass & AST_FORMAT_VIDEO_MASK) ? AST_FRAME_VIDEO : AST_FRAME_TEXT;
 
-	if (!rtp->lastrxts)
-		rtp->lastrxts = timestamp;
-
 	rtp->rxseqno = seqno;
-
-	/* Record received timestamp as last received now */
-	rtp->lastrxts = timestamp;
 
 	if (rtp->dtmfcount) {
 		rtp->dtmfcount -= (timestamp - rtp->lastrxts);
@@ -1759,6 +1755,9 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			return f;
 		}
 	}
+
+	/* Record received timestamp as last received now */
+	rtp->lastrxts = timestamp;
 
 	rtp->f.mallocd = 0;
 	rtp->f.datalen = res - hdrlen;
@@ -3662,14 +3661,48 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 
 void ast_rtp_codec_setpref(struct ast_rtp *rtp, struct ast_codec_pref *prefs)
 {
-	int x;
-	for (x = 0; x < 32; x++) {  /* Ugly way */
-		rtp->pref.order[x] = prefs->order[x];
-		rtp->pref.framing[x] = prefs->framing[x];
+	struct ast_format_list current_format_old, current_format_new;
+
+	/* if no packets have been sent through this session yet, then
+	 *  changing preferences does not require any extra work
+	 */
+	if (rtp->lasttxformat == 0) {
+		rtp->pref = *prefs;
+		return;
 	}
-	if (rtp->smoother)
-		ast_smoother_free(rtp->smoother);
-	rtp->smoother = NULL;
+
+	current_format_old = ast_codec_pref_getsize(&rtp->pref, rtp->lasttxformat);
+
+	rtp->pref = *prefs;
+
+	current_format_new = ast_codec_pref_getsize(&rtp->pref, rtp->lasttxformat);
+
+	/* if the framing desired for the current format has changed, we may have to create
+	 * or adjust the smoother for this session
+	 */
+	if ((current_format_new.inc_ms != 0) &&
+	    (current_format_new.cur_ms != current_format_old.cur_ms)) {
+		int new_size = (current_format_new.cur_ms * current_format_new.fr_len) / current_format_new.inc_ms;
+
+		if (rtp->smoother) {
+			ast_smoother_reconfigure(rtp->smoother, new_size);
+			if (option_debug) {
+				ast_log(LOG_DEBUG, "Adjusted smoother to %d ms and %d bytes\n", current_format_new.cur_ms, new_size);
+			}
+		} else {
+			if (!(rtp->smoother = ast_smoother_new(new_size))) {
+				ast_log(LOG_WARNING, "Unable to create smoother: format: %d ms: %d len: %d\n", rtp->lasttxformat, current_format_new.cur_ms, new_size);
+				return;
+			}
+			if (current_format_new.flags) {
+				ast_smoother_set_flags(rtp->smoother, current_format_new.flags);
+			}
+			if (option_debug) {
+				ast_log(LOG_DEBUG, "Created smoother: format: %d ms: %d len: %d\n", rtp->lasttxformat, current_format_new.cur_ms, new_size);
+			}
+		}
+	}
+
 }
 
 struct ast_codec_pref *ast_rtp_codec_getpref(struct ast_rtp *rtp)
@@ -3737,16 +3770,27 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 		rtp->smoother = NULL;
 	}
 
-	if (!rtp->smoother && subclass != AST_FORMAT_SPEEX && subclass != AST_FORMAT_G723_1) {
+	if (!rtp->smoother) {
 		struct ast_format_list fmt = ast_codec_pref_getsize(&rtp->pref, subclass);
-		if (fmt.inc_ms) { /* if codec parameters is set / avoid division by zero */
-			if (!(rtp->smoother = ast_smoother_new((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms))) {
-				ast_log(LOG_WARNING, "Unable to create smoother: format: %d ms: %d len: %d\n", subclass, fmt.cur_ms, ((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms));
-				return -1;
+
+		switch (subclass) {
+		case AST_FORMAT_SPEEX:
+		case AST_FORMAT_G723_1:
+		case AST_FORMAT_SIREN7:
+		case AST_FORMAT_SIREN14:
+			/* these are all frame-based codecs and cannot be safely run through
+			   a smoother */
+			break;
+		default:
+			if (fmt.inc_ms) { /* if codec parameters is set / avoid division by zero */
+				if (!(rtp->smoother = ast_smoother_new((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms))) {
+					ast_log(LOG_WARNING, "Unable to create smoother: format: %d ms: %d len: %d\n", subclass, fmt.cur_ms, ((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms));
+					return -1;
+				}
+				if (fmt.flags)
+					ast_smoother_set_flags(rtp->smoother, fmt.flags);
+				ast_debug(1, "Created smoother: format: %d ms: %d len: %d\n", subclass, fmt.cur_ms, ((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms));
 			}
-			if (fmt.flags)
-				ast_smoother_set_flags(rtp->smoother, fmt.flags);
-			ast_debug(1, "Created smoother: format: %d ms: %d len: %d\n", subclass, fmt.cur_ms, ((fmt.cur_ms * fmt.fr_len) / fmt.inc_ms));
 		}
 	}
 	if (rtp->smoother) {
