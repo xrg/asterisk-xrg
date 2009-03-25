@@ -601,7 +601,7 @@ fi
 %attr(0755,root,root)					%{_sbindir}/stereorize
 %attr(0755,root,root)					%{_sbindir}/streamplayer
 %attr(0755,root,root)					%{_sbindir}/astcanary
-%attr(0755,root,root)					%{_sbindir}/check_expr
+# %attr(0755,root,root)					%{_sbindir}/check_expr
 %attr(0755,root,root)					%{_sbindir}/conf2ael
 %attr(0755,root,root)					%{_sbindir}/hashtest
 %attr(0755,root,root)					%{_sbindir}/hashtest2
@@ -620,6 +620,8 @@ fi
 #attr(0755,root,root)					%{_libdir}/asterisk/modules/func_uri.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/pbx_*.so
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/res_*.so
+%attr(0755,root,root)					%{_libdir}/asterisk/modules/bridge_*.so
+%attr(0755,root,root)					%{_libdir}/asterisk/modules/test_*.so
 # %exclude		                              %{_libdir}/asterisk/modules/test_dlinklists.so
 
 # these are packaged as sub packages below
