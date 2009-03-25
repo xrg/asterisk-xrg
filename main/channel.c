@@ -718,6 +718,8 @@ int ast_best_codec(int fmts)
 		AST_FORMAT_ULAW,
 		/*! Unless of course, you're a silly European, so then prefer ALAW */
 		AST_FORMAT_ALAW,
+		AST_FORMAT_SIREN14,
+		AST_FORMAT_SIREN7,
 		/*! G.722 is better then all below, but not as common as the above... so give ulaw and alaw priority */
 		AST_FORMAT_G722,
 		/*! Okay, well, signed linear is easy to translate into other stuff */
@@ -1700,8 +1702,7 @@ int ast_hangup(struct ast_channel *chan)
 	return res;
 }
 
-#define ANSWER_WAIT_MS 500
-int __ast_answer(struct ast_channel *chan, unsigned int delay,  int cdr_answer)
+int ast_raw_answer(struct ast_channel *chan, int cdr_answer)
 {
 	int res = 0;
 
@@ -1733,38 +1734,6 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay,  int cdr_answer)
 			ast_cdr_answer(chan->cdr);
 		}
 		ast_channel_unlock(chan);
-		if (delay) {
-			ast_safe_sleep(chan, delay);
-		} else {
-			struct ast_frame *f;
-			int ms = ANSWER_WAIT_MS;
-			while (1) {
-				/* 500 ms was the original delay here, so now
-				 * we cap our waiting at 500 ms
-				 */
-				ms = ast_waitfor(chan, ms);
-				if (ms < 0) {
-					ast_log(LOG_WARNING, "Error condition occurred when polling channel %s for a voice frame: %s\n", chan->name, strerror(errno));
-					res = -1;
-					break;
-				}
-				if (ms == 0) {
-					ast_debug(2, "Didn't receive a voice frame from %s within %d ms of answering. Continuing anyway\n", chan->name, ANSWER_WAIT_MS);
-					res = 0;
-					break;
-				}
-				f = ast_read(chan);
-				if (!f || (f->frametype == AST_FRAME_CONTROL && f->subclass == AST_CONTROL_HANGUP)) {
-					res = -1;
-					ast_debug(2, "Hangup of channel %s detected in answer routine\n", chan->name);
-					break;
-				}
-				if (f->frametype == AST_FRAME_VOICE) {
-					res = 0;
-					break;
-				}
-			}
-		}
 		break;
 	case AST_STATE_UP:
 		/* Calling ast_cdr_answer when it it has previously been called
@@ -1780,6 +1749,107 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay,  int cdr_answer)
 
 	ast_indicate(chan, -1);
 	chan->visible_indication = 0;
+
+	return res;
+}
+
+int __ast_answer(struct ast_channel *chan, unsigned int delay, int cdr_answer)
+{
+	int res = 0;
+	enum ast_channel_state old_state;
+
+	old_state = chan->_state;
+	if ((res = ast_raw_answer(chan, cdr_answer))) {
+		return res;
+	}
+
+	switch (old_state) {
+	case AST_STATE_RINGING:
+	case AST_STATE_RING:
+		/* wait for media to start flowing, but don't wait any longer
+		 * than 'delay' or 500 milliseconds, whichever is longer
+		 */
+		do {
+			AST_LIST_HEAD_NOLOCK(, ast_frame) frames;
+			struct ast_frame *cur, *new;
+			int ms = MAX(delay, 500);
+			unsigned int done = 0;
+
+			AST_LIST_HEAD_INIT_NOLOCK(&frames);
+
+			for (;;) {
+				ms = ast_waitfor(chan, ms);
+				if (ms < 0) {
+					ast_log(LOG_WARNING, "Error condition occurred when polling channel %s for a voice frame: %s\n", chan->name, strerror(errno));
+					res = -1;
+					break;
+				}
+				if (ms == 0) {
+					ast_debug(2, "Didn't receive a media frame from %s within %d ms of answering. Continuing anyway\n", chan->name, MAX(delay, 500));
+					break;
+				}
+				cur = ast_read(chan);
+				if (!cur || ((cur->frametype == AST_FRAME_CONTROL) &&
+					     (cur->subclass == AST_CONTROL_HANGUP))) {
+					if (cur) {
+						ast_frfree(cur);
+					}
+					res = -1;
+					ast_debug(2, "Hangup of channel %s detected in answer routine\n", chan->name);
+					break;
+				}
+
+				if ((new = ast_frisolate(cur)) != cur) {
+					ast_frfree(cur);
+				}
+
+				AST_LIST_INSERT_HEAD(&frames, new, frame_list);
+
+				/* if a specific delay period was requested, continue
+				 * until that delay has passed. don't stop just because
+				 * incoming media has arrived.
+				 */
+				if (delay) {
+					continue;
+				}
+
+				switch (new->frametype) {
+					/* all of these frametypes qualify as 'media' */
+				case AST_FRAME_VOICE:
+				case AST_FRAME_VIDEO:
+				case AST_FRAME_TEXT:
+				case AST_FRAME_DTMF_BEGIN:
+				case AST_FRAME_DTMF_END:
+				case AST_FRAME_IMAGE:
+				case AST_FRAME_HTML:
+				case AST_FRAME_MODEM:
+					done = 1;
+					break;
+				case AST_FRAME_CONTROL:
+				case AST_FRAME_IAX:
+				case AST_FRAME_NULL:
+				case AST_FRAME_CNG:
+					break;
+				}
+
+				if (done) {
+					break;
+				}
+			}
+
+			if (res == 0) {
+				ast_channel_lock(chan);
+				while ((cur = AST_LIST_REMOVE_HEAD(&frames, frame_list))) {
+					ast_queue_frame_head(chan, cur);
+					ast_frfree(cur);
+				}
+				ast_channel_unlock(chan);
+			}
+		} while (0);
+		break;
+	default:
+		break;
+	}
 
 	return res;
 }
@@ -1961,12 +2031,12 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 			int kbrms = rms;
 			if (kbrms > 600000)
 				kbrms = 600000;
-			res = poll(pfds, max, kbrms);
+			res = ast_poll(pfds, max, kbrms);
 			if (!res)
 				rms -= kbrms;
 		} while (!res && (rms > 0));
 	} else {
-		res = poll(pfds, max, rms);
+		res = ast_poll(pfds, max, rms);
 	}
 	for (x = 0; x < n; x++)
 		ast_clear_flag(c[x], AST_FLAG_BLOCKING);
@@ -4454,6 +4524,7 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			case AST_CONTROL_UNHOLD:
 			case AST_CONTROL_VIDUPDATE:
 			case AST_CONTROL_SRCUPDATE:
+			case AST_CONTROL_T38:
 				ast_indicate_data(other, f->subclass, f->data.ptr, f->datalen);
 				if (jb_in_use) {
 					ast_jb_empty_and_reset(c0, c1);

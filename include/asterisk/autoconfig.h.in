@@ -7,6 +7,9 @@
 
 
 
+/* Define to 1 if internal poll should be used. */
+#undef AST_POLL_COMPAT
+
 /* Define to 1 if the `closedir' function returns void instead of `int'. */
 #undef CLOSEDIR_VOID
 
@@ -596,6 +599,12 @@
 /* Define if your system has the OpenH323 libraries. */
 #undef HAVE_OPENH323
 
+/* Define this to indicate the ${OPENR2_DESCRIP} library */
+#undef HAVE_OPENR2
+
+/* Define to indicate the ${OPENR2_DESCRIP} library version */
+#undef HAVE_OPENR2_VERSION
+
 /* Define this to indicate the ${OPENSSL_DESCRIP} library */
 #undef HAVE_OPENSSL
 
@@ -757,12 +766,6 @@
 
 /* Define to indicate the ${ROUND_DESCRIP} library version */
 #undef HAVE_ROUND_VERSION
-
-/* Define if your system has the RTLD_NOLOAD headers. */
-#undef HAVE_RTLD_NOLOAD
-
-/* Define RTLD_NOLOAD headers version */
-#undef HAVE_RTLD_NOLOAD_VERSION
 
 /* Define to 1 if your system has /sbin/launchd. */
 #undef HAVE_SBIN_LAUNCHD

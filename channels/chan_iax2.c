@@ -270,6 +270,9 @@ int (*iax2_regfunk)(const char *username, int onoff) = NULL;
 /* T1, maybe ISDN */
 #define IAX_CAPABILITY_MEDBANDWIDTH 	(IAX_CAPABILITY_FULLBANDWIDTH & 	\
 					 ~AST_FORMAT_SLINEAR &			\
+					 ~AST_FORMAT_SLINEAR16 &			\
+					 ~AST_FORMAT_SIREN7 &			\
+					 ~AST_FORMAT_SIREN14 &			\
 					 ~AST_FORMAT_ULAW &			\
 					 ~AST_FORMAT_ALAW &			\
 					 ~AST_FORMAT_G722) 
@@ -1064,6 +1067,7 @@ static int acf_channel_write(struct ast_channel *chan, const char *function, cha
 static int decode_frame(ast_aes_decrypt_key *dcx, struct ast_iax2_full_hdr *fh, struct ast_frame *f, int *datalen);
 static int encrypt_frame(ast_aes_encrypt_key *ecx, struct ast_iax2_full_hdr *fh, unsigned char *poo, int *datalen);
 static void build_ecx_key(const unsigned char *digest, struct chan_iax2_pvt *pvt);
+static void build_rand_pad(unsigned char *buf, ssize_t len);
 
 static const struct ast_channel_tech iax2_tech = {
 	.type = "IAX2",
@@ -2547,6 +2551,9 @@ static int update_packet(struct iax_frame *f)
 
 	/* Now re-encrypt the frame */
 	if (f->encmethods) {
+	/* since this is a retransmit frame, create a new random padding
+	 * before re-encrypting. */
+		build_rand_pad(f->semirand, sizeof(f->semirand));
 		encrypt_frame(&f->ecx, fh, f->semirand, &f->datalen);
 	}
 	return 0;
@@ -4856,6 +4863,18 @@ static int iax2_trunk_queue(struct chan_iax2_pvt *pvt, struct iax_frame *fr)
 	return 0;
 }
 
+/* IAX2 encryption requires 16 to 32 bytes of random padding to be present
+ * before the encryption data.  This function randomizes that data. */
+static void build_rand_pad(unsigned char *buf, ssize_t len)
+{
+	long tmp;
+	for (tmp = ast_random(); len > 0; tmp = ast_random()) {
+		memcpy(buf, (unsigned char *) &tmp, (len > sizeof(tmp)) ? sizeof(tmp) : len);
+		buf += sizeof(tmp);
+		len -= sizeof(tmp);
+	}
+}
+
 static void build_encryption_keys(const unsigned char *digest, struct chan_iax2_pvt *pvt)
 {
 	build_ecx_key(digest, pvt);
@@ -4867,6 +4886,7 @@ static void build_ecx_key(const unsigned char *digest, struct chan_iax2_pvt *pvt
 	/* it is required to hold the corresponding decrypt key to our encrypt key
 	 * in the pvt struct because queued frames occasionally need to be decrypted and
 	 * re-encrypted when updated for a retransmission */
+	build_rand_pad(pvt->semirand, sizeof(pvt->semirand));
 	ast_aes_encrypt_key(digest, &pvt->ecx);
 	ast_aes_decrypt_key(digest, &pvt->mydcx);
 }
@@ -4933,7 +4953,7 @@ static int decode_frame(ast_aes_decrypt_key *dcx, struct ast_iax2_full_hdr *fh, 
 		/* Decrypt */
 		memcpy_decrypt(workspace, efh->encdata, *datalen - sizeof(struct ast_iax2_full_enc_hdr), dcx);
 
-		padding = 16 + (workspace[15] & 0xf);
+		padding = 16 + (workspace[15] & 0x0f);
 		if (iaxdebug)
 			ast_debug(1, "Decoding full frame with length %d (padding = %d) (15=%02x)\n", *datalen, padding, workspace[15]);
 		if (*datalen < padding + sizeof(struct ast_iax2_full_hdr))
@@ -6672,15 +6692,20 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 	ast_devstate_changed(AST_DEVICE_UNKNOWN, "IAX2/%s", p->name); /* Activate notification */
 
 return_unref:
-	ast_string_field_set(iaxs[callno], peer, peer);
-	/* Choose lowest expiry number */
-	if (expire && (expire < iaxs[callno]->expiry)) 
-		iaxs[callno]->expiry = expire;
+	if (iaxs[callno]) {
+		ast_string_field_set(iaxs[callno], peer, peer);
+
+		/* Choose lowest expiry number */
+		if (expire && (expire < iaxs[callno]->expiry)) {
+			iaxs[callno]->expiry = expire;
+		}
+	}
 
 	res = 0;
 
-	if (p)
+	if (p) {
 		peer_unref(p);
+	}
 
 	return res;
 }
