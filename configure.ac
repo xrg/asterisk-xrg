@@ -2024,7 +2024,7 @@ AST_EXT_TOOL_CHECK([NEON29], [neon-config], , [--libs],
 #error Need libneon >= 0.29.0
 #endif])
 
-AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp-config], , [--agent-libs],
+AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp-config], , [--base-agent-libs],
 [#include <net-snmp/net-snmp-config.h>
 #include <net-snmp/net-snmp-includes.h>
 #include <net-snmp/agent/net-snmp-agent-includes.h>],
