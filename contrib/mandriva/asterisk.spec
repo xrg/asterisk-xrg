@@ -14,6 +14,7 @@
 %{?_without_h323:	%global build_h323 0}
 %{?_with_h323:		%global build_h323 1}
 
+# not compatible >=kernel-2.6.25 Using instead asterisk-chan_lcr
 %define build_misdn	0
 %{?_without_misdn:	%global build_misdn 0}
 %{?_with_misdn:		%global build_misdn 1}
@@ -67,61 +68,92 @@ Requires(preun): rpm-helper
 Requires:	mpg123
 Requires:	asterisk-core-sounds
 Requires:	asterisk-core-moh
+BuildRequires:	alsa-lib-devel
 BuildRequires:	ast_menuselect
-BuildRequires:	libtool
 BuildRequires:	autoconf >= 1:2.60
 BuildRequires:	automake1.9 >= 1.9.6
-BuildRequires:	libalsa-devel
+BuildRequires:	bison
+BuildRequires:	bluez-devel
+BuildRequires:	curl-devel
+BuildRequires:	dahdi-devel >= 2.0.0
+BuildRequires:	ffmpeg-devel
+BuildRequires:	flex
+#BuildRequires:	freetds-devel >= 0.64
+BuildRequires:	gmime-devel
+BuildRequires:	gsm-devel
+BuildRequires:	gtk2-devel
+BuildRequires:	jackit-devel
+BuildRequires:	krb5-devel
+BuildRequires:	libcap-devel
 BuildRequires:	libcurl-devel
-#BuildRequires:	gtk+1.2-devel
-BuildRequires:	isdn4k-utils-devel
+BuildRequires:	libedit-devel
+BuildRequires:	libgcrypt-devel
+BuildRequires:	libgnutls-devel
+BuildRequires:	libgpg-error-devel
 BuildRequires:	libgsm-devel
+BuildRequires:	%mklibname hoard
+BuildRequires:	libidn-devel
 BuildRequires:	libiksemel-devel
 BuildRequires:	libilbc-devel
+BuildRequires:	libjack-devel
 BuildRequires:	libnbs-devel
 BuildRequires:	libncurses-devel
-BuildRequires:	libpri-devel >= 1.4.0
-BuildRequires:	spandsp-devel
+BuildRequires:	libogg-devel
+BuildRequires:	libosp-devel
+BuildRequires:	libpopt-devel
+BuildRequires:	libpri-devel >= 1.4.8
 BuildRequires:	libspeex-devel
+BuildRequires:	libss7-devel >= 1.0.2
 BuildRequires:	libtermcap-devel
 BuildRequires:	libtiff-devel
 BuildRequires:	libtonezone-devel >= 1.4.0
+BuildRequires:	libtool
+BuildRequires:	libtool-devel
+BuildRequires:	libusb-devel
+BuildRequires:	libvorbis-devel
 BuildRequires:	libzap-devel >= 1.0.1
+BuildRequires:	lm_sensors-devel
 BuildRequires:	lpc10-devel
-BuildRequires:	libidn-devel
+BuildRequires:	lua-devel
+BuildRequires:	newt-devel
+BuildRequires:	openais-devel
+BuildRequires:	openldap-devel
 BuildRequires:	oggvorbis-devel
 BuildRequires:	openssl-devel
+BuildRequires:	pam-devel
+BuildRequires:	perl-devel
+BuildRequires:	portaudio-devel >= 19
 BuildRequires:	postgresql-devel
+BuildRequires:	radiusclient-ng-devel
+BuildRequires:	resample-devel
+BuildRequires:	SDL_image-devel
+BuildRequires:	spandsp-devel
+BuildRequires:	speex-devel
+BuildRequires:	sqlite3-devel
+BuildRequires:	tcp_wrappers-devel
+BuildRequires:	termcap-devel
+BuildRequires:	tiff-devel
 BuildRequires:	sqlite-devel
-BuildRequires:	portaudio-devel
-BuildRequires:  libjack-devel
-BuildRequires:	bison
-BuildRequires:	flex
+#BuildRequires:	swig-devel
+BuildRequires:	wget
 %if %mdkversion < 200900
 BuildRequires: imap-devel
 %else
 BuildRequires:	c-client-devel
 %endif
-BuildRequires:	krb5-devel
-BuildRequires:	pam-devel
-BuildRequires:	gmime-devel
 %if %{build_misdn}
 BuildRequires:	libmisdn-devel >= 1:3.4
+BuildRequires:	isdn4k-utils-devel
 %endif
 %if %{build_docs}
 BuildRequires:	doxygen
+BuildRequires:	graphviz
 %endif
-BuildRequires:	newt-devel
-BuildRequires:	oggvorbis-devel
 %if %{build_h323}
-#BuildRequires:	ooh323c-devel
-#BuildRequires:	openh323-devel >= 1.15.3
+BuildRequires:	ooh323c-devel
+BuildRequires:	openh323-devel >= 1.15.3
+BuildRequires:	pwlib-devel
 %endif
-## needed for smsq: popt-devel
-BuildRequires:	libpopt-devel
-#BuildRequires:	swig-devel
-BuildRequires:	wget
-BuildRequires:	resample-devel
 BuildRoot:	%{_tmppath}/%{name}-%{version}-root
 
 %description
@@ -136,21 +168,14 @@ POTS, and IP telephony clients using the Inter-Asterisk eXchange
 protocol (e.g. gnophone or miniphone).  For more information and a
 current list of supported hardware, see www.asterisk.org.
 
-** Temporary version: modules like zaptel (aka. dahdi), mISDN are out.
-
-%if %{build_misdn}
-%package	chan_misdn
-Summary:	This module adds mISDN support to the Asterisk PBX
+%package	firmware
+Summary:	Firmware for the Digium S101I (IAXy)
 Group:		System/Servers
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+License:	Redistributable, no modification permitted
+Requires:	asterisk = %{version}-%{release}
 
-%description	chan_misdn
-This module adds mISDN support to the Asterisk PBX. mISDN is the
-(experimental) new ISDN4Linux stack, which adds support for
-driving cards in NT mode and thus connecting an ISDN phone to your
-computer.
-%endif
+%description	firmware
+Firmware for the Digium S101I (IAXy).
 
 %package	devel
 Summary:	Header files for building Asterisk modules
@@ -167,11 +192,44 @@ Group:		Books/Howtos
 %description	docs
 The Hitchhiker's Guide to Asterisk
 
+%package	plugins-ais
+Summary:	Modules for Asterisk that use OpenAIS
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-ais
+Modules for Asterisk that use OpenAIS.
+
+%package	plugins-alsa
+Summary:	Modules for Asterisk that use Alsa sound drivers
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-alsa
+Modules for Asterisk that use Alsa sound drivers.
+
+%package	plugins-curl
+Summary:	Modules for Asterisk that use cURL
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-curl
+Modules for Asterisk that use cURL.
+
+%package	plugins-dahdi
+Summary:	Modules for Asterisk that use DAHDI
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+Requires:	dahdi-tools >= 2.0.0
+
+%description	plugins-dahdi
+Modules for Asterisk that use DAHDI.
+
+
 %package	plugins-fax
 Summary:	FAX plugins for Asterisk
 Group:		System/Servers
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires: %{name} = %{version}-%{release}
 
 %description	plugins-fax
 This package contains FAX plugins for Asterisk:
@@ -179,6 +237,78 @@ This package contains FAX plugins for Asterisk:
 * Trivial FAX Receive Application
 * Trivial FAX Transmit Application
 * Assign entered string to a given variable
+
+%package	plugins-festival
+Summary:	Festival application for Asterisk
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+Requires:	festival
+
+%description	plugins-festival
+Application for the Asterisk PBX that uses Festival to convert text to speech.
+
+%package	plugins-ices
+Summary:	Stream audio from Asterisk to an IceCast server
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+Requires:	ices
+
+%description	plugins-ices
+Stream audio from Asterisk to an IceCast server.
+
+%package	plugins-jabber
+Summary:	Jabber support for Asterisk
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-jabber
+This package contains Jabber support for Asterisk.
+
+%package	plugins-jack
+Summary:	JACK resources for Asterisk
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-jack
+JACK resources for Asterisk.
+
+%package	plugins-lua
+Summary:	Lua resources for Asterisk
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-lua
+Lua resources for Asterisk.
+
+%package	plugins-ldap
+Summary:	LDAP resources for Asterisk
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-ldap
+LDAP resources for Asterisk.
+
+%package	plugins-minivm
+Summary:	MiniVM applicaton for Asterisk
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-minivm
+MiniVM application for Asterisk.
+
+%if %{build_misdn}
+%package	chan_misdn
+Summary:	This module adds mISDN support to the Asterisk PBX
+Group:		System/Servers
+Requires(post): %{name} = %{version}
+Requires(preun): %{name} = %{version}
+
+%description	chan_misdn
+This module adds mISDN support to the Asterisk PBX. mISDN is the
+(experimental) new ISDN4Linux stack, which adds support for
+driving cards in NT mode and thus connecting an ISDN phone to your
+computer.
+%endif
 
 %if %{build_odbc}
 %package	plugins-odbc
@@ -197,6 +327,23 @@ This package contains ODBC plugins for Asterisk:
 * ODBC resource manager
 %endif
 
+%package	plugins-oss
+Summary:	Modules for Asterisk that use OSS sound drivers
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-oss
+Modules for Asterisk that use OSS sound drivers.
+
+%package	plugins-portaudio
+Summary:	Modules for Asterisk that use the portaudio library
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-portaudio
+Modules for Asterisk that use the portaudio library.
+
+
 %package	plugins-pgsql
 Summary:	PostgreSQL plugins for Asterisk
 Group:		System/Servers
@@ -211,100 +358,128 @@ This package contains PostgreSQL plugins for Asterisk:
 * Simple PostgreSQL Interface
 * Call Detail Recording for PostgreSQL
 
+
 %if %{build_radius}
 %package	plugins-radius
 Summary:	Radiusclient plugins for Asterisk
 Group:		System/Servers
-BuildRequires:	radiusclient-ng-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires:	asterisk = %{version}-%{release}
 
 %description	plugins-radius
-This package contains Radiusclient plugins for Asterisk:
-
-* Call Detail Recording for Radius
+This package contains Radiusclient plugins for Asterisk.
 %endif
+
+%package	plugins-skinny
+Summary:	Modules for Asterisk that support the SCCP/Skinny protocol
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-skinny
+Modules for Asterisk that support the SCCP/Skinny protocol.
+
+%package	plugins-snmp
+Summary:	Brief SNMP Agent / SubAgent support for Asterisk
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+Requires:	net-snmp
+
+%description	plugins-snmp
+This package contains brief SNMP Agent / SubAgent support for Asterisk.
+
+%package	plugins-speex
+Summary:	SPEEX plugins for Asterisk
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+
+%description	plugins-speex
+This package contains SPEEX plugins for Asterisk.
 
 %package	plugins-sqlite
 Summary:	SQLite plugins for Asterisk
 Group:		System/Servers
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires:	asterisk = %{version}-%{release}
 
 %description	plugins-sqlite
-This package contains SQLite plugins for Asterisk:
+This package contains SQLite plugins for Asterisk.
 
-* Call Detail Recording for SQLite
-
-%if %build_tds
+%if %{build_tds}
 %package	plugins-tds
 Summary:	FreeTDS plugins for Asterisk
 Group:		System/Servers
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
-BuildRequires:	freetds_mssql-devel >= 0.64
+Requires:	asterisk = %{version}-%{release}
 
 %description	plugins-tds
-This package contains FreeTDS plugins for Asterisk:
-
-* Call Detail Recording for FreeTDS
+This package contains FreeTDS plugins for Asterisk.
 %endif
 
 %package	plugins-osp
 Summary:	Open Settlement Protocol for Asterisk
 Group:		System/Servers
-BuildRequires:	libosp-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
 
 %description	plugins-osp
-This package contains OSP (Open Settlement Protocol) support for Asterisk
+This package contains OSP (Open Settlement Protocol) support for Asterisk.
 
-%package	plugins-snmp
-Summary:	Brief SNMP Agent / SubAgent support for Asterisk
+%package	plugins-unistim
+Summary:	Unistim channel for Asterisk
 Group:		System/Servers
-Requires:	net-snmp
-BuildRequires:	libnet-snmp-devel
-BuildRequires:	tcp_wrappers-devel
-BuildRequires:	openssl-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires:	asterisk = %{version}-%{release}
 
-%description	plugins-snmp
-This package contains brief SNMP Agent / SubAgent support for Asterisk.
+%description	plugins-unistim
+Unistim channel for Asterisk.
 
-%package	plugins-jabber
-Summary:	Jabber support for Asterisk
+%package	plugins-usbradio
+Summary:	USB radio channel for Asterisk
 Group:		System/Servers
-BuildRequires:	libgcrypt-devel
-BuildRequires:	libgnutls-devel
-BuildRequires:	libgpg-error-devel
-BuildRequires:	libiksemel-devel
-BuildRequires:	zlib-devel
-Requires(post): %{name} = %{version}
-Requires(preun): %{name} = %{version}
+Requires:	asterisk = %{version}-%{release}
 
-%description	plugins-jabber
-This package contains Jabber support for Asterisk.
+%description	plugins-usbradio
+USB radio channel for Asterisk.
 
-* res_jabber  - A resource for interfacing asterisk directly as a client or a
-                component to a jabber compliant server.
-
-* chan_gtalk  - brief Gtalk Channel Driver, until google/libjingle works with
-                jingle spec.
-
-%package	webvmail
-Summary:	Web frontend to voicemail
+%package	plugins-voicemail
+Summary:	Common Voicemail Modules for Asterisk
 Group:		System/Servers
-Requires:	%{name} = %{version}-%{release}
-Requires:	webserver
+Requires:	asterisk = %{version}-%{release}
+Requires:	asterisk-plugins-voicemail-implementation = %{version}-%{release}
+Requires:	sox
+Requires:	sendmail-command
 
-%description	webvmail
-This package contains the web frontend to voicemail.
+%description	plugins-voicemail
+Common Voicemail Modules for Asterisk.
 
-WARNING:
-IT USES A SETUID ROOT PERL SCRIPT, SO IF YOU DON'T LIKE THAT,
-DO NOT INSTALL THIS PACKAGE!
+%package	plugins-voicemail-imap
+Summary:	Store voicemail on an IMAP server
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+Requires:	asterisk-plugins-voicemail = %{version}-%{release}
+Provides:	asterisk-plugins-voicemail-implementation = %{version}-%{release}
+
+%description	plugins-voicemail-imap
+Voicemail implementation for Asterisk that stores voicemail on an IMAP
+server.
+
+%if %{build_odbc}
+%package	plugins-voicemail-odbc
+Summary:	Store voicemail in a database using ODBC
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+Requires:	asterisk-plugins-voicemail = %{version}-%{release}
+Provides:	asterisk-plugins-voicemail-implementation = %{version}-%{release}
+
+%description	plugins-voicemail-odbc
+Voicemail implementation for Asterisk that uses ODBC to store
+voicemail in a database.
+%endif
+
+%package	plugins-voicemail-plain
+Summary:	Store voicemail on the local filesystem
+Group:		System/Servers
+Requires:	asterisk = %{version}-%{release}
+Requires:	asterisk-plugins-voicemail = %{version}-%{release}
+Provides:	asterisk-plugins-voicemail-implementation = %{version}-%{release}
+
+%description	plugins-voicemail-plain
+Voicemail implementation for Asterisk that stores voicemail on the
+local filesystem.
 
 %package        tests
 Summary:        Testing utilities for Asterisk
@@ -342,6 +517,8 @@ cp contrib/mandriva/menuselect.makeopts.2008 ./menuselect.makeopts
 cp contrib/mandriva/menuselect.makeopts ./
 %endif
 
+chmod -x contrib/scripts/dbsep.cgi
+
 # lib64 fix
 find -name "Makefile" | xargs perl -pi -e "s|/usr/lib|%{_libdir}|g"
 perl -pi -e "s|/lib\b|/%{_lib}|g" configure*
@@ -357,37 +534,39 @@ sh ./bootstrap.sh
 
 echo "%{version}-%{release}" > .version
 
-export ASTCFLAGS="%{optflags}"
+export CFLAGS="%{optflags} `gmime-config --cflags`"
 
-%configure2_5x \
+%configure \
     --localstatedir=/var \
-    --without-kde \
-    --without-qt \
-    --without-tinfo \
-    --without-vpb \
-    --with-cap=%{_prefix} \
-%if !%{build_h323}
-    --without-pwlib \
-    --without-h323 \
-%else
-    --with-h323=%{_prefix} \
-%endif
-%if %{build_imap}
-    --with-imap=%{_prefix} \
-%else
-    --without-imap \
-%endif
     --with-asound=%{_prefix} \
+    --with-execinfo=%{_prefix} \
+    --with-cap=%{_prefix} \
+    --with-curl=%{_prefix} \
     --with-curses=%{_prefix} \
-    --with-gnutls=%{_prefix} \
+    --with-crypto=%{_prefix} \
+    --with-dahdi=%{_prefix} \
+    --with-avcodec=%{_prefix} \
     --with-gsm=%{_prefix} \
+    --without-gtk \
+    --with-gtk2=%{_/prefix} \
+    --with-gmime=%{_prefix} \
+    --with-hoard=%{_prefix} \
+    --with-iconv=%{_prefix} \
     --with-iksemel=%{_prefix} \
-%if 0
-    --with-isdnnet=%{_prefix} \
+    --with-imap=system \
+    --with-jack=%{_prefix} \
+    --with-ldap=%{_prefix} \
+    --with-libedit=%{_prefix} \
+    --with-ltdl=%{_prefix} \
+    --with-lua=%{_prefix} \
 %if %{build_misdn}
+    --with-isdnnet=%{_prefix} \
     --with-misdn=%{_prefix} \
-%endif
     --with-suppserv=%{_prefix} \
+%else
+    --without-isdnnet \
+    --without-misdn \
+    --without-suppserv \
 %endif
     --with-nbs=%{_prefix} \
     --with-ncurses=%{_prefix} \
@@ -395,30 +574,42 @@ export ASTCFLAGS="%{optflags}"
     --with-newt=%{_prefix} \
 %if %{build_odbc}
     --with-odbc=%{_prefix} \
+%else
+    --without-odbc \
 %endif
     --with-ogg=%{_prefix} \
     --with-osptk=%{_prefix} \
-    --with-oss=%{_prefix} \
-    --with-popt=%{_prefix} \
     --with-postgres=%{_prefix} \
-%if 0
+    --with-popt=%{_prefix} \
+    --with-portaudio=%{_prefix} \
     --with-pri=%{_prefix} \
+    --with-resample=%{_prefix} \
+    --with-spandsp=%{_prefix} \
+    --with-ss7=%{_prefix} \
+%if %{build_h323}
+    --with-pwlib=%{_prefix} \
+    --with-h323=%{_prefix} \
+%else
+    --without-pwlib \
+    --without-h323 \
 %endif
     --with-radius=%{_prefix} \
-    --with-speex=%{_prefix} \
-    --with-sqlite=%{_prefix} \
+    --with-sdl=%{_prefix} \
+    --with-SDL_image=%{_prefix} \
+    --with-openais=%{_prefix} \
+    --with-speexdsp=%{_prefix} \
+    --without-sqlite \
+    --with-sqlite3=%{_prefix} \
     --with-ssl=%{_prefix} \
-%if %{build_tds}
-    --with-tds_mssql=%{_prefix} \
-%endif
+    --with-tds=%{_prefix} \
     --with-termcap=%{_prefix} \
-    --with-vorbis=%{_prefix} \
-    --with-z=%{_prefix} \
-%if 0
+    --without-tinfo \
     --with-tonezone=%{_prefix} \
-    --with-zaptel=%{_prefix} \
-%endif
-    HTTPDIR="/var/www"
+    --with-usb=%{_prefix} \
+    --with-vorbis=%{_prefix} \
+    --without-vpb \
+    --with-x11=%{_prefix} \
+    --with-z=%{_prefix}
 
 #pushd menuselect
 #	# Just configure for the host system
@@ -426,7 +617,9 @@ export ASTCFLAGS="%{optflags}"
 #popd
 
 %make -j1 cleantest
-%make
+
+export ASTCFLAGS="%{optflags}"
+%make ASTVARRUNDIR=/var/run/asterisk
 
 %if %{build_docs}
 %make progdocs
@@ -510,13 +703,13 @@ rm -rf %{buildroot}%{astvardir}/sounds
 %_pre_useradd asterisk %{astvardir} /bin/sh
 
 %post
-%create_ghostfile /var/log/asterisk/console asterisk asterisk 644
-%create_ghostfile /var/log/asterisk/debug asterisk asterisk 644
-%create_ghostfile /var/log/asterisk/messages asterisk asterisk 644
-%create_ghostfile /var/log/asterisk/queue_log asterisk asterisk 644
-%create_ghostfile /var/log/asterisk/event_log asterisk asterisk 644
-%create_ghostfile /var/log/asterisk/cdr-csv/Master.csv asterisk asterisk 644
-%create_ghostfile /var/log/asterisk/h323_log asterisk asterisk 644
+%create_ghostfile /var/log/asterisk/console asterisk asterisk 640
+%create_ghostfile /var/log/asterisk/debug asterisk asterisk 640
+%create_ghostfile /var/log/asterisk/messages asterisk asterisk 640
+%create_ghostfile /var/log/asterisk/queue_log asterisk asterisk 640
+%create_ghostfile /var/log/asterisk/event_log asterisk asterisk 640
+%create_ghostfile /var/log/asterisk/cdr-csv/Master.csv asterisk asterisk 640
+%create_ghostfile /var/log/asterisk/h323_log asterisk asterisk 640
 echo "Adding setuid root to /usr/bin/mpg123, needed for MOH"
 chmod u+s %{_bindir}/mpg123
 %_post_service asterisk
@@ -552,6 +745,14 @@ fi
 
 %postun
 %_postun_userdel asterisk
+
+%pre plugins-dahdi
+%{_sbindir}/usermod -a -G dahdi asterisk
+
+%if %{build_misdn}
+%pre plugins-misdn
+%{_sbindir}/usermod -a -G misdn asterisk
+%endif
 
 %clean
 [ -n "%{buildroot}" -a "%{buildroot}" != / ] && rm -rf %{buildroot}
@@ -609,42 +810,163 @@ fi
 
 %attr(0755,root,root)		%dir			%{_libdir}/asterisk
 %attr(0755,root,root)		%dir			%{_libdir}/asterisk/modules
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/app_*.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/cdr_*.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/chan_*.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/codec_*.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/format_*.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/func_*.so
-#attr(0755,root,root)					%{_libdir}/asterisk/modules/func_callerid.so
-#attr(0755,root,root)					%{_libdir}/asterisk/modules/func_enum.so
-#attr(0755,root,root)					%{_libdir}/asterisk/modules/func_uri.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/pbx_*.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/res_*.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/bridge_*.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/test_*.so
-# %exclude		                              %{_libdir}/asterisk/modules/test_dlinklists.so
-
-# these are packaged as sub packages below
-%if %{build_misdn}
-%exclude						%{_libdir}/asterisk/modules/chan_misdn.so
+%dir %{_libdir}/asterisk/modules
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_adsiprog.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_alarmreceiver.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_amd.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_authenticate.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_cdr.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_chanisavail.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_channelredirect.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_chanspy.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_controlplayback.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_db.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dial.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dictate.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_directed_pickup.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_disa.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dumpchan.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_echo.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_exec.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_externalivr.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_followme.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_forkcdr.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_getcpeid.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_image.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_ivrdemo.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_macro.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_milliwatt.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_mixmonitor.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_morsecode.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_mp3.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_nbscat.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_parkandannounce.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_playback.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_privacy.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_queue.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_readexten.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_readfile.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_read.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_record.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_rpt.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_sayunixtime.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_senddtmf.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_sendtext.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_setcallerid.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_skel.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_sms.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_softhangup.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_speech_utils.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_stack.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_system.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_talkdetect.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_test.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_transfer.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_url.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_userevent.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_waitforring.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_waitforsilence.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_waituntil.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_verbose.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_while.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_zapateller.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_csv.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_custom.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_manager.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_agent.so
+#%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_features.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_iax2.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_local.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_mgcp.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_nbs.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_phone.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_sip.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_adpcm.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_alaw.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_a_mu.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_g722.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_g726.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_gsm.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_ilbc.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_lpc10.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_resample.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_ulaw.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_g723.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_g726.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_g729.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_gsm.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_h263.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_h264.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_ilbc.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_jpeg.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_ogg_vorbis.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_pcm.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_sln16.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_sln.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav_gsm.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_vox.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_audiohookinherit.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_base64.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_blacklist.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_callerid.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_cdr.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_channel.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_config.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_cut.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_db.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_devstate.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_dialgroup.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_dialplan.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_enum.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_env.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_extstate.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_global.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_groupcount.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_iconv.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_lock.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_logic.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_math.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_md5.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_module.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_rand.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_realtime.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_sha1.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_shell.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_strings.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_sysinfo.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_timeout.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_uri.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_version.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_volume.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_ael.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_config.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_dundi.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_gtkconsole.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_loopback.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_realtime.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_spool.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_adsi.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_ael_share.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_agi.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_clioriginate.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_convert.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_crypto.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_http_post.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_indications.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_limit.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_monitor.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_musiconhold.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_phoneprov.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_realtime.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_smdi.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_speech.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_pthread.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/test_dlinklists.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/test_heap.so
+%if 0
+%attr(0755,root,root) %{_libdir}/asterisk/modules/test_skel.so
 %endif
-%if %{build_odbc}
-%exclude						%{_libdir}/asterisk/modules/*_odbc.so
-%endif
-%if %{build_tds}
-%exclude						%{_libdir}/asterisk/modules/*tds*.so
-%endif
-# %exclude						%{_libdir}/asterisk/modules/app_*fax.so
-%exclude						%{_libdir}/asterisk/modules/app_osplookup.so
-#exclude						%{_libdir}/asterisk/modules/app_sql_postgres.so
-%exclude						%{_libdir}/asterisk/modules/cdr_pgsql.so
-%exclude						%{_libdir}/asterisk/modules/cdr_radius.so
-%exclude						%{_libdir}/asterisk/modules/cdr_sqlite.so
-%exclude						%{_libdir}/asterisk/modules/chan_gtalk.so
-%exclude						%{_libdir}/asterisk/modules/res_config_pgsql.so
-%exclude						%{_libdir}/asterisk/modules/res_jabber.so
-%exclude						%{_libdir}/asterisk/modules/res_snmp.so
-%exclude						%{_libdir}/asterisk/modules/*sql*.so
 
 #attr(0755,asterisk,asterisk)	%dir			%{astvardir}
 %attr(0755,root,root)		%dir			%{astvardir}/agi-bin
@@ -708,86 +1030,210 @@ fi
 							%{_mandir}/man8/safe_asterisk.8*
 
 %files devel -f %{name}-devel.filelist
-%defattr(-,root,root)
-%attr(0644,root,root)					%{_includedir}/asterisk/*.h
-%attr(0644,root,root)					%{_includedir}/asterisk.h
-#exclude						%{_includedir}/asterisk/defaults.h
-							%{_libdir}/pkgconfig/asterisk.pc
-#multiarch						%{multiarch_includedir}/asterisk/defaults.h
+%defattr(-,root,root,-)
+%doc doc/CODING-GUIDELINES doc/datastores.txt doc/modules.txt doc/valgrind.txt
+%dir %{_includedir}/asterisk
+%{_includedir}/asterisk.h
+%{_includedir}/asterisk/*.h
 
-%files docs
-%defattr(-,root,root)
-%doc							docs-html/*
+%files firmware
+%defattr(-,root,root,-)
+%attr(0750,asterisk,asterisk) /var/lib/asterisk/firmware
+
+%files plugins-ais
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/ais.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_ais.so
+
+%files plugins-alsa
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/alsa.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_alsa.so
+
+%files plugins-curl
+%defattr(-,root,root,-)
+%doc contrib/scripts/dbsep.cgi
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/dbsep.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_curl.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_curl.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_curl.so
+
+%files plugins-dahdi
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/meetme.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/chan_dahdi.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_flash.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_meetme.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_page.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdibarge.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiras.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiscan.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_dahdi.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_dahdi.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_dahdi.so
+
+%files plugins-fax
+%defattr(-,root,root,-)
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_fax.so
+
+%files plugins-festival
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/festival.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_festival.so
+
+%files plugins-ices
+%defattr(-,root,root,-)
+%doc contrib/asterisk-ices.xml
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_ices.so
+
+%files plugins-jabber
+%defattr(-,root,root,-)
+%doc doc/jabber.txt doc/jingle.txt
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/gtalk.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/jabber.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/jingle.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_gtalk.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_jingle.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_jabber.so
+
+%files plugins-jack
+%defattr(-,root,root,-)
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_jack.so
+
+%files plugins-lua
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/extensions.lua
+%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_lua.so
+
+%files plugins-ldap
+%defattr(-,root,root,-)
+%doc doc/ldap.txt
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_ldap.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_ldap.so
+
+%files plugins-minivm
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/extensions_minivm.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/minivm.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_minivm.so
 
 %if %{build_misdn}
-%files chan_misdn
-%defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/misdn.conf
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/chan_misdn.so
-%endif
-
-%if 0
-%files plugins-fax
-%defattr(-,root,root)
-#attr(0755,root,root)
-%{_libdir}/asterisk/modules/app_*fax.so
+%files plugins-misdn
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/misdn.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_misdn.so
 %endif
 
 %if %{build_odbc}
 %files plugins-odbc
-%defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*_odbc.conf
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/*_odbc.so
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_adaptive_odbc.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_odbc.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/func_odbc.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_odbc.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_adaptive_odbc.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_odbc.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_odbc.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_odbc.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_odbc.so
 %endif
 
-%files plugins-pgsql
-%defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/cdr_pgsql.conf
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/res_pgsql.conf
-#attr(0755,root,root)					%{_libdir}/asterisk/modules/app_sql_postgres.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/cdr_pgsql.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/res_config_pgsql.so
-
-%if %{build_radius}
-%files plugins-radius
-%defattr(-,root,root)
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/cdr_radius.so
-%endif
-
-%files plugins-sqlite
-%defattr(-,root,root)
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/cdr_sqlite.so
-
-%if %build_tds
-%files plugins-tds
-%defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/cdr_tds.conf
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/cdr_tds.so
-%endif
+%files plugins-oss
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/oss.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_oss.so
 
 %files plugins-osp
 %defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/osp.conf
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/app_osplookup.so
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/osp.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_osplookup.so
+
+%files plugins-portaudio
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/console.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_console.so
+
+%files plugins-pgsql
+%defattr(-,root,root,-)
+%doc contrib/scripts/realtime_pgsql.sql
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_pgsql.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_pgsql.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_pgsql.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_pgsql.so
+
+%files plugins-radius
+%defattr(-,root,root,-)
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_radius.so
+
+%files plugins-skinny
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/skinny.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_skinny.so
 
 %files plugins-snmp
-%defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/res_snmp.conf
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/res_snmp.so
+%defattr(-,root,root,-)
+%doc doc/asterisk-mib.txt
+%doc doc/digium-mib.txt
+%doc doc/snmp.txt
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_snmp.conf
+%attr(0644,root,root) /var/lib/snmp/mibs/ASTERISK-MIB.txt
+%attr(0644,root,root) /var/lib/snmp/mibs/DIGIUM-MIB.txt
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_snmp.so
 
-%files plugins-jabber
-%defattr(-,root,root)
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/gtalk.conf
-%attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/jabber.conf
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/chan_gtalk.so
-%attr(0755,root,root)					%{_libdir}/asterisk/modules/res_jabber.so
+%files plugins-sqlite
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_sqlite3_custom.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_sqlite3_custom.so
 
-%files webvmail
+%files plugins-speex
+%defattr(-,root,root,-)
+%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_speex.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_speex.so
+
+%if %{build_tds}
+%files plugins-tds
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_tds.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_tds.so
+%endif
+
+%files plugins-unistim
+%defattr(-,root,root,-)
+%doc doc/unistim.txt
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/unistim.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_unistim.so
+
+%files plugins-usbradio
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/usbradio.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_usbradio.so
+
+%files plugins-voicemail
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/voicemail.conf
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_vmcount.so
+
+%files plugins-voicemail-imap
+%defattr(-,root,root,-)
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_directory_imap.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_voicemail_imap.so
+
+%if %{build_odbc}
+%files plugins-voicemail-odbc
+%defattr(-,root,root,-)
+%doc doc/voicemail_odbc_postgresql.txt
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_directory_odbc.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_voicemail_odbc.so
+%endif
+
+%files plugins-voicemail-plain
+%defattr(-,root,root,-)
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_directory_plain.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_voicemail_plain.so
+
+%files docs
 %defattr(-,root,root)
-%attr(4755,root,root)					/var/www/cgi-bin/vmail.cgi
-%attr(-,root,root)		%dir			/var/www/html/_asterisk
-%attr(0644,root,root)					/var/www/html/_asterisk/animlogo.gif
-%attr(0644,root,root)					/var/www/html/_asterisk/play.gif
+%doc	docs-html/*
 
 %files tests
 %attr(0755,root,root)					%{_libdir}/asterisk/modules/test_dlinklists.so
