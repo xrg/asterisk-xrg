@@ -28,9 +28,9 @@
 #ifndef RES_AIS_AIS_H
 #define RES_AIS_AIS_H
 
-#include <saAis.h>
-#include <saClm.h>
-#include <saEvt.h>
+#include <openais/saAis.h>
+#include <openais/saClm.h>
+#include <openais/saEvt.h>
 
 extern SaVersionT ais_version;
 

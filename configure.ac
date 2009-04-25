@@ -1479,10 +1479,10 @@ AST_EXT_LIB_CHECK([OPENAIS], [SaClm], [saClmInitialize], [openais/saClm.h], [-L/
 if test "${PBX_OPENAIS}" = 1; then
    PBX_AIS=1
    if test -n "${OPENAIS_DIR}"; then
-      AIS_INCLUDE="${OPENAIS_INCLUDE}/openais"
+      AIS_INCLUDE="${OPENAIS_INCLUDE_DIR}"
       AIS_LIB="-lSaEvt ${OPENAIS_LIB}"
    else
-      AIS_INCLUDE="-I/usr/include/openais"
+      AIS_INCLUDE=""
       AIS_LIB="-lSaClm -lSaEvt -L/usr/lib/openais -L/usr/lib64/openais"
    fi
 fi

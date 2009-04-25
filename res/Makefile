@@ -15,6 +15,8 @@ MODULE_PREFIX=res
 MENUSELECT_CATEGORY=RES
 MENUSELECT_DESCRIPTION=Resource Modules
 
+GMIME_CFLAGS:=$(shell gmime-config --cflags)
+
 all: _all
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
@@ -30,6 +32,7 @@ ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
 endif
 
 res_config_ldap.o: _ASTCFLAGS+=-DLDAP_DEPRECATED
+res_http_post.o: ASTCFLAGS+=$(GMIME_CFLAGS)
 
 ael/ael_lex.o: ael/ael_lex.c ../include/asterisk/ael_structs.h ael/ael.tab.h
 ael/ael_lex.o: _ASTCFLAGS+=-I. -Iael -Wno-unused
