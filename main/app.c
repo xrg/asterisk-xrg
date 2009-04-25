@@ -52,7 +52,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/threadstorage.h"
 
-AST_THREADSTORAGE_PUBLIC(global_app_buf);
+AST_THREADSTORAGE_PUBLIC(ast_str_thread_global_buf);
 
 
 #define MAX_OTHER_FORMATS 10
@@ -1014,9 +1014,9 @@ int ast_app_group_set_channel(struct ast_channel *chan, const char *data)
 	}
 
 	AST_RWLIST_WRLOCK(&groups);
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, group_list) {
 		if ((gi->chan == chan) && ((ast_strlen_zero(category) && ast_strlen_zero(gi->category)) || (!ast_strlen_zero(gi->category) && !strcasecmp(gi->category, category)))) {
-			AST_RWLIST_REMOVE_CURRENT(list);
+			AST_RWLIST_REMOVE_CURRENT(group_list);
 			free(gi);
 			break;
 		}
@@ -1033,7 +1033,7 @@ int ast_app_group_set_channel(struct ast_channel *chan, const char *data)
 			gi->category = (char *) gi + sizeof(*gi) + strlen(group) + 1;
 			strcpy(gi->category, category);
 		}
-		AST_RWLIST_INSERT_TAIL(&groups, gi, list);
+		AST_RWLIST_INSERT_TAIL(&groups, gi, group_list);
 	} else {
 		res = -1;
 	}
@@ -1053,7 +1053,7 @@ int ast_app_group_get_count(const char *group, const char *category)
 	}
 
 	AST_RWLIST_RDLOCK(&groups);
-	AST_RWLIST_TRAVERSE(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE(&groups, gi, group_list) {
 		if (!strcasecmp(gi->group, group) && (ast_strlen_zero(category) || (!ast_strlen_zero(gi->category) && !strcasecmp(gi->category, category)))) {
 			count++;
 		}
@@ -1079,7 +1079,7 @@ int ast_app_group_match_get_count(const char *groupmatch, const char *category)
 	}
 
 	AST_RWLIST_RDLOCK(&groups);
-	AST_RWLIST_TRAVERSE(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE(&groups, gi, group_list) {
 		if (!regexec(&regexbuf, gi->group, 0, NULL, 0) && (ast_strlen_zero(category) || (!ast_strlen_zero(gi->category) && !strcasecmp(gi->category, category)))) {
 			count++;
 		}
@@ -1096,15 +1096,15 @@ int ast_app_group_update(struct ast_channel *old, struct ast_channel *new)
 	struct ast_group_info *gi = NULL;
 
 	AST_RWLIST_WRLOCK(&groups);
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, group_list) {
 		if (gi->chan == old) {
 			gi->chan = new;
 		} else if (gi->chan == new) {
-			AST_RWLIST_REMOVE_CURRENT(list);
+			AST_RWLIST_REMOVE_CURRENT(group_list);
 			ast_free(gi);
 		}
 	}
-	AST_RWLIST_TRAVERSE_SAFE_END
+	AST_RWLIST_TRAVERSE_SAFE_END;
 	AST_RWLIST_UNLOCK(&groups);
 
 	return 0;
@@ -1115,9 +1115,9 @@ int ast_app_group_discard(struct ast_channel *chan)
 	struct ast_group_info *gi = NULL;
 
 	AST_RWLIST_WRLOCK(&groups);
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, list) {
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&groups, gi, group_list) {
 		if (gi->chan == chan) {
-			AST_RWLIST_REMOVE_CURRENT(list);
+			AST_RWLIST_REMOVE_CURRENT(group_list);
 			ast_free(gi);
 		}
 	}

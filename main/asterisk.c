@@ -120,7 +120,6 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/cdr.h"
 #include "asterisk/pbx.h"
 #include "asterisk/enum.h"
-#include "asterisk/rtp.h"
 #include "asterisk/http.h"
 #include "asterisk/udptl.h"
 #include "asterisk/app.h"
@@ -138,8 +137,6 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/buildinfo.h"
 #include "asterisk/xmldoc.h"
 #include "asterisk/poll-compat.h"
-
-#include "asterisk/doxyref.h"		/* Doxygen documentation */
 
 #include "../defaults.h"
 
@@ -182,7 +179,7 @@ long option_minmemfree;				/*!< Minimum amount of free system memory - stop acce
 
 /*! @} */
 
-struct ast_eid g_eid;
+struct ast_eid ast_eid_default;
 
 /* XXX tmpdir is a subdir of the spool directory, and no way to remap it */
 char record_cache_dir[AST_CACHE_DIR_LEN] = DEFAULT_TMP_DIR;
@@ -427,7 +424,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 		return NULL;
 	}
 
-	ast_eid_to_str(eid_str, sizeof(eid_str), &g_eid);
+	ast_eid_to_str(eid_str, sizeof(eid_str), &ast_eid_default);
 
 	ast_cli(a->fd, "\nPBX Core settings\n");
 	ast_cli(a->fd, "-----------------\n");
@@ -464,7 +461,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 	ast_cli(a->fd, "  Executable includes:         %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_EXEC_INCLUDES) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Transcode via SLIN:          %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSCODE_VIA_SLIN) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Internal timing:             %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING) ? "Enabled" : "Disabled");
-	ast_cli(a->fd, "  Transmit silence during rec: %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING) ? "Enabled" : "Disabled");
+	ast_cli(a->fd, "  Transmit silence during rec: %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSMIT_SILENCE) ? "Enabled" : "Disabled");
 
 	ast_cli(a->fd, "\n* Subsystems\n");
 	ast_cli(a->fd, "  -------------\n");
@@ -2398,11 +2395,12 @@ static char *cli_complete(EditLine *editline, int ch)
 	int nummatches = 0;
 	char **matches;
 	int retval = CC_ERROR;
-	char buf[2048];
+	char buf[2048], savechr;
 	int res;
 
 	LineInfo *lf = (LineInfo *)el_line(editline);
 
+	savechr = *(char *)lf->cursor;
 	*(char *)lf->cursor = '\0';
 	ptr = (char *)lf->cursor;
 	if (ptr) {
@@ -2428,8 +2426,10 @@ static char *cli_complete(EditLine *editline, int ch)
 			char *mbuf;
 			int mlen = 0, maxmbuf = 2048;
 			/* Start with a 2048 byte buffer */			
-			if (!(mbuf = ast_malloc(maxmbuf)))
+			if (!(mbuf = ast_malloc(maxmbuf))) {
+				lf->cursor[0] = savechr;
 				return (char *)(CC_ERROR);
+			}
 			snprintf(buf, sizeof(buf), "_COMMAND MATCHESARRAY \"%s\" \"%s\"", lf->buffer, ptr); 
 			fdsend(ast_consock, buf);
 			res = 0;
@@ -2438,8 +2438,10 @@ static char *cli_complete(EditLine *editline, int ch)
 				if (mlen + 1024 > maxmbuf) {
 					/* Every step increment buffer 1024 bytes */
 					maxmbuf += 1024;					
-					if (!(mbuf = ast_realloc(mbuf, maxmbuf)))
+					if (!(mbuf = ast_realloc(mbuf, maxmbuf))) {
+						lf->cursor[0] = savechr;
 						return (char *)(CC_ERROR);
+					}
 				}
 				/* Only read 1024 bytes at a time */
 				res = read(ast_consock, mbuf + mlen, 1024);
@@ -2498,6 +2500,8 @@ static char *cli_complete(EditLine *editline, int ch)
 			ast_free(matches[i]);
 		ast_free(matches);
 	}
+
+	lf->cursor[0] = savechr;
 
 	return (char *)(long)retval;
 }
@@ -2810,7 +2814,7 @@ static void ast_readconfig(void)
 	ast_copy_string(cfg_paths.socket_path, DEFAULT_SOCKET, sizeof(cfg_paths.socket_path));
 	ast_copy_string(cfg_paths.run_dir, DEFAULT_RUN_DIR, sizeof(cfg_paths.run_dir));
 
-	ast_set_default_eid(&g_eid);
+	ast_set_default_eid(&ast_eid_default);
 
 	/* no asterisk.conf? no problem, use buildtime config! */
 	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
@@ -2981,7 +2985,7 @@ static void ast_readconfig(void)
 			struct ast_eid tmp_eid;
 			if (!ast_str_to_eid(&tmp_eid, v->value)) {
 				ast_verbose("Successfully set global EID to '%s'\n", v->value);
-				g_eid = tmp_eid;
+				ast_eid_default = tmp_eid;
 			} else
 				ast_verbose("Invalid Entity ID '%s' provided\n", v->value);
 		} else if (!strcasecmp(v->name, "lightbackground")) {
@@ -3129,6 +3133,7 @@ int main(int argc, char *argv[])
 	ast_utils_init();
 	tdd_init();
 	ast_tps_init();
+	ast_fd_init();
 
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
@@ -3502,7 +3507,10 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	ast_event_init();
+	if (ast_event_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
 
 	ast_makesocket();
 	sigemptyset(&sigs);
@@ -3569,7 +3577,6 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	ast_rtp_init();
 	ast_dsp_init();
 	ast_udptl_init();
 

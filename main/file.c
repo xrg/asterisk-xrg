@@ -314,8 +314,10 @@ static void filestream_destructor(void *arg)
 		free(f->filename);
 	if (f->realfilename)
 		free(f->realfilename);
-	if (f->fmt->close)
-		f->fmt->close(f);
+	if (f->fmt->close) {
+		void (*closefn)(struct ast_filestream *) = f->fmt->close;
+		closefn(f);
+	}
 	if (f->f)
 		fclose(f->f);
 	if (f->vfs)
@@ -353,8 +355,9 @@ static int fn_wrapper(struct ast_filestream *s, const char *comment, enum wrap_f
 {
 	struct ast_format *f = s->fmt;
 	int ret = -1;
+	int (*openfn)(struct ast_filestream *s);
 
-	if (mode == WRAP_OPEN && f->open && f->open(s))
+	if (mode == WRAP_OPEN && (openfn = f->open) && openfn(s))
 		ast_log(LOG_WARNING, "Unable to open format %s\n", f->name);
 	else if (mode == WRAP_REWRITE && f->rewrite && f->rewrite(s, comment))
 		ast_log(LOG_WARNING, "Unable to rewrite format %s\n", f->name);
@@ -775,11 +778,16 @@ static enum fsread_res ast_readvideo_callback(struct ast_filestream *s)
 			ast_set_flag(fr, AST_FRFLAG_FROM_FILESTREAM);
 			ao2_ref(s, +1);
 		}
-		if (!fr || ast_write(s->owner, fr)) { /* no stream or error, as above */
-			if (fr)
+		if (!fr /* stream complete */ || ast_write(s->owner, fr) /* error writing */) {
+			if (fr) {
 				ast_log(LOG_WARNING, "Failed to write frame\n");
+				ast_frfree(fr);
+			}
 			s->owner->vstreamid = -1;
 			return FSREAD_FAILURE;
+		}
+		if (fr) {
+			ast_frfree(fr);
 		}
 	}
 
@@ -1234,6 +1242,7 @@ static int waitstream_core(struct ast_channel *c, const char *breakon,
 				case AST_CONTROL_SRCUPDATE:
 				case AST_CONTROL_HOLD:
 				case AST_CONTROL_UNHOLD:
+				case -1:
 					/* Unimportant */
 					break;
 				default:

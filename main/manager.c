@@ -499,7 +499,7 @@ static struct ast_manager_user *get_manager_by_name_locked(const char *name)
 }
 
 /*! \brief Get displayconnects config option.
- *  \param s manager session to get parameter from.
+ *  \param session manager session to get parameter from.
  *  \return displayconnects config option value.
  */
 static int manager_displayconnects (struct mansession_session *session)
@@ -1759,22 +1759,39 @@ static int action_challenge(struct mansession *s, const struct message *m)
 static char mandescr_hangup[] =
 "Description: Hangup a channel\n"
 "Variables: \n"
-"	Channel: The channel name to be hungup\n";
+"	Channel: The channel name to be hungup\n"
+"	Cause: numeric hangup cause\n";
 
 static int action_hangup(struct mansession *s, const struct message *m)
 {
 	struct ast_channel *c = NULL;
+	int causecode = 0; /* all values <= 0 mean 'do not set hangupcause in channel' */
 	const char *name = astman_get_header(m, "Channel");
+	const char *cause = astman_get_header(m, "Cause");
 	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "No channel specified");
 		return 0;
+	}
+	if (!ast_strlen_zero(cause)) {
+		char *endptr;
+		causecode = strtol(cause, &endptr, 10);
+		if (causecode < 0 || causecode > 127 || *endptr != '\0') {
+			ast_log(LOG_NOTICE, "Invalid 'Cause: %s' in manager action Hangup\n", cause);
+			/* keep going, better to hangup without cause than to not hang up at all */
+			causecode = 0; /* do not set channel's hangupcause */
+		}
 	}
 	c = ast_get_channel_by_name_locked(name);
 	if (!c) {
 		astman_send_error(s, m, "No such channel");
 		return 0;
 	}
-	ast_softhangup(c, AST_SOFTHANGUP_EXPLICIT);
+	if (causecode > 0) {
+		ast_debug(1, "Setting hangupcause of channel %s to %d (is %d now)\n",
+				c->name, causecode, c->hangupcause);
+		c->hangupcause = causecode;
+	}
+	ast_softhangup_nolock(c, AST_SOFTHANGUP_EXPLICIT);
 	ast_channel_unlock(c);
 	astman_send_ack(s, m, "Channel Hungup");
 	return 0;
@@ -2327,7 +2344,7 @@ static void *fast_originate(void *data)
 		snprintf(requested_channel, AST_CHANNEL_NAME, "%s/%s", in->tech, in->data);	
 	/* Tell the manager what happened with the channel */
 	manager_event(EVENT_FLAG_CALL, "OriginateResponse",
-		"%s"
+		"%s%s"
 		"Response: %s\r\n"
 		"Channel: %s\r\n"
 		"Context: %s\r\n"
@@ -2336,7 +2353,8 @@ static void *fast_originate(void *data)
 		"Uniqueid: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n",
-		in->idtext, res ? "Failure" : "Success", chan ? chan->name : requested_channel, in->context, in->exten, reason, 
+		in->idtext, ast_strlen_zero(in->idtext) ? "" : "\r\n", res ? "Failure" : "Success", 
+		chan ? chan->name : requested_channel, in->context, in->exten, reason, 
 		chan ? chan->uniqueid : "<null>",
 		S_OR(in->cid_num, "<unknown>"),
 		S_OR(in->cid_name, "<unknown>")
@@ -2434,7 +2452,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 			res = -1;
 		} else {
 			if (!ast_strlen_zero(id))
-				snprintf(fast->idtext, sizeof(fast->idtext), "ActionID: %s\r\n", id);
+				snprintf(fast->idtext, sizeof(fast->idtext), "ActionID: %s", id);
 			ast_copy_string(fast->tech, tech, sizeof(fast->tech));
    			ast_copy_string(fast->data, data, sizeof(fast->data));
 			ast_copy_string(fast->app, app, sizeof(fast->app));
@@ -3349,8 +3367,12 @@ int __manager_event(int category, const char *event,
 int ast_manager_unregister(char *action)
 {
 	struct manager_action *cur;
+	struct timespec tv = { 5, };
 
-	AST_RWLIST_WRLOCK(&actions);
+	if (AST_RWLIST_TIMEDWRLOCK(&actions, &tv)) {
+		ast_log(LOG_ERROR, "Could not obtain lock on manager list\n");
+		return -1;
+	}
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&actions, cur, list) {
 		if (!strcasecmp(action, cur->action)) {
 			AST_RWLIST_REMOVE_CURRENT(list);
@@ -3378,8 +3400,12 @@ static int manager_state_cb(char *context, char *exten, int state, void *data)
 static int ast_manager_register_struct(struct manager_action *act)
 {
 	struct manager_action *cur, *prev = NULL;
+	struct timespec tv = { 5, };
 
-	AST_RWLIST_WRLOCK(&actions);
+	if (AST_RWLIST_TIMEDWRLOCK(&actions, &tv)) {
+		ast_log(LOG_ERROR, "Could not obtain lock on manager list\n");
+		return -1;
+	}
 	AST_RWLIST_TRAVERSE(&actions, cur, list) {
 		int ret = strcasecmp(cur->action, act->action);
 		if (ret == 0) {
@@ -3392,8 +3418,8 @@ static int ast_manager_register_struct(struct manager_action *act)
 			break;
 		}
 	}
-	
-	if (prev)	
+
+	if (prev)
 		AST_RWLIST_INSERT_AFTER(&actions, prev, act, list);
 	else
 		AST_RWLIST_INSERT_HEAD(&actions, act, list);
@@ -3420,7 +3446,10 @@ int ast_manager_register2(const char *action, int auth, int (*func)(struct manse
 	cur->synopsis = synopsis;
 	cur->description = description;
 
-	ast_manager_register_struct(cur);
+	if (ast_manager_register_struct(cur)) {
+		ast_free(cur);
+		return -1;
+	}
 
 	return 0;
 }
@@ -3803,7 +3832,7 @@ static struct ast_str *generic_http_callback(enum output_format format,
 		 * properties of the rand() function (and the constantcy of s), that
 		 * won't happen twice in a row.
 		 */
-		while ((session->managerid = rand() ^ (unsigned long) session) == 0);
+		while ((session->managerid = ast_random() ^ (unsigned long) session) == 0);
 		session->last_ev = grab_last();
 		AST_LIST_HEAD_INIT_NOLOCK(&session->datastores);
 		AST_LIST_LOCK(&sessions);
@@ -3892,7 +3921,9 @@ static struct ast_str *generic_http_callback(enum output_format format,
 		size_t l = ftell(s.f);
 		
 		if (l) {
-			if ((buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_SHARED, s.fd, 0))) {
+			if (MAP_FAILED == (buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_PRIVATE, s.fd, 0))) {
+				ast_log(LOG_WARNING, "mmap failed.  Manager output was not processed\n");
+			} else {
 				if (format == FORMAT_XML || format == FORMAT_HTML)
 					xml_translate(&out, buf, params, format);
 				else

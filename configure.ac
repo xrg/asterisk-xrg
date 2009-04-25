@@ -461,6 +461,24 @@ AC_DEFINE([HAVE_PTHREAD_MUTEX_RECURSIVE_NP], 1, [Define to 1 if your system defi
 AC_MSG_RESULT(no)
 )
 
+AC_MSG_CHECKING(for pthread_rwlock_timedwrlock() in pthread.h)
+AC_LINK_IFELSE(
+  [AC_LANG_PROGRAM(
+    [#include <pthread.h>
+     #include <time.h>],
+    [pthread_rwlock_t foo; struct timespec bar; pthread_rwlock_timedwrlock(&foo, &bar)])
+  ],[
+    AC_MSG_RESULT(yes)
+    ac_cv_pthread_rwlock_timedwrlock="yes"
+  ],[
+    AC_MSG_RESULT(no)
+    ac_cv_pthread_rwlock_timedwrlock="no"
+  ]
+)
+if test "${ac_cv_pthread_rwlock_timedwrlock}" = "yes"; then
+  AC_DEFINE([HAVE_PTHREAD_RWLOCK_TIMEDWRLOCK], 1, [Define if your system has pthread_rwlock_timedwrlock()])
+fi
+
 AST_C_DEFINE_CHECK([PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP], [pthread.h])
 
 #if test "${cross_compiling}" = "no";
@@ -608,6 +626,10 @@ AC_LINK_IFELSE(
 	),
 	AC_MSG_RESULT(no)
 )
+
+AST_C_DEFINE_CHECK([GLOB_NOMAGIC], [GLOB_NOMAGIC], [glob.h])
+
+AST_C_DEFINE_CHECK([GLOB_BRACE], [GLOB_BRACE], [glob.h])
 
 AST_C_DEFINE_CHECK([IP_MTU_DISCOVER], [IP_MTU_DISCOVER], [netinet/in.h])
 
@@ -1404,6 +1426,8 @@ AST_EXT_LIB_CHECK([PRI_PROG_W_CAUSE], [pri], [pri_progress_with_cause], [libpri.
 
 AST_EXT_LIB_CHECK([PRI_INBANDDISCONNECT], [pri], [pri_set_inbanddisconnect], [libpri.h])
 
+AST_EXT_LIB_CHECK([PRI_SERVICE_MESSAGES], [pri], [pri_maintenance_service], [libpri.h])
+
 AST_EXT_LIB_CHECK([RESAMPLE], [resample], [resample_open], [libresample.h], [-lm])
 
 AST_C_COMPILE_CHECK([SPANDSP], [
@@ -1469,7 +1493,9 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 		[${PWLIB_INCLUDE}], [${PWLIB_LIB}])
 fi
 
-AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h]) 
+AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h], [-lm]) 
+# Some distributions (like SuSE) remove the 5.1 suffix.
+AST_EXT_LIB_CHECK([LUA], [lua], [luaL_register], [lua.h], [-lm]) 
 
 AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
 

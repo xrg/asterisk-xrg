@@ -96,15 +96,23 @@ enum misdn_err_e {
 	ENOCHAN=1
 };
 
-
 enum mISDN_NUMBER_PLAN {
-	NUMPLAN_UNINITIALIZED=-1,
-	NUMPLAN_INTERNATIONAL=0x1,
-	NUMPLAN_NATIONAL=0x2,
-	NUMPLAN_SUBSCRIBER=0x4,
-	NUMPLAN_UNKNOWN=0x0
+	NUMPLAN_UNKNOWN = 0x0,
+	NUMPLAN_ISDN = 0x1,		/* ISDN/Telephony numbering plan E.164 */
+	NUMPLAN_DATA = 0x3,		/* Data numbering plan X.121 */
+	NUMPLAN_TELEX = 0x4,	/* Telex numbering plan F.69 */
+	NUMPLAN_NATIONAL = 0x8,
+	NUMPLAN_PRIVATE = 0x9
 };
 
+enum mISDN_NUMBER_TYPE {
+	NUMTYPE_UNKNOWN = 0x0,
+	NUMTYPE_INTERNATIONAL = 0x1,
+	NUMTYPE_NATIONAL = 0x2,
+	NUMTYPE_NETWORK_SPECIFIC = 0x3,
+	NUMTYPE_SUBSCRIBER = 0x4,
+	NUMTYPE_ABBREVIATED = 0x5
+};
 
 enum event_response_e {
 	RESPONSE_IGNORE_SETUP_WITHOUT_CLOSE,
@@ -125,6 +133,7 @@ enum event_e {
 	EVENT_PROCEEDING,
 	EVENT_PROGRESS,
 	EVENT_SETUP,
+	EVENT_REGISTER,
 	EVENT_ALERTING,
 	EVENT_CONNECT,
 	EVENT_SETUP_ACKNOWLEDGE,
@@ -189,6 +198,44 @@ enum { /* progress indicators */
 	INFO_PI_INTERWORKING_NO_RELEASE_POST_ANSWER =0x13
 };
 
+/*!
+ * \brief Q.931 encoded redirecting reason
+ */
+enum mISDN_REDIRECTING_REASON {
+	mISDN_REDIRECTING_REASON_UNKNOWN = 0x0,
+	/*! Call forwarding busy or called DTE busy */
+	mISDN_REDIRECTING_REASON_CALL_FWD_BUSY = 0x1,
+	/*! Call forwarding no reply */
+	mISDN_REDIRECTING_REASON_NO_REPLY = 0x2,
+	/*! Call deflection */
+	mISDN_REDIRECTING_REASON_DEFLECTION = 0x4,
+	/*! Called DTE out of order */
+	mISDN_REDIRECTING_REASON_OUT_OF_ORDER = 0x9,
+	/*! Call forwarding by the called DTE */
+	mISDN_REDIRECTING_REASON_CALL_FWD_DTE = 0xA,
+	/*! Call forwarding unconditional or systematic call redirection */
+	mISDN_REDIRECTING_REASON_CALL_FWD = 0xF
+};
+
+/*!
+ * \brief Notification description code enumeration
+ */
+enum mISDN_NOTIFY_CODE {
+	mISDN_NOTIFY_CODE_INVALID = -1,
+	/*! Call is placed on hold (Q.931) */
+	mISDN_NOTIFY_CODE_USER_SUSPEND = 0x00,
+	/*! Call is taken off of hold (Q.931) */
+	mISDN_NOTIFY_CODE_USER_RESUME = 0x01,
+	/*! Call is diverting (EN 300 207-1 Section 7.2.1) */
+	mISDN_NOTIFY_CODE_CALL_IS_DIVERTING = 0x7B,
+	/*! Call diversion is enabled (cfu, cfb, cfnr) (EN 300 207-1 Section 7.2.1) */
+	mISDN_NOTIFY_CODE_DIVERSION_ACTIVATED = 0x68,
+	/*! Call transfer, alerting (EN 300 369-1 Section 7.2) */
+	mISDN_NOTIFY_CODE_CALL_TRANSFER_ALERTING = 0x69,
+	/*! Call transfer, active(answered) (EN 300 369-1 Section 7.2) */
+	mISDN_NOTIFY_CODE_CALL_TRANSFER_ACTIVE = 0x6A,
+};
+
 enum { /*CODECS*/
 	INFO_CODEC_ULAW=2,
 	INFO_CODEC_ALAW=3
@@ -202,11 +249,115 @@ enum layer_e {
 	UNKNOWN
 };
 
+/*! Maximum phone number (address) length plus null terminator */
+#define MISDN_MAX_NUMBER_LEN		(31 + 1)
+
+/*! Maximum name length plus null terminator (From ECMA-164) */
+#define MISDN_MAX_NAME_LEN			(50 + 1)
+
+/*! Maximum subaddress length plus null terminator */
+#define MISDN_MAX_SUBADDRESS_LEN	(23 + 1)
+
+/*! Maximum keypad facility content length plus null terminator */
+#define MISDN_MAX_KEYPAD_LEN		(31 + 1)
+
+/*! \brief Dialed/Called information struct */
+struct misdn_party_dialing {
+	/*! \brief Type-of-number in ISDN terms for the dialed/called number */
+	enum mISDN_NUMBER_TYPE number_type;
+
+	/*! \brief Type-of-number numbering plan. */
+	enum mISDN_NUMBER_PLAN number_plan;
+
+	/*! \brief Dialed/Called Phone Number (Address) */
+	char number[MISDN_MAX_NUMBER_LEN];
+
+	/*! \brief Dialed/Called Subaddress number */
+	char subaddress[MISDN_MAX_SUBADDRESS_LEN];
+};
+
+/*! \brief Connected-Line/Calling/Redirecting ID info struct */
+struct misdn_party_id {
+	/*! \brief Number presentation restriction code
+	 * 0=Allowed, 1=Restricted, 2=Unavailable
+	 */
+	int presentation;
+
+	/*! \brief Number screening code
+	 * 0=Unscreened, 1=Passed Screen, 2=Failed Screen, 3=Network Number
+	 */
+	int screening;
+
+	/*! \brief Type-of-number in ISDN terms for the number */
+	enum mISDN_NUMBER_TYPE number_type;
+
+	/*! \brief Type-of-number numbering plan. */
+	enum mISDN_NUMBER_PLAN number_plan;
+
+	/*! \brief Subscriber Name
+	 * \note The name is currently obtained from Asterisk for
+	 * potential use in display ie's since basic ISDN does
+	 * not support names directly.
+	 */
+	char name[MISDN_MAX_NAME_LEN];
+
+	/*! \brief Phone number (Address) */
+	char number[MISDN_MAX_NUMBER_LEN];
+
+	/*! \brief Subaddress number */
+	char subaddress[MISDN_MAX_SUBADDRESS_LEN];
+};
+
+/*! \brief Redirecting information struct */
+struct misdn_party_redirecting {
+	/*! \brief Who is redirecting the call (Sent to the party the call is redirected toward) */
+	struct misdn_party_id from;
+
+	/*! \brief Where the call is being redirected toward (Sent to the calling party) */
+	struct misdn_party_id to;
+
+	/*! \brief Reason a call is being redirected (Q.931 field value) */
+	enum mISDN_REDIRECTING_REASON reason;
+
+	/*! \brief Number of times the call has been redirected */
+	int count;
+
+	/*! \brief TRUE if the redirecting.to information has changed */
+	int to_changed;
+};
 
 
+/*! \brief B channel control structure */
 struct misdn_bchannel {
 	/*! \brief B channel send locking structure */
 	struct send_lock *send_lock;
+
+#if defined(AST_MISDN_ENHANCEMENTS)
+	/*! \brief The BC, HLC (optional) and LLC (optional) contents from the SETUP message. */
+	struct Q931_Bc_Hlc_Llc setup_bc_hlc_llc;
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
+
+	/*!
+	 * \brief Dialed/Called information struct
+	 * \note The number_type element is set to "dialplan" in /etc/asterisk/misdn.conf for outgoing calls
+	 */
+	struct misdn_party_dialing dialed;
+
+	/*! \brief Originating/Caller ID information struct
+	 * \note The number_type element can be set to "localdialplan" in /etc/asterisk/misdn.conf for outgoing calls
+	 * \note The number element can be set to "callerid" in /etc/asterisk/misdn.conf for outgoing calls
+	 */
+	struct misdn_party_id caller;
+
+	/*! \brief Connected-Party/Connected-Line ID information struct
+	 * \note The number_type element can be set to "cpndialplan" in /etc/asterisk/misdn.conf for outgoing calls
+	 */
+	struct misdn_party_id connected;
+
+	/*! \brief Redirecting information struct (Where a call diversion or transfer was invoked)
+	 * \note The redirecting subaddress is not defined in Q.931 so it is not used.
+	 */
+	struct misdn_party_redirecting redirecting;
 
 	/*! \brief TRUE if this is a dummy BC record */
 	int dummy;
@@ -264,6 +415,9 @@ struct misdn_bchannel {
 	/*! \brief TRUE if the B channel number is preselected */
 	int channel_preselected;
 
+	/*! \brief TRUE if the B channel is allocated from the REGISTER pool */
+	int is_register_pool;
+
 	/*! \brief TRUE if B channel record is in use */
 	int in_use;
 
@@ -285,8 +439,6 @@ struct misdn_bchannel {
 
 	/*! \brief Not used. Contents are setup but not used. */
 	void *astbuf;
-
-	void *misdnbuf;	/* Not used */
 
 	/*! \brief TRUE if the TE side should choose the B channel to use
 	 * \note This value is user configurable in /etc/asterisk/misdn.conf
@@ -325,26 +477,6 @@ struct misdn_bchannel {
 
 	/*! \brief TRUE if we will not use the jitter buffer system */
 	int nojitter;
-
-	/*! \brief Type-of-number in ISDN terms for the dialed/called number
-	 * \note This value is set to "dialplan" in /etc/asterisk/misdn.conf for outgoing calls
-	 */
-	enum mISDN_NUMBER_PLAN dnumplan;
-
-	/*! \brief Type-of-number in ISDN terms for the redirecting number which a call diversion or transfer was invoked.
-	 * \note Collected from the incoming SETUP message but not used.
-	 */
-	enum mISDN_NUMBER_PLAN rnumplan;
-
-	/*! \brief Type-of-number in ISDN terms for the originating/calling number (Caller-ID)
-	 * \note This value is set to "localdialplan" in /etc/asterisk/misdn.conf for outgoing calls
-	 */
-	enum mISDN_NUMBER_PLAN onumplan;
-
-	/*! \brief Type-of-number in ISDN terms for the connected party number
-	 * \note This value is set to "cpndialplan" in /etc/asterisk/misdn.conf for outgoing calls
-	 */
-	enum mISDN_NUMBER_PLAN cpnnumplan;
 
 	/*! \brief Progress Indicator IE coding standard field.
 	 * \note Collected from the incoming messages but not used.
@@ -421,16 +553,41 @@ struct misdn_bchannel {
 	 */
 	int stack_holder;
 
-	/*! \brief Caller ID presentation restriction code
+	/*!
+	 * \brief Put a display ie in the CONNECT message
+	 * \details
+	 * Put a display ie in the CONNECT message containing the following
+	 * information if it is available (nt port only):
+	 * 0 - Do not put the connected line information in the display ie.
+	 * 1 - Put the available connected line name in the display ie.
+	 * 2 - Put the available connected line number in the display ie.
+	 * 3 - Put the available connected line name and number in the display ie.
+	 */
+	int display_connected;
+
+	/*!
+	 * \brief Put a display ie in the SETUP message
+	 * \details
+	 * Put a display ie in the SETUP message containing the following
+	 * information if it is available (nt port only):
+	 * 0 - Do not put the caller information in the display ie.
+	 * 1 - Put the available caller name in the display ie.
+	 * 2 - Put the available caller number in the display ie.
+	 * 3 - Put the available caller name and number in the display ie.
+	 */
+	int display_setup;
+
+	/*! \brief User set presentation restriction code
 	 * 0=Allowed, 1=Restricted, 2=Unavailable
 	 * \note It is settable by the misdn_set_opt() application.
 	 */
-	int pres;
+	int presentation;
 
-	/*! \brief Caller ID screening code
-	 * 0=Unscreened, 1=Passed Screen, 2=Failed Screen, 3=Network Number
-	 */
-	int screen;
+	/*! \brief TRUE if the user set the presentation restriction code */
+	int set_presentation;
+
+	/*! \brief Notification indicator ie description code */
+	enum mISDN_NOTIFY_CODE notify_description_code;
 
 	/*! \brief SETUP message bearer capability field code value */
 	int capability;
@@ -468,40 +625,18 @@ struct misdn_bchannel {
 	 */
 	char display[84];
 
-	/*! \brief Not used. Contents are setup but not used. */
-	char msn[32];
-
-	/*! \brief Originating/Calling Phone Number (Address)
-	 * \note This value can be set to "callerid" in /etc/asterisk/misdn.conf for outgoing calls
-	 */
-	char oad[32];
-
-	/*! \brief Redirecting Phone Number (Address) where a call diversion or transfer was invoked */
-	char rad[32];
-
-	/*! \brief Dialed/Called Phone Number (Address) */
-	char dad[32];
-
-	/*! \brief Connected Party/Line Phone Number (Address) */
-	char cad[32];
-
-	/*! \brief Original Dialed/Called Phone Number (Address) before national/international dialing prefix added.
-	 * \note Not used. Contents are setup but not used.
-	 */
-	char orig_dad[32];
-
 	/*! \brief Q.931 Keypad Facility IE contents
 	 * \note Contents exported and imported to Asterisk variable MISDN_KEYPAD
 	 */
-	char keypad[32];
+	char keypad[MISDN_MAX_KEYPAD_LEN];
 
 	/*! \brief Current overlap dialing digits to/from INFORMATION messages */
-	char info_dad[64];
+	char info_dad[MISDN_MAX_NUMBER_LEN];
 
 	/*! \brief Collected digits to go into info_dad[] while waiting for a SETUP_ACKNOWLEDGE to come in. */
-	char infos_pending[64];
+	char infos_pending[MISDN_MAX_NUMBER_LEN];
 
-/* 	unsigned char info_keypad[32]; */
+/* 	unsigned char info_keypad[MISDN_MAX_KEYPAD_LEN]; */
 /* 	unsigned char clisub[24]; */
 /* 	unsigned char cldsub[24]; */
 
@@ -600,6 +735,9 @@ char *manager_isdn_get_info(enum event_e event);
 void misdn_lib_transfer(struct misdn_bchannel* holded_bc);
 
 struct misdn_bchannel* misdn_lib_get_free_bc(int port, int channel, int inout, int dec);
+#if defined(AST_MISDN_ENHANCEMENTS)
+struct misdn_bchannel *misdn_lib_get_register_bc(int port);
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
 void manager_bchannel_activate(struct misdn_bchannel *bc);
 void manager_bchannel_deactivate(struct misdn_bchannel * bc);
@@ -679,4 +817,4 @@ void misdn_dump_chanlist(void);
 void misdn_make_dummy(struct misdn_bchannel *dummybc, int port, int l3id, int nt, int channel);
 
 
-#endif
+#endif	/* TE_LIB */
