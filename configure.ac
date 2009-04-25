@@ -20,6 +20,8 @@ AC_CONFIG_SRCDIR([main/asterisk.c])
 AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
 
+AC_USE_SYSTEM_EXTENSIONS	# note- does not work on FreeBSD
+
 # preserve any CFLAGS or LDFLAGS that may be set
 # NOTE: This must be done before calling any macros that end up
 # calling AC_PROG_CC or the like, since they will set a default
