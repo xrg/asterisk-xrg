@@ -31,6 +31,7 @@ ALL_UTILS:=astman smsq stereorize streamplayer muted hashtest2 hashtest astcanar
 UTILS:=$(ALL_UTILS)
 
 LIBS += $(BKTR_LIB) # astobj2 with devmode uses backtrace
+LIBS+=-lpthread
 
 _ASTCFLAGS+=-DSTANDALONE
 
