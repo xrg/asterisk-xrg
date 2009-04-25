@@ -28,9 +28,9 @@
 		"console {device}"
 #else
 
-#include <ffmpeg/avcodec.h>
+#include <libavcodec/avcodec.h>
 #ifndef OLD_FFMPEG
-#include <ffmpeg/swscale.h>     /* requires a recent ffmpeg */
+#include <libswscale/swscale.h>     /* requires a recent ffmpeg */
 #endif
 
 #define CONSOLE_VIDEO_CMDS			\
