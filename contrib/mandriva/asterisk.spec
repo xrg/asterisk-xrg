@@ -853,7 +853,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_senddtmf.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sendtext.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_setcallerid.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_skel.so
+# attr(0755,root,root) %{_libdir}/asterisk/modules/app_skel.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sms.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_softhangup.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_speech_utils.so
@@ -942,7 +942,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_ael.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_config.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_dundi.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_gtkconsole.so
+# attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_gtkconsole.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_loopback.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_realtime.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_spool.so
