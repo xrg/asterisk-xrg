@@ -99,7 +99,7 @@ BuildRequires:	libjack-devel
 BuildRequires:	libnbs-devel
 BuildRequires:	libncurses-devel
 BuildRequires:	libogg-devel
-BuildRequires:	libosp-devel
+BuildRequires:	libosp-devel >= 3.5
 BuildRequires:	libpopt-devel
 BuildRequires:	libpri-devel >= 1.4.8
 BuildRequires:	libspeex-devel
