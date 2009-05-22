@@ -27,9 +27,9 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #if defined(HAVE_LIBXML2)
-#define _POSIX_C_SOURCE	200112L
 #include <libxml/parser.h>
 #include <libxml/tree.h>
+#include <libxml/xinclude.h>
 /* libxml2 ast_xml implementation. */
 
 
@@ -56,10 +56,16 @@ struct ast_xml_doc *ast_xml_open(char *filename)
 	}
 
 	doc = xmlReadFile(filename, NULL, XML_PARSE_RECOVER);
+	if (doc) {
+		/* process xinclude elements. */
+		if (xmlXIncludeProcess(doc) < 0) {
+			xmlFreeDoc(doc);
+			return NULL;
+		}
+	}
 
 	return (struct ast_xml_doc *) doc;
 }
-
 
 void ast_xml_close(struct ast_xml_doc *doc)
 {

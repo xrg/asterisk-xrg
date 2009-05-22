@@ -192,6 +192,12 @@
 /* Define if your system has the DAHDI headers. */
 #undef HAVE_DAHDI
 
+/* Define if your system has the DAHDI_ECHOCANCEL_FAX_MODE headers. */
+#undef HAVE_DAHDI_ECHOCANCEL_FAX_MODE
+
+/* Define DAHDI_ECHOCANCEL_FAX_MODE headers version */
+#undef HAVE_DAHDI_ECHOCANCEL_FAX_MODE_VERSION
+
 /* Define if your system has the DAHDI_HALF_FULL headers. */
 #undef HAVE_DAHDI_HALF_FULL
 
@@ -220,8 +226,14 @@
 /* Define to 1 if you have the `dup2' function. */
 #undef HAVE_DUP2
 
+/* Define to 1 if you have the `eaccess' function. */
+#undef HAVE_EACCESS
+
 /* Define to 1 if you have the `endpwent' function. */
 #undef HAVE_ENDPWENT
+
+/* Define to 1 if you have the `euidaccess' function. */
+#undef HAVE_EUIDACCESS
 
 /* Define this to indicate the ${EXP_DESCRIP} library */
 #undef HAVE_EXP

@@ -11,8 +11,6 @@
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.6.3  -------------
 ------------------------------------------------------------------------------
 
-
-
 SIP Changes
 -----------
  * Added preferred_codec_only option in sip.conf. This feature limits the joint
@@ -20,6 +18,15 @@ SIP Changes
  * Added SIP_CODEC_OUTBOUND dialplan variable which can be used to set the codec
    to be used for the outgoing call. It must be one of the codecs configured
    for the device.
+ * Added tlsprivatekey option to sip.conf.  This allows a separate .pem file
+   to be used for holding a private key.  If tlsprivatekey is not specified,
+   tlscertfile is searched for both public and private key.
+ * Added tlsclientmethod option to sip.conf.  This allows the protocol for
+   outbound client connections to be specified.
+ * The sendrpid parameter has been expanded to include the options
+   'rpid' and 'pai'. Setting sendrpid to 'rpid' will cause Remote-Party-ID
+   header to be sent (equivalent to setting sendrpid=yes) and setting
+   sendrpid to 'pai' will cause P-Asserted-Identity header to be sent.
 
 Applications
 ------------
@@ -28,12 +35,40 @@ Applications
    regardless if the call has been answered or not.
  * Added functionality to the app_dial F() option to continue with execution
    at the current location when no parameters are provided.
+ * Added c() option to app_chanspy. This option allows custom DTMF to be set
+   to cycle through the next avaliable channel.  By default this is still '*'.
+ * Added x() option to app_chanspy.  This option allows DTMF to be set to
+   exit the application.
 
 Dialplan Functions
 ------------------
  * Added new dialplan functions CONNECTEDLINE and REDIRECTING which permits
    setting various connected line and redirecting party information.
  * The CHANNEL() function now supports the "name" option.
+ * For DAHDI channels, the CHANNEL() dialplan function now
+   supports changing the channel's buffer policy (for the current
+   call only), using this syntax:
+
+   exten => s,n,Set(CHANNEL(buffers)=6,full)
+
+   This would change the channel to the 'full' buffer policy and
+   6 (six) buffers. Possible options for this setting are the same
+   as those in chan_dahdi.conf.
+ * For DAHDI channels, the CHANNEL() dialplan function now allows
+   the dialplan to request changes in the configuration of the active
+   echo canceller on the channel (if any), for the current call only.
+   The syntax is:
+
+   exten => s,n,Set(CHANNEL(echocan_mode)=off)
+
+   The possible values are:
+
+     on - normal mode (the echo canceller is actually reinitalized)
+     off - disabled
+     fax - FAX/data mode (NLP disabled if possible, otherwise completely
+           disabled)
+     voice - voice mode (returns from FAX mode, reverting the changes that
+             were made when FAX mode was requested)
 
 Queue changes
 -------------
@@ -65,6 +100,18 @@ mISDN channel driver (chan_misdn) changes
     the CCBS/CCNR functionality.
   * Added new dialplan function mISDN_CC which permits retrieval of various
     values from an active call completion record.
+  * For PTP, you should manually send the COLR of the redirected-to party
+    for an incomming redirected call if the incoming call could experience
+    further redirects.  Just set the REDIRECTING(to-num,i) = ${EXTEN} and
+    set the REDIRECTING(to-pres) to the COLR.  A call has been redirected
+    if the REDIRECTING(from-num) is not empty.
+  * For outgoing PTP redirected calls, you now need to use the inhibit(i)
+    option on all of the REDIRECTING statements before dialing the
+    redirected-to party.  You still have to set the REDIRECTING(to-xxx,i)
+    and the REDIRECTING(from-xxx,i) values.  The PTP call will update the
+    redirecting-to presentation (COLR) when it becomes available.
+  * Added outgoing_colp parameter to misdn.conf to filter outgoing COLP
+    information.
 
 thirdparty mISDN enhancements
 -----------------------------
@@ -77,21 +124,33 @@ The latest modified mISDN v1.1.x based version is available at:
 http://svn.digium.com/svn/thirdparty/mISDN/trunk
 http://svn.digium.com/svn/thirdparty/mISDNuser/trunk
 
-Taged versions of the modified mISDN code are available under:
+Tagged versions of the modified mISDN code are available under:
 http://svn.digium.com/svn/thirdparty/mISDN/tags
 http://svn.digium.com/svn/thirdparty/mISDNuser/tags
-
-SIP channel driver (chan_sip) changes
--------------------------------------------
-  * The sendrpid parameter has been expanded to include the options
-    'rpid' and 'pai'. Setting sendrpid to 'rpid' will cause Remote-Party-ID
-    header to be sent (equivalent to setting sendrpid=yes) and setting
-    sendrpid to 'pai' will cause P-Asserted-Identity header to be sent.
 
 Asterisk Manager Interface
 --------------------------
  * The Hangup action now accepts a Cause header which may be used to
    set the channel's hangup cause.
+ * sslprivatekey option added to manager.conf and http.conf.  Adds the ability
+   to specify a separate .pem file to hold a private key.  By default sslcert
+   is used to hold both the public and private key.
+ * Options in manager.conf and http.conf with the 'ssl' prefix have been replaced
+   for options containing the 'tls' prefix.  For example, 'sslenable' is now
+   'tlsenable'.  This has been done in effort to keep ssl and tls options consistent
+   across all .conf files. All affected sample.conf files have been modified to
+   reflect this change.  Previous options such as 'sslenable' still work,
+   but options with the 'tls' prefix are preferred.
+
+Logger
+------
+ * The rarely used 'event_log' and LOG_EVENT channel have been removed; the few
+   users of this channel in the tree have been converted to LOG_NOTICE or removed
+   (in cases where the same message was already generated to another channel).
+
+CDR
+---
+ * Multiple files and formats can now be specified in cdr_custom.conf.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------

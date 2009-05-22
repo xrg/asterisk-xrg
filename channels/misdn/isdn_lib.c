@@ -753,6 +753,8 @@ static void empty_bc(struct misdn_bchannel *bc)
 	bc->display_connected = 0;	/* none */
 	bc->display_setup = 0;	/* none */
 
+	bc->outgoing_colp = 0;/* pass */
+
 	bc->presentation = 0;	/* allowed */
 	bc->set_presentation = 0;
 
@@ -763,6 +765,11 @@ static void empty_bc(struct misdn_bchannel *bc)
 	bc->progress_coding=0;
 	bc->progress_location=0;
 	bc->progress_indicator=0;
+
+#if defined(AST_MISDN_ENHANCEMENTS)
+	bc->div_leg_3_rx_wanted = 0;
+	bc->div_leg_3_tx_pending = 0;
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
 /** Set Default Bearer Caps **/
 	bc->capability=INFO_CAPABILITY_SPEECH;

@@ -114,11 +114,10 @@ static char *orig_exten(int fd, const char *chan, const char *data)
  * \param cmd operation to execute
  * \param a structure that contains either application or extension arguments
  * \retval CLI_SUCCESS on success.
- * \retval CLI_SHOWUSAGE on failure.
-*/
+ * \retval CLI_SHOWUSAGE on failure.*/
 static char *handle_orig(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	static char *choices[] = { "application", "extension", NULL };
+	static const char * const choices[] = { "application", "extension", NULL };
 	char *res;
 	switch (cmd) {
 	case CLI_INIT:
@@ -201,15 +200,14 @@ static char *handle_redirect(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 	name = a->argv[2];
 	dest = a->argv[3];
 
-	chan = ast_get_channel_by_name_locked(name);
-	if (!chan) {
+	if (!(chan = ast_channel_get_by_name(name))) {
 		ast_cli(a->fd, "Channel '%s' not found\n", name);
 		return CLI_FAILURE;
 	}
 
 	res = ast_async_parseable_goto(chan, dest);
 
-	ast_channel_unlock(chan);
+	chan = ast_channel_unref(chan);
 
 	if (!res) {
 		ast_cli(a->fd, "Channel '%s' successfully redirected to %s\n", name, dest);

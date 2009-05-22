@@ -173,7 +173,7 @@ static void *handle_tls_connection(void *data)
 					X509_NAME *name = X509_get_subject_name(peer);
 					int pos = -1;
 					int found = 0;
-				
+
 					for (;;) {
 						/* Walk the certificate to check all available "Common Name" */
 						/* XXX Probably should do a gethostbyname on the hostname and compare that as well */
@@ -229,7 +229,7 @@ void *ast_tcptls_server_root(void *data)
 	socklen_t sinlen;
 	struct ast_tcptls_session_instance *tcptls_session;
 	pthread_t launched;
-	
+
 	for (;;) {
 		int i, flags;
 
@@ -261,7 +261,7 @@ void *ast_tcptls_server_root(void *data)
 		memcpy(&tcptls_session->remote_address, &sin, sizeof(tcptls_session->remote_address));
 
 		tcptls_session->client = 0;
-			
+
 		if (ast_pthread_create_detached_background(&launched, NULL, handle_tls_connection, tcptls_session)) {
 			ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
 			close(tcptls_session->fd);
@@ -283,18 +283,45 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 	SSL_load_error_strings();
 	SSLeay_add_ssl_algorithms();
 
-	if (!(cfg->ssl_ctx = SSL_CTX_new( client ? SSLv23_client_method() : SSLv23_server_method() ))) {
+	if (client) {
+		if (ast_test_flag(&cfg->flags, AST_SSL_SSLV2_CLIENT)) {
+			cfg->ssl_ctx = SSL_CTX_new(SSLv2_client_method());
+		} else if (ast_test_flag(&cfg->flags, AST_SSL_SSLV3_CLIENT)) {
+			cfg->ssl_ctx = SSL_CTX_new(SSLv3_client_method());
+		} else if (ast_test_flag(&cfg->flags, AST_SSL_TLSV1_CLIENT)) {
+			cfg->ssl_ctx = SSL_CTX_new(TLSv1_client_method());
+		} else {
+			/* SSLv23_client_method() sends SSLv2, this was the original
+			 * default for ssl clients before the option was given to
+			 * pick what protocol a client should use.  In order not
+			 * to break expected behavior it remains the default. */
+			cfg->ssl_ctx = SSL_CTX_new(SSLv23_client_method());
+		}
+	} else {
+		/* SSLv23_server_method() supports TLSv1, SSLv2, and SSLv3 inbound connections. */
+		cfg->ssl_ctx = SSL_CTX_new(SSLv23_server_method());
+	}
+
+	if (!cfg->ssl_ctx) {
 		ast_debug(1, "Sorry, SSL_CTX_new call returned null...\n");
 		cfg->enabled = 0;
 		return 0;
 	}
 	if (!ast_strlen_zero(cfg->certfile)) {
-		if (SSL_CTX_use_certificate_file(cfg->ssl_ctx, cfg->certfile, SSL_FILETYPE_PEM) == 0 ||
-		    SSL_CTX_use_PrivateKey_file(cfg->ssl_ctx, cfg->certfile, SSL_FILETYPE_PEM) == 0 ||
-		    SSL_CTX_check_private_key(cfg->ssl_ctx) == 0 ) {
+		char *tmpprivate = ast_strlen_zero(cfg->pvtfile) ? cfg->certfile : cfg->pvtfile;
+		if (SSL_CTX_use_certificate_file(cfg->ssl_ctx, cfg->certfile, SSL_FILETYPE_PEM) == 0) {
 			if (!client) {
 				/* Clients don't need a certificate, but if its setup we can use it */
-				ast_verb(0, "SSL cert error <%s>", cfg->certfile);
+				ast_verb(0, "SSL error loading cert file. <%s>", cfg->certfile);
+				sleep(2);
+				cfg->enabled = 0;
+				return 0;
+			}
+		}
+		if ((SSL_CTX_use_PrivateKey_file(cfg->ssl_ctx, tmpprivate, SSL_FILETYPE_PEM) == 0) || (SSL_CTX_check_private_key(cfg->ssl_ctx) == 0 )) {
+			if (!client) {
+				/* Clients don't need a private key, but if its setup we can use it */
+				ast_verb(0, "SSL error loading private key file. <%s>", tmpprivate);
 				sleep(2);
 				cfg->enabled = 0;
 				return 0;
@@ -409,22 +436,22 @@ void ast_tcptls_server_start(struct ast_tcptls_session_args *desc)
 {
 	int flags;
 	int x = 1;
-	
+
 	/* Do nothing if nothing has changed */
 	if (!memcmp(&desc->old_address, &desc->local_address, sizeof(desc->old_address))) {
 		ast_debug(1, "Nothing changed in %s\n", desc->name);
 		return;
 	}
-	
+
 	desc->old_address = desc->local_address;
-	
+
 	/* Shutdown a running server if there is one */
 	if (desc->master != AST_PTHREADT_NULL) {
 		pthread_cancel(desc->master);
 		pthread_kill(desc->master, SIGURG);
 		pthread_join(desc->master, NULL);
 	}
-	
+
 	if (desc->accept_fd != -1)
 		close(desc->accept_fd);
 
@@ -439,7 +466,7 @@ void ast_tcptls_server_start(struct ast_tcptls_session_args *desc)
 		ast_log(LOG_ERROR, "Unable to allocate socket for %s: %s\n", desc->name, strerror(errno));
 		return;
 	}
-	
+
 	setsockopt(desc->accept_fd, SOL_SOCKET, SO_REUSEADDR, &x, sizeof(x));
 	if (bind(desc->accept_fd, (struct sockaddr *) &desc->local_address, sizeof(desc->local_address))) {
 		ast_log(LOG_ERROR, "Unable to bind %s to %s:%d: %s\n",
@@ -479,4 +506,54 @@ void ast_tcptls_server_stop(struct ast_tcptls_session_args *desc)
 		close(desc->accept_fd);
 	desc->accept_fd = -1;
 	ast_debug(2, "Stopped server :: %s\n", desc->name);
+}
+
+int ast_tls_read_conf(struct ast_tls_config *tls_cfg, struct ast_tcptls_session_args *tls_desc, const char *varname, const char *value)
+{
+	if (!strcasecmp(varname, "tlsenable") || !strcasecmp(varname, "sslenable")) {
+		tls_cfg->enabled = ast_true(value) ? 1 : 0;
+		tls_desc->local_address.sin_family = AF_INET;
+	} else if (!strcasecmp(varname, "tlscertfile") || !strcasecmp(varname, "sslcert") || !strcasecmp(varname, "tlscert")) {
+		ast_free(tls_cfg->certfile);
+		tls_cfg->certfile = ast_strdup(value);
+	} else if (!strcasecmp(varname, "tlsprivatekey") || !strcasecmp(varname, "sslprivatekey")) {
+		ast_free(tls_cfg->pvtfile);
+		tls_cfg->pvtfile = ast_strdup(value);
+	} else if (!strcasecmp(varname, "tlscipher") || !strcasecmp(varname, "sslcipher")) {
+		ast_free(tls_cfg->cipher);
+		tls_cfg->cipher = ast_strdup(value);
+	} else if (!strcasecmp(varname, "tlscafile")) {
+		ast_free(tls_cfg->cafile);
+		tls_cfg->cafile = ast_strdup(value);
+	} else if (!strcasecmp(varname, "tlscapath")) {
+		ast_free(tls_cfg->capath);
+		tls_cfg->capath = ast_strdup(value);
+	} else if (!strcasecmp(varname, "tlsverifyclient")) {
+		ast_set2_flag(&tls_cfg->flags, ast_true(value), AST_SSL_VERIFY_CLIENT);
+	} else if (!strcasecmp(varname, "tlsdontverifyserver")) {
+		ast_set2_flag(&tls_cfg->flags, ast_true(value), AST_SSL_DONT_VERIFY_SERVER);
+	} else if (!strcasecmp(varname, "tlsbindaddr") || !strcasecmp(varname, "sslbindaddr")) {
+		if (ast_parse_arg(value, PARSE_INADDR, &tls_desc->local_address))
+			ast_log(LOG_WARNING, "Invalid %s '%s'\n", varname, value);
+	} else if (!strcasecmp(varname, "tlsbindport") || !strcasecmp(varname, "sslbindport")) {
+		tls_desc->local_address.sin_port = htons(atoi(value));
+	} else if (!strcasecmp(varname, "tlsclientmethod") || !strcasecmp(varname, "sslclientmethod")) {
+		if (!strcasecmp(value, "tlsv1")) {
+			ast_set_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
+		} else if (!strcasecmp(value, "sslv3")) {
+			ast_set_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
+		} else if (!strcasecmp(value, "sslv2")) {
+			ast_set_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
+		}
+	} else {
+		return -1;
+	}
+
+	return 0;
 }

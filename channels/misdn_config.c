@@ -221,6 +221,12 @@ static const struct misdn_cfg_spec port_spec[] = {
 		"\n"
 		"\tscreen=0, presentation=0 -> callerid presented\n"
 		"\tscreen=1, presentation=1 -> callerid restricted (the remote end doesn't see it!)" },
+	{ "outgoing_colp", MISDN_CFG_OUTGOING_COLP, MISDN_CTYPE_INT, "0", NONE,
+		"Select what to do with outgoing COLP information on this port.\n"
+		"\n"
+		"\t0 - Send out COLP information unaltered.\n"
+		"\t1 - Force COLP to restricted on all outgoing COLP information.\n"
+		"\t2 - Do not send COLP information." },
 	{ "display_connected", MISDN_CFG_DISPLAY_CONNECTED, MISDN_CTYPE_INT, "0", NONE,
 		"Put a display ie in the CONNECT message containing the following\n"
 		"\tinformation if it is available (nt port only):\n"
@@ -594,7 +600,7 @@ void misdn_cfg_get(int port, enum misdn_cfg_elements elem, void *buf, int bufsiz
 	misdn_cfg_unlock();
 }
 
-enum misdn_cfg_elements misdn_cfg_get_elem(char *name)
+enum misdn_cfg_elements misdn_cfg_get_elem(const char *name)
 {
 	int pos;
 
@@ -821,7 +827,9 @@ void misdn_cfg_get_config_string (int port, enum misdn_cfg_elements elem, char* 
 				for (; iter; iter = iter->next) {
 					strncat(tempbuf, iter->msn, sizeof(tempbuf) - strlen(tempbuf) - 1);
 				}
-				tempbuf[strlen(tempbuf)-2] = 0;
+				if (strlen(tempbuf) > 1) {
+					tempbuf[strlen(tempbuf)-2] = 0;
+				}
 			}
 			snprintf(buf, bufsize, " -> msns: %s", *tempbuf ? tempbuf : "none");
 			break;

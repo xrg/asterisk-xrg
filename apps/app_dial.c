@@ -258,6 +258,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						with this option. Also, pbx services are not run on the peer (called) channel,
 						so you will not be able to set timeouts via the TIMEOUT() function in this macro.</para>
 					</note>
+					<warning><para>Be aware of the limitations that macros have, specifically with regards to use of
+					the <literal>WaitExten</literal> application. For more information, see the documentation for
+					Macro()</para></warning>
 				</option>
 				<option name="n">
 					<para>This option is a modifier for the call screening/privacy mode. (See the 
@@ -591,6 +594,7 @@ static void hanguptree(struct chanlist *outgoing, struct ast_channel *exception,
 				/* This is for the channel drivers */
 				outgoing->chan->hangupcause = AST_CAUSE_ANSWERED_ELSEWHERE;
 			}
+			ast_party_connected_line_free(&outgoing->connected);
 			ast_hangup(outgoing->chan);
 		}
 		oo = outgoing;
@@ -864,6 +868,8 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 #endif
 	struct ast_party_connected_line connected_caller;
 	struct ast_str *featurecode = ast_str_alloca(FEATURE_MAX_LEN + 1);
+
+	ast_party_connected_line_init(&connected_caller);
 	if (single) {
 		/* Turn off hold music, etc */
 		if (!ast_test_flag64(outgoing, OPT_MUSICBACK | OPT_RINGBACK))
@@ -1445,7 +1451,7 @@ static int do_privacy(struct ast_channel *chan, struct ast_channel *peer,
 	ast_autoservice_stop(chan);
 	if (ast_test_flag64(opts, OPT_PRIVACY) && (res2 >= '1' && res2 <= '5')) {
 		/* map keypresses to various things, the index is res2 - '1' */
-		static const char *_val[] = { "ALLOW", "DENY", "TORTURE", "KILL", "ALLOW" };
+		static const char * const _val[] = { "ALLOW", "DENY", "TORTURE", "KILL", "ALLOW" };
 		static const int _flag[] = { AST_PRIVACY_ALLOW, AST_PRIVACY_DENY, AST_PRIVACY_TORTURE, AST_PRIVACY_KILL, AST_PRIVACY_ALLOW};
 		int i = res2 - '1';
 		ast_verb(3, "--Set privacy database entry %s/%s to %s\n",
@@ -1628,7 +1634,7 @@ static void end_bridge_callback_data_fixup(struct ast_bridge_config *bconfig, st
 	bconfig->end_bridge_callback_data = originator;
 }
 
-static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags64 *peerflags, int *continue_exec)
+static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast_flags64 *peerflags, int *continue_exec)
 {
 	int res = -1; /* default: error */
 	char *rest, *cur; /* scan the list of destinations */
@@ -2417,7 +2423,7 @@ done:
 	return res;
 }
 
-static int dial_exec(struct ast_channel *chan, void *data)
+static int dial_exec(struct ast_channel *chan, const char *data)
 {
 	struct ast_flags64 peerflags;
 
@@ -2426,7 +2432,7 @@ static int dial_exec(struct ast_channel *chan, void *data)
 	return dial_exec_full(chan, data, &peerflags, NULL);
 }
 
-static int retrydial_exec(struct ast_channel *chan, void *data)
+static int retrydial_exec(struct ast_channel *chan, const char *data)
 {
 	char *parse;
 	const char *context = NULL;

@@ -43,6 +43,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
+#define AST_API_MODULE
 #include "asterisk/smdi.h"
 #include "asterisk/config.h"
 #include "asterisk/astobj.h"
@@ -378,7 +379,18 @@ static void *smdi_msg_find(struct ast_smdi_interface *iface,
 
 	switch (type) {
 	case SMDI_MD:
-		if (ast_test_flag(&options, OPT_SEARCH_TERMINAL)) {
+		if (ast_strlen_zero(search_key)) {
+			struct ast_smdi_md_message *md_msg = NULL;
+
+			/* No search key provided (the code from chan_dahdi does this).
+			 * Just pop the top message off of the queue. */
+
+			ASTOBJ_CONTAINER_TRAVERSE(&iface->md_q, !md_msg, do {
+				md_msg = ASTOBJ_REF(iterator);
+			} while (0); );
+
+			msg = md_msg;
+		} else if (ast_test_flag(&options, OPT_SEARCH_TERMINAL)) {
 			struct ast_smdi_md_message *md_msg = NULL;
 
 			/* Searching by the message desk terminal */
@@ -406,7 +418,20 @@ static void *smdi_msg_find(struct ast_smdi_interface *iface,
 		}
 		break;
 	case SMDI_MWI:
-		msg = ASTOBJ_CONTAINER_FIND(&iface->mwi_q, search_key);
+		if (ast_strlen_zero(search_key)) {
+			struct ast_smdi_mwi_message *mwi_msg = NULL;
+
+			/* No search key provided (the code from chan_dahdi does this).
+			 * Just pop the top message off of the queue. */
+
+			ASTOBJ_CONTAINER_TRAVERSE(&iface->mwi_q, !mwi_msg, do {
+				mwi_msg = ASTOBJ_REF(iterator);
+			} while (0); );
+
+			msg = mwi_msg;
+		} else {
+			msg = ASTOBJ_CONTAINER_FIND(&iface->mwi_q, search_key);
+		}
 		break;
 	}
 
@@ -1308,6 +1333,8 @@ static struct ast_custom_function smdi_msg_function = {
 	.read = smdi_msg_read,
 };
 
+static int unload_module(void);
+
 static int load_module(void)
 {
 	int res;
@@ -1325,8 +1352,10 @@ static int load_module(void)
 	/* load the config and start the listener threads*/
 	res = smdi_load(0);
 	if (res < 0) {
+		unload_module();
 		return res;
 	} else if (res == 1) {
+		unload_module();
 		ast_log(LOG_NOTICE, "No SMDI interfaces are available to listen on, not starting SMDI listener.\n");
 		return AST_MODULE_LOAD_DECLINE;
 	}

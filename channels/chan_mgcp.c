@@ -119,7 +119,7 @@ static const char config[] = "mgcp.conf";
 #define MGCP_CX_INACTIVE	4
 /*! } */
 
-static char *mgcp_cxmodes[] = {
+static const char * const mgcp_cxmodes[] = {
 	"sendonly",
 	"recvonly",
 	"sendrecv",
@@ -1098,7 +1098,7 @@ static char *handle_mgcp_audit_endpoint(struct ast_cli_entry *e, int cmd, struct
 	if (a->argc != 4)
 		return CLI_SHOWUSAGE;
 	/* split the name into parts by null */
-	ename = a->argv[3];
+	ename = ast_strdupa(a->argv[3]);
 	gname = ename;
 	while (*gname) {
 		if (*gname == '@') {
@@ -1479,7 +1479,6 @@ static struct ast_channel *mgcp_new(struct mgcp_subchannel *sub, int state)
 		if (!tmp->nativeformats)
 			tmp->nativeformats = capability;
 		fmt = ast_best_codec(tmp->nativeformats);
-		ast_string_field_build(tmp, name, "MGCP/%s@%s-%d", i->name, i->parent->name, sub->id);
 		if (sub->rtp)
 			ast_channel_set_fd(tmp, 0, ast_rtp_instance_fd(sub->rtp, 0));
 		if (i->dtmfmode & (MGCP_DTMF_INBAND | MGCP_DTMF_HYBRID)) {
@@ -1920,7 +1919,7 @@ static int process_sdp(struct mgcp_subchannel *sub, struct mgcp_request *req)
 	return 0;
 }
 
-static int add_header(struct mgcp_request *req, char *var, char *value)
+static int add_header(struct mgcp_request *req, const char *var, const char *value)
 {
 	if (req->len >= sizeof(req->data) - 4) {
 		ast_log(LOG_WARNING, "Out of space, can't add anymore\n");

@@ -48,10 +48,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/tcptls.h"
 #include "asterisk/astobj2.h"
 
-static const char *app = "ExternalIVR";
+static const char * const app = "ExternalIVR";
 
-static const char *synopsis = "Interfaces with an external IVR application";
-static const char *descrip =
+static const char * const synopsis = "Interfaces with an external IVR application";
+static const char * const descrip =
 "  ExternalIVR(command|ivr://ivrhosti([,arg[,arg...]])[,options]): Either forks a process\n"
 "to run given command or makes a socket to connect to given host and starts\n"
 "a generator on the channel. The generator's play list is controlled by the\n"
@@ -282,29 +282,20 @@ static void ast_eivr_getvariable(struct ast_channel *chan, char *data, char *out
 
 static void ast_eivr_setvariable(struct ast_channel *chan, char *data)
 {
-	char buf[1024];
 	char *value;
 
-	char *inbuf, *variable;
+	char *inbuf = ast_strdupa(data), *variable;
 
-	int j;
-
-	for (j = 1, inbuf = data; ; j++, inbuf = NULL) {
-		variable = strsep(&inbuf, ",");
+	for (variable = strsep(&inbuf, ","); variable; variable = strsep(&inbuf, ",")) {
 		ast_debug(1, "Setting up a variable: %s\n", variable);
-		if (variable) {
-			/* variable contains "varname=value" */
-			ast_copy_string(buf, variable, sizeof(buf));
-			value = strchr(buf, '=');
-			if (!value) {
-				value = "";
-			} else {
-				*value++ = '\0';
-			}
-			pbx_builtin_setvar_helper(chan, buf, value);
+		/* variable contains "varname=value" */
+		value = strchr(variable, '=');
+		if (!value) {
+			value = "";
 		} else {
-			break;
+			*value++ = '\0';
 		}
+		pbx_builtin_setvar_helper(chan, variable, value);
 	}
 }
 
@@ -320,7 +311,7 @@ static struct playlist_entry *make_entry(const char *filename)
 	return entry;
 }
 
-static int app_exec(struct ast_channel *chan, void *data)
+static int app_exec(struct ast_channel *chan, const char *data)
 {
 	struct ast_flags flags = { 0, };
 	char *opts[0];

@@ -90,8 +90,8 @@ static struct ast_config *say_cfg = NULL;
  * 'say load [new|old]' will enable the new or old method, or report status
  */
 static const void *say_api_buf[40];
-static const char *say_old = "old";
-static const char *say_new = "new";
+static const char * const say_old = "old";
+static const char * const say_new = "new";
 
 static void save_say_mode(const void *arg)
 {
@@ -380,7 +380,7 @@ static int say_init_mode(const char *mode) {
 static char *__say_cli_init(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	const char *old_mode = say_api_buf[0] ? say_new : say_old;
-	char *mode;
+	const char *mode;
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "say load [new|old]";
@@ -415,7 +415,7 @@ static struct ast_cli_entry cli_playback[] = {
 	AST_CLI_DEFINE(__say_cli_init, "Set or show the say mode"),
 };
 
-static int playback_exec(struct ast_channel *chan, void *data)
+static int playback_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	int mres = 0;

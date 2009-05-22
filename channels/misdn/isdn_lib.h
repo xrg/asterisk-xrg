@@ -493,6 +493,18 @@ struct misdn_bchannel {
 	 */
 	int progress_indicator;
 
+#if defined(AST_MISDN_ENHANCEMENTS)
+	/*!
+	 * \brief TRUE if waiting for DivertingLegInformation3 to queue redirecting update.
+	 */
+	int div_leg_3_rx_wanted;
+
+	/*!
+	 * \brief TRUE if a DivertingLegInformation3 needs to be sent with CONNECT.
+	 */
+	int div_leg_3_tx_pending;
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
+
 	/*! \brief Inbound FACILITY message function type and contents */
 	struct FacParm fac_in;
 
@@ -576,6 +588,15 @@ struct misdn_bchannel {
 	 * 3 - Put the available caller name and number in the display ie.
 	 */
 	int display_setup;
+
+	/*!
+	 * \brief Select what to do with outgoing COLP information.
+	 * \details
+	 * 0 - pass (Send out COLP information unaltered.)
+	 * 1 - restricted (Force COLP to restricted on all outgoing COLP information.)
+	 * 2 - block (Do not send COLP information.)
+	 */
+	int outgoing_colp;
 
 	/*! \brief User set presentation restriction code
 	 * 0=Allowed, 1=Restricted, 2=Unavailable

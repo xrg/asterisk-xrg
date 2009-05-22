@@ -92,7 +92,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</description>
 	</application>
  ***/
-static const char *app = "ControlPlayback";
+static const char * const app = "ControlPlayback";
 
 enum {
 	OPT_OFFSET = (1 << 1),
@@ -125,7 +125,7 @@ static int is_argument(const char *haystack, int needle)
 	return 0;
 }
 
-static int controlplayback_exec(struct ast_channel *chan, void *data)
+static int controlplayback_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	int skipms = 0;

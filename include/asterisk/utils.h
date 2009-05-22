@@ -32,8 +32,9 @@
 #include "asterisk/time.h"
 #include "asterisk/logger.h"
 #include "asterisk/localtime.h"
+#include "asterisk/stringfields.h"
 
-/*! 
+/*!
 \note \verbatim
    Note:
    It is very important to use only unsigned variables to hold
@@ -214,9 +215,9 @@ struct ast_hostent {
 struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp);
 
 /*!  \brief Produces MD5 hash based on input string */
-void ast_md5_hash(char *output, char *input);
+void ast_md5_hash(char *output, const char *input);
 /*! \brief Produces SHA1 hash based on input string */
-void ast_sha1_hash(char *output, char *input);
+void ast_sha1_hash(char *output, const char *input);
 
 int ast_base64encode_full(char *dst, const unsigned char *src, int srclen, int max, int linebreaks);
 
@@ -645,6 +646,33 @@ void ast_enable_packet_fragmentation(int sock);
 int ast_mkdir(const char *path, int mode);
 
 #define ARRAY_LEN(a) (sizeof(a) / sizeof(0[a]))
+
+
+/* Definition for Digest authorization */
+struct ast_http_digest {
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(username);
+		AST_STRING_FIELD(nonce);
+		AST_STRING_FIELD(uri);
+		AST_STRING_FIELD(realm);
+		AST_STRING_FIELD(domain);
+		AST_STRING_FIELD(response);
+		AST_STRING_FIELD(cnonce);
+		AST_STRING_FIELD(opaque);
+		AST_STRING_FIELD(nc);
+	);
+	int qop;		/* Flag set to 1, if we send/recv qop="quth" */
+};
+
+/*!
+ *\brief Parse digest authorization header.
+ *\return Returns -1 if we have no auth or something wrong with digest.
+ *\note This function may be used for Digest request and responce header.
+ * request arg is set to nonzero, if we parse Digest Request.
+ * pedantic arg can be set to nonzero if we need to do addition Digest check.
+ */
+int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request, int pedantic);
+
 
 #ifdef AST_DEVMODE
 #define ast_assert(a) _ast_assert(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)

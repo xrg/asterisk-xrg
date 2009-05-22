@@ -47,7 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<optionlist>
 					<option name="a">
 						<para>Update the answer time on the NEW CDR just after it's been inited.
-						The new CDR may have been answered already, the reset that forkcdr does
+						The new CDR may have been answered already. The reset that forkcdr does
 						will erase the answer time. This will bring it back, but the answer time
 						will be a copy of the fork/start time. It will only do this if the initial
 						cdr was indeed already answered.</para>
@@ -64,7 +64,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						reset.</para>
 					</option>
 					<option name="e">
-						<para>End the original CDR. Do this after all the necc. data.</para>
+						<para>End the original CDR. Do this after all the neccessry data is copied
+						from the original CDR to the new forked CDR.</para>
 					</option>
 					<option name="r">
 						<para>Do <emphasis>NOT</emphasis> reset the new cdr.</para>
@@ -225,7 +226,7 @@ static void ast_cdr_fork(struct ast_channel *chan, struct ast_flags optflags, ch
 	ast_set_flag(cdr, AST_CDR_FLAG_CHILD | AST_CDR_FLAG_LOCKED);
 }
 
-static int forkcdr_exec(struct ast_channel *chan, void *data)
+static int forkcdr_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	char *argcopy = NULL;

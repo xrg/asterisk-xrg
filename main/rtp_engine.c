@@ -1013,7 +1013,8 @@ static enum ast_bridge_result remote_bridge_loop(struct ast_channel *c0, struct 
 		}
 		if ((inaddrcmp(&t0, &ac0)) ||
 		    (vinstance0 && inaddrcmp(&vt0, &vac0)) ||
-		    (tinstance0 && inaddrcmp(&tt0, &tac0))) {
+		    (tinstance0 && inaddrcmp(&tt0, &tac0)) ||
+		    (codec0 != oldcodec0)) {
 			ast_debug(1, "Oooh, '%s' changed end address to %s:%d (format %d)\n",
 				  c0->name, ast_inet_ntoa(t0.sin_addr), ntohs(t0.sin_port), codec0);
 			ast_debug(1, "Oooh, '%s' was %s:%d/(format %d)\n",
@@ -1540,7 +1541,8 @@ int ast_rtp_instance_make_compatible(struct ast_channel *chan, struct ast_rtp_in
 
 	if (!peer_instance || peer_instance->engine != instance->engine) {
 		ast_channel_unlock(peer);
-		peer_instance = (ao2_ref(peer_instance, -1), NULL);
+		ao2_ref(peer_instance, -1);
+		peer_instance = NULL;
 		return -1;
 	}
 
@@ -1548,7 +1550,8 @@ int ast_rtp_instance_make_compatible(struct ast_channel *chan, struct ast_rtp_in
 
 	ast_channel_unlock(peer);
 
-	peer_instance = (ao2_ref(peer_instance, -1), NULL);
+	ao2_ref(peer_instance, -1);
+	peer_instance = NULL;
 
 	return res;
 }

@@ -135,7 +135,6 @@ enum ao2_callback_type {
 /* the underlying functions common to debug and non-debug versions */
 
 static int internal_ao2_ref(void *user_data, const int delta);
-static void *internal_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn);
 static struct ao2_container *internal_ao2_container_alloc(struct ao2_container *c, const uint n_buckets, ao2_hash_fn *hash_fn,
 							  ao2_callback_fn *cmp_fn);
 static struct bucket_list *internal_ao2_link(struct ao2_container *c, void *user_data, const char *file, int line, const char *func);
@@ -236,7 +235,7 @@ int __ao2_ref_debug(void *user_data, const int delta, char *tag, char *file, int
 
 	if (delta != 0) {
 		FILE *refo = fopen(REF_FILE,"a");
-		fprintf(refo, "%p %s%d   %s:%d:%s (%s) [@%d]\n", user_data, (delta<0? "":"+"), delta, file, line, funcname, tag, obj->priv_data.ref_counter);
+		fprintf(refo, "%p %s%d   %s:%d:%s (%s) [@%d]\n", user_data, (delta<0? "":"+"), delta, file, line, funcname, tag, obj ? obj->priv_data.ref_counter : -1);
 		fclose(refo);
 	}
 	if (obj->priv_data.ref_counter + delta == 0 && obj->priv_data.destructor_fn != NULL) { /* this isn't protected with lock; just for o/p */
@@ -303,7 +302,7 @@ static int internal_ao2_ref(void *user_data, const int delta)
  * We always alloc at least the size of a void *,
  * for debugging purposes.
  */
-static void *internal_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
+static void *internal_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, const char *file, int line, const char *funcname)
 {
 	/* allocation */
 	struct astobj2 *obj;
@@ -311,7 +310,11 @@ static void *internal_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_f
 	if (data_size < sizeof(void *))
 		data_size = sizeof(void *);
 
+#if defined(__AST_DEBUG_MALLOC)
+	obj = __ast_calloc(1, sizeof(*obj) + data_size, file, line, funcname);
+#else
 	obj = ast_calloc(1, sizeof(*obj) + data_size);
+#endif
 
 	if (obj == NULL)
 		return NULL;
@@ -332,13 +335,14 @@ static void *internal_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_f
 	return EXTERNAL_OBJ(obj);
 }
 
-void *__ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, char *tag, char *file, int line, const char *funcname)
+void *__ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, char *tag,
+			const char *file, int line, const char *funcname, int ref_debug)
 {
 	/* allocation */
 	void *obj;
-	FILE *refo = fopen(REF_FILE,"a");
+	FILE *refo = ref_debug ? fopen(REF_FILE,"a") : NULL;
 
-	obj = internal_ao2_alloc(data_size, destructor_fn);
+	obj = internal_ao2_alloc(data_size, destructor_fn, file, line, funcname);
 
 	if (obj == NULL)
 		return NULL;
@@ -354,7 +358,7 @@ void *__ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, char 
 
 void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
 {
-	return internal_ao2_alloc(data_size, destructor_fn);
+	return internal_ao2_alloc(data_size, destructor_fn, __FILE__, __LINE__, __FUNCTION__);
 }
 
 
@@ -428,7 +432,7 @@ static struct ao2_container *internal_ao2_container_alloc(struct ao2_container *
 		return NULL;
 	
 	c->version = 1;	/* 0 is a reserved value here */
-	c->n_buckets = n_buckets;
+	c->n_buckets = hash_fn ? n_buckets : 1;
 	c->hash_fn = hash_fn ? hash_fn : hash_zero;
 	c->cmp_fn = cmp_fn;
 
@@ -440,14 +444,16 @@ static struct ao2_container *internal_ao2_container_alloc(struct ao2_container *
 }
 
 struct ao2_container *__ao2_container_alloc_debug(const unsigned int n_buckets, ao2_hash_fn *hash_fn,
-						  ao2_callback_fn *cmp_fn, char *tag, char *file, int line, const char *funcname)
+						  ao2_callback_fn *cmp_fn, char *tag, char *file, int line,
+						  const char *funcname, int ref_debug)
 {
 	/* XXX maybe consistency check on arguments ? */
 	/* compute the container size */
-	size_t container_size = sizeof(struct ao2_container) + n_buckets * sizeof(struct bucket);
-	struct ao2_container *c = __ao2_alloc_debug(container_size, container_destruct_debug, tag, file, line, funcname);
+	const unsigned int num_buckets = hash_fn ? n_buckets : 1;
+	size_t container_size = sizeof(struct ao2_container) + num_buckets * sizeof(struct bucket);
+	struct ao2_container *c = __ao2_alloc_debug(container_size, container_destruct_debug, tag, file, line, funcname, ref_debug);
 
-	return internal_ao2_container_alloc(c, n_buckets, hash_fn, cmp_fn);
+	return internal_ao2_container_alloc(c, num_buckets, hash_fn, cmp_fn);
 }
 
 struct ao2_container *__ao2_container_alloc(const unsigned int n_buckets, ao2_hash_fn *hash_fn,
@@ -456,10 +462,11 @@ struct ao2_container *__ao2_container_alloc(const unsigned int n_buckets, ao2_ha
 	/* XXX maybe consistency check on arguments ? */
 	/* compute the container size */
 
-	size_t container_size = sizeof(struct ao2_container) + n_buckets * sizeof(struct bucket);
+	const unsigned int num_buckets = hash_fn ? n_buckets : 1;
+	size_t container_size = sizeof(struct ao2_container) + num_buckets * sizeof(struct bucket);
 	struct ao2_container *c = __ao2_alloc(container_size, container_destruct);
 
-	return internal_ao2_container_alloc(c, n_buckets, hash_fn, cmp_fn);
+	return internal_ao2_container_alloc(c, num_buckets, hash_fn, cmp_fn);
 }
 
 /*!
@@ -920,10 +927,10 @@ static void container_destruct_debug(void *_c)
 #ifdef AO2_DEBUG
 static int print_cb(void *obj, void *arg, int flag)
 {
-	int *fd = arg;
+	struct ast_cli_args *a = (struct ast_cli_args *) arg;
 	char *s = (char *)obj;
 
-	ast_cli(*fd, "string <%s>\n", s);
+	ast_cli(a->fd, "string <%s>\n", s);
 	return 0;
 }
 
@@ -1010,7 +1017,7 @@ static char *handle_astobj2_test(struct ast_cli_entry *e, int cmd, struct ast_cl
 		ao2_t_ref(obj, -1, "test");
 	}
 	ast_cli(a->fd, "testing callbacks\n");
-	ao2_t_callback(c1, 0, print_cb, &a->fd, "test callback");
+	ao2_t_callback(c1, 0, print_cb, a, "test callback");
 	ast_cli(a->fd, "testing iterators, remove every second object\n");
 	{
 		struct ao2_iterator ai;
@@ -1031,7 +1038,7 @@ static char *handle_astobj2_test(struct ast_cli_entry *e, int cmd, struct ast_cl
 		}
 	}
 	ast_cli(a->fd, "testing callbacks again\n");
-	ao2_t_callback(c1, 0, print_cb, &a->fd, "test callback");
+	ao2_t_callback(c1, 0, print_cb, a, "test callback");
 
 	ast_verbose("now you should see an error message:\n");
 	ao2_t_ref(&i, -1, "");	/* i is not a valid object so we print an error here */

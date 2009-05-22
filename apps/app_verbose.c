@@ -72,7 +72,7 @@ static char *app_log = "Log";
  ***/
 
 
-static int verbose_exec(struct ast_channel *chan, void *data)
+static int verbose_exec(struct ast_channel *chan, const char *data)
 {
 	int vsize;
 	char *parse;
@@ -118,7 +118,7 @@ static int verbose_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static int log_exec(struct ast_channel *chan, void *data)
+static int log_exec(struct ast_channel *chan, const char *data)
 {
 	char *parse;
 	int lnum = -1;
@@ -146,8 +146,6 @@ static int log_exec(struct ast_channel *chan, void *data)
 		lnum = __LOG_VERBOSE;
 	} else if (!strcasecmp(args.level, "DTMF")) {
 		lnum = __LOG_DTMF;
-	} else if (!strcasecmp(args.level, "EVENT")) {
-		lnum = __LOG_EVENT;
 	} else {
 		ast_log(LOG_ERROR, "Unknown log level: '%s'\n", args.level);
 	}

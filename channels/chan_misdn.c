@@ -316,7 +316,9 @@ enum misdn_chan_state {
 	MISDN_HOLD_DISCONNECT,     /*!< when on hold */
 };
 
+/*! Asterisk created the channel (outgoing call) */
 #define ORG_AST 1
+/*! mISDN created the channel (incoming call) */
 #define ORG_MISDN 2
 
 struct hold_info {
@@ -709,11 +711,11 @@ static void release_chan(struct misdn_bchannel *bc);
 
 #if defined(AST_MISDN_ENHANCEMENTS)
 static const char misdn_command_name[] = "misdn_command";
-static int misdn_command_exec(struct ast_channel *chan, void *data);
+static int misdn_command_exec(struct ast_channel *chan, const char *data);
 #endif	/* defined(AST_MISDN_ENHANCEMENTS) */
-static int misdn_check_l2l1(struct ast_channel *chan, void *data);
-static int misdn_set_opt_exec(struct ast_channel *chan, void *data);
-static int misdn_facility_exec(struct ast_channel *chan, void *data);
+static int misdn_check_l2l1(struct ast_channel *chan, const char *data);
+static int misdn_set_opt_exec(struct ast_channel *chan, const char *data);
+static int misdn_facility_exec(struct ast_channel *chan, const char *data);
 
 int chan_misdn_jb_empty(struct misdn_bchannel *bc, char *buf, int len);
 
@@ -746,7 +748,7 @@ static struct chan_list *get_chan_by_ast(struct ast_channel *ast)
 	return NULL;
 }
 
-static struct chan_list *get_chan_by_ast_name(char *name)
+static struct chan_list *get_chan_by_ast_name(const char *name)
 {
 	struct chan_list *tmp;
 
@@ -3623,7 +3625,7 @@ misdn_overlap_dial_task_disconnect:
 
 static void send_digit_to_chan(struct chan_list *cl, char digit)
 {
-	static const char *dtmf_tones[] = {
+	static const char * const dtmf_tones[] = {
 /* *INDENT-OFF* */
 		"!941+1336/100,!0/100",	/* 0 */
 		"!697+1209/100,!0/100",	/* 1 */
@@ -4023,7 +4025,7 @@ struct state_struct {
 	char txt[255];
 };
 
-static struct state_struct state_array[] = {
+static const struct state_struct state_array[] = {
 /* *INDENT-OFF* */
 	{ MISDN_NOTHING,             "NOTHING" },             /* at beginning */
 	{ MISDN_WAITING4DIGS,        "WAITING4DIGS" },        /* when waiting for infos */
@@ -5123,11 +5125,11 @@ static const struct FacParm Fac_Msgs[] = {
 
 static char *handle_cli_misdn_send_facility(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char *channame;
-	char *nr;
+	const char *channame;
+	const char *nr;
 	struct chan_list *tmp;
 	int port;
-	char *served_nr;
+	const char *served_nr;
 	struct misdn_bchannel dummy, *bc=&dummy;
 	unsigned max_len;
 
@@ -5379,8 +5381,8 @@ static char *handle_cli_misdn_send_restart(struct ast_cli_entry *e, int cmd, str
 
 static char *handle_cli_misdn_send_digit(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char *channame;
-	char *msg;
+	const char *channame;
+	const char *msg;
 	struct chan_list *tmp;
 	int i, msglen;
 
@@ -5428,7 +5430,7 @@ static char *handle_cli_misdn_send_digit(struct ast_cli_entry *e, int cmd, struc
 
 static char *handle_cli_misdn_toggle_echocancel(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char *channame;
+	const char *channame;
 	struct chan_list *tmp;
 
 	switch (cmd) {
@@ -5474,8 +5476,8 @@ static char *handle_cli_misdn_toggle_echocancel(struct ast_cli_entry *e, int cmd
 
 static char *handle_cli_misdn_send_display(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	char *channame;
-	char *msg;
+	const char *channame;
+	const char *msg;
 	struct chan_list *tmp;
 
 	switch (cmd) {
@@ -5866,6 +5868,7 @@ static int read_config(struct chan_list *ch)
 
 	misdn_cfg_get(port, MISDN_CFG_DISPLAY_CONNECTED, &bc->display_connected, sizeof(bc->display_connected));
 	misdn_cfg_get(port, MISDN_CFG_DISPLAY_SETUP, &bc->display_setup, sizeof(bc->display_setup));
+	misdn_cfg_get(port, MISDN_CFG_OUTGOING_COLP, &bc->outgoing_colp, sizeof(bc->outgoing_colp));
 
 	misdn_cfg_get(port, MISDN_CFG_PICKUPGROUP, &pg, sizeof(pg));
 	misdn_cfg_get(port, MISDN_CFG_CALLGROUP, &cg, sizeof(cg));
@@ -6041,7 +6044,6 @@ static void misdn_get_connected_line(struct ast_channel *ast, struct misdn_bchan
  */
 static void misdn_update_connected_line(struct ast_channel *ast, struct misdn_bchannel *bc, int originator)
 {
-	int Is_PTMP;
 	struct chan_list *ch;
 
 	misdn_get_connected_line(ast, bc, originator);
@@ -6050,66 +6052,49 @@ static void misdn_update_connected_line(struct ast_channel *ast, struct misdn_bc
 	} else {
 		bc->redirecting.to = bc->caller;
 	}
-
-	Is_PTMP = !misdn_lib_is_ptp(bc->port);
-	switch (ast->connected.source) {
-	case AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER:
-	case AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER:
-		ch = MISDN_ASTERISK_TECH_PVT(ast);
-		if (ch->state == MISDN_CONNECTED
-			|| originator != ORG_MISDN) {
-			if (Is_PTMP) {
-				/* Send NOTIFY(transfer-active, redirecting.to data) */
-				bc->redirecting.to_changed = 1;
-				bc->notify_description_code = mISDN_NOTIFY_CODE_CALL_TRANSFER_ACTIVE;
-				misdn_lib_send_event(bc, EVENT_NOTIFY);
-#if defined(AST_MISDN_ENHANCEMENTS)
-			} else {
-				/* Send EctInform(transfer-active, redirecting.to data) */
-				bc->fac_out.Function = Fac_EctInform;
-				bc->fac_out.u.EctInform.InvokeID = ++misdn_invoke_id;
-				bc->fac_out.u.EctInform.Status = 1;/* active */
-				if (bc->redirecting.to.number[0]) {
-					misdn_PresentedNumberUnscreened_fill(&bc->fac_out.u.EctInform.Redirection,
-						&bc->redirecting.to);
-					bc->fac_out.u.EctInform.RedirectionPresent = 1;
-				} else {
-					bc->fac_out.u.EctInform.RedirectionPresent = 0;
-				}
-
-				/* Send message */
-				print_facility(&bc->fac_out, bc);
-				misdn_lib_send_event(bc, EVENT_FACILITY);
-#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
-			}
-		}
+	switch (bc->outgoing_colp) {
+	case 1:/* restricted */
+	case 2:/* blocked */
+		bc->redirecting.to.presentation = 1;/* restricted */
 		break;
-	case AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER_ALERTING:
-		if (Is_PTMP) {
-			/* Send NOTIFY(transfer-alerting, redirecting.to data) */
+	default:
+		break;
+	}
+
+	ch = MISDN_ASTERISK_TECH_PVT(ast);
+	if (ch->state == MISDN_CONNECTED
+		|| originator != ORG_MISDN) {
+		int is_ptmp;
+
+		is_ptmp = !misdn_lib_is_ptp(bc->port);
+		if (is_ptmp) {
+			/* Send NOTIFY(transfer-active, redirecting.to data) */
 			bc->redirecting.to_changed = 1;
-			bc->notify_description_code = mISDN_NOTIFY_CODE_CALL_TRANSFER_ALERTING;
+			bc->notify_description_code = mISDN_NOTIFY_CODE_CALL_TRANSFER_ACTIVE;
 			misdn_lib_send_event(bc, EVENT_NOTIFY);
 #if defined(AST_MISDN_ENHANCEMENTS)
 		} else {
-			/* Send EctInform(transfer-alerting, redirecting.to data) */
+			/* Send EctInform(transfer-active, redirecting.to data) */
 			bc->fac_out.Function = Fac_EctInform;
 			bc->fac_out.u.EctInform.InvokeID = ++misdn_invoke_id;
-			bc->fac_out.u.EctInform.Status = 0;/* alerting */
-			if (bc->redirecting.to.number[0]) {
-				misdn_PresentedNumberUnscreened_fill(&bc->fac_out.u.EctInform.Redirection,
-					&bc->redirecting.to);
-				bc->fac_out.u.EctInform.RedirectionPresent = 1;
-			} else {
-				bc->fac_out.u.EctInform.RedirectionPresent = 0;
+			bc->fac_out.u.EctInform.Status = 1;/* active */
+			bc->fac_out.u.EctInform.RedirectionPresent = 1;/* Must be present when status is active */
+			misdn_PresentedNumberUnscreened_fill(&bc->fac_out.u.EctInform.Redirection,
+				&bc->redirecting.to);
+			switch (bc->outgoing_colp) {
+			case 2:/* blocked */
+				/* Block the number going out */
+				bc->fac_out.u.EctInform.Redirection.Type = 1;/* presentationRestricted */
+				break;
+			default:
+				break;
 			}
+
+			/* Send message */
 			print_facility(&bc->fac_out, bc);
 			misdn_lib_send_event(bc, EVENT_FACILITY);
 #endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 		}
-		break;
-	default:
-		break;
 	}
 }
 
@@ -6185,33 +6170,61 @@ static void misdn_copy_redirecting_to_ast(struct ast_channel *ast, const struct 
  *
  * \param ast Current Asterisk channel
  * \param bc Associated B channel
+ * \param originator Who originally created this channel. ORG_AST or ORG_MISDN
  *
  * \return Nothing
  */
-static void misdn_update_redirecting(struct ast_channel *ast, struct misdn_bchannel *bc)
+static void misdn_update_redirecting(struct ast_channel *ast, struct misdn_bchannel *bc, int originator)
 {
-	int Is_PTMP;
+	int is_ptmp;
 
 	misdn_copy_redirecting_from_ast(bc, ast);
+	switch (bc->outgoing_colp) {
+	case 1:/* restricted */
+	case 2:/* blocked */
+		bc->redirecting.to.presentation = 1;/* restricted */
+		break;
+	default:
+		break;
+	}
 
-	Is_PTMP = !misdn_lib_is_ptp(bc->port);
-	if (Is_PTMP) {
+	if (originator != ORG_MISDN) {
+		return;
+	}
+
+	is_ptmp = !misdn_lib_is_ptp(bc->port);
+	if (is_ptmp) {
 		/* Send NOTIFY(call-is-diverting, redirecting.to data) */
 		bc->redirecting.to_changed = 1;
 		bc->notify_description_code = mISDN_NOTIFY_CODE_CALL_IS_DIVERTING;
 		misdn_lib_send_event(bc, EVENT_NOTIFY);
 #if defined(AST_MISDN_ENHANCEMENTS)
 	} else {
-		/* Send DivertingLegInformation1 */
-		bc->fac_out.Function = Fac_DivertingLegInformation1;
-		bc->fac_out.u.DivertingLegInformation1.InvokeID = ++misdn_invoke_id;
-		bc->fac_out.u.DivertingLegInformation1.DiversionReason =
-			misdn_to_diversion_reason(bc->redirecting.reason);
-		bc->fac_out.u.DivertingLegInformation1.SubscriptionOption = 2;/* notificationWithDivertedToNr */
-		bc->fac_out.u.DivertingLegInformation1.DivertedToPresent = 1;
-		misdn_PresentedNumberUnscreened_fill(&bc->fac_out.u.DivertingLegInformation1.DivertedTo, &bc->redirecting.to);
-		print_facility(&bc->fac_out, bc);
-		misdn_lib_send_event(bc, EVENT_FACILITY);
+		int match;	/* TRUE if the dialed number matches the redirecting to number */
+
+		match = (strcmp(ast->exten, bc->redirecting.to.number) == 0) ? 1 : 0;
+		if (!bc->div_leg_3_tx_pending
+			|| !match) {
+			/* Send DivertingLegInformation1 */
+			bc->fac_out.Function = Fac_DivertingLegInformation1;
+			bc->fac_out.u.DivertingLegInformation1.InvokeID = ++misdn_invoke_id;
+			bc->fac_out.u.DivertingLegInformation1.DiversionReason =
+				misdn_to_diversion_reason(bc->redirecting.reason);
+			bc->fac_out.u.DivertingLegInformation1.SubscriptionOption = 2;/* notificationWithDivertedToNr */
+			bc->fac_out.u.DivertingLegInformation1.DivertedToPresent = 1;
+			misdn_PresentedNumberUnscreened_fill(&bc->fac_out.u.DivertingLegInformation1.DivertedTo, &bc->redirecting.to);
+			switch (bc->outgoing_colp) {
+			case 2:/* blocked */
+				/* Block the number going out */
+				bc->fac_out.u.DivertingLegInformation1.DivertedTo.Type = 1;/* presentationRestricted */
+				break;
+			default:
+				break;
+			}
+			print_facility(&bc->fac_out, bc);
+			misdn_lib_send_event(bc, EVENT_FACILITY);
+		}
+		bc->div_leg_3_tx_pending = 0;
 
 		/* Send DivertingLegInformation3 */
 		bc->fac_out.Function = Fac_DivertingLegInformation3;
@@ -6384,6 +6397,14 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 		}
 
 		misdn_copy_redirecting_from_ast(newbc, ast);
+		switch (newbc->outgoing_colp) {
+		case 1:/* restricted */
+		case 2:/* blocked */
+			newbc->redirecting.from.presentation = 1;/* restricted */
+			break;
+		default:
+			break;
+		}
 #if defined(AST_MISDN_ENHANCEMENTS)
 		if (newbc->redirecting.from.number[0] && misdn_lib_is_ptp(port)) {
 			/* Create DivertingLegInformation2 facility */
@@ -6397,7 +6418,25 @@ static int misdn_call(struct ast_channel *ast, char *dest, int timeout)
 			misdn_PresentedNumberUnscreened_fill(
 				&newbc->fac_out.u.DivertingLegInformation2.Diverting,
 				&newbc->redirecting.from);
+			switch (newbc->outgoing_colp) {
+			case 2:/* blocked */
+				/* Block the number going out */
+				newbc->fac_out.u.DivertingLegInformation2.Diverting.Type = 1;/* presentationRestricted */
+				break;
+			default:
+				break;
+			}
 			newbc->fac_out.u.DivertingLegInformation2.OriginalCalledPresent = 0;
+			if (1 < newbc->redirecting.count) {
+				newbc->fac_out.u.DivertingLegInformation2.OriginalCalledPresent = 1;
+				newbc->fac_out.u.DivertingLegInformation2.OriginalCalled.Type = 2;/* numberNotAvailableDueToInterworking */
+			}
+
+			/*
+			 * Expect a DivertingLegInformation3 to update the COLR of the
+			 * redirecting-to party we are attempting to call now.
+			 */
+			newbc->div_leg_3_rx_wanted = 1;
 		}
 #endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
@@ -6518,6 +6557,27 @@ static int misdn_answer(struct ast_channel *ast)
 		p->bc->connected.number_plan = p->bc->dialed.number_plan;
 	}
 
+	switch (p->bc->outgoing_colp) {
+	case 1:/* restricted */
+	case 2:/* blocked */
+		p->bc->connected.presentation = 1;/* restricted */
+		break;
+	default:
+		break;
+	}
+
+#if defined(AST_MISDN_ENHANCEMENTS)
+	if (p->bc->div_leg_3_tx_pending) {
+		p->bc->div_leg_3_tx_pending = 0;
+
+		/* Send DivertingLegInformation3 */
+		p->bc->fac_out.Function = Fac_DivertingLegInformation3;
+		p->bc->fac_out.u.DivertingLegInformation3.InvokeID = ++misdn_invoke_id;
+		p->bc->fac_out.u.DivertingLegInformation3.PresentationAllowedIndicator =
+			(p->bc->connected.presentation == 0) ? 1 : 0;
+		print_facility(&p->bc->fac_out, p->bc);
+	}
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 	misdn_lib_send_event(p->bc, EVENT_CONNECT);
 	start_bc_tones(p);
 
@@ -6720,7 +6780,7 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 		break;
 	case AST_CONTROL_REDIRECTING:
 		chan_misdn_log(1, p->bc->port, "* IND :\tredirecting info update pid:%d\n", p->bc->pid);
-		misdn_update_redirecting(ast, p->bc);
+		misdn_update_redirecting(ast, p->bc, p->originator);
 		break;
 	default:
 		chan_misdn_log(1, p->bc->port, " --> * Unknown Indication:%d pid:%d\n", cond, p->bc->pid);
@@ -6829,12 +6889,11 @@ CLEAN_CH:
 
 	switch (p->state) {
 	case MISDN_INCOMING_SETUP:
-	case MISDN_CALLING:
 		p->state = MISDN_CLEANING;
 		/* This is the only place in misdn_hangup, where we
 		 * can call release_chan, else it might create lot's of trouble
 		 * */
-		ast_log(LOG_NOTICE, "release channel, in CALLING/INCOMING_SETUP state.. no other events happened\n");
+		ast_log(LOG_NOTICE, "release channel, in INCOMING_SETUP state.. no other events happened\n");
 		release_chan(bc);
 		misdn_lib_send_event(bc, EVENT_RELEASE_COMPLETE);
 		break;
@@ -6857,6 +6916,7 @@ CLEAN_CH:
 		}
 		break;
 
+	case MISDN_CALLING:
 	case MISDN_ALERTING:
 	case MISDN_PROGRESS:
 	case MISDN_PROCEEDING:
@@ -7738,7 +7798,9 @@ static void update_name(struct ast_channel *tmp, int port, int c)
 	snprintf(newname, sizeof(newname), "%s/%d-", misdn_type, chan_offset + c);
 	if (strncmp(tmp->name, newname, strlen(newname))) {
 		snprintf(newname, sizeof(newname), "%s/%d-u%d", misdn_type, chan_offset + c, glob_channel++);
+		ast_channel_lock(tmp);
 		ast_change_name(tmp, newname);
+		ast_channel_unlock(tmp);
 		chan_misdn_log(3, port, " --> updating channel name to [%s]\n", tmp->name);
 	}
 }
@@ -8393,7 +8455,7 @@ static void misdn_cc_pbx_notify(long record_id, const struct misdn_cc_notify *no
 
 	if (ast_pbx_start(chan)) {
 		ast_log(LOG_WARNING, "Unable to start pbx channel %s!\n", chan->name);
-		ast_channel_free(chan);
+		ast_channel_release(chan);
 	} else {
 		ast_verb(1, "Started pbx for call completion notify channel %s\n", chan->name);
 	}
@@ -8636,6 +8698,7 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 #endif	/* We don't handle this yet */
 	case Fac_DivertingLegInformation1:
 		/* Private-Public ISDN interworking message */
+		bc->div_leg_3_rx_wanted = 0;
 		if (ch && ch->ast) {
 			bc->redirecting.reason =
 				diversion_reason_to_misdn(bc->fac_in.u.DivertingLegInformation1.DiversionReason);
@@ -8646,12 +8709,15 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 				/* Add configured prefix to redirecting.to.number */
 				misdn_add_number_prefix(bc->port, bc->redirecting.to.number_type,
 					bc->redirecting.to.number, sizeof(bc->redirecting.to.number));
-
-				misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting);
-				ast_channel_queue_redirecting_update(ch->ast, &ch->ast->redirecting);
 			} else {
-				ch->ast->redirecting.reason = misdn_to_ast_reason(bc->redirecting.reason);
+				bc->redirecting.to.number[0] = '\0';
+				bc->redirecting.to.number_plan = NUMPLAN_ISDN;
+				bc->redirecting.to.number_type = NUMTYPE_UNKNOWN;
+				bc->redirecting.to.presentation = 1;/* restricted */
+				bc->redirecting.to.screening = 0;/* unscreened */
 			}
+			misdn_copy_redirecting_to_ast(ch->ast, &bc->redirecting);
+			bc->div_leg_3_rx_wanted = 1;
 		}
 		break;
 	case Fac_DivertingLegInformation2:
@@ -8659,7 +8725,25 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 		switch (event) {
 		case EVENT_SETUP:
 			/* Comes in on a SETUP with redirecting.from information */
+			bc->div_leg_3_tx_pending = 1;
 			if (ch && ch->ast) {
+				/*
+				 * Setup the redirecting.to informtion so we can identify
+				 * if the user wants to manually supply the COLR for this
+				 * redirected to number if further redirects could happen.
+				 *
+				 * All the user needs to do is set the REDIRECTING(to-pres)
+				 * to the COLR and REDIRECTING(to-num) = ${EXTEN} to be safe
+				 * after determining that the incoming call was redirected by
+				 * checking if there is a REDIRECTING(from-num).
+				 */
+				ast_copy_string(bc->redirecting.to.number, bc->dialed.number,
+					sizeof(bc->redirecting.to.number));
+				bc->redirecting.to.number_plan = bc->dialed.number_plan;
+				bc->redirecting.to.number_type = bc->dialed.number_type;
+				bc->redirecting.to.presentation = 1;/* restricted */
+				bc->redirecting.to.screening = 0;/* unscreened */
+
 				bc->redirecting.reason =
 					diversion_reason_to_misdn(bc->fac_in.u.DivertingLegInformation2.DiversionReason);
 				bc->redirecting.count = bc->fac_in.u.DivertingLegInformation2.DiversionCounter;
@@ -8688,7 +8772,17 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 		break;
 	case Fac_DivertingLegInformation3:
 		/* Private-Public ISDN interworking message */
-		/* Don't know what to do with this. */
+		if (bc->div_leg_3_rx_wanted) {
+			bc->div_leg_3_rx_wanted = 0;
+
+			if (ch && ch->ast) {
+				ch->ast->redirecting.to.number_presentation =
+					bc->fac_in.u.DivertingLegInformation3.PresentationAllowedIndicator
+					? AST_PRES_ALLOWED | AST_PRES_USER_NUMBER_UNSCREENED
+					: AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_UNSCREENED;
+				ast_channel_queue_redirecting_update(ch->ast, &ch->ast->redirecting);
+			}
+		}
 		break;
 
 #else	/* !defined(AST_MISDN_ENHANCEMENTS) */
@@ -8827,6 +8921,15 @@ static void misdn_facility_ie_handler(enum event_e event, struct misdn_bchannel 
 			misdn_add_number_prefix(bc->port, party_id.number_type,
 				party_id.number, sizeof(party_id.number));
 
+			/*
+			 * It would be preferable to update the connected line information
+			 * only when the message callStatus is active.  However, the
+			 * optional redirection number may not be present in the active
+			 * message if an alerting message were received earlier.
+			 *
+			 * The consequences if we wind up sending two updates is benign.
+			 * The other end will think that it got transferred twice.
+			 */
 			misdn_queue_connected_line_update(ch->ast, &party_id,
 				(bc->fac_in.u.EctInform.Status == 0 /* alerting */)
 					? AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER_ALERTING
@@ -9370,7 +9473,9 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 
 			if (!ast_canmatch_extension(ch->ast, ch->context, bc->dialed.number, 1, bc->caller.number)) {
 				if (ast_exists_extension(ch->ast, ch->context, "i", 1, bc->caller.number)) {
-					ast_log(LOG_WARNING, "Extension can never match, So jumping to 'i' extension. port(%d)\n", bc->port);
+					ast_log(LOG_WARNING,
+						"Extension '%s@%s' can never match. Jumping to 'i' extension. port:%d\n",
+						bc->dialed.number, ch->context, bc->port);
 					strcpy(ch->ast->exten, "i");
 
 					ch->state = MISDN_DIALING;
@@ -9378,9 +9483,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 					break;
 				}
 
-				ast_log(LOG_WARNING, "Extension can never match, so disconnecting on port(%d).\n"
-						"\tMaybe you want to add an 'i' extension to catch this case.\n",
-						bc->port);
+				ast_log(LOG_WARNING,
+					"Extension '%s@%s' can never match. Disconnecting. port:%d\n"
+					"\tMaybe you want to add an 'i' extension to catch this case.\n",
+					bc->dialed.number, ch->context, bc->port);
 
 				if (bc->nt) {
 					hanguptone_indicate(ch);
@@ -9607,7 +9713,9 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		chan_misdn_log(5, bc->port, "CONTEXT:%s\n", ch->context);
 		if (!ast_canmatch_extension(ch->ast, ch->context, bc->dialed.number, 1, bc->caller.number)) {
 			if (ast_exists_extension(ch->ast, ch->context, "i", 1, bc->caller.number)) {
-				ast_log(LOG_WARNING, "Extension can never match, So jumping to 'i' extension. port(%d)\n", bc->port);
+				ast_log(LOG_WARNING,
+					"Extension '%s@%s' can never match. Jumping to 'i' extension. port:%d\n",
+					bc->dialed.number, ch->context, bc->port);
 				strcpy(ch->ast->exten, "i");
 				misdn_lib_send_event(bc, EVENT_SETUP_ACKNOWLEDGE);
 				ch->state = MISDN_DIALING;
@@ -9615,9 +9723,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 				break;
 			}
 
-			ast_log(LOG_WARNING, "Extension can never match, so disconnecting on port(%d).\n"
-					"\tMaybe you want to add an 'i' extension to catch this case.\n",
-					bc->port);
+			ast_log(LOG_WARNING,
+				"Extension '%s@%s' can never match. Disconnecting. port:%d\n"
+				"\tMaybe you want to add an 'i' extension to catch this case.\n",
+				bc->dialed.number, ch->context, bc->port);
 			if (bc->nt) {
 				hanguptone_indicate(ch);
 			}
@@ -9805,6 +9914,17 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		if (bc->fac_in.Function != Fac_None) {
 			misdn_facility_ie_handler(event, bc, ch);
 		}
+#if defined(AST_MISDN_ENHANCEMENTS)
+		if (bc->div_leg_3_rx_wanted) {
+			bc->div_leg_3_rx_wanted = 0;
+
+			if (ch->ast) {
+				ch->ast->redirecting.to.number_presentation =
+					AST_PRES_RESTRICTED | AST_PRES_USER_NUMBER_UNSCREENED;
+				ast_channel_queue_redirecting_update(ch->ast, &ch->ast->redirecting);
+			}
+		}
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
 		/* we answer when we've got our very new L3 ID from the NT stack */
 		misdn_lib_send_event(bc, EVENT_CONNECT_ACKNOWLEDGE);
@@ -10218,6 +10338,15 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 			}
 			break;
 		case mISDN_NOTIFY_CODE_CALL_TRANSFER_ALERTING:
+			/*
+			 * It would be preferable to update the connected line information
+			 * only when the message callStatus is active.  However, the
+			 * optional redirection number may not be present in the active
+			 * message if an alerting message were received earlier.
+			 *
+			 * The consequences if we wind up sending two updates is benign.
+			 * The other end will think that it got transferred twice.
+			 */
 			if (bc->redirecting.to_changed) {
 				bc->redirecting.to_changed = 0;
 				if (ch && ch->ast) {
@@ -11228,7 +11357,7 @@ static const struct misdn_command_table misdn_commands[] = {
  * \retval 0 on success.
  * \retval -1 on error.
  */
-static int misdn_command_exec(struct ast_channel *chan, void *data)
+static int misdn_command_exec(struct ast_channel *chan, const char *data)
 {
 	char *parse;
 	unsigned index;
@@ -11268,7 +11397,7 @@ static int misdn_command_exec(struct ast_channel *chan, void *data)
 }
 #endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
-static int misdn_facility_exec(struct ast_channel *chan, void *data)
+static int misdn_facility_exec(struct ast_channel *chan, const char *data)
 {
 	struct chan_list *ch = MISDN_ASTERISK_TECH_PVT(chan);
 	char *parse;
@@ -11347,7 +11476,7 @@ static int misdn_facility_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static int misdn_check_l2l1(struct ast_channel *chan, void *data)
+static int misdn_check_l2l1(struct ast_channel *chan, const char *data)
 {
 	char *parse;
 	char group[BUFFERSIZE + 1];
@@ -11421,7 +11550,7 @@ static int misdn_check_l2l1(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static int misdn_set_opt_exec(struct ast_channel *chan, void *data)
+static int misdn_set_opt_exec(struct ast_channel *chan, const char *data)
 {
 	struct chan_list *ch = MISDN_ASTERISK_TECH_PVT(chan);
 	char *tok;

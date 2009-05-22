@@ -99,7 +99,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</see-also>
 	</application>
  ***/
-static const char *app_page= "Page";
+static const char * const app_page= "Page";
 
 enum {
 	PAGE_DUPLEX = (1 << 0),
@@ -118,7 +118,7 @@ AST_APP_OPTIONS(page_opts, {
 });
 
 
-static int page_exec(struct ast_channel *chan, void *data)
+static int page_exec(struct ast_channel *chan, const char *data)
 {
 	char *tech, *resource, *tmp;
 	char meetmeopts[88], originator[AST_CHANNEL_NAME], *opts[0];

@@ -720,11 +720,13 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 			if ((c = strrchr(other_side, ';'))) {
 				*++c = '1';
 			}
-			if ((tmpchan = ast_get_channel_by_name_locked(other_side))) {
+			if ((tmpchan = ast_channel_get_by_name(other_side))) {
+				ast_channel_lock(tmpchan);
 				if ((base_peer = ast_bridged_channel(tmpchan))) {
 					ast_copy_string(pu->peername, base_peer->name, sizeof(pu->peername));
 				}
 				ast_channel_unlock(tmpchan);
+				tmpchan = ast_channel_unref(tmpchan);
 			}
 		} else {
 			ast_copy_string(pu->peername, S_OR(args->orig_chan_name, peer->name), sizeof(pu->peername));
@@ -919,7 +921,7 @@ static void set_peers(struct ast_channel **caller, struct ast_channel **callee,
  * Setup channel, set return exten,priority to 's,1'
  * answer chan, sleep chan, park call
 */
-static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
+static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
 {
 	struct ast_channel *parker;
 	struct ast_channel *parkee;
@@ -989,7 +991,7 @@ static int play_message_in_bridged_call(struct ast_channel *caller_chan, struct 
  * \retval AST_FEATURE_RETURN_SUCCESS on success.
  * \retval -1 on error.
 */
-static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
+static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
 {
 	char *caller_chan_id = NULL, *callee_chan_id = NULL, *args = NULL, *touch_filename = NULL;
 	int x = 0;
@@ -1082,7 +1084,7 @@ static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *pee
 	return -1;
 }
 
-static int builtin_automixmonitor(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
+static int builtin_automixmonitor(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
 {
 	char *caller_chan_id = NULL, *callee_chan_id = NULL, *args = NULL, *touch_filename = NULL;
 	int x = 0;
@@ -1192,7 +1194,7 @@ static int builtin_automixmonitor(struct ast_channel *chan, struct ast_channel *
 
 }
 
-static int builtin_disconnect(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
+static int builtin_disconnect(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
 {
 	ast_verb(4, "User hit '%s' to disconnect call.\n", code);
 	return AST_FEATURE_RETURN_HANGUP;
@@ -1242,7 +1244,7 @@ static const char *real_ctx(struct ast_channel *transferer, struct ast_channel *
  * \retval AST_FEATURE_RETURN_SUCCESS.
  * \retval -1 on failure.
 */
-static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
+static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
 {
 	struct ast_channel *transferer;
 	struct ast_channel *transferee;
@@ -1373,7 +1375,7 @@ static int check_compat(struct ast_channel *c, struct ast_channel *newchan)
  *
  * \return -1 on failure
 */
-static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
+static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
 {
 	struct ast_channel *transferer;
 	struct ast_channel *transferee;
@@ -1387,7 +1389,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	struct ast_bridge_config bconfig;
 	struct ast_frame *f;
 	int l;
-	struct ast_party_connected_line connected_line = {{0,},};
+	struct ast_party_connected_line connected_line;
 	struct ast_datastore *features_datastore;
 	struct ast_dial_features *dialfeatures = NULL;
 
@@ -1457,6 +1459,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	newchan = feature_request_and_dial(transferer, transferee, "Local", ast_best_codec(transferer->nativeformats),
 		xferto, atxfernoanswertimeout, &outstate, transferer->cid.cid_num, transferer->cid.cid_name, 1, transferer->language);
 
+	ast_party_connected_line_init(&connected_line);
 	if (!ast_check_hangup(transferer)) {
 		/* Transferer is up - old behaviour */
 		ast_indicate(transferer, -1);
@@ -1716,8 +1719,7 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 
 AST_RWLOCK_DEFINE_STATIC(features_lock);
 
-static struct ast_call_feature builtin_features[] = 
-{
+static struct ast_call_feature builtin_features[] = {
 	{ AST_FEATURE_REDIRECT, "Blind Transfer", "blindxfer", "#", "#", builtin_blindtransfer, AST_FEATURE_FLAG_NEEDSDTMF, "" },
 	{ AST_FEATURE_REDIRECT, "Attended Transfer", "atxfer", "", "", builtin_atxfer, AST_FEATURE_FLAG_NEEDSDTMF, "" },
 	{ AST_FEATURE_AUTOMON, "One Touch Monitor", "automon", "", "", builtin_automonitor, AST_FEATURE_FLAG_NEEDSDTMF, "" },
@@ -1922,7 +1924,7 @@ struct ast_call_feature *ast_find_call_feature(const char *name)
  * \retval -1 error.
  * \retval -2 when an application cannot be found.
 */
-static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense, void *data)
+static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
 {
 	struct ast_app *app;
 	struct ast_call_feature *feature = data;
@@ -2018,7 +2020,7 @@ static int remap_feature(const char *name, const char *value)
  * \retval -1 on failure.
 */
 static int feature_interpret_helper(struct ast_channel *chan, struct ast_channel *peer,
-	struct ast_bridge_config *config, char *code, int sense, char *dynamic_features_buf,
+	struct ast_bridge_config *config, const char *code, int sense, char *dynamic_features_buf,
 	struct ast_flags *features, int operation, struct ast_call_feature *feature)
 {
 	int x;
@@ -2121,7 +2123,7 @@ static int feature_interpret_helper(struct ast_channel *chan, struct ast_channel
  * \retval -1 on failure.
 */
 
-static int feature_interpret(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, char *code, int sense) {
+static int feature_interpret(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense) {
 
 	char dynamic_features_buf[128];
 	const char *peer_dynamic_features, *chan_dynamic_features;
@@ -2150,7 +2152,7 @@ static int feature_interpret(struct ast_channel *chan, struct ast_channel *peer,
 }
 
 
-int ast_feature_detect(struct ast_channel *chan, struct ast_flags *features, char *code, struct ast_call_feature *feature) {
+int ast_feature_detect(struct ast_channel *chan, struct ast_flags *features, const char *code, struct ast_call_feature *feature) {
 
 	return feature_interpret_helper(chan, NULL, NULL, code, 0, NULL, features, 0, feature);
 }
@@ -2569,16 +2571,16 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			ast_set_flag(chan_cdr, AST_CDR_FLAG_MAIN);
 			ast_cdr_update(chan);
 			bridge_cdr = ast_cdr_dup(chan_cdr);
-			ast_copy_string(bridge_cdr->lastapp, chan->appl, sizeof(bridge_cdr->lastapp));
-			ast_copy_string(bridge_cdr->lastdata, chan->data, sizeof(bridge_cdr->lastdata));
+			ast_copy_string(bridge_cdr->lastapp, S_OR(chan->appl, ""), sizeof(bridge_cdr->lastapp));
+			ast_copy_string(bridge_cdr->lastdata, S_OR(chan->data, ""), sizeof(bridge_cdr->lastdata));
 		} else {
 			/* better yet, in a xfer situation, find out why the chan cdr got zapped (pun unintentional) */
 			bridge_cdr = ast_cdr_alloc(); /* this should be really, really rare/impossible? */
 			ast_copy_string(bridge_cdr->channel, chan->name, sizeof(bridge_cdr->channel));
 			ast_copy_string(bridge_cdr->dstchannel, peer->name, sizeof(bridge_cdr->dstchannel));
 			ast_copy_string(bridge_cdr->uniqueid, chan->uniqueid, sizeof(bridge_cdr->uniqueid));
-			ast_copy_string(bridge_cdr->lastapp, chan->appl, sizeof(bridge_cdr->lastapp));
-			ast_copy_string(bridge_cdr->lastdata, chan->data, sizeof(bridge_cdr->lastdata));
+			ast_copy_string(bridge_cdr->lastapp, S_OR(chan->appl, ""), sizeof(bridge_cdr->lastapp));
+			ast_copy_string(bridge_cdr->lastdata, S_OR(chan->data, ""), sizeof(bridge_cdr->lastdata));
 			ast_cdr_setcid(bridge_cdr, chan);
 			bridge_cdr->disposition = (chan->_state == AST_STATE_UP) ?  AST_CDR_ANSWERED : AST_CDR_NULL;
 			bridge_cdr->amaflags = chan->amaflags ? chan->amaflags :  ast_default_amaflags;
@@ -2602,15 +2604,21 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		   hears nothing but ringing while the macro does its thing. */
 		if (peer_cdr && !ast_tvzero(peer_cdr->answer)) {
 			bridge_cdr->answer = peer_cdr->answer;
-			chan_cdr->answer = peer_cdr->answer;
 			bridge_cdr->disposition = peer_cdr->disposition;
-			chan_cdr->disposition = peer_cdr->disposition;
+			if (chan_cdr) {
+				chan_cdr->answer = peer_cdr->answer;
+				chan_cdr->disposition = peer_cdr->disposition;
+			}
 		} else {
 			ast_cdr_answer(bridge_cdr);
-			ast_cdr_answer(chan_cdr); /* for the sake of cli status checks */
+			if (chan_cdr) {
+				ast_cdr_answer(chan_cdr); /* for the sake of cli status checks */
+			}
 		}
-		if (ast_test_flag(chan,AST_FLAG_BRIDGE_HANGUP_DONT)) {
-			ast_set_flag(chan_cdr, AST_CDR_FLAG_BRIDGED);
+		if (ast_test_flag(chan,AST_FLAG_BRIDGE_HANGUP_DONT) && (chan_cdr || peer_cdr)) {
+			if (chan_cdr) {
+				ast_set_flag(chan_cdr, AST_CDR_FLAG_BRIDGED);
+			}
 			if (peer_cdr) {
 				ast_set_flag(peer_cdr, AST_CDR_FLAG_BRIDGED);
 			}
@@ -2705,6 +2713,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				break;
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
+			case AST_CONTROL_CONNECTED_LINE:
 				ast_indicate_data(other, f->subclass, f->data.ptr, f->datalen);
 				break;
 			case AST_CONTROL_OPTION:
@@ -2883,33 +2892,35 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	      to attend to; if the chan or peer changed names,
 	      we have the before and after attached CDR's.
 	*/
-	
+
 	if (new_chan_cdr) {
 		struct ast_channel *chan_ptr = NULL;
- 
- 		if (strcasecmp(orig_channame, chan->name) != 0) { 
- 			/* old channel */
- 			chan_ptr = ast_get_channel_by_name_locked(orig_channame);
- 			if (chan_ptr) {
- 				if (!ast_bridged_channel(chan_ptr)) {
- 					struct ast_cdr *cur;
- 					for (cur = chan_ptr->cdr; cur; cur = cur->next) {
- 						if (cur == chan_cdr) {
- 							break;
- 						}
- 					}
- 					if (cur)
- 						ast_cdr_specialized_reset(chan_cdr,0);
- 				}
- 				ast_channel_unlock(chan_ptr);
- 			}
- 			/* new channel */
- 			ast_cdr_specialized_reset(new_chan_cdr,0);
- 		} else {
- 			ast_cdr_specialized_reset(chan_cdr,0); /* nothing changed, reset the chan_cdr  */
- 		}
+
+		if (strcasecmp(orig_channame, chan->name) != 0) { 
+			/* old channel */
+			if ((chan_ptr = ast_channel_get_by_name(orig_channame))) {
+				ast_channel_lock(chan_ptr);
+				if (!ast_bridged_channel(chan_ptr)) {
+					struct ast_cdr *cur;
+					for (cur = chan_ptr->cdr; cur; cur = cur->next) {
+						if (cur == chan_cdr) {
+							break;
+						}
+					}
+					if (cur) {
+						ast_cdr_specialized_reset(chan_cdr, 0);
+					}
+				}
+				ast_channel_unlock(chan_ptr);
+				chan_ptr = ast_channel_unref(chan_ptr);
+			}
+			/* new channel */
+			ast_cdr_specialized_reset(new_chan_cdr, 0);
+		} else {
+			ast_cdr_specialized_reset(chan_cdr, 0); /* nothing changed, reset the chan_cdr  */
+		}
 	}
-	
+
 	{
 		struct ast_channel *chan_ptr = NULL;
 		new_peer_cdr = pick_unlocked_cdr(peer->cdr); /* the proper chan cdr, if there are forked cdrs */
@@ -2917,8 +2928,8 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			ast_set_flag(new_peer_cdr, AST_CDR_FLAG_POST_DISABLED); /* DISABLED is viral-- it will propagate across a bridge */
 		if (strcasecmp(orig_peername, peer->name) != 0) { 
 			/* old channel */
-			chan_ptr = ast_get_channel_by_name_locked(orig_peername);
-			if (chan_ptr) {
+			if ((chan_ptr = ast_channel_get_by_name(orig_peername))) {
+				ast_channel_lock(chan_ptr);
 				if (!ast_bridged_channel(chan_ptr)) {
 					struct ast_cdr *cur;
 					for (cur = chan_ptr->cdr; cur; cur = cur->next) {
@@ -2926,15 +2937,17 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 							break;
 						}
 					}
-					if (cur)
-						ast_cdr_specialized_reset(peer_cdr,0);
+					if (cur) {
+						ast_cdr_specialized_reset(peer_cdr, 0);
+					}
 				}
 				ast_channel_unlock(chan_ptr);
+				chan_ptr = ast_channel_unref(chan_ptr);
 			}
 			/* new channel */
-			ast_cdr_specialized_reset(new_peer_cdr,0);
+			ast_cdr_specialized_reset(new_peer_cdr, 0);
 		} else {
-			ast_cdr_specialized_reset(peer_cdr,0); /* nothing changed, reset the peer_cdr  */
+			ast_cdr_specialized_reset(peer_cdr, 0); /* nothing changed, reset the peer_cdr  */
 		}
 	}
 	
@@ -3240,7 +3253,7 @@ AST_APP_OPTIONS(park_call_options, BEGIN_OPTIONS
 END_OPTIONS );
 
 /*! \brief Park a call */
-static int park_call_exec(struct ast_channel *chan, void *data)
+static int park_call_exec(struct ast_channel *chan, const char *data)
 {
 	/* Cache the original channel name in case we get masqueraded in the middle
 	 * of a park--it is still theoretically possible for a transfer to happen before
@@ -3326,7 +3339,7 @@ static int park_call_exec(struct ast_channel *chan, void *data)
 }
 
 /*! \brief Pickup parked call */
-static int park_exec_full(struct ast_channel *chan, void *data, struct ast_parkinglot *parkinglot)
+static int park_exec_full(struct ast_channel *chan, const char *data, struct ast_parkinglot *parkinglot)
 {
 	int res = 0;
 	struct ast_channel *peer=NULL;
@@ -3336,7 +3349,7 @@ static int park_exec_full(struct ast_channel *chan, void *data, struct ast_parki
 	struct ast_bridge_config config;
 
 	if (data)
-		park = atoi((char *)data);
+		park = atoi((char *) data);
 
 	parkinglot = find_parkinglot(findparkinglotname(chan)); 	
 	if (!parkinglot)
@@ -3477,7 +3490,7 @@ static int park_exec_full(struct ast_channel *chan, void *data, struct ast_parki
 
 		/* Simulate the PBX hanging up */
 		ast_hangup(peer);
-		return res;
+		return -1;
 	} else {
 		/*! \todo XXX Play a message XXX */
 		if (ast_stream_and_wait(chan, "pbx-invalidpark", ""))
@@ -3486,10 +3499,10 @@ static int park_exec_full(struct ast_channel *chan, void *data, struct ast_parki
 		res = -1;
 	}
 
-	return res;
+	return -1;
 }
 
-static int park_exec(struct ast_channel *chan, void *data) 
+static int park_exec(struct ast_channel *chan, const char *data) 
 {
 	return park_exec_full(chan, data, default_parkinglot);
 }
@@ -3671,7 +3684,7 @@ static int load_config(void)
 	char old_parking_ext[AST_MAX_EXTENSION];
 	char old_parking_con[AST_MAX_EXTENSION] = "";
 	char *ctg; 
-	static const char *categories[] = { 
+	static const char * const categories[] = { 
 		/* Categories in features.conf that are not
 		 * to be parsed as group categories
 		 */
@@ -4096,7 +4109,7 @@ static char *handle_features_reload(struct ast_cli_entry *e, int cmd, struct ast
 	return CLI_SUCCESS;
 }
 
-static char mandescr_bridge[] =
+static const char mandescr_bridge[] =
 "Description: Bridge together two channels already in the PBX\n"
 "Variables: ( Headers marked with * are required )\n"
 "   *Channel1: Channel to Bridge to Channel2\n"
@@ -4157,12 +4170,8 @@ static int action_bridge(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	/* The same code must be executed for chana and chanb.  To avoid a
-	 * theoretical deadlock, this code is separated so both chana and chanb will
-	 * not hold locks at the same time. */
-
 	/* Start with chana */
-	chana = ast_get_channel_by_name_prefix_locked(channela, strlen(channela));
+	chana = ast_channel_get_by_name_prefix(channela, strlen(channela));
 
 	/* send errors if any of the channels could not be found/locked */
 	if (!chana) {
@@ -4180,16 +4189,16 @@ static int action_bridge(struct mansession *s, const struct message *m)
 	if (!(tmpchana = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, NULL, 
 		NULL, NULL, 0, "Bridge/%s", chana->name))) {
 		astman_send_error(s, m, "Unable to create temporary channel!");
-		ast_channel_unlock(chana);
+		chana = ast_channel_unref(chana);
 		return 1;
 	}
 
 	do_bridge_masquerade(chana, tmpchana);
-	ast_channel_unlock(chana);
-	chana = NULL;
+
+	chana = ast_channel_unref(chana);
 
 	/* now do chanb */
-	chanb = ast_get_channel_by_name_prefix_locked(channelb, strlen(channelb));
+	chanb = ast_channel_get_by_name_prefix(channelb, strlen(channelb));
 	/* send errors if any of the channels could not be found/locked */
 	if (!chanb) {
 		char buf[256];
@@ -4208,12 +4217,13 @@ static int action_bridge(struct mansession *s, const struct message *m)
 		NULL, NULL, 0, "Bridge/%s", chanb->name))) {
 		astman_send_error(s, m, "Unable to create temporary channels!");
 		ast_hangup(tmpchana);
-		ast_channel_unlock(chanb);
+		chanb = ast_channel_unref(chanb);
 		return 1;
 	}
+
 	do_bridge_masquerade(chanb, tmpchanb);
-	ast_channel_unlock(chanb);
-	chanb = NULL;
+
+	chanb = ast_channel_unref(chanb);
 
 	/* make the channels compatible, send error if we fail doing so */
 	if (ast_channel_make_compatible(tmpchana, tmpchanb)) {
@@ -4372,7 +4382,7 @@ static int manager_parking_status(struct mansession *s, const struct message *m)
 	return RESULT_SUCCESS;
 }
 
-static char mandescr_park[] =
+static const char mandescr_park[] =
 "Description: Park a channel.\n"
 "Variables: (Names marked with * are required)\n"
 "	*Channel: Channel name to park\n"
@@ -4408,19 +4418,22 @@ static int manager_park(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	ch1 = ast_get_channel_by_name_locked(channel);
-	if (!ch1) {
+	if (!(ch1 = ast_channel_get_by_name(channel))) {
 		snprintf(buf, sizeof(buf), "Channel does not exist: %s", channel);
 		astman_send_error(s, m, buf);
 		return 0;
 	}
 
-	ch2 = ast_get_channel_by_name_locked(channel2);
-	if (!ch2) {
+	if (!(ch2 = ast_channel_get_by_name(channel2))) {
 		snprintf(buf, sizeof(buf), "Channel does not exist: %s", channel2);
 		astman_send_error(s, m, buf);
-		ast_channel_unlock(ch1);
+		ast_channel_unref(ch1);
 		return 0;
+	}
+
+	ast_channel_lock(ch1);
+	while (ast_channel_trylock(ch2)) {
+		CHANNEL_DEADLOCK_AVOIDANCE(ch1);
 	}
 
 	if (!ast_strlen_zero(timeout)) {
@@ -4438,19 +4451,26 @@ static int manager_park(struct mansession *s, const struct message *m)
 	ast_channel_unlock(ch1);
 	ast_channel_unlock(ch2);
 
+	ch1 = ast_channel_unref(ch1);
+	ch2 = ast_channel_unref(ch2);
+
 	return 0;
 }
 
-static int find_channel_by_group(struct ast_channel *c, void *data) {
-	struct ast_channel *chan = data;
+static int find_channel_by_group(void *obj, void *arg, void *data, int flags)
+{
+	struct ast_channel *c = data;
+	struct ast_channel *chan = obj;
 
-	return !c->pbx &&
+	int i = !c->pbx &&
 		/* Accessing 'chan' here is safe without locking, because there is no way for
 		   the channel do disappear from under us at this point.  pickupgroup *could*
 		   change while we're here, but that isn't a problem. */
 		(c != chan) &&
 		(chan->pickupgroup & c->callgroup) &&
 		((c->_state == AST_STATE_RINGING) || (c->_state == AST_STATE_RING));
+
+	return i ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*!
@@ -4463,43 +4483,57 @@ static int find_channel_by_group(struct ast_channel *c, void *data) {
 */
 int ast_pickup_call(struct ast_channel *chan)
 {
-	struct ast_channel *cur = ast_channel_search_locked(find_channel_by_group, chan);
+	struct ast_channel *cur;
+	struct ast_party_connected_line connected_caller;
+	int res;
+	const char *chan_name;
+	const char *cur_name;
 
-	if (cur) {
-		struct ast_party_connected_line connected_caller;
-
-		int res = -1;
-		ast_debug(1, "Call pickup on chan '%s' by '%s'\n",cur->name, chan->name);
-
-		connected_caller = cur->connected;
-		connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-		ast_channel_update_connected_line(chan, &connected_caller);
-
-		ast_party_connected_line_collect_caller(&connected_caller, &chan->cid);
-		connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-		ast_channel_queue_connected_line_update(chan, &connected_caller);
-
-		res = ast_answer(chan);
-		if (res)
-			ast_log(LOG_WARNING, "Unable to answer '%s'\n", chan->name);
-		res = ast_queue_control(chan, AST_CONTROL_ANSWER);
-		if (res)
-			ast_log(LOG_WARNING, "Unable to queue answer on '%s'\n", chan->name);
-		res = ast_channel_masquerade(cur, chan);
-		if (res)
-			ast_log(LOG_WARNING, "Unable to masquerade '%s' into '%s'\n", chan->name, cur->name);		/* Done */
-		if (!ast_strlen_zero(pickupsound)) {
-			ast_stream_and_wait(cur, pickupsound, "");
-		}
-		ast_channel_unlock(cur);
-		return res;
-	} else	{
+	if (!(cur = ast_channel_callback(find_channel_by_group, NULL, chan, 0))) {
 		ast_debug(1, "No call pickup possible...\n");
 		if (!ast_strlen_zero(pickupfailsound)) {
 			ast_stream_and_wait(chan, pickupfailsound, "");
 		}
+		return -1;
 	}
-	return -1;
+
+	ast_channel_lock_both(cur, chan);
+
+	cur_name = ast_strdupa(cur->name);
+	chan_name = ast_strdupa(chan->name);
+
+	ast_debug(1, "Call pickup on chan '%s' by '%s'\n", cur_name, chan_name);
+
+	connected_caller = cur->connected;
+	connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
+	ast_channel_update_connected_line(chan, &connected_caller);
+
+	ast_party_connected_line_collect_caller(&connected_caller, &chan->cid);
+	connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
+	ast_channel_queue_connected_line_update(chan, &connected_caller);
+
+	ast_channel_unlock(cur);
+	ast_channel_unlock(chan);
+
+	if (ast_answer(chan)) {
+		ast_log(LOG_WARNING, "Unable to answer '%s'\n", chan_name);
+	}
+
+	if (ast_queue_control(chan, AST_CONTROL_ANSWER)) {
+		ast_log(LOG_WARNING, "Unable to queue answer on '%s'\n", chan_name);
+	}
+
+	if ((res = ast_channel_masquerade(cur, chan))) {
+		ast_log(LOG_WARNING, "Unable to masquerade '%s' into '%s'\n", chan_name, cur_name);
+	}
+
+	if (!ast_strlen_zero(pickupsound)) {
+		ast_stream_and_wait(cur, pickupsound, "");
+	}
+
+	cur = ast_channel_unref(cur);
+
+	return res;
 }
 
 static char *app_bridge = "Bridge";
@@ -4521,7 +4555,7 @@ END_OPTIONS );
  * answer call if not already, check compatible channels, setup bridge config
  * now bridge call, if transfered party hangs up return to PBX extension.
 */
-static int bridge_exec(struct ast_channel *chan, void *data)
+static int bridge_exec(struct ast_channel *chan, const char *data)
 {
 	struct ast_channel *current_dest_chan, *final_dest_chan;
 	char *tmp_data  = NULL;
@@ -4559,8 +4593,8 @@ static int bridge_exec(struct ast_channel *chan, void *data)
 	}
 
 	/* make sure we have a valid end point */
-	if (!(current_dest_chan = ast_get_channel_by_name_prefix_locked(args.dest_chan, 
-		strlen(args.dest_chan)))) {
+	if (!(current_dest_chan = ast_channel_get_by_name_prefix(args.dest_chan,
+			strlen(args.dest_chan)))) {
 		ast_log(LOG_WARNING, "Bridge failed because channel %s does not exists or we "
 			"cannot get its lock\n", args.dest_chan);
 		manager_event(EVENT_FLAG_CALL, "BridgeExec",
@@ -4573,8 +4607,9 @@ static int bridge_exec(struct ast_channel *chan, void *data)
 	}
 
 	/* answer the channel if needed */
-	if (current_dest_chan->_state != AST_STATE_UP)
+	if (current_dest_chan->_state != AST_STATE_UP) {
 		ast_answer(current_dest_chan);
+	}
 
 	/* try to allocate a place holder where current_dest_chan will be placed */
 	if (!(final_dest_chan = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, NULL, 
@@ -4601,6 +4636,7 @@ static int bridge_exec(struct ast_channel *chan, void *data)
 					"Channel2: %s\r\n", chan->name, final_dest_chan->name);
 		ast_hangup(final_dest_chan); /* may be we should return this channel to the PBX? */
 		pbx_builtin_setvar_helper(chan, "BRIDGERESULT", "INCOMPATIBLE");
+		current_dest_chan = ast_channel_unref(current_dest_chan);
 		return 0;
 	}
 
@@ -4618,6 +4654,8 @@ static int bridge_exec(struct ast_channel *chan, void *data)
 		}
 	}
 	
+	current_dest_chan = ast_channel_unref(current_dest_chan);
+
 	/* do the bridge */
 	ast_bridge_call(chan, final_dest_chan, &bconfig);
 

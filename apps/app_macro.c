@@ -68,6 +68,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			applications in deeply nested macros could cause asterisk to crash earlier than this limit.
 			It is advised that if you need to deeply nest macro calls, that you use the Gosub application
 			(now allows arguments like a Macro) with explict Return() calls instead.</para></warning>
+			<warning><para>Use of the application <literal>WaitExten</literal> within a macro will not function
+			as expected. Please use the <literal>Read</literal> application in order to read DTMF from a channel
+			currently executing a macro.</para></warning>
 		</description>
 		<see-also>
 			<ref type="application">MacroExit</ref>
@@ -97,6 +100,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<replaceable>expr</replaceable> is true (otherwise <replaceable>macroiffalse</replaceable>
 			if provided)</para>
 			<para>Arguments and return values as in application Macro()</para>
+			<xi:include xpointer="xpointer(/docs/application[@name='Macro']/description/warning[2])" />
 		</description>
 		<see-also>
 			<ref type="application">GotoIf</ref>
@@ -120,6 +124,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			Only one call at a time may run the macro. (we'll wait if another call is busy
 			executing in the Macro)</para>
 			<para>Arguments and return values as in application Macro()</para>
+			<xi:include xpointer="xpointer(/docs/application[@name='Macro']/description/warning[2])" />
 		</description>
 		<see-also>
 			<ref type="application">Macro</ref>
@@ -211,7 +216,7 @@ static struct ast_exten *find_matching_priority(struct ast_context *c, const cha
 	return NULL;
 }
 
-static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
+static int _macro_exec(struct ast_channel *chan, const char *data, int exclusive)
 {
 	const char *s;
 	char *tmp;
@@ -231,13 +236,14 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 	int offset, depth = 0, maxdepth = 7;
 	int setmacrocontext=0;
 	int autoloopflag, inhangup = 0;
+	struct ast_str *tmp_subst = NULL;
   
 	char *save_macro_exten;
 	char *save_macro_context;
 	char *save_macro_priority;
 	char *save_macro_offset;
 	struct ast_datastore *macro_store = ast_channel_datastore_find(chan, &macro_ds_info, NULL);
- 
+
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Macro() requires arguments. See \"core show application macro\" for help.\n");
 		return -1;
@@ -281,7 +287,6 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		return 0;
 	}
 	snprintf(depthc, sizeof(depthc), "%d", depth + 1);
-	pbx_builtin_setvar_helper(chan, "MACRO_DEPTH", depthc);
 
 	tmp = ast_strdupa(data);
 	rest = tmp;
@@ -311,7 +316,11 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		}
 		ast_autoservice_stop(chan);
 	}
-	
+
+	if (!(tmp_subst = ast_str_create(16))) {
+		return -1;
+	}
+
 	/* Save old info */
 	oldpriority = chan->priority;
 	ast_copy_string(oldexten, chan->exten, sizeof(oldexten));
@@ -336,6 +345,8 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
   
 	save_macro_offset = ast_strdup(pbx_builtin_getvar_helper(chan, "MACRO_OFFSET"));
 	pbx_builtin_setvar_helper(chan, "MACRO_OFFSET", NULL);
+
+	pbx_builtin_setvar_helper(chan, "MACRO_DEPTH", depthc);
 
 	/* Setup environment for new run */
 	chan->exten[0] = 's';
@@ -415,8 +426,10 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 			gosub_level++;
 			ast_debug(1, "Incrementing gosub_level\n");
 		} else if (!strcasecmp(runningapp, "GOSUBIF")) {
-			char tmp2[1024], *cond, *app_arg, *app2 = tmp2;
-			pbx_substitute_variables_helper(chan, runningdata, tmp2, sizeof(tmp2) - 1);
+			char *cond, *app_arg;
+			char *app2;
+			ast_str_substitute_variables(&tmp_subst, 0, chan, runningdata);
+			app2 = ast_str_buffer(tmp_subst);
 			cond = strsep(&app2, "?");
 			app_arg = strsep(&app2, ":");
 			if (pbx_checkcondition(cond)) {
@@ -438,19 +451,23 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 			ast_debug(1, "Decrementing gosub_level\n");
 		} else if (!strncasecmp(runningapp, "EXEC", 4)) {
 			/* Must evaluate args to find actual app */
-			char tmp2[1024], *tmp3 = NULL;
-			pbx_substitute_variables_helper(chan, runningdata, tmp2, sizeof(tmp2) - 1);
+			char *tmp2, *tmp3 = NULL;
+			ast_str_substitute_variables(&tmp_subst, 0, chan, runningdata);
+			tmp2 = ast_str_buffer(tmp_subst);
 			if (!strcasecmp(runningapp, "EXECIF")) {
-				tmp3 = strchr(tmp2, '|');
-				if (tmp3)
+				if ((tmp3 = strchr(tmp2, '|'))) {
 					*tmp3++ = '\0';
-				if (!pbx_checkcondition(tmp2))
+				}
+				if (!pbx_checkcondition(tmp2)) {
 					tmp3 = NULL;
-			} else
+				}
+			} else {
 				tmp3 = tmp2;
+			}
 
-			if (tmp3)
+			if (tmp3) {
 				ast_debug(1, "Last app: %s\n", tmp3);
+			}
 
 			if (tmp3 && !strncasecmp(tmp3, "GOSUB", 5)) {
 				gosub_level++;
@@ -547,21 +564,22 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		}
 	}
 	ast_channel_unlock(chan);
+	ast_free(tmp_subst);
 
 	return res;
 }
 
-static int macro_exec(struct ast_channel *chan, void *data)
+static int macro_exec(struct ast_channel *chan, const char *data)
 {
 	return _macro_exec(chan, data, 0);
 }
 
-static int macroexclusive_exec(struct ast_channel *chan, void *data)
+static int macroexclusive_exec(struct ast_channel *chan, const char *data)
 {
 	return _macro_exec(chan, data, 1);
 }
 
-static int macroif_exec(struct ast_channel *chan, void *data) 
+static int macroif_exec(struct ast_channel *chan, const char *data) 
 {
 	char *expr = NULL, *label_a = NULL, *label_b = NULL;
 	int res = 0;
@@ -586,7 +604,7 @@ static int macroif_exec(struct ast_channel *chan, void *data)
 	return res;
 }
 			
-static int macro_exit_exec(struct ast_channel *chan, void *data)
+static int macro_exit_exec(struct ast_channel *chan, const char *data)
 {
 	return MACRO_EXIT_RESULT;
 }

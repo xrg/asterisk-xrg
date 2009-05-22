@@ -150,7 +150,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 
 /*! \brief Welcome message when starting a CLI interface */
 #define WELCOME_MESSAGE \
-    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2008 Digium, Inc. and others.\n" \
+    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2009 Digium, Inc. and others.\n" \
                 "Created by Mark Spencer <markster@digium.com>\n" \
                 "Asterisk comes with ABSOLUTELY NO WARRANTY; type 'core show warranty' for details.\n" \
                 "This is free software, with components licensed under the GNU General Public\n" \
@@ -765,7 +765,7 @@ int64_t ast_mark(int i, int startstop)
 static char *handle_show_profile(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int i, min, max;
-	char *search = NULL;
+	const char *search = NULL;
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "core show profile";
@@ -800,7 +800,7 @@ static char *handle_show_profile(struct ast_cli_entry *e, int cmd, struct ast_cl
 static char *handle_clear_profile(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int i, min, max;
-	char *search = NULL;
+	const char *search = NULL;
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "core clear profile";
@@ -2743,7 +2743,7 @@ static int show_version(void)
 }
 
 static int show_cli_help(void) {
-	printf("Asterisk %s, Copyright (C) 1999 - 2008, Digium, Inc. and others.\n", ast_get_version());
+	printf("Asterisk %s, Copyright (C) 1999 - 2009, Digium, Inc. and others.\n", ast_get_version());
 	printf("Usage: asterisk [OPTIONS]\n");
 	printf("Valid Options:\n");
 	printf("   -V              Display version number and exit\n");
@@ -3304,57 +3304,6 @@ int main(int argc, char *argv[])
 
 	if (isroot) {
 		ast_set_priority(ast_opt_high_priority);
-		if (ast_opt_high_priority) {
-			int cpipe[2];
-
-			/* PIPE signal ensures that astcanary dies when Asterisk dies */
-			if (pipe(cpipe)) {
-				fprintf(stderr, "Unable to open pipe for canary process: %s\n", strerror(errno));
-				exit(1);
-			}
-			canary_pipe = cpipe[0];
-
-			snprintf(canary_filename, sizeof(canary_filename), "%s/alt.asterisk.canary.tweet.tweet.tweet", ast_config_AST_RUN_DIR);
-
-			/* Don't let the canary child kill Asterisk, if it dies immediately */
-			signal(SIGPIPE, SIG_IGN);
-
-			canary_pid = fork();
-			if (canary_pid == 0) {
-				char canary_binary[128], *lastslash;
-				int fd;
-
-				/* Reset signal handler */
-				signal(SIGCHLD, SIG_DFL);
-				signal(SIGPIPE, SIG_DFL);
-
-				dup2(cpipe[1], 100);
-				close(cpipe[1]);
-
-				for (fd = 0; fd < 100; fd++) {
-					close(fd);
-				}
-
-				execlp("astcanary", "astcanary", canary_filename, (char *)NULL);
-
-				/* If not found, try the same path as used to execute asterisk */
-				ast_copy_string(canary_binary, argv[0], sizeof(canary_binary));
-				if ((lastslash = strrchr(canary_binary, '/'))) {
-					ast_copy_string(lastslash + 1, "astcanary", sizeof(canary_binary) + canary_binary - (lastslash + 1));
-					execl(canary_binary, "astcanary", canary_filename, (char *)NULL);
-				}
-
-				/* Should never happen */
-				_exit(1);
-			} else if (canary_pid > 0) {
-				pthread_t dont_care;
-				close(cpipe[1]);
-				ast_pthread_create_detached(&dont_care, NULL, canary_thread, NULL);
-			}
-
-			/* Kill the canary when we exit */
-			atexit(canary_exit);
-		}
 	}
 
 	if (isroot && rungroup) {
@@ -3433,9 +3382,33 @@ int main(int argc, char *argv[])
 	if (geteuid() && ast_opt_dump_core) {
 		if (prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) < 0) {
 			ast_log(LOG_WARNING, "Unable to set the process for core dumps after changing to a non-root user. %s\n", strerror(errno));
-		}	
+		}
 	}
 #endif
+
+	{
+#if defined(HAVE_EACCESS) || defined(HAVE_EUIDACCESS)
+#if defined(HAVE_EUIDACCESS) && !defined(HAVE_EACCESS)
+#define eaccess euidaccess
+#endif
+		char dir[PATH_MAX];
+		if (!getcwd(dir, sizeof(dir)) || eaccess(dir, R_OK | X_OK | F_OK)) {
+			ast_log(LOG_ERROR, "Unable to access the running directory (%s).  Changing to '/' for compatibility.\n", strerror(errno));
+			/* If we cannot access the CWD, then we couldn't dump core anyway,
+			 * so chdir("/") won't break anything. */
+			if (chdir("/")) {
+				/* chdir(/) should never fail, so this ends up being a no-op */
+				ast_log(LOG_ERROR, "chdir(\"/\") failed?!! %s\n", strerror(errno));
+			}
+		} else
+#endif /* defined(HAVE_EACCESS) || defined(HAVE_EUIDACCESS) */
+		if (!ast_opt_no_fork && !ast_opt_dump_core) {
+			/* Backgrounding, but no cores, so chdir won't break anything. */
+			if (chdir("/")) {
+				ast_log(LOG_ERROR, "Unable to chdir(\"/\") ?!! %s\n", strerror(errno));
+			}
+		}
+	}
 
 	ast_term_init();
 	printf("%s", term_end());
@@ -3506,6 +3479,56 @@ int main(int argc, char *argv[])
 #endif
 	}
 #endif
+
+	/* Spawning of astcanary must happen AFTER the call to daemon(3) */
+	if (isroot && ast_opt_high_priority) {
+		int cpipe[2];
+
+		/* PIPE signal ensures that astcanary dies when Asterisk dies */
+		if (pipe(cpipe)) {
+			fprintf(stderr, "Unable to open pipe for canary process: %s\n", strerror(errno));
+			exit(1);
+		}
+		canary_pipe = cpipe[0];
+
+		snprintf(canary_filename, sizeof(canary_filename), "%s/alt.asterisk.canary.tweet.tweet.tweet", ast_config_AST_RUN_DIR);
+
+		/* Don't let the canary child kill Asterisk, if it dies immediately */
+		signal(SIGPIPE, SIG_IGN);
+
+		canary_pid = fork();
+		if (canary_pid == 0) {
+			char canary_binary[128], *lastslash;
+
+			/* Reset signal handler */
+			signal(SIGCHLD, SIG_DFL);
+			signal(SIGPIPE, SIG_DFL);
+
+			dup2(cpipe[1], 0);
+			close(cpipe[1]);
+			ast_close_fds_above_n(0);
+			ast_set_priority(0);
+
+			execlp("astcanary", "astcanary", canary_filename, (char *)NULL);
+
+			/* If not found, try the same path as used to execute asterisk */
+			ast_copy_string(canary_binary, argv[0], sizeof(canary_binary));
+			if ((lastslash = strrchr(canary_binary, '/'))) {
+				ast_copy_string(lastslash + 1, "astcanary", sizeof(canary_binary) + canary_binary - (lastslash + 1));
+				execl(canary_binary, "astcanary", canary_filename, (char *)NULL);
+			}
+
+			/* Should never happen */
+			_exit(1);
+		} else if (canary_pid > 0) {
+			pthread_t dont_care;
+			close(cpipe[1]);
+			ast_pthread_create_detached(&dont_care, NULL, canary_thread, NULL);
+		}
+
+		/* Kill the canary when we exit */
+		atexit(canary_exit);
+	}
 
 	if (ast_event_init()) {
 		printf("%s", term_quit());

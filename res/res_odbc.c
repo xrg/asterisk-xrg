@@ -1045,7 +1045,7 @@ int ast_odbc_backslash_is_escape(struct odbc_obj *obj)
 	return obj->parent->backslash_is_escape;
 }
 
-static int commit_exec(struct ast_channel *chan, void *data)
+static int commit_exec(struct ast_channel *chan, const char *data)
 {
 	struct odbc_txn_frame *tx;
 	SQLINTEGER nativeerror=0, numfields=0;
@@ -1082,7 +1082,7 @@ static int commit_exec(struct ast_channel *chan, void *data)
 	return 0;
 }
 
-static int rollback_exec(struct ast_channel *chan, void *data)
+static int rollback_exec(struct ast_channel *chan, const char *data)
 {
 	struct odbc_txn_frame *tx;
 	SQLINTEGER nativeerror=0, numfields=0;
@@ -1594,8 +1594,8 @@ static struct ast_custom_function odbc_function = {
 	.write = acf_transaction_write,
 };
 
-static const char *app_commit = "ODBC_Commit";
-static const char *app_rollback = "ODBC_Rollback";
+static const char * const app_commit = "ODBC_Commit";
+static const char * const app_rollback = "ODBC_Rollback";
 
 static int reload(void)
 {

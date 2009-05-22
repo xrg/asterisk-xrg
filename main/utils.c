@@ -227,7 +227,7 @@ struct hostent *ast_gethostbyname(const char *host, struct ast_hostent *hp)
 }
 
 /*! \brief Produce 32 char MD5 hash of value. */
-void ast_md5_hash(char *output, char *input)
+void ast_md5_hash(char *output, const char *input)
 {
 	struct MD5Context md5;
 	unsigned char digest[16];
@@ -235,7 +235,7 @@ void ast_md5_hash(char *output, char *input)
 	int x;
 
 	MD5Init(&md5);
-	MD5Update(&md5, (unsigned char *)input, strlen(input));
+	MD5Update(&md5, (const unsigned char *) input, strlen(input));
 	MD5Final(digest, &md5);
 	ptr = output;
 	for (x = 0; x < 16; x++)
@@ -243,7 +243,7 @@ void ast_md5_hash(char *output, char *input)
 }
 
 /*! \brief Produce 40 char SHA1 hash of value. */
-void ast_sha1_hash(char *output, char *input)
+void ast_sha1_hash(char *output, const char *input)
 {
 	struct SHA1Context sha;
 	char *ptr;
@@ -1446,7 +1446,7 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with)
 	return dataPut;
 }
 
-void ast_join(char *s, size_t len, char * const w[])
+void ast_join(char *s, size_t len, const char * const w[])
 {
 	int x, ofs = 0;
 	const char *src;
@@ -1500,16 +1500,21 @@ static size_t optimal_alloc_size(size_t size)
  * We can only allocate from the topmost pool, so the
  * fields in *mgr reflect the size of that only.
  */
-static int add_string_pool(struct ast_string_field_mgr *mgr,
-			   struct ast_string_field_pool **pool_head,
-			   size_t size)
+static int add_string_pool(struct ast_string_field_mgr *mgr, struct ast_string_field_pool **pool_head,
+			   size_t size, const char *file, int lineno, const char *func)
 {
 	struct ast_string_field_pool *pool;
 	size_t alloc_size = optimal_alloc_size(sizeof(*pool) + size);
 
+#if defined(__AST_DEBUG_MALLOC)
+	if (!(pool = __ast_calloc(1, alloc_size, file, lineno, func))) {
+		return -1;
+	}
+#else
 	if (!(pool = ast_calloc(1, alloc_size))) {
 		return -1;
 	}
+#endif
 
 	pool->prev = *pool_head;
 	pool->size = alloc_size - sizeof(*pool);
@@ -1525,16 +1530,18 @@ static int add_string_pool(struct ast_string_field_mgr *mgr,
  * size > 0 means initialize the pool list with a pool of given size.
  *	This must be called right after allocating the object.
  * size = 0 means release all pools except the most recent one.
+ *      If the first pool was allocated via embedding in another
+ *      object, that pool will be preserved instead.
  *	This is useful to e.g. reset an object to the initial value.
  * size < 0 means release all pools.
  *	This must be done before destroying the object.
  */
-int __ast_string_field_init(struct ast_string_field_mgr *mgr,
-			    struct ast_string_field_pool **pool_head,
-			    int size)
+int __ast_string_field_init(struct ast_string_field_mgr *mgr, struct ast_string_field_pool **pool_head,
+			    int needed, const char *file, int lineno, const char *func)
 {
 	const char **p = (const char **) pool_head + 1;
-	struct ast_string_field_pool *cur = *pool_head;
+	struct ast_string_field_pool *cur = NULL;
+	struct ast_string_field_pool *preserve = NULL;
 
 	/* clear fields - this is always necessary */
 	while ((struct ast_string_field_mgr *) p != mgr) {
@@ -1542,29 +1549,45 @@ int __ast_string_field_init(struct ast_string_field_mgr *mgr,
 	}
 
 	mgr->last_alloc = NULL;
-	if (size > 0) {			/* allocate the initial pool */
+#if defined(__AST_DEBUG_MALLOC)
+	mgr->owner_file = file;
+	mgr->owner_func = func;
+	mgr->owner_line = lineno;
+#endif
+	if (needed > 0) {		/* allocate the initial pool */
 		*pool_head = NULL;
-		return add_string_pool(mgr, pool_head, size);
+		return add_string_pool(mgr, pool_head, needed, file, lineno, func);
 	}
 
-	if (size < 0) {			/* reset all pools */
-		*pool_head = NULL;
-	} else {			/* preserve the first pool */
-		if (cur == NULL) {
+	if (needed < 0) {		/* reset all pools */
+		/* nothing to do */
+	} else if (mgr->embedded_pool) { /* preserve the embedded pool */
+		preserve = mgr->embedded_pool;
+		cur = *pool_head;
+	} else {			/* preserve the last pool */
+		if (*pool_head == NULL) {
 			ast_log(LOG_WARNING, "trying to reset empty pool\n");
 			return -1;
 		}
-		cur = cur->prev;
-		(*pool_head)->prev = NULL;
-		(*pool_head)->used = (*pool_head)->active = 0;
+		preserve = *pool_head;
+		cur = preserve->prev;
+	}
+
+	if (preserve) {
+		preserve->prev = NULL;
+		preserve->used = preserve->active = 0;
 	}
 
 	while (cur) {
 		struct ast_string_field_pool *prev = cur->prev;
 
-		ast_free(cur);
+		if (cur != preserve) {
+			ast_free(cur);
+		}
 		cur = prev;
 	}
+
+	*pool_head = preserve;
 
 	return 0;
 }
@@ -1583,8 +1606,13 @@ ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr
 			new_size *= 2;
 		}
 
-		if (add_string_pool(mgr, pool_head, new_size))
+#if defined(__AST_DEBUG_MALLOC)
+		if (add_string_pool(mgr, pool_head, new_size, mgr->owner_file, mgr->owner_line, mgr->owner_func))
 			return NULL;
+#else
+		if (add_string_pool(mgr, pool_head, new_size, __FILE__, __LINE__, __FUNCTION__))
+			return NULL;
+#endif
 	}
 
 	result = (*pool_head)->base + (*pool_head)->used;
@@ -1713,6 +1741,50 @@ void __ast_string_field_ptr_build(struct ast_string_field_mgr *mgr,
 	va_end(ap1);
 	va_end(ap2);
 }
+
+void *__ast_calloc_with_stringfields(unsigned int num_structs, size_t struct_size, size_t field_mgr_offset,
+				     size_t field_mgr_pool_offset, size_t pool_size, const char *file,
+				     int lineno, const char *func)
+{
+	struct ast_string_field_mgr *mgr;
+	struct ast_string_field_pool *pool;
+	struct ast_string_field_pool **pool_head;
+	size_t pool_size_needed = sizeof(*pool) + pool_size;
+	size_t size_to_alloc = optimal_alloc_size(struct_size + pool_size_needed);
+	void *allocation;
+	unsigned int x;
+
+#if defined(__AST_DEBUG_MALLOC)	
+	if (!(allocation = __ast_calloc(num_structs, size_to_alloc, file, lineno, func))) {
+		return NULL;
+	}
+#else
+	if (!(allocation = ast_calloc(num_structs, size_to_alloc))) {
+		return NULL;
+	}
+#endif
+
+	for (x = 0; x < num_structs; x++) {
+		void *base = allocation + (size_to_alloc * x);
+		const char **p;
+
+		mgr = base + field_mgr_offset;
+		pool_head = base + field_mgr_pool_offset;
+		pool = base + struct_size;
+
+		p = (const char **) pool_head + 1;
+		while ((struct ast_string_field_mgr *) p != mgr) {
+			*p++ = __ast_string_field_empty;
+		}
+
+		mgr->embedded_pool = pool;
+		*pool_head = pool;
+		pool->size = size_to_alloc - struct_size - sizeof(*pool);
+	}
+
+	return allocation;
+}
+
 /* end of stringfields support */
 
 AST_MUTEX_DEFINE_STATIC(fetchadd_m); /* used for all fetc&add ops */
@@ -1836,6 +1908,126 @@ int ast_utils_init(void)
 	ast_cli_register_multiple(utils_cli, ARRAY_LEN(utils_cli));
 #endif
 #endif
+	return 0;
+}
+
+
+/*!
+ *\brief Parse digest authorization header.
+ *\return Returns -1 if we have no auth or something wrong with digest.
+ *\note	This function may be used for Digest request and responce header.
+ * request arg is set to nonzero, if we parse Digest Request.
+ * pedantic arg can be set to nonzero if we need to do addition Digest check.
+ */
+int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request, int pedantic) {
+	int i;
+	char *c, key[512], val[512], tmp[512];
+	struct ast_str *str = ast_str_create(16);
+
+	if (ast_strlen_zero(digest) || !d || !str) {
+		ast_free(str);
+		return -1;
+	}
+
+	ast_str_set(&str, 0, "%s", digest);
+
+	c = ast_skip_blanks(ast_str_buffer(str));
+
+	if (strncasecmp(tmp, "Digest ", strlen("Digest "))) {
+		ast_log(LOG_WARNING, "Missing Digest.\n");
+		ast_free(str);
+		return -1;
+	}
+	c += strlen("Digest ");
+
+	/* lookup for keys/value pair */
+	while (*c && *(c = ast_skip_blanks(c))) {
+		/* find key */
+		i = 0;
+		while (*c && *c != '=' && *c != ',' && !isspace(*c)) {
+			key[i++] = *c++;
+		}
+		key[i] = '\0';
+		c = ast_skip_blanks(c);
+		if (*c == '=') {
+			c = ast_skip_blanks(++c);
+			i = 0;
+			if (*c == '\"') {
+				/* in quotes. Skip first and look for last */
+				c++;
+				while (*c && *c != '\"') {
+					if (*c == '\\' && c[1] != '\0') { /* unescape chars */
+						c++;
+					}
+					val[i++] = *c++;
+				}
+			} else {
+				/* token */
+				while (*c && *c != ',' && !isspace(*c)) {
+					val[i++] = *c++;
+				}
+			}
+			val[i] = '\0';
+		}
+
+		while (*c && *c != ',') {
+			c++;
+		}
+		if (*c) {
+			c++;
+		}
+
+		if (!strcasecmp(key, "username")) {
+			ast_string_field_set(d, username, val);
+		} else if (!strcasecmp(key, "realm")) {
+			ast_string_field_set(d, realm, val);
+		} else if (!strcasecmp(key, "nonce")) {
+			ast_string_field_set(d, nonce, val);
+		} else if (!strcasecmp(key, "uri")) {
+			ast_string_field_set(d, uri, val);
+		} else if (!strcasecmp(key, "domain")) {
+			ast_string_field_set(d, domain, val);
+		} else if (!strcasecmp(key, "response")) {
+			ast_string_field_set(d, response, val);
+		} else if (!strcasecmp(key, "algorithm")) {
+			if (strcasecmp(val, "MD5")) {
+				ast_log(LOG_WARNING, "Digest algorithm: \"%s\" not supported.\n", val);
+				return -1;
+			}
+		} else if (!strcasecmp(key, "cnonce")) {
+			ast_string_field_set(d, cnonce, val);
+		} else if (!strcasecmp(key, "opaque")) {
+			ast_string_field_set(d, opaque, val);
+		} else if (!strcasecmp(key, "qop") && !strcasecmp(val, "auth")) {
+			d->qop = 1;
+		} else if (!strcasecmp(key, "nc")) {
+			unsigned long u;
+			if (sscanf(val, "%lx", &u) != 1) {
+				ast_log(LOG_WARNING, "Incorrect Digest nc value: \"%s\".\n", val);
+				return -1;
+			}
+			ast_string_field_set(d, nc, val);
+		}
+	}
+	ast_free(str);
+
+	/* Digest checkout */
+	if (ast_strlen_zero(d->realm) || ast_strlen_zero(d->nonce)) {
+		/* "realm" and "nonce" MUST be always exist */
+		return -1;
+	}
+
+	if (!request) {
+		/* Additional check for Digest response */
+		if (ast_strlen_zero(d->username) || ast_strlen_zero(d->uri) || ast_strlen_zero(d->response)) {
+			return -1;
+		}
+
+		if (pedantic && d->qop && (ast_strlen_zero(d->cnonce) || ast_strlen_zero(d->nc))) {
+			return -1;
+		}
+	}
+
 	return 0;
 }
 

@@ -463,8 +463,9 @@ static int agent_cleanup(struct agent_pvt *p)
 	/* Release ownership of the agent to other threads (presumably running the login app). */
 	p->app_lock_flag = 0;
 	ast_cond_signal(&p->app_complete_cond);
-	if (chan)
-		ast_channel_free(chan);
+	if (chan) {
+		chan = ast_channel_release(chan);
+	}
 	if (p->dead) {
 		ast_mutex_destroy(&p->lock);
 		ast_mutex_destroy(&p->app_lock);
@@ -1124,7 +1125,7 @@ static struct ast_channel *agent_new(struct agent_pvt *p, int state)
 			p->owner = NULL;
 			tmp->tech_pvt = NULL;
 			p->app_sleep_cond = 1;
-			ast_channel_free( tmp );
+			tmp = ast_channel_release(tmp);
 			ast_mutex_unlock(&p->lock);	/* For other thread to read the condition. */
 			p->app_lock_flag = 0;
 			ast_cond_signal(&p->app_complete_cond);
@@ -1138,7 +1139,7 @@ static struct ast_channel *agent_new(struct agent_pvt *p, int state)
 			p->owner = NULL;
 			tmp->tech_pvt = NULL;
 			p->app_sleep_cond = 1;
-			ast_channel_free( tmp );
+			tmp = ast_channel_release(tmp);
 			ast_mutex_unlock(&p->lock);     /* For other thread to read the condition. */
 			return NULL;
 		}	
@@ -1707,7 +1708,7 @@ static int agent_logoff(const char *agent, int soft)
 static char *agent_logoff_cmd(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int ret;
-	char *agent;
+	const char *agent;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -1955,7 +1956,7 @@ static struct ast_cli_entry cli_agents[] = {
  * \returns
  * \sa agentmonitoroutgoing_exec(), load_module().
  */
-static int login_exec(struct ast_channel *chan, void *data)
+static int login_exec(struct ast_channel *chan, const char *data)
 {
 	int res=0;
 	int tries = 0;
@@ -2283,7 +2284,7 @@ static int login_exec(struct ast_channel *chan, void *data)
  * \returns
  * \sa login_exec(), load_module().
  */
-static int agentmonitoroutgoing_exec(struct ast_channel *chan, void *data)
+static int agentmonitoroutgoing_exec(struct ast_channel *chan, const char *data)
 {
 	int exitifnoagentid = 0;
 	int nowarnings = 0;

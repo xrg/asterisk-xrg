@@ -111,7 +111,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * bridge lock if it is important.
  */
 
-static const char *app = "ConfBridge";
+static const char * const app = "ConfBridge";
 
 enum {
 	OPTION_ADMIN = (1 << 0),             /*!< Set if the caller is an administrator */
@@ -683,7 +683,7 @@ static int menu_callback(struct ast_bridge *bridge, struct ast_bridge_channel *b
 }
 
 /*! \brief The ConfBridge application */
-static int confbridge_exec(struct ast_channel *chan, void *data)
+static int confbridge_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0, volume_adjustments[2];
 	char *parse;

@@ -117,12 +117,16 @@ tcpbindaddr=0.0.0.0             ; IP address for TCP server to bind to (0.0.0.0 
                                 ; Remember that the IP address must match the common name (hostname) in the
                                 ; certificate, so you don't want to bind a TLS socket to multiple IP addresses.
 
-;tlscertfile=asterisk.pem       ; Certificate file (*.pem only) to use for TLS connections 
-                                ; default is to look for "asterisk.pem" in current directory
+;tlscertfile=</path/to/certificate.pem> ; Certificate file (*.pem only) to use for TLS connections
+                                        ; default is to look for "asterisk.pem" in current directory
+
+;tlsprivatekey=</path/to/private.pem> ; Private key file (*.pem only) for TLS connections.
+                                      ; If no tlsprivatekey is specified, tlscertfile is searched for
+                                      ; for both public and private key.
 
 ;tlscafile=</path/to/certificate>
 ;        If the server your connecting to uses a self signed certificate
-;        you should have their certificate installed here so the code can 
+;        you should have their certificate installed here so the code can
 ;        verify the authenticity of their certificate.
 
 ;tlscadir=</path/to/ca/dir>
@@ -138,8 +142,12 @@ tcpbindaddr=0.0.0.0             ; IP address for TCP server to bind to (0.0.0.0 
 
 ;tlscipher=<SSL cipher string>
 ;        A string specifying which SSL ciphers to use or not use
-;        A list of valid SSL cipher strings can be found at: 
+;        A list of valid SSL cipher strings can be found at:
 ;                http://www.openssl.org/docs/apps/ciphers.html#CIPHER_STRINGS
+;
+;tlsclientmethod=tlsv1     ; values include tlsv1, sslv3, sslv2.
+                           ; Specify protocol for outbound client connections.
+                           ; If left unspecified, the default is sslv2.
 
 srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; Note: Asterisk only uses the first host 
@@ -224,9 +232,13 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; This is identical to sendrpid=yes
 ;sendrpid = pai                 ; Use the "P-Asserted-Identity" header
                                 ; to send the identity of the remote party
-;rpid_header = rpid             ; Which header should be used when sending Remote Party ID
-                                ; 'rpid' means to send "Remote-Party-ID"
-                                ; 'pai' means to send "P-Asserted-Identity"
+;rpid_update = no               ; In certain cases, the only method by which a connected line
+                                ; change may be immediately transmitted is with a SIP UPDATE request.
+                                ; If communicating with another Asterisk server, and you wish to be able
+                                ; transmit such UPDATE messages to it, then you must enable this option.
+                                ; Otherwise, we will have to wait until we can send a reinvite to
+                                ; transmit the information.
+
 ;progressinband=never           ; If we should generate in-band ringing always
                                 ; use 'never' to never use in-band signalling, even in cases
                                 ; where some buggy devices might not render it

@@ -38,6 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/manager.h"
 #include "asterisk/cli.h"
+#define AST_API_MODULE
 #include "asterisk/monitor.h"
 #include "asterisk/app.h"
 #include "asterisk/utils.h"
@@ -389,13 +390,13 @@ int ast_monitor_unpause(struct ast_channel *chan)
 }
 
 /*! \brief Wrapper for ast_monitor_pause */
-static int pause_monitor_exec(struct ast_channel *chan, void *data)
+static int pause_monitor_exec(struct ast_channel *chan, const char *data)
 {
 	return ast_monitor_pause(chan);
 }
 
 /*! \brief Wrapper for ast_monitor_unpause */
-static int unpause_monitor_exec(struct ast_channel *chan, void *data)
+static int unpause_monitor_exec(struct ast_channel *chan, const char *data)
 {
 	return ast_monitor_unpause(chan);
 }
@@ -456,7 +457,7 @@ int ast_monitor_change_fname(struct ast_channel *chan, const char *fname_base, i
  * \retval 0 on success.
  * \retval -1 on failure.
 */
-static int start_monitor_exec(struct ast_channel *chan, void *data)
+static int start_monitor_exec(struct ast_channel *chan, const char *data)
 {
 	char *arg = NULL;
 	char *options = NULL;
@@ -540,18 +541,18 @@ static int start_monitor_exec(struct ast_channel *chan, void *data)
 }
 
 /*! \brief Wrapper function \see ast_monitor_stop */
-static int stop_monitor_exec(struct ast_channel *chan, void *data)
+static int stop_monitor_exec(struct ast_channel *chan, const char *data)
 {
 	return ast_monitor_stop(chan, 1);
 }
 
 /*! \brief Wrapper function \see ast_monitor_change_fname */
-static int change_monitor_exec(struct ast_channel *chan, void *data)
+static int change_monitor_exec(struct ast_channel *chan, const char *data)
 {
-	return ast_monitor_change_fname(chan, (const char*)data, 1);
+	return ast_monitor_change_fname(chan, data, 1);
 }
 
-static char start_monitor_action_help[] =
+static const char start_monitor_action_help[] =
 "Description: The 'Monitor' action may be used to record the audio on a\n"
 "  specified channel.  The following parameters may be used to control\n"
 "  this:\n"
@@ -579,38 +580,45 @@ static int start_monitor_action(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "No channel specified");
 		return 0;
 	}
-	c = ast_get_channel_by_name_locked(name);
-	if (!c) {
+
+	if (!(c = ast_channel_get_by_name(name))) {
 		astman_send_error(s, m, "No such channel");
 		return 0;
 	}
 
 	if (ast_strlen_zero(fname)) {
-		/* No filename base specified, default to channel name as per CLI */		
+		/* No filename base specified, default to channel name as per CLI */
+		ast_channel_lock(c);
 		fname = ast_strdupa(c->name);
+		ast_channel_unlock(c);
 		/* Channels have the format technology/channel_name - have to replace that /  */
-		if ((d = strchr(fname, '/'))) 
+		if ((d = strchr(fname, '/'))) {
 			*d = '-';
+		}
 	}
 
 	if (ast_monitor_start(c, format, fname, 1, X_REC_IN | X_REC_OUT)) {
 		if (ast_monitor_change_fname(c, fname, 1)) {
 			astman_send_error(s, m, "Could not start monitoring channel");
-			ast_channel_unlock(c);
+			c = ast_channel_unref(c);
 			return 0;
 		}
 	}
 
 	if (ast_true(mix)) {
+		ast_channel_lock(c);
 		ast_monitor_setjoinfiles(c, 1);
+		ast_channel_unlock(c);
 	}
 
-	ast_channel_unlock(c);
+	c = ast_channel_unref(c);
+
 	astman_send_ack(s, m, "Started monitoring channel");
+
 	return 0;
 }
 
-static char stop_monitor_action_help[] =
+static const char stop_monitor_action_help[] =
 "Description: The 'StopMonitor' action may be used to end a previously\n"
 "  started 'Monitor' action.  The only parameter is 'Channel', the name\n"
 "  of the channel monitored.\n";
@@ -621,26 +629,32 @@ static int stop_monitor_action(struct mansession *s, const struct message *m)
 	struct ast_channel *c = NULL;
 	const char *name = astman_get_header(m, "Channel");
 	int res;
+
 	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "No channel specified");
 		return 0;
 	}
-	c = ast_get_channel_by_name_locked(name);
-	if (!c) {
+
+	if (!(c = ast_channel_get_by_name(name))) {
 		astman_send_error(s, m, "No such channel");
 		return 0;
 	}
+
 	res = ast_monitor_stop(c, 1);
-	ast_channel_unlock(c);
+
+	c = ast_channel_unref(c);
+
 	if (res) {
 		astman_send_error(s, m, "Could not stop monitoring channel");
 		return 0;
 	}
+
 	astman_send_ack(s, m, "Stopped monitoring channel");
+
 	return 0;
 }
 
-static char change_monitor_action_help[] =
+static const char change_monitor_action_help[] =
 "Description: The 'ChangeMonitor' action may be used to change the file\n"
 "  started by a previous 'Monitor' action.  The following parameters may\n"
 "  be used to control this:\n"
@@ -654,26 +668,32 @@ static int change_monitor_action(struct mansession *s, const struct message *m)
 	struct ast_channel *c = NULL;
 	const char *name = astman_get_header(m, "Channel");
 	const char *fname = astman_get_header(m, "File");
+
 	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "No channel specified");
 		return 0;
 	}
+
 	if (ast_strlen_zero(fname)) {
 		astman_send_error(s, m, "No filename specified");
 		return 0;
 	}
-	c = ast_get_channel_by_name_locked(name);
-	if (!c) {
+
+	if (!(c = ast_channel_get_by_name(name))) {
 		astman_send_error(s, m, "No such channel");
 		return 0;
 	}
+
 	if (ast_monitor_change_fname(c, fname, 1)) {
+		c = ast_channel_unref(c);
 		astman_send_error(s, m, "Could not change monitored filename of channel");
-		ast_channel_unlock(c);
 		return 0;
 	}
-	ast_channel_unlock(c);
+
+	c = ast_channel_unref(c);
+
 	astman_send_ack(s, m, "Changed monitor filename");
+
 	return 0;
 }
 
@@ -688,34 +708,36 @@ enum MONITOR_PAUSING_ACTION
 	MONITOR_ACTION_PAUSE,
 	MONITOR_ACTION_UNPAUSE
 };
-	  
+ 
 static int do_pause_or_unpause(struct mansession *s, const struct message *m, int action)
 {
 	struct ast_channel *c = NULL;
 	const char *name = astman_get_header(m, "Channel");
-	
+
 	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "No channel specified");
 		return -1;
 	}
-	
-	c = ast_get_channel_by_name_locked(name);
-	if (!c) {
+
+	if (!(c = ast_channel_get_by_name(name))) {
 		astman_send_error(s, m, "No such channel");
 		return -1;
 	}
 
-	if (action == MONITOR_ACTION_PAUSE)
+	if (action == MONITOR_ACTION_PAUSE) {
 		ast_monitor_pause(c);
-	else
+	} else {
 		ast_monitor_unpause(c);
-	
-	ast_channel_unlock(c);
+	}
+
+	c = ast_channel_unref(c);
+
 	astman_send_ack(s, m, (action == MONITOR_ACTION_PAUSE ? "Paused monitoring of the channel" : "Unpaused monitoring of the channel"));
-	return 0;	
+
+	return 0;
 }
 
-static char pause_monitor_action_help[] =
+static const char pause_monitor_action_help[] =
 	"Description: The 'PauseMonitor' action may be used to temporarily stop the\n"
 	" recording of a channel.  The following parameters may\n"
 	" be used to control this:\n"
@@ -726,7 +748,7 @@ static int pause_monitor_action(struct mansession *s, const struct message *m)
 	return do_pause_or_unpause(s, m, MONITOR_ACTION_PAUSE);
 }
 
-static char unpause_monitor_action_help[] =
+static const char unpause_monitor_action_help[] =
 	"Description: The 'UnpauseMonitor' action may be used to re-enable recording\n"
 	"  of a channel after calling PauseMonitor.  The following parameters may\n"
 	"  be used to control this:\n"

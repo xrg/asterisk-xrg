@@ -502,7 +502,7 @@ static struct unistimsession {
 
 static const unsigned char packet_rcv_discovery[] =
 	{ 0xff, 0xff, 0xff, 0xff, 0x02, 0x02, 0xff, 0xff, 0xff, 0xff, 0x9e, 0x03, 0x08 };
-static unsigned char packet_send_discovery_ack[] =
+static const unsigned char packet_send_discovery_ack[] =
 	{ 0x00, 0x00, /*Initial Seq (2 bytes) */ 0x00, 0x00, 0x00, 0x01 };
 
 static const unsigned char packet_recv_firm_version[] =
@@ -733,8 +733,8 @@ static unsigned int get_tick_count(void)
 }
 
 /* Send data to a phone without retransmit nor buffering */
-static void send_raw_client(int size, unsigned char *data, struct sockaddr_in *addr_to,
-	const struct sockaddr_in *addr_ourip)
+static void send_raw_client(int size, const unsigned char *data, struct sockaddr_in *addr_to,
+			    const struct sockaddr_in *addr_ourip)
 {
 #ifdef HAVE_PKTINFO
 	struct iovec msg_iov;
@@ -743,7 +743,12 @@ static void send_raw_client(int size, unsigned char *data, struct sockaddr_in *a
 	struct cmsghdr *ip_msg = (struct cmsghdr *) buffer;
 	struct in_pktinfo *pki = (struct in_pktinfo *) CMSG_DATA(ip_msg);
 
-	msg_iov.iov_base = data;
+	/* cast this to a non-const pointer, since the sendmsg() API
+	 * does not provide read-only and write-only flavors of the
+	 * structures used for its arguments, but in this case we know
+	 * the data will not be modified
+	 */
+	msg_iov.iov_base = (char *) data;
 	msg_iov.iov_len = size;
 
 	msg.msg_name = addr_to;	 /* optional address */
@@ -2469,14 +2474,17 @@ static void HandleCallIncoming(struct unistimsession *s)
 
 static int unistim_do_senddigit(struct unistimsession *pte, char digit)
 {
-
-	struct ast_frame f = { 0, };
+	struct ast_frame f = { .frametype = AST_FRAME_DTMF, .subclass = digit, .src = "unistim" };
 	struct unistim_subchannel *sub;
 	sub = pte->device->lines->subs[SUB_REAL];
 	if (!sub->owner || sub->alreadygone) {
 		ast_log(LOG_WARNING, "Unable to find subchannel in dtmf senddigit\n");
 		return -1;
 	}
+
+	/* Send DTMF indication _before_ playing sounds */
+	ast_queue_frame(sub->owner, &f);
+
 	if (unistimdebug)
 		ast_verb(0, "Send Digit %c\n", digit);
 	switch (digit) {
@@ -2533,10 +2541,6 @@ static int unistim_do_senddigit(struct unistimsession *pte, char digit)
 	}
 	usleep(150000);			 /* XXX Less than perfect, blocking an important thread is not a good idea */
 	send_tone(pte, 0, 0);
-	f.frametype = AST_FRAME_DTMF;
-	f.subclass = digit;
-	f.src = "unistim";
-	ast_queue_frame(sub->owner, &f);
 	return 0;
 }
 
@@ -4433,8 +4437,8 @@ static struct ast_channel *unistim_new(struct unistim_subchannel *sub, int state
 		return NULL;
 	}
 	l = sub->parent;
-	tmp = ast_channel_alloc(1, state, l->cid_num, NULL, l->accountcode, l->exten, 
-		l->context, l->amaflags, "%s-%08x", l->fullname, (int) (long) sub);
+	tmp = ast_channel_alloc(1, state, l->cid_num, NULL, l->accountcode, l->exten,
+		l->context, l->amaflags, "%s@%s-%d", l->name, l->parent->name, sub->subtype);
 	if (unistimdebug)
 		ast_verb(0, "unistim_new sub=%d (%p) chan=%p\n", sub->subtype, sub, tmp);
 	if (!tmp) {
@@ -4449,8 +4453,6 @@ static struct ast_channel *unistim_new(struct unistim_subchannel *sub, int state
 	if (unistimdebug)
 		ast_verb(0, "Best codec = %d from nativeformats %d (line cap=%d global=%d)\n", fmt,
 			 tmp->nativeformats, l->capability, CAPABILITY);
-	ast_string_field_build(tmp, name, "USTM/%s@%s-%d", l->name, l->parent->name,
-						   sub->subtype);
 	if ((sub->rtp) && (sub->subtype == 0)) {
 		if (unistimdebug)
 			ast_verb(0, "New unistim channel with a previous rtp handle ?\n");

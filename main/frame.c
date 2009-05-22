@@ -256,7 +256,7 @@ struct ast_frame *ast_smoother_read(struct ast_smoother *s)
 	/* Make sure we have enough data */
 	if (s->len < s->size) {
 		/* Or, if this is a G.729 frame with VAD on it, send it immediately anyway */
-		if (!((s->flags & AST_SMOOTHER_FLAG_G729) && (s->size % 10)))
+		if (!((s->flags & AST_SMOOTHER_FLAG_G729) && (s->len % 10)))
 			return NULL;
 	}
 	len = s->size;
@@ -1354,7 +1354,7 @@ static unsigned char get_n_bits_at(unsigned char *data, int n, int bit)
 
 static int speex_get_wb_sz_at(unsigned char *data, int len, int bit)
 {
-	static int SpeexWBSubModeSz[] = {
+	static const int SpeexWBSubModeSz[] = {
 		0, 36, 112, 192,
 		352, 0, 0, 0 };
 	int off = bit;
@@ -1384,12 +1384,12 @@ static int speex_get_wb_sz_at(unsigned char *data, int len, int bit)
 
 static int speex_samples(unsigned char *data, int len)
 {
-	static int SpeexSubModeSz[] = {
+	static const int SpeexSubModeSz[] = {
 		5, 43, 119, 160,
 		220, 300, 364, 492, 
 		79, 0, 0, 0,
 		0, 0, 0, 0 };
-	static int SpeexInBandSz[] = { 
+	static const int SpeexInBandSz[] = { 
 		1, 1, 4, 4,
 		4, 4, 4, 4,
 		8, 8, 16, 16,
