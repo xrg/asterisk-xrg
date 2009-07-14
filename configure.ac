@@ -1311,7 +1311,7 @@ AST_EXT_LIB_CHECK([NBS], [nbs], [nbs_connect], [nbs.h])
 
 AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
 
-AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp], , [--base-agent-libs],
+AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp], , [--base-agent-libs --external-agent-libs ],
 [#include <net-snmp/net-snmp-config.h>
 #include <net-snmp/net-snmp-includes.h>
 #include <net-snmp/agent/net-snmp-agent-includes.h>],
