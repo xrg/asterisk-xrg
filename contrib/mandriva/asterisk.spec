@@ -577,6 +577,8 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-crypto=%{_prefix} \
 %if %{build_dahdi}
     --with-dahdi=%{_prefix} \
+%else
+    --with-dahdi=no \
 %endif
     --with-avcodec=%{_prefix} \
     --with-gsm=%{_prefix} \
@@ -614,6 +616,8 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-ogg=%{_prefix} \
 %if %{build_osp}
     --with-osptk=%{_prefix} \
+%else
+    --with-osptk=no \
 %endif
     --with-postgres=%{_prefix} \
     --with-popt=%{_prefix} \
