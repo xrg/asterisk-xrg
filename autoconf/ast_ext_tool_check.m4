@@ -10,9 +10,9 @@ AC_DEFUN([AST_EXT_TOOL_CHECK],
 	AC_CHECK_TOOL(CONFIG_$1, $2-config, No)
 	if test ! "x${CONFIG_$1}" = xNo; then
 	    if test x"$3" = x ; then A=--cflags ; else A="$3" ; fi
-	    $1_INCLUDE=$(${CONFIG_$1} $A)
+	    $1_INCLUDE=$(${CONFIG_$1} $A | tr '\n' ' ')
 	    if test x"$4" = x ; then A=--libs ; else A="$4" ; fi
-	    $1_LIB=$(${CONFIG_$1} $A)
+	    $1_LIB=$(${CONFIG_$1} $A | tr '\n' ' ')
 	    if test x"$5" != x ; then
 		saved_cppflags="${CPPFLAGS}"
 		if test "x${$1_DIR}" != "x"; then
