@@ -868,7 +868,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_forkcdr.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_getcpeid.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_image.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_ivrdemo.so
+# attr(0755,root,root) %{_libdir}/asterisk/modules/app_ivrdemo.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_macro.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_milliwatt.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_mixmonitor.so
@@ -883,7 +883,10 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_readfile.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_read.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_record.so
+%if %mdkversion >= 200900
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_rpt.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_timerfd.so
+%endif
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sayunixtime.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_senddtmf.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sendtext.so
@@ -1008,7 +1011,6 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_sprintf.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_clialiases.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_rtp_asterisk.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_timerfd.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_originate.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_playtones.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_bridge.so
@@ -1078,6 +1080,16 @@ fi
 							%{_mandir}/man8/autosupport.8*
 							%{_mandir}/man8/safe_asterisk.8*
 %exclude /var/www/
+%exclude %{_libdir}/asterisk/modules/app_flash.so
+%exclude %{_libdir}/asterisk/modules/app_meetme.so
+%exclude %{_libdir}/asterisk/modules/app_page.so
+%exclude %{_libdir}/asterisk/modules/app_dahdibarge.so
+%exclude %{_libdir}/asterisk/modules/app_dahdiras.so
+# exclude %{_libdir}/asterisk/modules/app_dahdiscan.so
+%exclude %{_libdir}/asterisk/modules/chan_dahdi.so
+%exclude %{_libdir}/asterisk/modules/codec_dahdi.so
+%exclude %{_libdir}/asterisk/modules/res_timing_dahdi.so
+
 
 %files devel -f %{name}-devel.filelist
 %defattr(-,root,root,-)
@@ -1092,10 +1104,12 @@ fi
 %defattr(-,root,root,-)
 %attr(0750,asterisk,asterisk) /var/lib/asterisk/firmware
 
+%if %mdkversion >= 200900
 %files plugins-ais
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/ais.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_ais.so
+%endif
 
 %files plugins-alsa
 %defattr(-,root,root,-)
@@ -1126,9 +1140,11 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_dahdi.so
 %endif
 
+%if %mdkversion >= 200900
 %files plugins-fax
 %defattr(-,root,root,-)
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_fax.so
+%endif
 
 %files plugins-festival
 %defattr(-,root,root,-)
@@ -1306,6 +1322,8 @@ fi
 %files tests
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_dlinklists.so
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_sched.so
+%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_logger.so
+%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
 %attr(0755,root,root)  %{_sbindir}/refcounter
 
 %changelog -f Changelog.git.txt
