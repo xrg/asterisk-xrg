@@ -1,4 +1,4 @@
-MENUSELECT_APPS=app_skel
+MENUSELECT_APPS=app_skel app_osplookup app_ivrdemo
 MENUSELECT_CDR=
 MENUSELECT_CHANNELS=chan_features chan_h323 chan_misdn chan_usbradio chan_vpb 
 MENUSELECT_CODECS=
