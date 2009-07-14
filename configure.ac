@@ -1042,11 +1042,12 @@ if test "${USE_IMAP_TK}" != "no"; then
 	fi 
 	if test "${IMAP_TK_DIR}" = "system"; then
 		#We will enter here if user specified "system" or if any of above checks failed
-		AC_MSG_CHECKING([for system c-client library...])
+		AC_MSG_CHECKING([for system c-client library 2...])
 		CPPFLAGS="${saved_cppflags}"
 		LIBS="${saved_libs}"
 		imap_ldflags=""
 		imap_libs="-lc-client"
+		# -lssl -lkrb5 -lgssapi
 		imap_include="-DUSE_SYSTEM_IMAP" #Try the imap directory first
 		CPPFLAGS="${CPPFLAGS} ${imap_include}"
 		LIBS="${LIBS} ${imap_libs} "`echo ${imap_ldflags}`
@@ -1563,7 +1564,7 @@ then
     AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
 fi
 
-AST_EXT_TOOL_CHECK([GMIME], [gmime], [], [], [#include <gmime/gmime.h>], [gboolean q = g_mime_check_version(0,0,0);])
+AST_EXT_TOOL_CHECK([GMIME], [gmime], [--cflags], [--libs], [#include <gmime/gmime.h>], [gboolean q = g_mime_check_version(0,0,0);])
 
 AST_EXT_LIB_CHECK([HOARD], [hoard], [malloc], [])
 
@@ -1669,7 +1670,8 @@ AC_SUBST(PBX_IXJUSER)
 
 AST_EXT_TOOL_CHECK([SDL], [sdl])
 AST_EXT_LIB_CHECK([SDL_IMAGE], [SDL_image], [IMG_Load], [SDL_image.h], [${SDL_LIB}], [${SDL_INCLUDE}])
-AST_EXT_LIB_CHECK([FFMPEG], [avcodec], [sws_getContext], [libavcodec/avcodec.h], [-lswscale -lpthread -lz -lm])
+AST_EXT_LIB_CHECK([FFMPEG], [avcodec], [sws_getContext], [libavcodec/avcodec.h], [-lpthread -lz -lm])
+AST_EXT_LIB_CHECK([FFMPEG], [avcodec], [sws_getContext], [ffmpeg/avcodec.h], [-lpthread -lz -lm])
 
 # possible places for video4linux version 1
 AC_CHECK_HEADER([linux/videodev.h],

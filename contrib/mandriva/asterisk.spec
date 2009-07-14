@@ -45,6 +45,15 @@
 %{?_without_imap:	%global build_imap 0}
 %{?_with_imap:		%global build_imap 1}
 
+%define build_dahdi	1
+%define build_osp	1
+%define build_pri	1
+
+%if %mdkversion < 200900
+%define build_dahdi	0
+%define build_osp	0
+%define build_pri	0
+%endif
 %define	astvardir	/var/lib/asterisk
 
 Summary:	Asterisk PBX
@@ -75,7 +84,9 @@ BuildRequires:	automake1.9 >= 1.9.6
 BuildRequires:	bison
 BuildRequires:	bluez-devel
 BuildRequires:	curl-devel
+%if %{build_dahdi}
 BuildRequires:	dahdi-devel >= 2.0.0
+%endif
 BuildRequires:	ffmpeg-devel
 BuildRequires:	flex
 #BuildRequires:	freetds-devel >= 0.64
@@ -86,7 +97,7 @@ BuildRequires:	jackit-devel
 BuildRequires:	krb5-devel
 BuildRequires:	libcap-devel
 BuildRequires:	libcurl-devel
-BuildRequires:	libedit-devel
+BuildRequires:	edit-devel
 BuildRequires:	libgcrypt-devel
 BuildRequires:	libgnutls-devel
 BuildRequires:	libgpg-error-devel
@@ -99,11 +110,15 @@ BuildRequires:	libjack-devel
 BuildRequires:	libnbs-devel
 BuildRequires:	libncurses-devel
 BuildRequires:	libogg-devel
+%if %{build_osp}
 BuildRequires:	libosp-devel >= 3.5
+%endif
 BuildRequires:	libpopt-devel
+%if %{build_pri}
 BuildRequires:	libpri-devel >= 1.4.8
-BuildRequires:	libspeex-devel
 BuildRequires:	libss7-devel >= 1.0.2
+%endif
+BuildRequires:	libspeex-devel
 BuildRequires:	libtermcap-devel
 BuildRequires:	libtiff-devel
 BuildRequires:	libtonezone-devel >= 1.4.0
@@ -136,10 +151,12 @@ BuildRequires:	tiff-devel
 BuildRequires:	sqlite-devel
 #BuildRequires:	swig-devel
 BuildRequires:	wget
+%if %{build_imap}
 %if %mdkversion < 200900
 BuildRequires: imap-devel
 %else
 BuildRequires:	c-client-devel
+%endif
 %endif
 %if %{build_misdn}
 BuildRequires:	libmisdn-devel >= 1:3.4
@@ -216,6 +233,7 @@ Requires:	asterisk = %{version}-%{release}
 %description	plugins-curl
 Modules for Asterisk that use cURL.
 
+%if %{build_dahdi}
 %package	plugins-dahdi
 Summary:	Modules for Asterisk that use DAHDI
 Group:		System/Servers
@@ -224,7 +242,7 @@ Requires:	dahdi-tools >= 2.0.0
 
 %description	plugins-dahdi
 Modules for Asterisk that use DAHDI.
-
+%endif
 
 %package	plugins-fax
 Summary:	FAX plugins for Asterisk
@@ -412,12 +430,14 @@ Requires:	asterisk = %{version}-%{release}
 This package contains FreeTDS plugins for Asterisk.
 %endif
 
+%if %{build_osp}
 %package	plugins-osp
 Summary:	Open Settlement Protocol for Asterisk
 Group:		System/Servers
 
 %description	plugins-osp
 This package contains OSP (Open Settlement Protocol) support for Asterisk.
+%endif
 
 %package	plugins-unistim
 Summary:	Unistim channel for Asterisk
@@ -446,6 +466,7 @@ Requires:	sendmail-command
 %description	plugins-voicemail
 Common Voicemail Modules for Asterisk.
 
+%if %{build_imap}
 %package	plugins-voicemail-imap
 Summary:	Store voicemail on an IMAP server
 Group:		System/Servers
@@ -456,6 +477,7 @@ Provides:	asterisk-plugins-voicemail-implementation = %{version}-%{release}
 %description	plugins-voicemail-imap
 Voicemail implementation for Asterisk that stores voicemail on an IMAP
 server.
+%endif
 
 %if %{build_odbc}
 %package	plugins-voicemail-odbc
@@ -544,16 +566,19 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-curl=%{_prefix} \
     --with-curses=%{_prefix} \
     --with-crypto=%{_prefix} \
+%if %{build_dahdi}
     --with-dahdi=%{_prefix} \
+%endif
     --with-avcodec=%{_prefix} \
     --with-gsm=%{_prefix} \
     --without-gtk \
-    --with-gtk2=%{_/prefix} \
-    --with-gmime=%{_prefix} \
+    --with-gtk2=%{_prefix} \
     --with-hoard=%{_prefix} \
     --with-iconv=%{_prefix} \
     --with-iksemel=%{_prefix} \
+%if %{build_imap}
     --with-imap=system \
+%endif
     --with-jack=%{_prefix} \
     --with-ldap=%{_prefix} \
     --with-libedit=%{_prefix} \
@@ -578,14 +603,18 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --without-odbc \
 %endif
     --with-ogg=%{_prefix} \
+%if %{build_osp}
     --with-osptk=%{_prefix} \
+%endif
     --with-postgres=%{_prefix} \
     --with-popt=%{_prefix} \
     --with-portaudio=%{_prefix} \
+%if %{build_pri}
     --with-pri=%{_prefix} \
+    --with-ss7=%{_prefix} \
+%endif
     --with-resample=%{_prefix} \
     --with-spandsp=%{_prefix} \
-    --with-ss7=%{_prefix} \
 %if %{build_h323}
     --with-pwlib=%{_prefix} \
     --with-h323=%{_prefix} \
@@ -746,8 +775,10 @@ fi
 %postun
 %_postun_userdel asterisk
 
+%if %{build_dahdi}
 %pre plugins-dahdi
 %{_sbindir}/usermod -a -G dahdi asterisk
+%endif
 
 %if %{build_misdn}
 %pre plugins-misdn
@@ -1075,6 +1106,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_curl.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_curl.so
 
+%if %{build_dahdi}
 %files plugins-dahdi
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/meetme.conf
@@ -1088,6 +1120,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_dahdi.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/codec_dahdi.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_dahdi.so
+%endif
 
 %files plugins-fax
 %defattr(-,root,root,-)
@@ -1160,10 +1193,12 @@ fi
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/oss.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_oss.so
 
+%if %{build_osp}
 %files plugins-osp
 %defattr(-,root,root)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/osp.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_osplookup.so
+%endif
 
 %files plugins-portaudio
 %defattr(-,root,root,-)
@@ -1232,7 +1267,7 @@ fi
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/voicemail.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_vmcount.so
 
-%if 0 
+%if %{build_imap}
 #FIXME: find a better way to build dir_imap etc.
 %files plugins-voicemail-imap
 %defattr(-,root,root,-)
