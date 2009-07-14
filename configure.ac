@@ -1723,11 +1723,12 @@ if test "${USE_IMAP_TK}" != "no"; then
 	fi
 	if test "${IMAP_TK_DIR}" = "system"; then
 		#We will enter here if user specified "system" or if any of above checks failed
-		AC_MSG_CHECKING([for system c-client library...])
+		AC_MSG_CHECKING([for system c-client library 2...])
 		CPPFLAGS="${saved_cppflags}"
 		LIBS="${saved_libs}"
 		imap_ldflags=""
 		imap_libs="-lc-client"
+		# -lssl -lkrb5 -lgssapi
 		imap_include="-DUSE_SYSTEM_IMAP" #Try the imap directory first
 		CPPFLAGS="${CPPFLAGS} ${imap_include}"
 		LIBS="${LIBS} ${imap_libs} "`echo ${imap_ldflags}`
