@@ -46,8 +46,12 @@
 %{?_with_imap:		%global build_imap 1}
 
 %define build_dahdi	1
-%define build_osp	1
+%define build_osp	0
 %define build_pri	1
+
+%define build_ffmpeg	1
+%{?_without_ffmpeg:	%global build_ffmpeg 0}
+%{?_with_ffmpeg:	%global build_ffmpeg 1}
 
 %if %mdkversion < 200900
 %define build_dahdi	0
@@ -571,7 +575,9 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
 %else
     --with-dahdi=no \
 %endif
+%if %{build_ffmpeg}
     --with-avcodec=%{_prefix} \
+%endif
     --with-gsm=%{_prefix} \
     --without-gtk \
     --with-gtk2=%{_prefix} \
@@ -1134,7 +1140,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_page.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdibarge.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiras.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiscan.so
+#attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiscan.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_dahdi.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/codec_dahdi.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_dahdi.so
