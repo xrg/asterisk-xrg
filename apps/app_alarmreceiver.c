@@ -31,7 +31,7 @@
  
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision: 43933 $")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <string.h>
 #include <stdlib.h>
@@ -125,7 +125,7 @@ static void database_increment( char *key )
 		return;
 	}
 	
-	sscanf(value, "%u", &v);
+	sscanf(value, "%30u", &v);
 	v++;
 	
 	if(option_verbose >= 4)
