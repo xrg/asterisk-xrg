@@ -58,6 +58,7 @@ enum ast_device_state {
 	AST_DEVICE_RINGING,      /*!< Device is ringing */
 	AST_DEVICE_RINGINUSE,    /*!< Device is ringing *and* in use */
 	AST_DEVICE_ONHOLD,       /*!< Device is on hold */
+	AST_DEVICE_TOTAL,        /*/ Total num of device states, used for testing */
 };
 
 /*! \brief Devicestate provider call back */
@@ -253,10 +254,11 @@ enum ast_device_state ast_devstate_aggregate_result(struct ast_devstate_aggregat
  * This struct is only here so that it can be easily declared on the stack.
  */
 struct ast_devstate_aggregate {
+	unsigned int all_unknown:1;
 	unsigned int all_unavail:1;
 	unsigned int all_busy:1;
 	unsigned int all_free:1;
-	unsigned int all_on_hold:1;
+	unsigned int on_hold:1;
 	unsigned int busy:1;
 	unsigned int in_use:1;
 	unsigned int ring:1;

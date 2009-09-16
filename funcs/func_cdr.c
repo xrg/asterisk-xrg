@@ -163,12 +163,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</function>
  ***/
 
-enum {
+enum cdr_option_flags {
 	OPT_RECURSIVE = (1 << 0),
 	OPT_UNPARSED = (1 << 1),
 	OPT_LAST = (1 << 2),
 	OPT_SKIPLOCKED = (1 << 3),
-} cdr_option_flags;
+};
 
 AST_APP_OPTIONS(cdr_func_options, {
 	AST_APP_OPTION('l', OPT_LAST),
@@ -241,6 +241,8 @@ static int cdr_write(struct ast_channel *chan, const char *cmd, char *parse,
 
 	if (!strcasecmp(args.variable, "accountcode"))  /* the 'l' flag doesn't apply to setting the accountcode, userfield, or amaflags */
 		ast_cdr_setaccount(chan, value);
+	else if (!strcasecmp(args.variable, "peeraccount"))
+		ast_cdr_setpeeraccount(chan, value);
 	else if (!strcasecmp(args.variable, "userfield"))
 		ast_cdr_setuserfield(chan, value);
 	else if (!strcasecmp(args.variable, "amaflags"))

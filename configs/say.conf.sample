@@ -1,4 +1,4 @@
-; 
+;
 ; language configuration
 ;
 
@@ -66,7 +66,7 @@ mode=old	; method for playing numbers and dates
 ;	date:M:200604172030.00-4-102
 ;	date:p:200604172030.00-4-102
 ;
-; 
+;
 ; Remember, normally X Z N are special, and the search is
 ; case insensitive, so you must use [X] [N] [Z] .. if you
 ; want exact match.

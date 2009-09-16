@@ -69,7 +69,7 @@ port=5000                    ; UDP port
 ;bookmark=Hans C.@123        ; Use a softkey to dial 123. Name : 9 char max
 ;bookmark=Mailbox@011@54     ; 54 shows a mailbox icon. See #define FAV_ICON_ for other values (32 to 63)
 ;bookmark=Test@*@USTM/violet ; Display an icon if violet is connected (dynamic), only for unistim device
-;bookmark=4@Pager@54321@51   ; Display a pager icon and dial 54321 when softkey 4 is pressed 
+;bookmark=4@Pager@54321@51   ; Display a pager icon and dial 54321 when softkey 4 is pressed
 
 ;[violet]
 ;device=006038abcdef

@@ -17,9 +17,9 @@
 
 SOUNDS_DIR:=$(DESTDIR)$(ASTDATADIR)/sounds
 MOH_DIR:=$(DESTDIR)$(ASTDATADIR)/moh
-CORE_SOUNDS_VERSION:=1.4.15
+CORE_SOUNDS_VERSION:=1.4.16
 EXTRA_SOUNDS_VERSION:=1.4.9
-SOUNDS_URL:=http://downloads.digium.com/pub/telephony/sounds/releases
+SOUNDS_URL:=http://downloads.asterisk.org/pub/telephony/sounds/releases
 MCS:=$(subst -EN-,-en-,$(MENUSELECT_CORE_SOUNDS))
 MCS:=$(subst -FR-,-fr-,$(MCS))
 MCS:=$(subst -ES-,-es-,$(MCS))
@@ -48,7 +48,7 @@ MES:=$(subst -SIREN7,-siren7,$(MES))
 MES:=$(subst -SIREN14,-siren14,$(MES))
 EXTRA_SOUNDS:=$(MES:EXTRA-SOUNDS-%=asterisk-extra-sounds-%-$(EXTRA_SOUNDS_VERSION).tar.gz)
 EXTRA_SOUND_TAGS:=$(MES:EXTRA-SOUNDS-%=$(SOUNDS_DIR)/.asterisk-extra-sounds-%-$(EXTRA_SOUNDS_VERSION))
-MM:=$(subst -FREEPLAY-,-freeplay-,$(MENUSELECT_MOH))
+MM:=$(subst -OPSOUND-,-opsound-,$(MENUSELECT_MOH))
 MM:=$(subst -WAV,-wav,$(MM))
 MM:=$(subst -ULAW,-ulaw,$(MM))
 MM:=$(subst -ALAW,-alaw,$(MM))

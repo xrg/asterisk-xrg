@@ -118,6 +118,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/term.h"
 #include "asterisk/manager.h"
 #include "asterisk/cdr.h"
+#include "asterisk/cel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/enum.h"
 #include "asterisk/http.h"
@@ -941,8 +942,7 @@ void ast_unregister_atexit(void (*func)(void))
 	AST_RWLIST_TRAVERSE_SAFE_END;
 	AST_RWLIST_UNLOCK(&atexits);
 
-	if (ae)
-		free(ae);
+	free(ae);
 }
 
 /* Sending commands from consoles back to the daemon requires a terminating NULL */
@@ -1389,7 +1389,7 @@ static int ast_makesocket(void)
 	if (!ast_strlen_zero(ast_config_AST_CTL_PERMISSIONS)) {
 		int p1;
 		mode_t p;
-		sscanf(ast_config_AST_CTL_PERMISSIONS, "%o", &p1);
+		sscanf(ast_config_AST_CTL_PERMISSIONS, "%30o", &p1);
 		p = p1;
 		if ((chmod(ast_config_AST_SOCKET, p)) < 0)
 			ast_log(LOG_WARNING, "Unable to change file permissions of %s: %s\n", ast_config_AST_SOCKET, strerror(errno));
@@ -2192,10 +2192,10 @@ static char *cli_prompt(EditLine *editline)
 				switch (*t) {
 				case 'C': /* color */
 					t++;
-					if (sscanf(t, "%d;%d%n", &fgcolor, &bgcolor, &i) == 2) {
+					if (sscanf(t, "%30d;%30d%n", &fgcolor, &bgcolor, &i) == 2) {
 						ast_str_append(&prompt, 0, "%s", term_color_code(term_code, fgcolor, bgcolor, sizeof(term_code)));
 						t += i - 1;
-					} else if (sscanf(t, "%d%n", &fgcolor, &i) == 1) {
+					} else if (sscanf(t, "%30d%n", &fgcolor, &i) == 1) {
 						ast_str_append(&prompt, 0, "%s", term_color_code(term_code, fgcolor, 0, sizeof(term_code)));
 						t += i - 1;
 					}
@@ -2236,7 +2236,7 @@ static char *cli_prompt(EditLine *editline)
 #ifdef HAVE_GETLOADAVG
 				case 'l': /* load avg */
 					t++;
-					if (sscanf(t, "%d", &which) == 1 && which > 0 && which <= 3) {
+					if (sscanf(t, "%30d", &which) == 1 && which > 0 && which <= 3) {
 						double list[3];
 						getloadavg(list, 3);
 						ast_str_append(&prompt, 0, "%.2f", list[which - 1]);
@@ -2878,7 +2878,7 @@ static void ast_readconfig(void)
 		/* debug level (-d at startup) */
 		} else if (!strcasecmp(v->name, "debug")) {
 			option_debug = 0;
-			if (sscanf(v->value, "%d", &option_debug) != 1) {
+			if (sscanf(v->value, "%30d", &option_debug) != 1) {
 				option_debug = ast_true(v->value);
 			}
 #if HAVE_WORKING_FORK
@@ -2926,7 +2926,7 @@ static void ast_readconfig(void)
 		} else if (!strcasecmp(v->name, "internal_timing")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_INTERNAL_TIMING);
 		} else if (!strcasecmp(v->name, "maxcalls")) {
-			if ((sscanf(v->value, "%d", &option_maxcalls) != 1) || (option_maxcalls < 0)) {
+			if ((sscanf(v->value, "%30d", &option_maxcalls) != 1) || (option_maxcalls < 0)) {
 				option_maxcalls = 0;
 			}
 		} else if (!strcasecmp(v->name, "maxload")) {
@@ -2935,7 +2935,7 @@ static void ast_readconfig(void)
 			if (getloadavg(test, 1) == -1) {
 				ast_log(LOG_ERROR, "Cannot obtain load average on this system. 'maxload' option disabled.\n");
 				option_maxload = 0.0;
-			} else if ((sscanf(v->value, "%lf", &option_maxload) != 1) || (option_maxload < 0.0)) {
+			} else if ((sscanf(v->value, "%30lf", &option_maxload) != 1) || (option_maxload < 0.0)) {
 				option_maxload = 0.0;
 			}
 		/* Set the maximum amount of open files */
@@ -2977,7 +2977,7 @@ static void ast_readconfig(void)
 		} else if (!strcasecmp(v->name, "minmemfree")) {
 			/* specify the minimum amount of free memory to retain.  Asterisk should stop accepting new calls
 			 * if the amount of free memory falls below this watermark */
-			if ((sscanf(v->value, "%ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
+			if ((sscanf(v->value, "%30ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
 				option_minmemfree = 0;
 			}
 #endif
@@ -2998,7 +2998,7 @@ static void ast_readconfig(void)
 	}
 	for (v = ast_variable_browse(cfg, "compat"); v; v = v->next) {
 		float version;
-		if (sscanf(v->value, "%f", &version) != 1) {
+		if (sscanf(v->value, "%30f", &version) != 1) {
 			ast_log(LOG_WARNING, "Compatibility version for option '%s' is not a number: '%s'\n", v->name, v->value);
 			continue;
 		}
@@ -3142,7 +3142,7 @@ int main(int argc, char *argv[])
 		switch (c) {
 #if defined(HAVE_SYSINFO)
 		case 'e':
-			if ((sscanf(&optarg[1], "%ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
+			if ((sscanf(&optarg[1], "%30ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
 				option_minmemfree = 0;
 			}
 			break;
@@ -3182,11 +3182,11 @@ int main(int argc, char *argv[])
 			ast_set_flag(&ast_options, AST_OPT_FLAG_MUTE);
 			break;
 		case 'M':
-			if ((sscanf(optarg, "%d", &option_maxcalls) != 1) || (option_maxcalls < 0))
+			if ((sscanf(optarg, "%30d", &option_maxcalls) != 1) || (option_maxcalls < 0))
 				option_maxcalls = 0;
 			break;
 		case 'L':
-			if ((sscanf(optarg, "%lf", &option_maxload) != 1) || (option_maxload < 0.0))
+			if ((sscanf(optarg, "%30lf", &option_maxload) != 1) || (option_maxload < 0.0))
 				option_maxload = 0.0;
 			break;
 		case 'q':
@@ -3571,6 +3571,11 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+	if (ast_ssl_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+
 #ifdef AST_XML_DOCS
 	/* Load XML documentation. */
 	ast_xmldoc_load_documentation();
@@ -3590,7 +3595,17 @@ int main(int argc, char *argv[])
 
 	ast_channels_init();
 
+	if (init_manager()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+
 	if (ast_cdr_engine_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+
+	if (ast_cel_engine_init()) {
 		printf("%s", term_quit());
 		exit(1);
 	}
@@ -3648,14 +3663,7 @@ int main(int argc, char *argv[])
 	/* loads the cli_permissoins.conf file needed to implement cli restrictions. */
 	ast_cli_perms_init(0);
 
-	/* AMI is initialized after loading modules because of a potential
-	 * conflict between issuing a module reload from manager and
-	 * registering manager actions.  This will cause reversed locking
-	 * order between the module list and manager actions list. */
-	if (init_manager()) {
-		printf("%s", term_quit());
-		exit(1);
-	}
+	ast_stun_init();
 
 	dnsmgr_start_refresh();
 
@@ -3672,6 +3680,9 @@ int main(int argc, char *argv[])
 		sig_alert_pipe[0] = sig_alert_pipe[1] = -1;
 
 	ast_set_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED);
+
+	ast_process_pending_reloads();
+
 	pthread_sigmask(SIG_UNBLOCK, &sigs, NULL);
 
 #ifdef __AST_DEBUG_MALLOC

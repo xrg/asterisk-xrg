@@ -32,7 +32,7 @@
 
 
 \author{Asterisk Development Team \\ Asterisk.org}
-\title{Asterisk Reference Information \\ Version ASTERISKVERSION}
+\title{Asterisk Reference Information \\ ASTERISKVERSION}
 
 \begin{document}
 \maketitle
@@ -48,7 +48,7 @@ reference purposes.
   \input{../../LICENSE}
      \subsection{Hold Music}
        Digium has licensed the music included with
-       the Asterisk distribution From FreePlayMusic
+       the Asterisk distribution From opsound.org
        for use and distribution with Asterisk.  It
        is licensed ONLY for use as hold music within
        an Asterisk based PBX.
@@ -99,6 +99,8 @@ reference purposes.
   \input{misdn.tex}
   \section{Local}
   \input{localchannel.tex}
+  \section{Mobile}
+  \input{chan_mobile.tex}
 
 \chapter{Distributed Universal Number Discovery (DUNDi)}
   \section{Introduction}
@@ -117,6 +119,10 @@ reference purposes.
 \input{billing.tex}
 \input{cdrdriver.tex}
 
+\chapter{CEL: Channel Event Logging}
+\input{cel-doc.tex}
+\input{celdriver.tex}
+
 \chapter{Voicemail}
   \section{ODBC Storage}
   \label{odbcstorage}
@@ -134,6 +140,12 @@ reference purposes.
 
 \chapter{Phone Provisioning}
   \input{phoneprov.tex}
+
+\chapter{Calendaring}
+  \input{calendaring.tex}
+
+\chapter{Security Framework}
+  \input{security-events.tex}
 
 \chapter{Development}
   \section{Backtrace}

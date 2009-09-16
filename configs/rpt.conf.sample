@@ -86,7 +86,7 @@
 ; specify the rxchannel and the txchannel will be assumed from the rxchannel
 ;txchannel = DAHDI/6			; Tx audio/signalling channel
 ;functions = functions-remote
-;remote = ft897				; Set remote=y for dumb remote or 
+;remote = ft897				; Set remote=y for dumb remote or
 					; remote=ft897 for Yaesu FT-897 or
 					; remote=rbi for Doug Hall RBI1
 ;iobase = 0x378				; Specify IO port for parallel port (optional)
@@ -106,7 +106,7 @@
 ;6=autopatchup				; Autopatch up
 ;0=autopatchdn				; Autopatch down
 
-;90=cop,1				; System warm boot 
+;90=cop,1				; System warm boot
 ;91=cop,2				; System enable
 ;92=cop,3				; System disable
 
@@ -135,7 +135,7 @@
 ; Single frequencies are created by setting freq1 or freq2 to zero.
 ;
 ; |m - Morse escape sequence
-; 
+;
 ; Sends Morse code at the telemetry amplitude and telemetry frequency as defined in the
 ; [morse] section.
 ;
@@ -150,15 +150,15 @@
 
 
 ;ct1=|t(350,0,100,2048)(500,0,100,2048)(660,0,100,2048)
-;ct2=|t(660,880,150,2048)  
-;ct3=|t(440,0,150,2048) 
+;ct2=|t(660,880,150,2048)
+;ct3=|t(440,0,150,2048)
 ;ct4=|t(550,0,150,2048)
 ;ct5=|t(660,0,150,2048)
 ;ct6=|t(880,0,150,2048)
 ;ct7=|t(660,440,150,2048)
 ;ct8=|t(700,1100,150,2048)
-;remotetx=|t(2000,0,75,2048)(0,0,75,0)(1600,0,75,2048); 
-;remotemon=|t(1600,0,75,2048) 
+;remotetx=|t(2000,0,75,2048)(0,0,75,0)(1600,0,75,2048);
+;remotemon=|t(1600,0,75,2048)
 ;cmdmode=|t(900,903,200,2048)
 ;functcomplete=|t(1000,0,100,2048)(0,0,100,0)(1000,0,100,2048)
 
@@ -168,7 +168,7 @@
 ;speed=20		; Approximate speed in WPM
 ;frequency=800		; Morse Telemetry Frequency
 ;amplitude=4096		; Morse Telemetry Amplitude
-;idfrequency=330		; Morse ID Frequency	
+;idfrequency=330		; Morse ID Frequency
 ;idamplitude=2048	; Morse ID Amplitude
 
 ;[nodes]

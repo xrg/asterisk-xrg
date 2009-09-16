@@ -334,7 +334,7 @@ static int reload_followme(int reload)
 	featuredigittostr = ast_variable_retrieve(cfg, "general", "featuredigittimeout");
 
 	if (!ast_strlen_zero(featuredigittostr)) {
-		if (!sscanf(featuredigittostr, "%d", &featuredigittimeout))
+		if (!sscanf(featuredigittostr, "%30d", &featuredigittimeout))
 			featuredigittimeout = 5000;
 	}
 
@@ -831,10 +831,14 @@ static void findmeexec(struct fm_args *tpargs)
 				return;
 			}
 
-			outbound = ast_request("Local", ast_best_codec(caller->nativeformats), dialarg, &dg);
+			outbound = ast_request("Local", ast_best_codec(caller->nativeformats), caller, dialarg, &dg);
 			if (outbound) {
 				ast_set_callerid(outbound, caller->cid.cid_num, caller->cid.cid_name, caller->cid.cid_num);
 				ast_channel_inherit_variables(tpargs->chan, outbound);
+				ast_channel_datastore_inherit(tpargs->chan, outbound);
+				ast_string_field_set(outbound, language, tpargs->chan->language);
+				ast_string_field_set(outbound, accountcode, tpargs->chan->accountcode);
+				ast_string_field_set(outbound, musicclass, tpargs->chan->musicclass);
 				ast_verb(3, "calling %s\n", dialarg);
 				if (!ast_call(outbound,dialarg,0)) {
 					tmpuser->ochan = outbound;
@@ -956,7 +960,7 @@ static struct call_followme *find_realtime(const char *name)
 		if (!(numstr = ast_variable_retrieve(cfg, catg, "phonenumber"))) {
 			continue;
 		}
-		if (!(timeoutstr = ast_variable_retrieve(cfg, catg, "timeout")) || sscanf(timeoutstr, "%d", &timeout) != 1 || timeout < 1) {
+		if (!(timeoutstr = ast_variable_retrieve(cfg, catg, "timeout")) || sscanf(timeoutstr, "%30d", &timeout) != 1 || timeout < 1) {
 			timeout = 25;
 		}
 		/* This one has to exist; it was part of the query */

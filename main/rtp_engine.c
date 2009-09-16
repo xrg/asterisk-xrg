@@ -37,6 +37,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/pbx.h"
+#include "asterisk/translate.h"
 
 /*! Structure that represents an RTP session (instance) */
 struct ast_rtp_instance {
@@ -50,6 +51,8 @@ struct ast_rtp_instance {
 	struct sockaddr_in local_address;
 	/*! Address that we are sending RTP to */
 	struct sockaddr_in remote_address;
+	/*! Alternate address that we are receiving RTP from */
+	struct sockaddr_in alt_remote_address;
 	/*! Instance that we are bridged to if doing remote or local bridging */
 	struct ast_rtp_instance *bridged;
 	/*! Payload and packetization information */
@@ -60,6 +63,10 @@ struct ast_rtp_instance {
 	int holdtimeout;
 	/*! DTMF mode in use */
 	enum ast_rtp_dtmf_mode dtmf_mode;
+	/*! Glue currently in use */
+	struct ast_rtp_glue *glue;
+	/*! Channel associated with the instance */
+	struct ast_channel *chan;
 };
 
 /*! List of RTP engines that are currently registered */
@@ -278,6 +285,7 @@ int ast_rtp_instance_destroy(struct ast_rtp_instance *instance)
 
 struct ast_rtp_instance *ast_rtp_instance_new(const char *engine_name, struct sched_context *sched, struct sockaddr_in *sin, void *data)
 {
+	struct sockaddr_in address = { 0, };
 	struct ast_rtp_instance *instance = NULL;
 	struct ast_rtp_engine *engine = NULL;
 
@@ -315,11 +323,12 @@ struct ast_rtp_instance *ast_rtp_instance_new(const char *engine_name, struct sc
 	instance->local_address.sin_family = AF_INET;
 	instance->local_address.sin_addr = sin->sin_addr;
 	instance->remote_address.sin_family = AF_INET;
+	address.sin_addr = sin->sin_addr;
 
 	ast_debug(1, "Using engine '%s' for RTP instance '%p'\n", engine->name, instance);
 
 	/* And pass it off to the engine to setup */
-	if (instance->engine->new(instance, sched, sin, data)) {
+	if (instance->engine->new(instance, sched, &address, data)) {
 		ast_debug(1, "Engine '%s' failed to setup RTP instance '%p'\n", engine->name, instance);
 		ao2_ref(instance, -1);
 		return NULL;
@@ -359,15 +368,27 @@ int ast_rtp_instance_set_local_address(struct ast_rtp_instance *instance, struct
 
 int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, struct sockaddr_in *address)
 {
-	if (&instance->remote_address != address) {
-		instance->remote_address.sin_addr = address->sin_addr;
-		instance->remote_address.sin_port = address->sin_port;
-	}
+	instance->remote_address.sin_addr = address->sin_addr;
+	instance->remote_address.sin_port = address->sin_port;
 
 	/* moo */
 
 	if (instance->engine->remote_address_set) {
 		instance->engine->remote_address_set(instance, &instance->remote_address);
+	}
+
+	return 0;
+}
+
+int ast_rtp_instance_set_alt_remote_address(struct ast_rtp_instance *instance, struct sockaddr_in *address)
+{
+	instance->alt_remote_address.sin_addr = address->sin_addr;
+	instance->alt_remote_address.sin_port = address->sin_port;
+
+	/* oink */
+
+	if (instance->engine->alt_remote_address_set) {
+		instance->engine->alt_remote_address_set(instance, &instance->alt_remote_address);
 	}
 
 	return 0;
@@ -836,8 +857,8 @@ static enum ast_bridge_result local_bridge_loop(struct ast_channel *c0, struct a
 			if ((fr->subclass == AST_CONTROL_HOLD) ||
 			    (fr->subclass == AST_CONTROL_UNHOLD) ||
 			    (fr->subclass == AST_CONTROL_VIDUPDATE) ||
-			    (fr->subclass == AST_CONTROL_T38) ||
-			    (fr->subclass == AST_CONTROL_SRCUPDATE)) {
+			    (fr->subclass == AST_CONTROL_SRCUPDATE) ||
+			    (fr->subclass == AST_CONTROL_T38_PARAMETERS)) {
 				/* If we are going on hold, then break callback mode and P2P bridging */
 				if (fr->subclass == AST_CONTROL_HOLD) {
 					if (instance0->engine->local_bridge) {
@@ -1055,8 +1076,8 @@ static enum ast_bridge_result remote_bridge_loop(struct ast_channel *c0, struct 
 			if ((fr->subclass == AST_CONTROL_HOLD) ||
 			    (fr->subclass == AST_CONTROL_UNHOLD) ||
 			    (fr->subclass == AST_CONTROL_VIDUPDATE) ||
-			    (fr->subclass == AST_CONTROL_T38) ||
-			    (fr->subclass == AST_CONTROL_SRCUPDATE)) {
+			    (fr->subclass == AST_CONTROL_SRCUPDATE) ||
+			    (fr->subclass == AST_CONTROL_T38_PARAMETERS)) {
 				if (fr->subclass == AST_CONTROL_HOLD) {
 					/* If we someone went on hold we want the other side to reinvite back to us */
 					if (who == c0) {
@@ -1216,6 +1237,11 @@ enum ast_bridge_result ast_rtp_instance_bridge(struct ast_channel *c0, struct as
 		goto done;
 	}
 
+	instance0->glue = glue0;
+	instance1->glue = glue1;
+	instance0->chan = c0;
+	instance1->chan = c1;
+
 	/* Depending on the end result for bridging either do a local bridge or remote bridge */
 	if (audio_glue0_res == AST_RTP_GLUE_RESULT_LOCAL || audio_glue1_res == AST_RTP_GLUE_RESULT_LOCAL) {
 		ast_verbose(VERBOSE_PREFIX_3 "Locally bridging %s and %s\n", c0->name, c1->name);
@@ -1226,6 +1252,11 @@ enum ast_bridge_result ast_rtp_instance_bridge(struct ast_channel *c0, struct as
 				tinstance0, tinstance1, glue0, glue1, codec0, codec1, timeoutms, flags,
 				fo, rc, c0->tech_pvt, c1->tech_pvt);
 	}
+
+	instance0->glue = NULL;
+	instance1->glue = NULL;
+	instance0->chan = NULL;
+	instance1->chan = NULL;
 
 	unlock_chans = 0;
 
@@ -1556,6 +1587,17 @@ int ast_rtp_instance_make_compatible(struct ast_channel *chan, struct ast_rtp_in
 	return res;
 }
 
+int ast_rtp_instance_available_formats(struct ast_rtp_instance *instance, int to_endpoint, int to_asterisk)
+{
+	int formats;
+
+	if (instance->engine->available_formats && (formats = instance->engine->available_formats(instance, to_endpoint, to_asterisk))) {
+		return formats;
+	}
+
+	return ast_translate_available_formats(to_endpoint, to_asterisk);
+}
+
 int ast_rtp_instance_activate(struct ast_rtp_instance *instance)
 {
 	return instance->engine->activate ? instance->engine->activate(instance) : 0;
@@ -1586,4 +1628,19 @@ int ast_rtp_instance_get_timeout(struct ast_rtp_instance *instance)
 int ast_rtp_instance_get_hold_timeout(struct ast_rtp_instance *instance)
 {
 	return instance->holdtimeout;
+}
+
+struct ast_rtp_engine *ast_rtp_instance_get_engine(struct ast_rtp_instance *instance)
+{
+	return instance->engine;
+}
+
+struct ast_rtp_glue *ast_rtp_instance_get_active_glue(struct ast_rtp_instance *instance)
+{
+	return instance->glue;
+}
+
+struct ast_channel *ast_rtp_instance_get_chan(struct ast_rtp_instance *instance)
+{
+	return instance->chan;
 }

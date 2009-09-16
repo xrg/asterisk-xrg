@@ -7,6 +7,7 @@
 === and the other UPGRADE files for older releases.
 ===
 ======================================================================
+
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.6.3  -------------
 ------------------------------------------------------------------------------
@@ -27,18 +28,44 @@ SIP Changes
    'rpid' and 'pai'. Setting sendrpid to 'rpid' will cause Remote-Party-ID
    header to be sent (equivalent to setting sendrpid=yes) and setting
    sendrpid to 'pai' will cause P-Asserted-Identity header to be sent.
+ * The 'ignoresdpversion' behavior has been made automatic when the SDP received
+   is in response to a T.38 re-INVITE that Asterisk initiated. In this situation,
+   since the call will fail if Asterisk does not process the incoming SDP, Asterisk
+   will accept the SDP even if the SDP version number is not properly incremented,
+   but will generate a warning in the log indicating that the SIP peer that sent
+   the SDP should have the 'ignoresdpversion' option set.
+ * The 'nat' option has now been been changed to have yes, no, force_rport, and
+   comedia as valid values. Setting it to yes forces RFC 3581 behavior and enables
+   symmetric RTP support. Setting it to no only enables RFC 3581 behavior if the
+   remote side requests it and disables symmetric RTP support. Setting it to
+   force_rport forces RFC 3581 behavior and disables symmetric RTP support.
+   Setting it to comedia enables RFC 3581 behavior if the remote side requests it
+   and enables symmetric RTP support.
+ * Slave SIP channels now set HASH(SIP_CAUSE,<slave-channel-name>) on each
+   response.  This permits the master channel to know how each channel dialled
+   in a multi-channel setup resolved in an individual way.
+
+IAX2 Changes
+-----------
+ * Added rtsavesysname option into iax.conf to allow the systname to be saved
+   on realtime updates.
 
 Applications
 ------------
  * Added progress option to the app_dial D() option.  When progress DTMF is
-   present, those values are sent immediatly upon receiving a PROGRESS message
+   present, those values are sent immediately upon receiving a PROGRESS message
    regardless if the call has been answered or not.
  * Added functionality to the app_dial F() option to continue with execution
    at the current location when no parameters are provided.
  * Added c() option to app_chanspy. This option allows custom DTMF to be set
-   to cycle through the next avaliable channel.  By default this is still '*'.
+   to cycle through the next available channel.  By default this is still '*'.
  * Added x() option to app_chanspy.  This option allows DTMF to be set to
    exit the application.
+ * The Voicemail application has been improved to automatically ignore messages
+   that only contain silence.
+ * The ChanSpy application now has the 's' option, which makes the application
+   automatically exit once it hits a point where no more channels are available
+   to spy on.
 
 Dialplan Functions
 ------------------
@@ -63,12 +90,31 @@ Dialplan Functions
 
    The possible values are:
 
-     on - normal mode (the echo canceller is actually reinitalized)
+     on - normal mode (the echo canceller is actually reinitialized)
      off - disabled
      fax - FAX/data mode (NLP disabled if possible, otherwise completely
            disabled)
      voice - voice mode (returns from FAX mode, reverting the changes that
              were made when FAX mode was requested)
+ * Added new dialplan function MASTER_CHANNEL(), which permits retrieving
+   and setting variables on the channel which created the current channel.
+   Administrators should take care to avoid naming conflicts, when multiple
+   channels are dialled at once, especially when used with the Local channel
+   construct (which all could set variables on the master channel).  Usage
+   of the HASH() dialplan function, with the key set to the name of the slave
+   channel, is one approach that will avoid conflicts.
+ * Added new dialplan function MUTEAUDIO() for muting inbound and/or outbound
+   audio in a channel.
+ * func_odbc now allows multiple row results to be retrieved without using
+   mode=multirow.  If rowlimit is set, then additional rows may be retrieved
+   from the same query by using the name of the function which retrieved the
+   first row as an argument to ODBC_FETCH().
+
+Dialplan Variables
+------------------
+ * Added DYNAMIC_FEATURENAME which holds the last triggered dynamic feature.
+ * Added DYNAMIC_PEERNAME which holds the unique channel name on the other side
+   and is set when a dynamic feature is triggered.
 
 Queue changes
 -------------
@@ -91,7 +137,8 @@ mISDN channel driver (chan_misdn) changes
     used by the rest of the system.
   * Made use the nationalprefix and internationalprefix misdn.conf
     parameters to prefix any received number from the ISDN link if that
-    number has the corresponding Type-Of-Number.
+    number has the corresponding Type-Of-Number.  NOTE:  This includes
+    comparing the incoming call's dialed number against the MSN list.
   * Added the following new parameters: unknownprefix, netspecificprefix,
     subscriberprefix, and abbreviatedprefix in misdn.conf to prefix any
     received number from the ISDN link if that number has the corresponding
@@ -128,6 +175,27 @@ Tagged versions of the modified mISDN code are available under:
 http://svn.digium.com/svn/thirdparty/mISDN/tags
 http://svn.digium.com/svn/thirdparty/mISDNuser/tags
 
+libpri channel driver (chan_dahdi) DAHDI changes
+-------------------------------------------
+ * The channel variable PRIREDIRECTREASON is now just a status variable
+   and it is also deprecated.  Use the REDIRECTING(reason) dialplan function
+   to read and alter the reason.
+ * For Q.SIG and ETSI PRI/BRI-PTP, you should manually send the COLR of the
+   redirected-to party for an incomming redirected call if the incoming call
+   could experience further redirects.  Just set the
+   REDIRECTING(to-num,i) = CALLERID(dnid) and set the REDIRECTING(to-pres)
+   to the COLR.  A call has been redirected if the REDIRECTING(count) is not
+   zero.
+ * For outgoing Q.SIG and ETSI PRI/BRI-PTP redirected calls, you need to
+   use the inhibit(i) option on all of the REDIRECTING statements before
+   dialing the redirected-to party.  You still have to set the
+   REDIRECTING(to-xxx,i) and the REDIRECTING(from-xxx,i) values.  The call
+   will update the redirecting-to presentation (COLR) when it becomes available.
+ * Added Reverse Charging Indication receipt & transmission (requires latest
+   LibPRI).
+ * Added the ability to ignore calls that are not in a Multiple Subscriber
+   Number (MSN) list for PTMP CPE interfaces.
+
 Asterisk Manager Interface
 --------------------------
  * The Hangup action now accepts a Cause header which may be used to
@@ -141,16 +209,53 @@ Asterisk Manager Interface
    across all .conf files. All affected sample.conf files have been modified to
    reflect this change.  Previous options such as 'sslenable' still work,
    but options with the 'tls' prefix are preferred.
+ * Added a MuteAudio AMI action for muting inbound and/or outbound audio
+   in a channel. (res_mutestream.so)
 
-Logger
-------
- * The rarely used 'event_log' and LOG_EVENT channel have been removed; the few
-   users of this channel in the tree have been converted to LOG_NOTICE or removed
-   (in cases where the same message was already generated to another channel).
+Channel Event Logging
+---------------------
+ * A new interface, CEL, is introduced here. CEL logs single events, much like
+   the AMI, but it differs from the AMI in that it logs to db backends much
+   like CDR does; is based on the event subsystem introduced by Russell, and
+   can share in all its benefits; allows multiple backends to operate like CDR;
+   is specialized to event data that would be of concern to billing sytems,
+   like CDR. Backends for logging and accounting calls have been produced,
+   but a new CDR backend is still in development.
 
 CDR
 ---
+ * 'linkedid' and 'peeraccount' are new CDR fields available to CDR officianados.
+   linkedid is based on uniqueID, but spreads to other channels as transfers, dials,
+   etc are performed. Thus the peices of CDR can be grouped into multilegged sets.
  * Multiple files and formats can now be specified in cdr_custom.conf.
+ * cdr_syslog has been added which allows CDRs to be written directly to syslog.
+   See configs/cdr_syslog.conf.sample for more information.
+
+Calendaring for Asterisk
+------------------------
+ * A new set of modules were added supporing calendar integration with Asterisk.
+   Dialplan functions for reading from and writing to calendars are included,
+   as well as the ability to execute dialplan logic upon calendar event notifications.
+   iCalendar, CalDAV, and Exchange Server calendars are supported (Exchange support
+   only tested on Exchange Server 2003 with no support for forms-based authentication).
+
+Multicast RTP Support
+---------------------
+ * A new RTP engine and channel driver have been added which supports Multicast RTP.
+   The channel driver can be used with the Page application to perform multicast RTP
+   paging. The dial string format is: MulticastRTP/<type>/<destination>/<control address>
+   Type can be either basic or linksys.
+   Destination is the IP address and port for the RTP packets.
+   Control address is specific to the linksys type and is used for sending the control
+   packets unique to them.
+
+Security Events Framework
+-------------------------
+ * Asterisk has a new C API for reporting security events.  The module res_security_log
+   sends these events to the "security" logger level.  Currently, AMI is the only
+   Asterisk component that reports security events.  However, SIP support will be
+   coming soon.  For more information on the security events framework, see the
+   "Security Events" chapter of the included documentation - doc/tex/asterisk.pdf.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------
@@ -448,12 +553,8 @@ SIP Changes
    as well as periodically updating the IP address. These properties allow for
    better performance as well as recovery in the event of an IP change.
  * Performance improvements via using hash tables (astobj2) and doubly-linked lists to improve 
-   load/reload of large numbers of peers/users by ~40x (for large lists of peers.
-   Initially, we saw 4x improvement in call setup/destruction, but at the time
-   of merging, this gain has disappeared; further research will be done to try
-   and restore this performance improvement. Astobj2 refcounting is now used
-   for users, peers, and dialogs.  Users are encouraged to assist in regression
-   testing and problem reporting!
+   load/reload of large numbers of peers/users by ~40x (for large lists of peers).
+   These changes also provide performance improvements for call setup and tear down.
  * Added ability to specify registration expiry time on a per registration basis in
    the register line.
  * Added support for T140 RED - redundancy in T.140 to prevent text loss due to
@@ -1089,11 +1190,11 @@ Logger changes
 --------------
   * Added rotatestrategy option to logger.conf, along with two new options:
      "timestamp" which will use the time to name the logger files instead of
-     sequence number; and "rotate", which rotates the names of the logfiles,
+     sequence number; and "rotate", which rotates the names of the log files,
      similar to the way syslog rotates files.
   * Added exec_after_rotate option to logger.conf, which allows a system
      command to be run after rotation.  This is primarily useful with
-     rotatestrategry=rotate, to allow a limit on the number of logfiles kept
+     rotatestrategy=rotate, to allow a limit on the number of log files kept
      and to ensure that the oldest log file gets deleted.
   * Added realtime support for the queue log
 

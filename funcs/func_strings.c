@@ -51,7 +51,12 @@ AST_THREADSTORAGE(result_buf);
 			<parameter name="delim" required="true" />
 		</syntax>
 		<description>
-			<para>Example: ${FIELDQTY(ex-amp-le,-)} returns 3</para>
+			<para>The delimiter may be specified as a special or extended ASCII character, by encoding it.  The characters
+			<literal>\n</literal>, <literal>\r</literal>, and <literal>\t</literal> are all recognized as the newline,
+			carriage return, and tab characters, respectively.  Also, octal and hexadecimal specifications are recognized
+			by the patterns <literal>\0nnn</literal> and <literal>\xHH</literal>, respectively.  For example, if you wanted
+			to encode a comma as the delimiter, you could use either <literal>\054</literal> or <literal>\x2C</literal>.</para>
+			<para>Example: If ${example} contains <literal>ex-amp-le</literal>, then ${FIELDQTY(example,-)} returns 3.</para>
 		</description>
 	</function>
 	<function name="LISTFILTER" language="en_US">
@@ -857,6 +862,12 @@ static struct ast_custom_function array_function = {
 static int quote(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
 	char *bufptr = buf, *dataptr = data;
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_WARNING, "No argument specified!\n");
+		ast_copy_string(buf, "\"\"", len);
+		return 0;
+	}
+
 	*bufptr++ = '"';
 	for (; bufptr < buf + len - 1; dataptr++) {
 		if (*dataptr == '\\') {

@@ -277,6 +277,7 @@ static struct iax2_ie {
 	{ IAX_IE_RR_OOO, "RR_OUTOFORDER", dump_int },
 	{ IAX_IE_VARIABLE, "VARIABLE", dump_string },
 	{ IAX_IE_OSPTOKEN, "OSPTOKEN" },
+	{ IAX_IE_CALLTOKEN, "CALLTOKEN" },
 };
 
 static const struct iax2_ie prov_ies[] = {
@@ -533,6 +534,9 @@ void iax_frame_subclass2str(enum iax_frame_subclass subclass, char *str, size_t 
 	case IAX_COMMAND_RTKEY:
 		cmd = "RTKEY  ";
 		break;
+	case IAX_COMMAND_CALLTOKEN:
+		cmd = "CTOKEN ";
+		break;
 	}
 	ast_copy_string(str, cmd, len);
 }
@@ -573,7 +577,13 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		"PROCDNG",
 		"HOLD   ",
 		"UNHOLD ",
-		"VIDUPDT", };
+		"VIDUPDT",
+		"T38    ",
+		"SRCUPDT",
+		"TXFER  ",
+		"CNLINE ",
+		"REDIR  ",
+	};
 	struct ast_iax2_full_hdr *fh;
 	char retries[20];
 	char class2[20];
@@ -1045,6 +1055,12 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 				snprintf(tmp, (int)sizeof(tmp), "Expected OSP token block index to be 0~%d but was %d\n", IAX_MAX_OSPBLOCK_NUM - 1, count);
 				errorf(tmp);
 			}
+			break;
+		case IAX_IE_CALLTOKEN:
+			if (len) {
+				ies->calltokendata = (unsigned char *) data + 2;
+			}
+			ies->calltoken = 1;
 			break;
 		default:
 			snprintf(tmp, (int)sizeof(tmp), "Ignoring unknown information element '%s' (%d) of length %d\n", iax_ie2str(ie), ie, len);

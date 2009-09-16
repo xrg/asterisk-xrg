@@ -42,6 +42,9 @@ int ast_timing_init(void);		/*!< Provided by timing.c */
 int ast_indications_init(void); /*!< Provided by indications.c */
 int ast_indications_reload(void);/*!< Provided by indications.c */
 void ast_stun_init(void);               /*!< Provided by stun.c */
+int ast_cel_engine_init(void);		/*!< Provided by cel.c */
+int ast_cel_engine_reload(void);	/*!< Provided by cel.c */
+int ast_ssl_init(void);                 /*!< Porvided by ssl.c */
 
 /*!
  * \brief Reload asterisk modules.
@@ -59,6 +62,18 @@ void ast_stun_init(void);               /*!< Provided by stun.c */
  * \retval 2 if the specfied module was found and reloaded.
  */
 int ast_module_reload(const char *name);
+
+/*!
+ * \brief Process reload requests received during startup.
+ *
+ * This function requests that the loader execute the pending reload requests
+ * that were queued during server startup.
+ *
+ * \note This function will do nothing if the server has not completely started
+ *       up.  Once called, the reload queue is emptied, and further invocations
+ *       will have no affect.
+ */
+void ast_process_pending_reloads(void);
 
 /*! \brief Load XML documentation. Provided by xmldoc.c 
  *  \retval 1 on error.

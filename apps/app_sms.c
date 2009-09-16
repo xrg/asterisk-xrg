@@ -878,7 +878,7 @@ static void sms_readfile(sms_t * h, char *fn)
 					} else if (!strcmp(line, "scts")) {    /* get date/time */
 						int Y, m, d, H, M, S;
 						/* XXX Why aren't we using ast_strptime here? */
-						if (sscanf(p, "%d-%d-%dT%d:%d:%d", &Y, &m, &d, &H, &M, &S) == 6) {
+						if (sscanf(p, "%4d-%2d-%2dT%2d:%2d:%2d", &Y, &m, &d, &H, &M, &S) == 6) {
 							struct ast_tm t = { 0, };
 							t.tm_year = Y - 1900;
 							t.tm_mon = m - 1;
@@ -1779,7 +1779,7 @@ static void sms_process(sms_t * h, int samples, signed short *data)
 			h->iphasep = 0;
 		}
 		if (bit && h->ibitc == 200) {       /* sync, restart message */
-			/* Protocol 2: empty connnection ready (I am master) */
+			/* Protocol 2: empty connection ready (I am master) */
 			if (h->framenumber < 0 && h->ibytec >= 160 && !memcmp(h->imsg, "UUUUUUUUUUUUUUUUUUUU", 20)) {
 				h->framenumber = 1;
 				ast_verb(3, "SMS protocol 2 detected\n");
@@ -1832,19 +1832,19 @@ static void sms_process(sms_t * h, int samples, signed short *data)
  *	- AST_APP_OPTIONS() to drive the parsing routine
  *	- in the function, AST_DECLARE_APP_ARGS(...) for the arguments.
  */
-enum {
+enum sms_flags {
 	OPTION_BE_SMSC	= (1 << 0),             /* act as sms center */
 	OPTION_ANSWER	= (1 << 1),             /* answer on incoming calls */
 	OPTION_TWO	= (1 << 2),                 /* Use Protocol Two */
 	OPTION_PAUSE	= (1 << 3),             /* pause before sending data, in ms */
 	OPTION_SRR	= (1 << 4),                 /* set srr */
 	OPTION_DCS	= (1 << 5),                 /* set dcs */
-} sms_flags;
+};
 
-enum {
+enum sms_opt_args {
 	OPTION_ARG_PAUSE = 0,
 	OPTION_ARG_ARRAY_SIZE
-} sms_opt_args;
+};
 
 AST_APP_OPTIONS(sms_options, {
 	AST_APP_OPTION('s', OPTION_BE_SMSC),

@@ -41,6 +41,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/features.h"
 #include "asterisk/callerid.h"
+#include "asterisk/cel.h"
 
 #define PICKUPMARK "PICKUPMARK"
 
@@ -84,8 +85,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</application>
  ***/
 
-static const char * const app = "Pickup";
-static const char * const app2 = "PickupChan";
+static const char app[] = "Pickup";
+static const char app2[] = "PickupChan";
 /*! \todo This application should return a result code, like PICKUPRESULT */
 
 /* Perform actual pickup between two channels */
@@ -95,11 +96,15 @@ static int pickup_do(struct ast_channel *chan, struct ast_channel *target)
 	struct ast_party_connected_line connected_caller;
 
 	ast_debug(1, "Call pickup on '%s' by '%s'\n", target->name, chan->name);
+	ast_cel_report_event(target, AST_CEL_PICKUP, NULL, NULL, chan);
 
-	connected_caller = target->connected;
-	ast_party_connected_line_init(&target->connected);
+	ast_party_connected_line_init(&connected_caller);
+	ast_party_connected_line_copy(&connected_caller, &target->connected);
 	connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-	ast_channel_update_connected_line(chan, &connected_caller);
+	if (ast_channel_connected_line_macro(NULL, chan, &connected_caller, 0, 0)) {
+		ast_channel_update_connected_line(chan, &connected_caller);
+	}
+	ast_party_connected_line_free(&connected_caller);
 
 	ast_channel_lock(chan);
 	ast_connected_line_copy_from_caller(&connected_caller, &chan->cid);
@@ -211,7 +216,7 @@ static int pickup_by_exten(struct ast_channel *chan, const char *exten, const ch
 
 	while ((target = ast_channel_iterator_next(iter))) {
 		ast_channel_lock(target);
-		if (can_pickup(target)) {
+		if ((chan != target) && can_pickup(target)) {
 			break;
 		}
 		ast_channel_unlock(target);

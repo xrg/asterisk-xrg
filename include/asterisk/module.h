@@ -58,10 +58,11 @@ enum ast_module_unload_mode {
 };
 
 enum ast_module_load_result {
-	AST_MODULE_LOAD_SUCCESS = 0,	/*!< Module loaded and configured */
-	AST_MODULE_LOAD_DECLINE = 1,	/*!< Module is not configured */
-	AST_MODULE_LOAD_SKIP = 2,	/*!< Module was skipped for some reason */
-	AST_MODULE_LOAD_FAILURE = -1,	/*!< Module could not be loaded properly */
+	AST_MODULE_LOAD_SUCCESS = 0,    /*!< Module loaded and configured */
+	AST_MODULE_LOAD_DECLINE = 1,    /*!< Module is not configured */
+	AST_MODULE_LOAD_SKIP = 2,       /*!< Module was skipped for some reason */
+	AST_MODULE_LOAD_PRIORITY = 3,   /*!< Module is not loaded yet, but is added to prioity heap */
+	AST_MODULE_LOAD_FAILURE = -1,   /*!< Module could not be loaded properly */
 };
 
 /*! 
@@ -69,7 +70,7 @@ enum ast_module_load_result {
  * \param resource_name The name of the module to load.
  *
  * This function is run by the PBX to load the modules.  It performs
- * all loading and initilization tasks.   Basically, to load a module, just
+ * all loading and initialization tasks.   Basically, to load a module, just
  * give it the name of the module and it will do the rest.
  *
  * \return See possible enum values for ast_module_load_result.
@@ -189,6 +190,7 @@ struct ast_module_user_list;
 enum ast_module_flags {
 	AST_MODFLAG_DEFAULT = 0,
 	AST_MODFLAG_GLOBAL_SYMBOLS = (1 << 0),
+	AST_MODFLAG_LOAD_ORDER = (1 << 1),
 };
 
 struct ast_module_info {
@@ -219,6 +221,13 @@ struct ast_module_info {
 
 	/*! The value of AST_BUILDOPT_SUM when this module was compiled */
 	const char buildopt_sum[33];
+
+	/*! This value represents the order in which a module's load() function is initialized.
+	 *  The lower this value, the higher the priority.  The value is only checked if the
+	 *  AST_MODFLAG_LOAD_ORDER flag is set.  If the AST_MODFLAG_LOAD_ORDER flag is not set,
+	 *  this value will never be read and the module will be given the lowest possible priority
+	 *  on load. */
+	unsigned char load_pri;
 };
 
 void ast_module_register(const struct ast_module_info *);

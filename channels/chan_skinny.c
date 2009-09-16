@@ -71,6 +71,63 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/indications.h"
 #include "asterisk/linkedlists.h"
 
+/*** DOCUMENTATION
+	<manager name="SKINNYdevices" language="en_US">
+		<synopsis>
+			List SKINNY devices (text format).
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+		</syntax>
+		<description>
+			<para>Lists Skinny devices in text format with details on current status.
+			Devicelist will follow as separate events, followed by a final event called
+			DevicelistComplete.</para>
+		</description>
+	</manager>
+	<manager name="SKINNYshowdevice" language="en_US">
+		<synopsis>
+			Show SKINNY device (text format).
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Device" required="true">
+				<para>The device name you want to check.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Show one SKINNY device with details on current status.</para>
+		</description>
+	</manager>
+	<manager name="SKINNYlines" language="en_US">
+		<synopsis>
+			List SKINNY lines (text format).
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+		</syntax>
+		<description>
+			<para>Lists Skinny lines in text format with details on current status.
+			Linelist will follow as separate events, followed by a final event called
+			LinelistComplete.</para>
+		</description>
+	</manager>
+	<manager name="SKINNYshowline" language="en_US">
+		<synopsis>
+			Show SKINNY line (text format).
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Line" required="true">
+				<para>The line name you want to check.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Show one SKINNY line with details on current status.</para>
+		</description>
+	</manager>
+ ***/
+
 #ifdef SKINNY_DEVMODE
 #define SKINNY_DEVONLY(code)	\
 	code
@@ -585,7 +642,7 @@ struct soft_key_template_definition {
 #define SOFTKEY_DND 0x13
 #define SOFTKEY_IDIVERT 0x14
 
-struct soft_key_template_definition soft_key_template_default[] = {
+static struct soft_key_template_definition soft_key_template_default[] = {
 	{ "\200\001", SOFTKEY_REDIAL },
 	{ "\200\002", SOFTKEY_NEWCALL },
 	{ "\200\003", SOFTKEY_HOLD },
@@ -963,7 +1020,7 @@ struct skinny_req {
 /* XXX This is the combined size of the variables above.  (len, res, e)
    If more are added, this MUST change.
    (sizeof(skinny_req) - sizeof(skinny_data)) DOES NOT WORK on all systems (amd64?). */
-int skinny_header_size = 12;
+static int skinny_header_size = 12;
 
 /*****************************
  * Asterisk specific globals *
@@ -977,8 +1034,8 @@ static struct sockaddr_in bindaddr;
 static char ourhost[256];
 static int ourport;
 static struct in_addr __ourip;
-struct ast_hostent ahp;
-struct hostent *hp;
+static struct ast_hostent ahp;
+static struct hostent *hp;
 static int skinnysock = -1;
 static pthread_t accept_t;
 static int callnums = 1;
@@ -1182,7 +1239,7 @@ struct skinny_subchannel {
 	int immediate;					\
 	int hookstate;					\
 	int nat;					\
-	int canreinvite;				\
+	int directmedia;				\
 	int prune;
 
 struct skinny_line {
@@ -1198,7 +1255,7 @@ struct skinny_line {
 	int newmsgs;
 };
 
-struct skinny_line_options{
+static struct skinny_line_options{
 	SKINNY_LINE_OPTIONS
 } default_line_struct = {
  	.callwaiting = 1,
@@ -1208,7 +1265,7 @@ struct skinny_line_options{
  	.hidecallerid = 0,
 	.amaflags = 0,
  	.instance = 0,
- 	.canreinvite = 0,
+ 	.directmedia = 0,
  	.nat = 0,
  	.confcapability = AST_FORMAT_ULAW | AST_FORMAT_ALAW,
  	.capability = 0,
@@ -1217,7 +1274,7 @@ struct skinny_line_options{
 	.prune = 0,
 	.hookstate = SKINNY_ONHOOK,
 };
-struct skinny_line_options *default_line = &default_line_struct;
+static struct skinny_line_options *default_line = &default_line_struct;
 
 static AST_LIST_HEAD_STATIC(lines, skinny_line);
 
@@ -1278,7 +1335,7 @@ struct skinny_device {
 	AST_LIST_ENTRY(skinny_device) list;
 };
 
-struct skinny_device_options{
+static struct skinny_device_options {
 	SKINNY_DEVICE_OPTIONS
 } default_device_struct = {
 	.transfer = 1,
@@ -1290,7 +1347,7 @@ struct skinny_device_options{
  	.capability = 0,
 	.prune = 0,
 };
-struct skinny_device_options *default_device = &default_device_struct;
+static struct skinny_device_options *default_device = &default_device_struct;
 	
 static AST_LIST_HEAD_STATIC(devices, skinny_device);
 
@@ -1314,9 +1371,9 @@ struct skinnysession {
 	AST_LIST_ENTRY(skinnysession) list;
 };
 
+static struct ast_channel *skinny_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause);
 static AST_LIST_HEAD_STATIC(sessions, skinnysession);
 
-static struct ast_channel *skinny_request(const char *type, int format, void *data, int *cause);
 static int skinny_devicestate(void *data);
 static int skinny_call(struct ast_channel *ast, char *dest, int timeout);
 static int skinny_hangup(struct ast_channel *ast);
@@ -1847,6 +1904,7 @@ static int skinny_register(struct skinny_req *req, struct skinnysession *s)
 			AST_LIST_TRAVERSE(&d->lines, l, list) {
 				/* FIXME: All sorts of issues will occur if this line is already connected to a device */
 				if (l->device) {
+					manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: Skinny\r\nPeer: Skinny/%s@%s\r\nPeerStatus: Rejected\r\nCause: LINE_ALREADY_CONNECTED\r\n", l->name, l->device->name); 
 					ast_verb(1, "Line %s already connected to %s. Not connecting to %s.\n", l->name, l->device->name, d->name);
 				} else {
 					l->device = d;
@@ -1860,6 +1918,7 @@ static int skinny_register(struct skinny_req *req, struct skinnysession *s)
 					l->instance = instance;
 					l->newmsgs = ast_app_has_voicemail(l->mailbox, NULL);
 					set_callforwards(l, NULL, 0);
+					manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: Skinny\r\nPeer: Skinny/%s@%s\r\nPeerStatus: Registered\r\n", l->name, d->name);
 					register_exten(l);
 					/* initialize MWI on line and device */
 					mwi_event_cb(0, l);
@@ -1899,6 +1958,7 @@ static int skinny_unregister(struct skinny_req *req, struct skinnysession *s)
 				l->capability = 0;
 				ast_parse_allow_disallow(&l->prefs, &l->capability, "all", 0);			
 				l->instance = 0;
+				manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: Skinny\r\nPeer: Skinny/%s@%s\r\nPeerStatus: Unregistered\r\n", l->name, d->name);
 				unregister_exten(l);
 				ast_devstate_changed(AST_DEVICE_UNAVAILABLE, "Skinny/%s@%s", l->name, d->name);
 			}
@@ -2632,7 +2692,7 @@ static enum ast_rtp_glue_result skinny_get_rtp_peer(struct ast_channel *c, struc
 
 	l = sub->parent;
 
-	if (!l->canreinvite || l->nat){
+	if (!l->directmedia || l->nat){
 		res = AST_RTP_GLUE_RESULT_LOCAL;
 		if (skinnydebug)
 			ast_verb(1, "skinny_get_rtp_peer() Using AST_RTP_GLUE_RESULT_LOCAL \n");
@@ -2692,7 +2752,7 @@ static int skinny_set_rtp_peer(struct ast_channel *c, struct ast_rtp_instance *r
 
 		req->data.startmedia.conferenceId = htolel(sub->callid);
 		req->data.startmedia.passThruPartyId = htolel(sub->callid);
-		if (!(l->canreinvite) || (l->nat)){
+		if (!(l->directmedia) || (l->nat)){
 			ast_rtp_instance_get_local_address(rtp, &us);
 			req->data.startmedia.remoteIp = htolel(d->ourip.s_addr);
 			req->data.startmedia.remotePort = htolel(ntohs(us.sin_port));
@@ -3049,13 +3109,6 @@ static char *_skinny_show_devices(int fd, int *total, struct mansession *s, cons
 	return CLI_SUCCESS;
 }
 
-static const char mandescr_show_devices[] =
-"Description: Lists Skinny devices in text format with details on current status.\n"
-"Devicelist will follow as separate events, followed by a final event called\n"
-"DevicelistComplete.\n"
-"Variables: \n"
-"  ActionID: <id>	Action ID for this transaction. Will be returned.\n";
-
 /*! \brief  Show SKINNY devices in the manager API */
 /*    Inspired from chan_sip */
 static int manager_skinny_show_devices(struct mansession *s, const struct message *m)
@@ -3194,12 +3247,6 @@ static char *_skinny_show_device(int type, int fd, struct mansession *s, const s
 	return CLI_SUCCESS;
 }
 
-static const char mandescr_show_device[] =
-"Description: Show one SKINNY device with details on current status.\n"
-"Variables: \n"
-"  Device: <name>           The device name you want to check.\n"
-"  ActionID: <id>	  Optional action ID for this AMI transaction.\n";
-
 static int manager_skinny_show_device(struct mansession *s, const struct message *m)
 {
 	const char *a[4];
@@ -3309,13 +3356,6 @@ static char *_skinny_show_lines(int fd, int *total, struct mansession *s, const 
 
 	return CLI_SUCCESS;
 }
-
-static const char mandescr_show_lines[] =
-"Description: Lists Skinny lines in text format with details on current status.\n"
-"Linelist will follow as separate events, followed by a final event called\n"
-"LinelistComplete.\n"
-"Variables: \n"
-"  ActionID: <id>	Action ID for this transaction. Will be returned.\n";
 
 /*! \brief  Show Skinny lines in the manager API */
 /*    Inspired from chan_sip */
@@ -3436,6 +3476,7 @@ static char *_skinny_show_line(int type, int fd, struct mansession *s, const str
 				ast_cli(fd, "NAT:              %s\n", (l->nat ? "Yes" : "No"));
 				ast_cli(fd, "immediate:        %s\n", (l->immediate ? "Yes" : "No"));
 				ast_cli(fd, "Group:            %d\n", l->group);
+				ast_cli(fd, "Parkinglot:       %s\n", S_OR(l->parkinglot, "<not set>"));
 				ast_cli(fd, "Conf Codecs:      ");
 				ast_getformatname_multiple(codec_buf, sizeof(codec_buf) - 1, l->confcapability);
 				ast_cli(fd, "%s\n", codec_buf);
@@ -3481,6 +3522,7 @@ static char *_skinny_show_line(int type, int fd, struct mansession *s, const str
 				astman_append(s, "NAT: %s\r\n", (l->nat ? "Yes" : "No"));
 				astman_append(s, "immediate: %s\r\n", (l->immediate ? "Yes" : "No"));
 				astman_append(s, "Group: %d\r\n", l->group);
+				astman_append(s, "Parkinglot: %s\r\n", S_OR(l->parkinglot, "<not set>"));
 				ast_getformatname_multiple(codec_buf, sizeof(codec_buf) - 1, l->confcapability);
 				astman_append(s, "Codecs: %s\r\n", codec_buf);
 				astman_append(s, "CodecOrder: ");
@@ -3501,12 +3543,6 @@ static char *_skinny_show_line(int type, int fd, struct mansession *s, const str
 	AST_LIST_UNLOCK(&devices);
 	return CLI_SUCCESS;
 }
-
-static const char mandescr_show_line[] =
-"Description: Show one SKINNY line with details on current status.\n"
-"Variables: \n"
-"  Line: <name>           The line name you want to check.\n"
-"  ActionID: <id>	  Optional action ID for this AMI transaction.\n";
 
 static int manager_skinny_show_line(struct mansession *s, const struct message *m)
 {
@@ -3598,9 +3634,9 @@ static void start_rtp(struct skinny_subchannel *sub)
 
 	ast_mutex_lock(&sub->lock);
 	/* Allocate the RTP */
-	sub->rtp = ast_rtp_instance_new(NULL, sched, &bindaddr, NULL);
+	sub->rtp = ast_rtp_instance_new("asterisk", sched, &bindaddr, NULL);
 	if (hasvideo)
-		sub->vrtp = ast_rtp_instance_new(NULL, sched, &bindaddr, NULL);
+		sub->vrtp = ast_rtp_instance_new("asterisk", sched, &bindaddr, NULL);
 
 	if (sub->rtp) {
 		ast_rtp_instance_set_prop(sub->rtp, AST_RTP_PROPERTY_RTCP, 1);
@@ -4317,7 +4353,7 @@ static int skinny_indicate(struct ast_channel *ast, int ind, const void *data, s
 	return 0;
 }
 
-static struct ast_channel *skinny_new(struct skinny_line *l, int state)
+static struct ast_channel *skinny_new(struct skinny_line *l, int state, const char *linkedid)
 {
 	struct ast_channel *tmp;
 	struct skinny_subchannel *sub;
@@ -4330,7 +4366,7 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 		return NULL;
 	}
 
-	tmp = ast_channel_alloc(1, state, l->cid_num, l->cid_name, l->accountcode, l->exten, l->context, l->amaflags, "Skinny/%s@%s-%d", l->name, d->name, callnums);
+	tmp = ast_channel_alloc(1, state, l->cid_num, l->cid_name, l->accountcode, l->exten, l->context, linkedid, l->amaflags, "Skinny/%s@%s-%d", l->name, d->name, callnums);
 	if (!tmp) {
 		ast_log(LOG_WARNING, "Unable to allocate channel structure\n");
 		return NULL;
@@ -4380,6 +4416,8 @@ static struct ast_channel *skinny_new(struct skinny_line *l, int state)
 			ast_string_field_set(tmp, language, l->language);
 		if (!ast_strlen_zero(l->accountcode))
 			ast_string_field_set(tmp, accountcode, l->accountcode);
+		if (!ast_strlen_zero(l->parkinglot))
+			ast_string_field_set(tmp, parkinglot, l->parkinglot);
 		if (l->amaflags)
 			tmp->amaflags = l->amaflags;
 
@@ -4513,7 +4551,7 @@ static int handle_transfer_button(struct skinny_subchannel *sub)
 		if (!sub->onhold) {
 			skinny_hold(sub);
 		}
-		c = skinny_new(l, AST_STATE_DOWN);
+		c = skinny_new(l, AST_STATE_DOWN, NULL);
 		if (c) {
 			newsub = c->tech_pvt;
 			/* point the sub and newsub at each other so we know they are related */
@@ -4791,7 +4829,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 			break;
 		}
 
-		c = skinny_new(l, AST_STATE_DOWN);
+		c = skinny_new(l, AST_STATE_DOWN, NULL);
 		if (!c) {
 			ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
 		} else {
@@ -4829,7 +4867,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 		}
 
 		if (!sub || !sub->owner)
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		else
 			c = sub->owner;
 
@@ -4889,7 +4927,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 			ast_verb(1, "Received Stimulus: Voicemail(%d/%d)\n", instance, callreference);
 
 		if (!sub || !sub->owner) {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		} else {
 			c = sub->owner;
 		}
@@ -4974,7 +5012,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 			ast_verb(1, "Received Stimulus: Forward All(%d/%d)\n", instance, callreference);
 
 		if (!sub || !sub->owner) {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		} else {
 			c = sub->owner;
 		}
@@ -4991,7 +5029,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 			ast_verb(1, "Received Stimulus: Forward Busy (%d/%d)\n", instance, callreference);
 
 		if (!sub || !sub->owner) {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		} else {
 			c = sub->owner;
 		}
@@ -5009,7 +5047,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 
 #if 0 /* Not sure how to handle this yet */
 		if (!sub || !sub->owner) {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		} else {
 			c = sub->owner;
 		}
@@ -5060,7 +5098,7 @@ static int handle_stimulus_message(struct skinny_req *req, struct skinnysession 
 			if (sub && sub->owner) {
 				ast_debug(1, "Current subchannel [%s] already has owner\n", sub->owner->name);
 			} else {
-				c = skinny_new(l, AST_STATE_DOWN);
+				c = skinny_new(l, AST_STATE_DOWN, NULL);
 				if (c) {
 					sub = c->tech_pvt;
 					l->activesub = sub;
@@ -5158,7 +5196,7 @@ static int handle_offhook_message(struct skinny_req *req, struct skinnysession *
 		if (sub && sub->owner) {
 			ast_debug(1, "Current sub [%s] already has owner\n", sub->owner->name);
 		} else {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 			if (c) {
 				sub = c->tech_pvt;
 				l->activesub = sub;
@@ -5647,7 +5685,7 @@ static int handle_enbloc_call_message(struct skinny_req *req, struct skinnysessi
 		l = sub->parent;
 	}
 
-	c = skinny_new(l, AST_STATE_DOWN);
+	c = skinny_new(l, AST_STATE_DOWN, NULL);
 
 	if(!c) {
 		ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", l->name, d->name);
@@ -5761,7 +5799,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 		}
 
 		if (!sub || !sub->owner) {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		} else {
 			c = sub->owner;
 		}
@@ -5797,7 +5835,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 			ast_verb(1, "Received Softkey Event: New Call(%d/%d)\n", instance, callreference);
 
 		/* New Call ALWAYS gets a new sub-channel */
-		c = skinny_new(l, AST_STATE_DOWN);
+		c = skinny_new(l, AST_STATE_DOWN, NULL);
 		sub = c->tech_pvt;
 	
 		/* transmit_ringer_mode(d, SKINNY_RING_OFF);
@@ -5867,7 +5905,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 			ast_verb(1, "Received Softkey Event: Forward All(%d/%d)\n", instance, callreference);
 
 		if (!sub || !sub->owner) {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		} else {
 			c = sub->owner;
 		}
@@ -5885,7 +5923,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 			ast_verb(1, "Received Softkey Event: Forward Busy (%d/%d)\n", instance, callreference);
 
 		if (!sub || !sub->owner) {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		} else {
 			c = sub->owner;
 		}
@@ -5904,7 +5942,7 @@ static int handle_soft_key_event_message(struct skinny_req *req, struct skinnyse
 
 #if 0 /* Not sure how to handle this yet */
 		if (!sub || !sub->owner) {
-			c = skinny_new(l, AST_STATE_DOWN);
+			c = skinny_new(l, AST_STATE_DOWN, NULL);
 		} else {
 			c = sub->owner;
 		}
@@ -6298,6 +6336,7 @@ static int get_input(struct skinnysession *s)
 {
 	int res;
 	int dlen = 0;
+	int *bufaddr;
 	struct pollfd fds[1];
 
 	fds[0].fd = s->fd;
@@ -6344,7 +6383,8 @@ static int get_input(struct skinnysession *s)
 			return -1;
 		}
 
-		dlen = letohl(*(int *)s->inbuf);
+		bufaddr = (int *)s->inbuf;
+		dlen = letohl(*bufaddr);
 		if (dlen < 4) {
 			ast_debug(1, "Skinny Client sent invalid data.\n");
 			ast_mutex_unlock(&s->lock);
@@ -6353,7 +6393,7 @@ static int get_input(struct skinnysession *s)
 		if (dlen+8 > sizeof(s->inbuf)) {
 			dlen = sizeof(s->inbuf) - 8;
 		}
-		*(int *)s->inbuf = htolel(dlen);
+		*bufaddr = htolel(dlen);
 
 		res = read(s->fd, s->inbuf+4, dlen+4);
 		ast_mutex_unlock(&s->lock);
@@ -6372,13 +6412,15 @@ static int get_input(struct skinnysession *s)
 static struct skinny_req *skinny_req_parse(struct skinnysession *s)
 {
 	struct skinny_req *req;
+	int *bufaddr;
 
 	if (!(req = ast_calloc(1, SKINNY_MAX_PACKET)))
 		return NULL;
 
 	ast_mutex_lock(&s->lock);
 	memcpy(req, s->inbuf, skinny_header_size);
-	memcpy(&req->data, s->inbuf+skinny_header_size, letohl(*(int*)(s->inbuf))-4);
+	bufaddr = (int *)(s->inbuf);
+	memcpy(&req->data, s->inbuf+skinny_header_size, letohl(*bufaddr)-4);
 
 	ast_mutex_unlock(&s->lock);
 
@@ -6534,7 +6576,7 @@ static int skinny_devicestate(void *data)
 	return get_devicestate(l);
 }
 
-static struct ast_channel *skinny_request(const char *type, int format, void *data, int *cause)
+static struct ast_channel *skinny_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	int oldformat;
 	
@@ -6561,7 +6603,7 @@ static struct ast_channel *skinny_request(const char *type, int format, void *da
 		return NULL;
 	}
 	ast_verb(3, "skinny_request(%s)\n", tmp);
-	tmpc = skinny_new(l, AST_STATE_DOWN);
+	tmpc = skinny_new(l, AST_STATE_DOWN, requestor ? requestor->linkedid : NULL);
 	if (!tmpc) {
 		ast_log(LOG_WARNING, "Unable to make channel for '%s'\n", tmp);
 	}
@@ -6651,7 +6693,7 @@ static struct ast_channel *skinny_request(const char *type, int format, void *da
  					ast_log(LOG_WARNING, "Invalid cos_video value at line %d, refer to QoS documentation\n", v->lineno);
  				continue;
  			} else if (!strcasecmp(v->name, "bindport")) {
- 				if (sscanf(v->value, "%d", &ourport) == 1) {
+ 				if (sscanf(v->value, "%5d", &ourport) == 1) {
  					bindaddr.sin_port = htons(ourport);
  				} else {
  					ast_log(LOG_WARNING, "Invalid bindport '%s' at line %d of %s\n", v->value, v->lineno, config);
@@ -6682,9 +6724,9 @@ static struct ast_channel *skinny_request(const char *type, int format, void *da
  				CLINE_OPTS->callwaiting = ast_true(v->value);
  				continue;
  			}
- 		} else if (!strcasecmp(v->name, "canreinvite")) {
+ 		} else if (!strcasecmp(v->name, "directmedia") || !strcasecmp(v->name, "canreinvite")) {
  			if (type & (TYPE_DEF_LINE | TYPE_LINE)) {
- 				CLINE_OPTS->canreinvite = ast_true(v->value);
+ 				CLINE_OPTS->directmedia = ast_true(v->value);
  				continue;
  			}
  		} else if (!strcasecmp(v->name, "nat")) {
@@ -6989,7 +7031,7 @@ static struct ast_channel *skinny_request(const char *type, int format, void *da
  		strsep(&cfg_context, "@");
  		if (ast_strlen_zero(cfg_context))
  			 cfg_context = "default";
-		l->mwi_event_sub = ast_event_subscribe(AST_EVENT_MWI, mwi_event_cb, l,
+		l->mwi_event_sub = ast_event_subscribe(AST_EVENT_MWI, mwi_event_cb, "skinny MWI subsciption", l,
  			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, cfg_mailbox,
  			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, cfg_context,
  			AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_EXISTS,
@@ -7128,7 +7170,7 @@ static struct ast_channel *skinny_request(const char *type, int format, void *da
 	/* load the general section */
 	cat = ast_category_browse(cfg, "general");
 	config_parse_variables(TYPE_GENERAL, NULL, ast_variable_browse(cfg, "general"));
-		
+
 	if (ntohl(bindaddr.sin_addr.s_addr)) {
 		__ourip = bindaddr.sin_addr;
 	} else {
@@ -7347,14 +7389,10 @@ static int load_module(void)
 	ast_rtp_glue_register(&skinny_rtp_glue);
 	ast_cli_register_multiple(cli_skinny, ARRAY_LEN(cli_skinny));
 
-	ast_manager_register2("SKINNYdevices", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_skinny_show_devices,
-			"List SKINNY devices (text format)", mandescr_show_devices);
-	ast_manager_register2("SKINNYshowdevice", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_skinny_show_device,
-			"Show SKINNY device (text format)", mandescr_show_device);
-	ast_manager_register2("SKINNYlines", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_skinny_show_lines,
-			"List SKINNY lines (text format)", mandescr_show_lines);
-	ast_manager_register2("SKINNYshowline", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_skinny_show_line,
-			"Show SKINNY line (text format)", mandescr_show_line);
+	ast_manager_register_xml("SKINNYdevices", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_skinny_show_devices);
+	ast_manager_register_xml("SKINNYshowdevice", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_skinny_show_device);
+	ast_manager_register_xml("SKINNYlines", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_skinny_show_lines);
+	ast_manager_register_xml("SKINNYshowline", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_skinny_show_line);
 
 	sched = sched_context_create();
 	if (!sched) {
@@ -7404,6 +7442,7 @@ static int unload_module(void)
 			if (l->mwi_event_sub)
 				ast_event_unsubscribe(l->mwi_event_sub);
 			ast_mutex_unlock(&l->lock);
+			manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: Skinny\r\nPeer: Skinny/%s@%s\r\nPeerStatus: Unregistered\r\n", l->name, d->name);
 			unregister_exten(l);
 		}
 		if (s->fd > -1)

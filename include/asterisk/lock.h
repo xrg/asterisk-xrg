@@ -1573,9 +1573,9 @@ static inline int _ast_rwlock_tryrdlock(ast_rwlock_t *t, const char *name,
 #ifdef HAVE_BKTR
 	struct ast_bt *bt = NULL;
 #endif
-
-
 #ifdef AST_MUTEX_INIT_W_CONSTRUCTORS
+	int canlog = strcmp(filename, "logger.c") & t->tracking;
+
 	if ((t->lock) == ((pthread_rwlock_t) __AST_RWLOCK_INIT_VALUE)) {
 		 /* Don't warn abount uninitialized lock.
 		  * Simple try to initialize it.
@@ -1631,9 +1631,9 @@ static inline int _ast_rwlock_trywrlock(ast_rwlock_t *t, const char *name,
 #ifdef HAVE_BKTR
 	struct ast_bt *bt = NULL;
 #endif
-
-
 #ifdef AST_MUTEX_INIT_W_CONSTRUCTORS
+	int canlog = strcmp(filename, "logger.c") & t->tracking;
+
 	if ((t->lock) == ((pthread_rwlock_t) __AST_RWLOCK_INIT_VALUE)) {
 		 /* Don't warn abount uninitialized lock.
 		  * Simple try to initialize it.

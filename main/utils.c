@@ -873,7 +873,7 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
 		int i;
 		if (lock_info->num_locks) {
-			ast_str_append(&str, 0, "=== Thread ID: %d (%s)\n", (int) lock_info->thread_id,
+			ast_str_append(&str, 0, "=== Thread ID: %ld (%s)\n", (long) lock_info->thread_id,
 				lock_info->thread_name);
 			pthread_mutex_lock(&lock_info->lock);
 			for (i = 0; str && i < lock_info->num_locks; i++) {
@@ -1559,8 +1559,18 @@ int __ast_string_field_init(struct ast_string_field_mgr *mgr, struct ast_string_
 		return add_string_pool(mgr, pool_head, needed, file, lineno, func);
 	}
 
+	/* if there is an embedded pool, we can't actually release *all*
+	 * pools, we must keep the embedded one. if the caller is about
+	 * to free the structure that contains the stringfield manager
+	 * and embedded pool anyway, it will be freed as part of that
+	 * operation.
+	 */
+	if ((needed < 0) && mgr->embedded_pool) {
+		needed = 0;
+	}
+
 	if (needed < 0) {		/* reset all pools */
-		/* nothing to do */
+		cur = *pool_head;
 	} else if (mgr->embedded_pool) { /* preserve the embedded pool */
 		preserve = mgr->embedded_pool;
 		cur = *pool_head;
@@ -1816,7 +1826,7 @@ int ast_get_timeval(const char *src, struct timeval *dst, struct timeval _defaul
 		return -1;
 
 	/* only integer at the moment, but one day we could accept more formats */
-	if (sscanf(src, "%Lf%n", &dtv, &scanned) > 0) {
+	if (sscanf(src, "%30Lf%n", &dtv, &scanned) > 0) {
 		dst->tv_sec = dtv;
 		dst->tv_usec = (dtv - dst->tv_sec) * 1000000.0;
 		if (consumed)
@@ -1843,7 +1853,7 @@ int ast_get_time_t(const char *src, time_t *dst, time_t _default, int *consumed)
 		return -1;
 
 	/* only integer at the moment, but one day we could accept more formats */
-	if (sscanf(src, "%ld%n", &t, &scanned) == 1) {
+	if (sscanf(src, "%30ld%n", &t, &scanned) == 1) {
 		*dst = t;
 		if (consumed)
 			*consumed = scanned;
@@ -2002,7 +2012,7 @@ int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request,
 			d->qop = 1;
 		} else if (!strcasecmp(key, "nc")) {
 			unsigned long u;
-			if (sscanf(val, "%lx", &u) != 1) {
+			if (sscanf(val, "%30lx", &u) != 1) {
 				ast_log(LOG_WARNING, "Incorrect Digest nc value: \"%s\".\n", val);
 				return -1;
 			}

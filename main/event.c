@@ -39,7 +39,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/taskprocessor.h"
 #include "asterisk/astobj2.h"
 
-struct ast_taskprocessor *event_dispatcher;
+static struct ast_taskprocessor *event_dispatcher;
 
 /*!
  * \brief An event information element
@@ -119,6 +119,7 @@ struct ast_event_ie_val {
 struct ast_event_sub {
 	enum ast_event_type type;
 	ast_event_cb_t cb;
+	char description[64];
 	void *userdata;
 	uint32_t uniqueid;
 	AST_LIST_HEAD_NOLOCK(, ast_event_ie_val) ie_vals;
@@ -182,40 +183,77 @@ static struct {
 };
 
 /*!
- * The index of each entry _must_ match the event type number!
+ * \brief Event Names
  */
-static struct event_name {
-	enum ast_event_type type;
-	const char *name;
-} event_names[] = {
-	{ 0, "" },
-	{ AST_EVENT_CUSTOM,              "Custom" },
-	{ AST_EVENT_MWI,                 "MWI" },
-	{ AST_EVENT_SUB,                 "Subscription" },
-	{ AST_EVENT_UNSUB,               "Unsubscription" },
-	{ AST_EVENT_DEVICE_STATE,        "DeviceState" },
-	{ AST_EVENT_DEVICE_STATE_CHANGE, "DeviceStateChange" },
+static const char * const event_names[AST_EVENT_TOTAL] = {
+	[AST_EVENT_CUSTOM]              = "Custom",
+	[AST_EVENT_MWI]                 = "MWI",
+	[AST_EVENT_SUB]                 = "Subscription",
+	[AST_EVENT_UNSUB]               = "Unsubscription",
+	[AST_EVENT_DEVICE_STATE]        = "DeviceState",
+	[AST_EVENT_DEVICE_STATE_CHANGE] = "DeviceStateChange",
+	[AST_EVENT_CEL]                 = "CEL",
+	[AST_EVENT_SECURITY]            = "Security",
 };
 
 /*!
- * The index of each entry _must_ match the event ie number!
+ * \brief IE payload types and names
  */
-static struct ie_map {
-	enum ast_event_ie_type ie_type;
+static const struct ie_map {
 	enum ast_event_ie_pltype ie_pltype;
 	const char *name;
-} ie_maps[] = {
-	{ 0, 0, "" },
-	{ AST_EVENT_IE_NEWMSGS,   AST_EVENT_IE_PLTYPE_UINT, "NewMessages" },
-	{ AST_EVENT_IE_OLDMSGS,   AST_EVENT_IE_PLTYPE_UINT, "OldMessages" },
-	{ AST_EVENT_IE_MAILBOX,   AST_EVENT_IE_PLTYPE_STR,  "Mailbox" },
-	{ AST_EVENT_IE_UNIQUEID,  AST_EVENT_IE_PLTYPE_UINT, "UniqueID" },
-	{ AST_EVENT_IE_EVENTTYPE, AST_EVENT_IE_PLTYPE_UINT, "EventType" },
-	{ AST_EVENT_IE_EXISTS,    AST_EVENT_IE_PLTYPE_UINT, "Exists" },
-	{ AST_EVENT_IE_DEVICE,    AST_EVENT_IE_PLTYPE_STR,  "Device" },
-	{ AST_EVENT_IE_STATE,     AST_EVENT_IE_PLTYPE_UINT, "State" },
-	{ AST_EVENT_IE_CONTEXT,   AST_EVENT_IE_PLTYPE_STR,  "Context" },
-	{ AST_EVENT_IE_EID,       AST_EVENT_IE_PLTYPE_RAW,  "EntityID" },
+} ie_maps[AST_EVENT_IE_TOTAL] = {
+	[AST_EVENT_IE_NEWMSGS]             = { AST_EVENT_IE_PLTYPE_UINT, "NewMessages" },
+	[AST_EVENT_IE_OLDMSGS]             = { AST_EVENT_IE_PLTYPE_UINT, "OldMessages" },
+	[AST_EVENT_IE_MAILBOX]             = { AST_EVENT_IE_PLTYPE_STR,  "Mailbox" },
+	[AST_EVENT_IE_UNIQUEID]            = { AST_EVENT_IE_PLTYPE_UINT, "UniqueID" },
+	[AST_EVENT_IE_EVENTTYPE]           = { AST_EVENT_IE_PLTYPE_UINT, "EventType" },
+	[AST_EVENT_IE_EXISTS]              = { AST_EVENT_IE_PLTYPE_UINT, "Exists" },
+	[AST_EVENT_IE_DEVICE]              = { AST_EVENT_IE_PLTYPE_STR,  "Device" },
+	[AST_EVENT_IE_STATE]               = { AST_EVENT_IE_PLTYPE_UINT, "State" },
+	[AST_EVENT_IE_CONTEXT]             = { AST_EVENT_IE_PLTYPE_STR,  "Context" },
+	[AST_EVENT_IE_EID]                 = { AST_EVENT_IE_PLTYPE_RAW,  "EntityID" },
+	[AST_EVENT_IE_CEL_EVENT_TYPE]      = { AST_EVENT_IE_PLTYPE_UINT, "CELEventType" },
+	[AST_EVENT_IE_CEL_EVENT_TIME]      = { AST_EVENT_IE_PLTYPE_UINT, "CELEventTime" },
+	[AST_EVENT_IE_CEL_EVENT_TIME_USEC] = { AST_EVENT_IE_PLTYPE_UINT, "CELEventTimeUSec" },
+	[AST_EVENT_IE_CEL_USEREVENT_NAME]  = { AST_EVENT_IE_PLTYPE_UINT, "CELUserEventName" },
+	[AST_EVENT_IE_CEL_CIDNAME]         = { AST_EVENT_IE_PLTYPE_STR,  "CELCIDName" },
+	[AST_EVENT_IE_CEL_CIDNUM]          = { AST_EVENT_IE_PLTYPE_STR,  "CELCIDNum" },
+	[AST_EVENT_IE_CEL_EXTEN]           = { AST_EVENT_IE_PLTYPE_STR,  "CELExten" },
+	[AST_EVENT_IE_CEL_CONTEXT]         = { AST_EVENT_IE_PLTYPE_STR,  "CELContext" },
+	[AST_EVENT_IE_CEL_CHANNAME]        = { AST_EVENT_IE_PLTYPE_STR,  "CELChanName" },
+	[AST_EVENT_IE_CEL_APPNAME]         = { AST_EVENT_IE_PLTYPE_STR,  "CELAppName" },
+	[AST_EVENT_IE_CEL_APPDATA]         = { AST_EVENT_IE_PLTYPE_STR,  "CELAppData" },
+	[AST_EVENT_IE_CEL_AMAFLAGS]        = { AST_EVENT_IE_PLTYPE_STR,  "CELAMAFlags" },
+	[AST_EVENT_IE_CEL_ACCTCODE]        = { AST_EVENT_IE_PLTYPE_UINT, "CELAcctCode" },
+	[AST_EVENT_IE_CEL_UNIQUEID]        = { AST_EVENT_IE_PLTYPE_STR,  "CELUniqueID" },
+	[AST_EVENT_IE_CEL_USERFIELD]       = { AST_EVENT_IE_PLTYPE_STR,  "CELUserField" },
+	[AST_EVENT_IE_CEL_CIDANI]          = { AST_EVENT_IE_PLTYPE_STR,  "CELCIDani" },
+	[AST_EVENT_IE_CEL_CIDRDNIS]        = { AST_EVENT_IE_PLTYPE_STR,  "CELCIDrdnis" },
+	[AST_EVENT_IE_CEL_CIDDNID]         = { AST_EVENT_IE_PLTYPE_STR,  "CELCIDdnid" },
+	[AST_EVENT_IE_CEL_PEER]            = { AST_EVENT_IE_PLTYPE_STR,  "CELPeer" },
+	[AST_EVENT_IE_CEL_LINKEDID]        = { AST_EVENT_IE_PLTYPE_STR,  "CELLinkedID" },
+	[AST_EVENT_IE_CEL_PEERACCT]        = { AST_EVENT_IE_PLTYPE_STR,  "CELPeerAcct" },
+	[AST_EVENT_IE_CEL_EXTRA]           = { AST_EVENT_IE_PLTYPE_STR,  "CELExtra" },
+	[AST_EVENT_IE_SECURITY_EVENT]      = { AST_EVENT_IE_PLTYPE_STR,  "SecurityEvent" },
+	[AST_EVENT_IE_EVENT_VERSION]       = { AST_EVENT_IE_PLTYPE_UINT, "EventVersion" },
+	[AST_EVENT_IE_SERVICE]             = { AST_EVENT_IE_PLTYPE_STR,  "Service" },
+	[AST_EVENT_IE_MODULE]              = { AST_EVENT_IE_PLTYPE_STR,  "Module" },
+	[AST_EVENT_IE_ACCOUNT_ID]          = { AST_EVENT_IE_PLTYPE_STR,  "AccountID" },
+	[AST_EVENT_IE_SESSION_ID]          = { AST_EVENT_IE_PLTYPE_STR,  "SessionID" },
+	[AST_EVENT_IE_SESSION_TV]          = { AST_EVENT_IE_PLTYPE_STR,  "SessionTV" },
+	[AST_EVENT_IE_ACL_NAME]            = { AST_EVENT_IE_PLTYPE_STR,  "ACLName" },
+	[AST_EVENT_IE_LOCAL_ADDR]          = { AST_EVENT_IE_PLTYPE_STR,  "LocalAddress" },
+	[AST_EVENT_IE_REMOTE_ADDR]         = { AST_EVENT_IE_PLTYPE_STR,  "RemoteAddress" },
+	[AST_EVENT_IE_EVENT_TV]            = { AST_EVENT_IE_PLTYPE_STR,  "EventTV" },
+	[AST_EVENT_IE_REQUEST_TYPE]        = { AST_EVENT_IE_PLTYPE_STR,  "RequestType" },
+	[AST_EVENT_IE_REQUEST_PARAMS]      = { AST_EVENT_IE_PLTYPE_STR,  "RequestParams" },
+	[AST_EVENT_IE_AUTH_METHOD]         = { AST_EVENT_IE_PLTYPE_STR,  "AuthMethod" },
+	[AST_EVENT_IE_SEVERITY]            = { AST_EVENT_IE_PLTYPE_STR,  "Severity" },
+	[AST_EVENT_IE_EXPECTED_ADDR]       = { AST_EVENT_IE_PLTYPE_STR,  "ExpectedAddress" },
+	[AST_EVENT_IE_CHALLENGE]           = { AST_EVENT_IE_PLTYPE_STR,  "Challenge" },
+	[AST_EVENT_IE_RESPONSE]            = { AST_EVENT_IE_PLTYPE_STR,  "Response" },
+	[AST_EVENT_IE_EXPECTED_RESPONSE]   = { AST_EVENT_IE_PLTYPE_STR,  "ExpectedResponse" },
 };
 
 const char *ast_event_get_type_name(const struct ast_event *event)
@@ -224,12 +262,12 @@ const char *ast_event_get_type_name(const struct ast_event *event)
 
 	type = ast_event_get_type(event);
 
-	if (type >= AST_EVENT_TOTAL || type < 0) {
+	if (type < 0 || type >= ARRAY_LEN(event_names)) {
 		ast_log(LOG_ERROR, "Invalid event type - '%d'\n", type);
 		return "";
 	}
 
-	return event_names[type].name;
+	return event_names[type];
 }
 
 int ast_event_str_to_event_type(const char *str, enum ast_event_type *event_type)
@@ -237,10 +275,11 @@ int ast_event_str_to_event_type(const char *str, enum ast_event_type *event_type
 	int i;
 
 	for (i = 0; i < ARRAY_LEN(event_names); i++) {
-		if (strcasecmp(event_names[i].name, str))
+		if (strcasecmp(event_names[i], str)) {
 			continue;
+		}
 
-		*event_type = event_names[i].type;
+		*event_type = i;
 		return 0;
 	}
 
@@ -249,13 +288,8 @@ int ast_event_str_to_event_type(const char *str, enum ast_event_type *event_type
 
 const char *ast_event_get_ie_type_name(enum ast_event_ie_type ie_type)
 {
-	if (ie_type <= 0 || ie_type > AST_EVENT_IE_MAX) {
+	if (ie_type <= 0 || ie_type >= ARRAY_LEN(ie_maps)) {
 		ast_log(LOG_ERROR, "Invalid IE type - '%d'\n", ie_type);
-		return "";
-	}
-
-	if (ie_maps[ie_type].ie_type != ie_type) {
-		ast_log(LOG_ERROR, "The ie type passed in does not match the ie type defined in the ie table.\n");
 		return "";
 	}
 
@@ -264,13 +298,8 @@ const char *ast_event_get_ie_type_name(enum ast_event_ie_type ie_type)
 
 enum ast_event_ie_pltype ast_event_get_ie_pltype(enum ast_event_ie_type ie_type)
 {
-	if (ie_type <= 0 || ie_type > AST_EVENT_IE_MAX) {
+	if (ie_type <= 0 || ie_type >= ARRAY_LEN(ie_maps)) {
 		ast_log(LOG_ERROR, "Invalid IE type - '%d'\n", ie_type);
-		return AST_EVENT_IE_PLTYPE_UNKNOWN;
-	}
-
-	if (ie_maps[ie_type].ie_type != ie_type) {
-		ast_log(LOG_ERROR, "The ie type passed in does not match the ie type defined in the ie table.\n");
 		return AST_EVENT_IE_PLTYPE_UNKNOWN;
 	}
 
@@ -282,10 +311,11 @@ int ast_event_str_to_ie_type(const char *str, enum ast_event_ie_type *ie_type)
 	int i;
 
 	for (i = 0; i < ARRAY_LEN(ie_maps); i++) {
-		if (strcasecmp(ie_maps[i].name, str))
+		if (strcasecmp(ie_maps[i].name, str)) {
 			continue;
+		}
 
-		*ie_type = ie_maps[i].ie_type;
+		*ie_type = i;
 		return 0;
 	}
 
@@ -335,9 +365,9 @@ enum ast_event_subscriber_res ast_event_check_subscriber(enum ast_event_type typ
 	}
 
 	va_start(ap, type);
-	for (ie_type = va_arg(ap, enum ast_event_type);
+	for (ie_type = va_arg(ap, enum ast_event_ie_type);
 		ie_type != AST_EVENT_IE_END;
-		ie_type = va_arg(ap, enum ast_event_type))
+		ie_type = va_arg(ap, enum ast_event_ie_type))
 	{
 		struct ast_event_ie_val *ie_value = alloca(sizeof(*ie_value));
 		int insert = 1;
@@ -535,8 +565,9 @@ static struct ast_event *gen_sub_event(struct ast_event_sub *sub)
 	struct ast_event *event;
 
 	event = ast_event_new(AST_EVENT_SUB,
-		AST_EVENT_IE_UNIQUEID,  AST_EVENT_IE_PLTYPE_UINT, sub->uniqueid,
-		AST_EVENT_IE_EVENTTYPE, AST_EVENT_IE_PLTYPE_UINT, sub->type,
+		AST_EVENT_IE_UNIQUEID,    AST_EVENT_IE_PLTYPE_UINT, sub->uniqueid,
+		AST_EVENT_IE_EVENTTYPE,   AST_EVENT_IE_PLTYPE_UINT, sub->type,
+		AST_EVENT_IE_DESCRIPTION, AST_EVENT_IE_PLTYPE_STR, sub->description,
 		AST_EVENT_IE_END);
 
 	if (!event)
@@ -636,7 +667,7 @@ int ast_event_sub_append_ie_uint(struct ast_event_sub *sub,
 {
 	struct ast_event_ie_val *ie_val;
 
-	if (ie_type < 0 || ie_type > AST_EVENT_IE_MAX) {
+	if (ie_type <= 0 || ie_type >= AST_EVENT_IE_TOTAL) {
 		return -1;
 	}
 
@@ -658,11 +689,13 @@ int ast_event_sub_append_ie_bitflags(struct ast_event_sub *sub,
 {
 	struct ast_event_ie_val *ie_val;
 
-	if (ie_type < 0 || ie_type > AST_EVENT_IE_MAX)
+	if (ie_type <= 0 || ie_type >= AST_EVENT_IE_TOTAL) {
 		return -1;
+	}
 
-	if (!(ie_val = ast_calloc(1, sizeof(*ie_val))))
+	if (!(ie_val = ast_calloc(1, sizeof(*ie_val)))) {
 		return -1;
+	}
 
 	ie_val->ie_type = ie_type;
 	ie_val->payload.uint = flags;
@@ -678,7 +711,7 @@ int ast_event_sub_append_ie_exists(struct ast_event_sub *sub,
 {
 	struct ast_event_ie_val *ie_val;
 
-	if (ie_type < 0 || ie_type > AST_EVENT_IE_MAX) {
+	if (ie_type <= 0 || ie_type >= AST_EVENT_IE_TOTAL) {
 		return -1;
 	}
 
@@ -699,7 +732,7 @@ int ast_event_sub_append_ie_str(struct ast_event_sub *sub,
 {
 	struct ast_event_ie_val *ie_val;
 
-	if (ie_type < 0 || ie_type > AST_EVENT_IE_MAX) {
+	if (ie_type <= 0 || ie_type >= AST_EVENT_IE_TOTAL) {
 		return -1;
 	}
 
@@ -727,7 +760,7 @@ int ast_event_sub_append_ie_raw(struct ast_event_sub *sub,
 {
 	struct ast_event_ie_val *ie_val;
 
-	if (ie_type < 0 || ie_type > AST_EVENT_IE_MAX) {
+	if (ie_type <= 0 || ie_type >= AST_EVENT_IE_TOTAL) {
 		return -1;
 	}
 
@@ -773,7 +806,7 @@ int ast_event_sub_activate(struct ast_event_sub *sub)
 }
 
 struct ast_event_sub *ast_event_subscribe(enum ast_event_type type, ast_event_cb_t cb,
-	void *userdata, ...)
+	char *description, void *userdata, ...)
 {
 	va_list ap;
 	enum ast_event_ie_type ie_type;
@@ -783,10 +816,12 @@ struct ast_event_sub *ast_event_subscribe(enum ast_event_type type, ast_event_cb
 		return NULL;
 	}
 
+	ast_copy_string(sub->description, description, sizeof(sub->description));
+
 	va_start(ap, userdata);
-	for (ie_type = va_arg(ap, enum ast_event_type);
+	for (ie_type = va_arg(ap, enum ast_event_ie_type);
 		ie_type != AST_EVENT_IE_END;
-		ie_type = va_arg(ap, enum ast_event_type))
+		ie_type = va_arg(ap, enum ast_event_ie_type))
 	{
 		enum ast_event_ie_pltype ie_pltype;
 
@@ -843,6 +878,11 @@ void ast_event_sub_destroy(struct ast_event_sub *sub)
 	ast_free(sub);
 }
 
+const char *ast_event_subscriber_get_description(struct ast_event_sub *sub)
+{
+	return sub ? sub->description : NULL;
+}
+
 struct ast_event_sub *ast_event_unsubscribe(struct ast_event_sub *sub)
 {
 	struct ast_event *event;
@@ -856,8 +896,9 @@ struct ast_event_sub *ast_event_unsubscribe(struct ast_event_sub *sub)
 		AST_EVENT_IE_END) != AST_EVENT_SUB_NONE) {
 
 		event = ast_event_new(AST_EVENT_UNSUB,
-			AST_EVENT_IE_UNIQUEID,  AST_EVENT_IE_PLTYPE_UINT, sub->uniqueid,
-			AST_EVENT_IE_EVENTTYPE, AST_EVENT_IE_PLTYPE_UINT, sub->type,
+			AST_EVENT_IE_UNIQUEID,    AST_EVENT_IE_PLTYPE_UINT, sub->uniqueid,
+			AST_EVENT_IE_EVENTTYPE,   AST_EVENT_IE_PLTYPE_UINT, sub->type,
+			AST_EVENT_IE_DESCRIPTION, AST_EVENT_IE_PLTYPE_STR, sub->description,
 			AST_EVENT_IE_END);
 
 		if (event) {
@@ -1024,7 +1065,7 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 {
 	va_list ap;
 	struct ast_event *event;
-	enum ast_event_type ie_type;
+	enum ast_event_ie_type ie_type;
 	struct ast_event_ie_val *ie_val;
 	AST_LIST_HEAD_NOLOCK_STATIC(ie_vals, ast_event_ie_val);
 
@@ -1036,9 +1077,9 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 	}
 
 	va_start(ap, type);
-	for (ie_type = va_arg(ap, enum ast_event_type);
+	for (ie_type = va_arg(ap, enum ast_event_ie_type);
 		ie_type != AST_EVENT_IE_END;
-		ie_type = va_arg(ap, enum ast_event_type))
+		ie_type = va_arg(ap, enum ast_event_ie_type))
 	{
 		struct ast_event_ie_val *ie_value = alloca(sizeof(*ie_value));
 		int insert = 1;
@@ -1177,9 +1218,9 @@ struct ast_event *ast_event_get_cached(enum ast_event_type type, ...)
 	}
 
 	va_start(ap, type);
-	for (ie_type = va_arg(ap, enum ast_event_type);
+	for (ie_type = va_arg(ap, enum ast_event_ie_type);
 		ie_type != AST_EVENT_IE_END;
-		ie_type = va_arg(ap, enum ast_event_type))
+		ie_type = va_arg(ap, enum ast_event_ie_type))
 	{
 		enum ast_event_ie_pltype ie_pltype;
 
@@ -1233,7 +1274,7 @@ static struct ast_event_ref *alloc_event_ref(void)
 
 /*! \brief Duplicate an event and add it to the cache
  * \note This assumes this index in to the cache is locked */
-static int attribute_unused ast_event_dup_and_cache(const struct ast_event *event)
+static int ast_event_dup_and_cache(const struct ast_event *event)
 {
 	struct ast_event *dup_event;
 	struct ast_event_ref *event_ref;
@@ -1262,6 +1303,7 @@ int ast_event_queue_and_cache(struct ast_event *event)
 	struct ast_event_ref tmp_event_ref = {
 		.event = event,
 	};
+	int res = -1;
 
 	if (!(container = ast_event_cache[ast_event_get_type(event)].container)) {
 		ast_log(LOG_WARNING, "cache requested for non-cached event type\n");
@@ -1272,8 +1314,10 @@ int ast_event_queue_and_cache(struct ast_event *event)
 	ao2_callback(container, OBJ_POINTER | OBJ_UNLINK | OBJ_MULTIPLE | OBJ_NODATA,
 			ast_event_cmp, &tmp_event_ref);
 
+	res = ast_event_dup_and_cache(event);
+
 queue_event:
-	return ast_event_queue(event);
+	return ast_event_queue(event) ? -1 : res;
 }
 
 static int handle_event(void *data)
@@ -1330,6 +1374,7 @@ int ast_event_queue(struct ast_event *event)
 	if (ast_event_check_subscriber(host_event_type, AST_EVENT_IE_END)
 			== AST_EVENT_SUB_NONE) {
 		ast_event_destroy(event);
+		ast_log(LOG_NOTICE, "Event destroyed, no subscriber\n");
 		return 0;
 	}
 

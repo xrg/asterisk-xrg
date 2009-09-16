@@ -22,20 +22,20 @@ TRUNKMSD = 1
 -- an extension name is prefixed by a '_' character, it is interpreted as
 -- a pattern rather than a literal.  In patterns, some characters have
 -- special meanings:
---                                                                           
+--
 --   X - any digit from 0-9
 --   Z - any digit from 1-9
 --   N - any digit from 2-9
 --   [1235-9] - any digit in the brackets (in this example, 1,2,3,5,6,7,8,9)
---   . - wildcard, matches anything remaining (e.g. _9011. matches 
+--   . - wildcard, matches anything remaining (e.g. _9011. matches
 --       anything starting with 9011 excluding 9011 itself)
 --   ! - wildcard, causes the matching process to complete as soon as
 --       it can unambiguously determine that no other matches are possible
---                                                                           
+--
 -- For example the extension _NXXXXXX would match normal 7 digit
 -- dialings, while _1NXXNXXXXXX would represent an area code plus phone
 -- number preceded by a one.
--- 
+--
 -- If your extension has special characters in it such as '.' and '!' you must
 -- explicitly make it a string in the tabale definition:
 --
@@ -44,7 +44,7 @@ TRUNKMSD = 1
 --
 -- There are no priorities.  All extensions to asterisk appear to have a single
 -- priority as if they consist of a single priority.
--- 
+--
 -- Each context is defined as a table in the extensions table.  The
 -- context names should be strings.
 --
@@ -52,7 +52,7 @@ TRUNKMSD = 1
 -- extension.  This extension should be set to a table containing a list
 -- of context names.  Do not put references to tables in the includes
 -- table.
--- 
+--
 --   include = {"a", "b", "c"};
 --
 -- Channel variables can be accessed thorugh the global 'channel' table.
@@ -79,7 +79,7 @@ TRUNKMSD = 1
 -- Also notice the absence of the following constructs from the examples above:
 --   channel.func_name(1,2,3) = "value"  -- this will NOT work
 --   value = channel.func_name(1,2,3)    -- this will NOT work as expected
--- 
+--
 --
 -- Dialplan applications can be accessed through the global 'app' table.
 --

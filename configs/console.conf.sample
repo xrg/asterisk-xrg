@@ -5,7 +5,7 @@
 [general]
 
 ; Set this option to "yes" to enable automatically answering calls on the
-; console.  This is very useful if the console is used as an intercom. 
+; console.  This is very useful if the console is used as an intercom.
 ; The default value is "no".
 ;
 ;autoanswer = no
@@ -21,7 +21,7 @@
 ;extension = s
 
 ; Set the default CallerID for created channels.
-; 
+;
 ;callerid = MyName Here <(256) 428-6000>
 
 ; Set the default language for created channels.

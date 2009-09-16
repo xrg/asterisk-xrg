@@ -3,16 +3,16 @@
 //
 //
 // Static extension configuration file, used by
-// the pbx_ael module. This is where you configure all your 
-// inbound and outbound calls in Asterisk. 
-// 
-// This configuration file is reloaded 
+// the pbx_ael module. This is where you configure all your
+// inbound and outbound calls in Asterisk.
+//
+// This configuration file is reloaded
 // - With the "ael reload" command in the CLI
 // - With the "reload" command (that reloads everything) in the CLI
 
 // The "Globals" category contains global variables that can be referenced
 // in the dialplan by using the GLOBAL dialplan function:
-//  ${GLOBAL(VARIABLE)} 
+//  ${GLOBAL(VARIABLE)}
 // ${${GLOBAL(VARIABLE)}} or ${text${GLOBAL(VARIABLE)}} or any hybrid
 // Unix/Linux environmental variables are reached with the ENV dialplan
 // function: ${ENV(VARIABLE)}
@@ -44,8 +44,8 @@ globals {
 };
 
 //
-// Any category other than "General" and "Globals" represent 
-// extension contexts, which are collections of extensions.  
+// Any category other than "General" and "Globals" represent
+// extension contexts, which are collections of extensions.
 //
 // Extension names may be numbers, letters, or combinations
 // thereof. If an extension name is prefixed by a '_'
@@ -56,12 +56,12 @@ globals {
 //   Z - any digit from 1-9
 //   N - any digit from 2-9
 //   [1235-9] - any digit in the brackets (in this example, 1,2,3,5,6,7,8,9)
-//   . - wildcard, matches anything remaining (e.g. _9011. matches 
+//   . - wildcard, matches anything remaining (e.g. _9011. matches
 //	anything starting with 9011 excluding 9011 itself)
 //   ! - wildcard, causes the matching process to complete as soon as
 //       it can unambiguously determine that no other matches are possible
 //
-// For example the extension _NXXXXXX would match normal 7 digit dialings, 
+// For example the extension _NXXXXXX would match normal 7 digit dialings,
 // while _1NXXNXXXXXX would represent an area code plus phone number
 // preceded by a one.
 //
@@ -72,8 +72,8 @@ globals {
 // The priority "same" or "s" means the same as the previously specified
 // priority, again regardless of whether the previous entry was for the
 // same extension.  Priorities may be immediately followed by a plus sign
-// and another integer to add that amount (most useful with 's' or 'n').  
-// Priorities may then also have an alias, or label, in 
+// and another integer to add that amount (most useful with 's' or 'n').
+// Priorities may then also have an alias, or label, in
 // parenthesis after their name which can be used in goto situations
 //
 // Contexts contain several lines, one for each step of each
@@ -87,11 +87,11 @@ globals {
 //	exten-name => {
 //		application(arg1,arg2,...);
 //
-// 	Timing list for includes is 
+// 	Timing list for includes is
 //
 //   <time range>|<days of week>|<days of month>|<months>
 //
-//	includes { 
+//	includes {
 //		daytime|9:00-17:00|mon-fri|*|*;
 //      };
 //
@@ -129,7 +129,7 @@ context ael-dundi-e164-via-pstn {
 	//
 	// If you are freely delivering calls to the PSTN, list them here
 	//
-	//_1256428XXXX => Dial(DAHDI/G2/${EXTEN:7}); // Expose all of 256-428 
+	//_1256428XXXX => Dial(DAHDI/G2/${EXTEN:7}); // Expose all of 256-428
 	//_1256325XXXX => Dial(DAHDI/G2/${EXTEN:7}); // Ditto for 256-325
 };
 
@@ -149,8 +149,8 @@ context ael-dundi-e164-switch {
 	//
 	// Just a wrapper for the switch
 	//
-	
-	switches { 
+
+	switches {
 		DUNDi/e164;
 	};
 };
@@ -168,8 +168,8 @@ context ael-dundi-e164-lookup {
 };
 
 //
-// DUNDi can also be implemented as a Macro instead of using 
-// the Local channel driver. 
+// DUNDi can also be implemented as a Macro instead of using
+// the Local channel driver.
 //
 macro ael-dundi-e164(exten) {
 //
@@ -240,7 +240,7 @@ context ael-trunktollfree {
 	//
 	// Long distance context accessed through trunk interface
 	//
-	
+
 	_91800NXXXXXX => Dial(${TRUNK}/${EXTEN:${TRUNKMSD}});
 	_91888NXXXXXX => Dial(${TRUNK}/${EXTEN:${TRUNKMSD}});
 	_91877NXXXXXX => Dial(${TRUNK}/${EXTEN:${TRUNKMSD}});
@@ -285,10 +285,10 @@ context ael-local {
 
 //
 // You can use an alternative switch type as well, to resolve
-// extensions that are not known here, for example with remote 
+// extensions that are not known here, for example with remote
 // IAX switching you transparently get access to the remote
 // Asterisk PBX
-// 
+//
 // switch => IAX2/user:password@bigserver/local
 //
 // An "lswitch" is like a switch but is literal, in that
@@ -380,7 +380,7 @@ instructions:
 
 context ael-default {
 
-// By default we include the demo.  In a production system, you 
+// By default we include the demo.  In a production system, you
 // probably don't want to have the demo there.
 
 	includes {
@@ -443,6 +443,6 @@ context ael-default {
 // friendly Asterisk CLI prompt.
 //
 // 'show application <command>' will show details of how you
-// use that particular application in this file, the dial plan. 
+// use that particular application in this file, the dial plan.
 //
 }

@@ -1,10 +1,10 @@
-Call data records can be stored in many different databases or even CSV text.
+\section{Storage Backends}
 
-\section{MSSQL}
+\subsection{Microsoft SQL Server}
 
 	Asterisk can currently store CDRs into an MSSQL database in
 	two different ways:  cdr\_odbc or cdr\_tds
-	
+
 	Call Data Records can be stored using unixODBC (which requires
 	the FreeTDS package) [cdr\_odbc] or directly by using just the
 	FreeTDS package [cdr\_tds]  The following provide some
@@ -12,7 +12,7 @@ Call data records can be stored in many different databases or even CSV text.
 
 	NOTE:  Only choose one db connector.
 
-\subsection{ODBC using cdr\_odbc}
+\subsubsection{ODBC using cdr\_odbc}
 	Compile, configure, and install the latest unixODBC package:
 \begin{astlisting}
 \begin{verbatim}
@@ -121,7 +121,7 @@ Call data records can be stored in many different databases or even CSV text.
 		logs a connection to the database and will now record every
 		call to the database when it's complete.
 
-\subsection{TDS, using cdr\_tds}
+\subsubsection{TDS, using cdr\_tds}
 		Compile, configure, and install the latest FreeTDS package:
 \begin{astlisting}
 \begin{verbatim}
@@ -195,11 +195,43 @@ Call data records can be stored in many different databases or even CSV text.
                 call to the database when it's complete.
 
 
-\section{MYSQL}
+\subsection{MySQL}
+
+\subsubsection{ODBC}
 
 Using MySQL for CDR records is supported by using ODBC and the cdr\_odbc module.
 
-\section{PGSQL}
+\subsubsection{Native}
+
+Alternatively, there is a native MySQL CDR module.
+
+To use it, configure the module in cdr\_mysql.conf.  Create a table called cdr under the database name you will be using the following schema.
+
+\begin{astlisting}
+\begin{verbatim}
+CREATE TABLE cdr (
+  calldate datetime NOT NULL default '0000-00-00 00:00:00',
+  clid varchar(80) NOT NULL default '',
+  src varchar(80) NOT NULL default '',
+  dst varchar(80) NOT NULL default '',
+  dcontext varchar(80) NOT NULL default '',
+  channel varchar(80) NOT NULL default '',
+  dstchannel varchar(80) NOT NULL default '',
+  lastapp varchar(80) NOT NULL default '',
+  lastdata varchar(80) NOT NULL default '',
+  duration int(11) NOT NULL default '0',
+  billsec int(11) NOT NULL default '0',
+  disposition varchar(45) NOT NULL default '',
+  amaflags int(11) NOT NULL default '0',
+  accountcode varchar(20) NOT NULL default '',
+  uniqueid varchar(32) NOT NULL default '',
+  userfield varchar(255) NOT NULL default ''
+);
+\end{verbatim}
+\end{astlisting}
+
+
+\subsection{PostgreSQL}
         If you want to go directly to postgresql database, and have the cdr\_pgsql.so
         compiled you can use the following sample setup.
         On Debian, before compiling asterisk, just install libpqxx-dev.
@@ -246,13 +278,17 @@ Using MySQL for CDR records is supported by using ODBC and the cdr\_odbc module.
 \end{verbatim}
 \end{astlisting}
 
-\section{SQLLITE}
+\subsection{SQLite 2}
 
 SQLite version 2 is supported in cdr\_sqlite.
 
-\section{RADIUS}
+\subsection{SQLite 3}
 
-\subsection{What is needed}
+SQLite version 3 is supported in cdr\_sqlite3\_custom.
+
+\subsection{RADIUS}
+
+\subsubsection{What is needed}
 
 \begin{itemize}
 	\item FreeRADIUS server
@@ -289,13 +325,11 @@ SQLite version 2 is supported in cdr\_sqlite.
 \caption{Asterisk/RADIUS Integration}
 \end{figure}
 
-\subsection{Steps to follow in order to have RADIUS support}
-
 \subsubsection{Installation of the Radiusclient library}
 
-	Download the sources from	
+	Download the sources from
 	\url{http://developer.berlios.de/projects/radiusclient-ng/}
-		
+
 	Untar the source tarball:
 
 \begin{verbatim}
@@ -312,15 +346,15 @@ SQLite version 2 is supported in cdr\_sqlite.
 \end{verbatim}
 
 \subsubsection{Configuration of the Radiusclient library}
-	
+
 	By default all the configuration files of the radiusclient library will
 	be in \path{/usr/local/etc/radiusclient-ng} directory.
-		
+
 	File "radiusclient.conf"
 		Open the file and find lines containing the following:
 
 			authserver      localhost
-	
+
 	This is the hostname or IP address of the RADIUS server used for
 	authentication. You will have to change this unless the server is
 	running on the same host as your Asterisk PBX.
@@ -332,10 +366,10 @@ SQLite version 2 is supported in cdr\_sqlite.
 	on the same host as your Asterisk PBX.
 
 	\textbf{File "servers"}
-		
+
 	RADIUS protocol uses simple access control mechanism based on shared
 	secrets that allows RADIUS servers to limit access from RADIUS clients.
-		
+
 	A RADIUS server is configured with a secret string and only RADIUS
 	clients that have the same secret will be accepted.
 
@@ -349,7 +383,7 @@ SQLite version 2 is supported in cdr\_sqlite.
 	are going to use.
 
 	\textbf{File "dictionary"}
-			
+
 	Asterisk uses some attributes that are not included in the
 	dictionary of radiusclient library, therefore it is necessary to add
 	them. A file called dictionary.digium (kept in the contrib dir)
@@ -364,7 +398,7 @@ SQLite version 2 is supported in cdr\_sqlite.
 	Download sources tarball from:
 
 		\url{http://freeradius.org/}
-			
+
 	Untar, configure, build, and install the server:
 
 \begin{verbatim}
@@ -377,15 +411,15 @@ SQLite version 2 is supported in cdr\_sqlite.
 
 	All the configuration files of FreeRADIUS server will be in
 	/usr/local/etc/raddb directory.
-		
+
 
 \subsubsection{Configuration of the FreeRADIUS Server}
-			
+
 	There are several files that have to be modified to configure the
 	RADIUS server. These are presented next.
 
 	File "clients.conf"
-			
+
 	File \path{/usr/local/etc/raddb/clients.conf} contains description of
 	RADIUS clients that are allowed to use the server. For each of the
 	clients you need to specify its hostname or IP address and also a
@@ -398,26 +432,26 @@ SQLite version 2 is supported in cdr\_sqlite.
 		    secret = mysecret
 		    shortname = foo
 		}
-\end{verbatim}	
+\end{verbatim}
 
 	This fragment allows access from RADIUS clients on "myhost" if they use
-	"mysecret" as the shared secret.	
+	"mysecret" as the shared secret.
 	The file already contains an entry for localhost (127.0.0.1), so if you
 	are running the RADIUS server on the same host as your Asterisk server,
 	then modify the existing entry instead, replacing the default password.
-		
+
 	File "dictionary"
-		
+
 	Note: as of version 1.1.2, the dictionary.digium file ships with FreeRADIUS.
 	The following procedure brings the dictionary.digium file to previous versions
 	of FreeRADIUS.
-	
+
 	File \path{/usr/local/etc/raddb/dictionary} contains the dictionary of
 	FreeRADIUS server. You have to add the same dictionary file
 	(dictionary.digium), which you added to the dictionary of radiusclient-ng
 	library. You can include it into the main file, adding the following line at the
 	end of file \path{/usr/local/etc/raddb/dictionary}:
-		
+
 	\$INCLUDE /path/to/dictionary.digium
 
 	That will include the same new attribute definitions that are used
@@ -431,7 +465,7 @@ SQLite version 2 is supported in cdr\_sqlite.
 
         The module will be compiled as long as the radiusclient-ng
         library has been detected on your system.
-	
+
 	By default FreeRADIUS server will log all accounting requests into
 	\path{/usr/local/var/log/radius/radacct} directory in form of plain text files.
 	The server will create one file for each hostname in the directory. The
@@ -442,12 +476,12 @@ SQLite version 2 is supported in cdr\_sqlite.
 	separated values will be created in \path{/var/log/asterisk/cdr-csv}.
 
 	The configuration file for cdr\_radius.so module is \path{/etc/asterisk/cdr.conf}
-	
+
 	This is where you can set CDR related parameters as well as the path to
 	the radiusclient-ng library configuration file.
 
 
-\section{Logged Values}
+\subsubsection{Logged Values}
 \begin{verbatim}
   "Asterisk-Acc-Code",          The account name of detail records
   "Asterisk-Src",

@@ -27,6 +27,7 @@
 
 #include <time.h>	/* we want to override localtime_r */
 #include <unistd.h>
+#include <string.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/time.h"
@@ -221,6 +222,11 @@ void ast_sha1_hash(char *output, const char *input);
 
 int ast_base64encode_full(char *dst, const unsigned char *src, int srclen, int max, int linebreaks);
 
+#undef MIN
+#define MIN(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a > __b) ? __b : __a);})
+#undef MAX
+#define MAX(a, b) ({ typeof(a) __a = (a); typeof(b) __b = (b); ((__a < __b) ? __b : __a);})
+
 /*!
  * \brief Encode data in base64
  * \param dst the destination buffer
@@ -349,13 +355,13 @@ int ast_careful_fwrite(FILE *f, int fd, const char *s, size_t len, int timeoutms
 /*
  * Thread management support (should be moved to lock.h or a different header)
  */
- 
-#define AST_STACKSIZE 240 * 1024
+
+#define AST_STACKSIZE (((sizeof(void *) * 8 * 8) - 16) * 1024)
 
 #if defined(LOW_MEMORY)
-#define AST_BACKGROUND_STACKSIZE 48 * 1024
+#define AST_BACKGROUND_STACKSIZE (((sizeof(void *) * 8 * 2) - 16) * 1024)
 #else
-#define AST_BACKGROUND_STACKSIZE 240 * 1024
+#define AST_BACKGROUND_STACKSIZE AST_STACKSIZE
 #endif
 
 void ast_register_thread(char *name);

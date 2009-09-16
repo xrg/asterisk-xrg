@@ -42,9 +42,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/stat.h>
 #include <dirent.h>
 #include <sys/ioctl.h>
-#ifdef SOLARIS
-#include <thread.h>
-#endif
 
 #ifdef HAVE_DAHDI
 #include <dahdi/user.h>
@@ -70,53 +67,82 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define INITIAL_NUM_FILES   8
 
-static char *play_moh = "MusicOnHold";
-static char *wait_moh = "WaitMusicOnHold";
-static char *set_moh = "SetMusicOnHold";
-static char *start_moh = "StartMusicOnHold";
-static char *stop_moh = "StopMusicOnHold";
+/*** DOCUMENTATION
+	<application name="MusicOnHold" language="en_US">
+		<synopsis>
+			Play Music On Hold indefinitely.
+		</synopsis>
+		<syntax>
+			<parameter name="class" required="true" />
+			<parameter name="duration" />
+		</syntax>
+		<description>
+			<para>Plays hold music specified by class. If omitted, the default music
+			source for the channel will be used. Change the default class with
+			Set(CHANNEL(musicclass)=...). If duration is given, hold music will be played
+			specified number of seconds. If duration is ommited, music plays indefinitely.
+			Returns <literal>0</literal> when done, <literal>-1</literal> on hangup.</para>
+		</description>
+	</application>
+	<application name="WaitMusicOnHold" language="en_US">
+		<synopsis>
+			Wait, playing Music On Hold.
+		</synopsis>
+		<syntax>
+			<parameter name="delay" required="true" />
+		</syntax>
+		<description>
+			<para> !!! DEPRECATED. Use MusicOnHold instead !!!</para>
+			<para>Plays hold music specified number of seconds. Returns <literal>0</literal> when done,
+			or <literal>-1</literal> on hangup. If no hold music is available, the delay will still occur
+			with no sound.</para>
+			<para> !!! DEPRECATED. Use MusicOnHold instead !!!</para>
+		</description>
+	</application>
+	<application name="SetMusicOnHold" language="en_US">
+		<synopsis>
+			Set default Music On Hold class.
+		</synopsis>
+		<syntax>
+			<parameter name="class" required="yes" />
+		</syntax>
+		<description>
+			<para>!!! DEPRECATED. USe Set(CHANNEL(musicclass)=...) instead !!!</para>
+			<para>Sets the default class for music on hold for a given channel.
+			When music on hold is activated, this class will be used to select which
+			music is played.</para>
+			<para>!!! DEPRECATED. USe Set(CHANNEL(musicclass)=...) instead !!!</para>
+		</description>
+	</application>
+	<application name="StartMusicOnHold" language="en_US">
+		<synopsis>
+			Play Music On Hold.
+		</synopsis>
+		<syntax>
+			<parameter name="class" required="true" />
+		</syntax>
+		<description>
+			<para>Starts playing music on hold, uses default music class for channel.
+			Starts playing music specified by class. If omitted, the default music
+			source for the channel will be used. Always returns <literal>0</literal>.</para>
+		</description>
+	</application>
+	<application name="StopMusicOnHold" language="en_US">
+		<synopsis>
+			Stop playing Music On Hold.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Stops playing music on hold.</para>
+		</description>
+	</application>
+ ***/
 
-static char *play_moh_syn = "Play Music On Hold indefinitely";
-static char *wait_moh_syn = "Wait, playing Music On Hold";
-static char *set_moh_syn = "Set default Music On Hold class";
-static char *start_moh_syn = "Play Music On Hold";
-static char *stop_moh_syn = "Stop Playing Music On Hold";
-
-static char *play_moh_desc = "  MusicOnHold(class[,duration]):\n"
-"Plays hold music specified by class.  If omitted, the default\n"
-"music source for the channel will be used. Change the default \n"
-"class with Set(CHANNEL(musicclass)=...).\n"
-"If duration is given, hold music will be played specified number\n"
-"of seconds. If duration is ommited, music plays indefinitely.\n"
-"Returns 0 when done, -1 on hangup.\n";
-
-static char *wait_moh_desc = "  WaitMusicOnHold(delay):\n"
-"\n"
-"  !!! DEPRECATED. Use MusicOnHold instead !!!\n"
-"\n"
-"Plays hold music specified number of seconds.  Returns 0 when\n"
-"done, or -1 on hangup.  If no hold music is available, the delay will\n"
-"still occur with no sound.\n"
-"\n"
-"  !!! DEPRECATED. Use MusicOnHold instead !!!\n";
-
-static char *set_moh_desc = "  SetMusicOnHold(class):\n"
-"\n"
-"  !!! DEPRECATED. USe Set(CHANNEL(musicclass)=...) instead !!!\n"
-"\n"
-"Sets the default class for music on hold for a given channel.  When\n"
-"music on hold is activated, this class will be used to select which\n"
-"music is played.\n"
-"\n"
-"  !!! DEPRECATED. USe Set(CHANNEL(musicclass)=...) instead !!!\n";
-
-static char *start_moh_desc = "  StartMusicOnHold(class):\n"
-"Starts playing music on hold, uses default music class for channel.\n"
-"Starts playing music specified by class.  If omitted, the default\n"
-"music source for the channel will be used.  Always returns 0.\n";
-
-static char *stop_moh_desc = "  StopMusicOnHold(): "
-"Stops playing music on hold.\n";
+static const char play_moh[] = "MusicOnHold";
+static const char wait_moh[] = "WaitMusicOnHold";
+static const char set_moh[] = "SetMusicOnHold";
+static const char start_moh[] = "StartMusicOnHold";
+static const char stop_moh[] = "StopMusicOnHold";
 
 static int respawn_time = 20;
 
@@ -360,14 +386,10 @@ static void moh_handle_digit(struct ast_channel *chan, char digit)
 	if ((class = get_mohbydigit(digit))) {
 		classname = ast_strdupa(class->name);
 		class = mohclass_unref(class, "Unreffing ao2_find from finding by digit");
+		ast_string_field_set(chan,musicclass,classname);
+		ast_moh_stop(chan);
+		ast_moh_start(chan, classname, NULL);
 	}
-
-	if (!class) {
-		return;
-	}
-
-	ast_moh_stop(chan);
-	ast_moh_start(chan, classname, NULL);
 }
 
 static struct ast_generator moh_file_stream = 
@@ -622,7 +644,7 @@ static int play_moh_exec(struct ast_channel *chan, const char *data)
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	if (!ast_strlen_zero(args.duration)) {
-		if (sscanf(args.duration, "%d", &timeout) == 1) {
+		if (sscanf(args.duration, "%30d", &timeout) == 1) {
 			timeout *= 1000;
 		} else {
 			ast_log(LOG_WARNING, "Invalid MusicOnHold duration '%s'. Will wait indefinitely.\n", args.duration);
@@ -1137,7 +1159,9 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 {
 	struct mohclass *mohclass = NULL;
 	struct moh_files_state *state = chan->music_state;
+	struct ast_variable *var = NULL;
 	int res;
+	int realtime_possible = ast_check_realtime("musiconhold");
 
 	/* The following is the order of preference for which class to use:
 	 * 1) The channels explicitly set musicclass, which should *only* be
@@ -1152,28 +1176,37 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 	 */
 	if (!ast_strlen_zero(chan->musicclass)) {
 		mohclass = get_mohbyname(chan->musicclass, 1);
-	}
-	if (!mohclass && !ast_strlen_zero(mclass)) {
-		mohclass = get_mohbyname(mclass, 1);
-	}
-	if (!mohclass && !ast_strlen_zero(interpclass)) {
-		mohclass = get_mohbyname(interpclass, 1);
-	}
-
-	/* If no moh class found in memory, then check RT */
-	if (!mohclass && ast_check_realtime("musiconhold")) {
-		struct ast_variable *var = NULL, *tmp = NULL;
-
-		if (!ast_strlen_zero(chan->musicclass)) {
+		if (!mohclass && realtime_possible) {
 			var = ast_load_realtime("musiconhold", "name", chan->musicclass, SENTINEL);
 		}
-		if (!var && !ast_strlen_zero(mclass))
+	}
+	if (!mohclass && !var && !ast_strlen_zero(mclass)) {
+		mohclass = get_mohbyname(mclass, 1);
+		if (!mohclass && realtime_possible) {
 			var = ast_load_realtime("musiconhold", "name", mclass, SENTINEL);
-		if (!var && !ast_strlen_zero(interpclass))
+		}
+	}
+	if (!mohclass && !var && !ast_strlen_zero(interpclass)) {
+		mohclass = get_mohbyname(interpclass, 1);
+		if (!mohclass && realtime_possible) {
 			var = ast_load_realtime("musiconhold", "name", interpclass, SENTINEL);
-		if (!var)
+		}
+	}
+
+	if (!mohclass && !var) {
+		mohclass = get_mohbyname("default", 1);
+		if (!mohclass && realtime_possible) {
 			var = ast_load_realtime("musiconhold", "name", "default", SENTINEL);
-		if (var && (mohclass = moh_class_malloc())) {
+		}
+	}
+
+	/* If no moh class found in memory, then check RT. Note that the logic used
+	 * above guarantees that if var is non-NULL, then mohclass must be NULL.
+	 */
+	if (var) {
+		struct ast_variable *tmp = NULL;
+
+		if ((mohclass = moh_class_malloc())) {
 			mohclass->realtime = 1;
 			for (tmp = var; tmp; tmp = tmp->next) {
 				if (!strcasecmp(tmp->name, "name"))
@@ -1304,13 +1337,9 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 					return -1;
 				}
 			}
-		} else if (var) {
+		} else {
 			ast_variables_destroy(var);
 		}
-	}
-
-	if (!mohclass) {
-		mohclass = get_mohbyname("default", 1);
 	}
 
 	if (!mohclass) {
@@ -1395,9 +1424,10 @@ static void moh_class_destructor(void *obj)
 	while ((member = AST_LIST_REMOVE_HEAD(&class->members, list))) {
 		free(member);
 	}
-	
+
 	if (class->thread) {
 		pthread_cancel(class->thread);
+		pthread_join(class->thread, NULL);
 		class->thread = AST_PTHREADT_NULL;
 	}
 
@@ -1667,17 +1697,17 @@ static int load_module(void)
 				local_ast_moh_cleanup);
 	}
 
-	res = ast_register_application(play_moh, play_moh_exec, play_moh_syn, play_moh_desc);
+	res = ast_register_application_xml(play_moh, play_moh_exec);
 	ast_register_atexit(ast_moh_destroy);
 	ast_cli_register_multiple(cli_moh, ARRAY_LEN(cli_moh));
 	if (!res)
-		res = ast_register_application(wait_moh, wait_moh_exec, wait_moh_syn, wait_moh_desc);
+		res = ast_register_application_xml(wait_moh, wait_moh_exec);
 	if (!res)
-		res = ast_register_application(set_moh, set_moh_exec, set_moh_syn, set_moh_desc);
+		res = ast_register_application_xml(set_moh, set_moh_exec);
 	if (!res)
-		res = ast_register_application(start_moh, start_moh_exec, start_moh_syn, start_moh_desc);
+		res = ast_register_application_xml(start_moh, start_moh_exec);
 	if (!res)
-		res = ast_register_application(stop_moh, stop_moh_exec, stop_moh_syn, stop_moh_desc);
+		res = ast_register_application_xml(stop_moh, stop_moh_exec);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

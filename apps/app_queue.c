@@ -95,6 +95,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/global_datastores.h"
 #include "asterisk/taskprocessor.h"
 #include "asterisk/callerid.h"
+#include "asterisk/cel.h"
 
 /*!
  * \par Please read before modifying this file.
@@ -494,7 +495,160 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Gets or sets queue members penalty.</para>
 		</description>
 	</function>
-
+	<manager name="Queues" language="en_US">
+		<synopsis>
+			Queues.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueueStatus" language="en_US">
+		<synopsis>
+			Show queue status.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Queue" />
+			<parameter name="Member" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueueSummary" language="en_US">
+		<synopsis>
+			Show queue summary.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Queue" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueueAdd" language="en_US">
+		<synopsis>
+			Add interface to queue.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Queue" required="true" />
+			<parameter name="Interface" required="true" />
+			<parameter name="Penalty" />
+			<parameter name="Paused" />
+			<parameter name="MemberName" />
+			<parameter name="StateInterface" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueueRemove" language="en_US">
+		<synopsis>
+			Remove interface from queue.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Queue" required="true" />
+			<parameter name="Interface" required="true" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueuePause" language="en_US">
+		<synopsis>
+			Makes a queue member temporarily unavailable.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Interface" required="true" />
+			<parameter name="Paused" required="true" />
+			<parameter name="Queue" />
+			<parameter name="Reason" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueueLog" language="en_US">
+		<synopsis>
+			Adds custom entry in queue_log.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Queue" required="true" />
+			<parameter name="Event" required="true" />
+			<parameter name="Uniqueid" />
+			<parameter name="Interface" />
+			<parameter name="Message" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueuePenalty" language="en_US">
+		<synopsis>
+			Set the penalty for a queue member.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Interface" required="true" />
+			<parameter name="Penalty" required="true" />
+			<parameter name="Queue" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueueRule" language="en_US">
+		<synopsis>
+			Queue Rules.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Rule" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueueReload" language="en_US">
+		<synopsis>
+			Reload a queue, queues, or any sub-section of a queue or queues.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Queue" />
+			<parameter name="Members">
+				<enumlist>
+					<enum name="yes" />
+					<enum name="no" />
+				</enumlist>
+			</parameter>
+			<parameter name="Rules">
+				<enumlist>
+					<enum name="yes" />
+					<enum name="no" />
+				</enumlist>
+			</parameter>
+			<parameter name="Parameters">
+				<enumlist>
+					<enum name="yes" />
+					<enum name="no" />
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="QueueReset" language="en_US">
+		<synopsis>
+			Reset queue statistics.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Queue" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
  ***/
 
 enum {
@@ -824,7 +978,7 @@ struct rule_list {
 	AST_LIST_ENTRY(rule_list) list;
 };
 
-AST_LIST_HEAD_STATIC(rule_lists, rule_list);
+static AST_LIST_HEAD_STATIC(rule_lists, rule_list);
 
 static struct ao2_container *queues;
 
@@ -1063,6 +1217,7 @@ static int handle_statechange(void *datap)
 		}
 
 		ao2_unlock(q);
+		ao2_ref(q, -1);
 	}
 
 	if (found)
@@ -2208,7 +2363,8 @@ posout:
 		res = play_file(qe->chan, qe->parent->sound_thanks);
 	}
 playout:
-	if ((res > 0 && !valid_exit(qe, res)) || res < 0)
+
+	if ((res > 0 && !valid_exit(qe, res)))
 		res = 0;
 
 	/* Set our last_pos indicators */
@@ -2525,7 +2681,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 		location = "";
 
 	/* Request the peer */
-	tmp->chan = ast_request(tech, qe->chan->nativeformats, location, &status);
+	tmp->chan = ast_request(tech, qe->chan->nativeformats, qe->chan, location, &status);
 	if (!tmp->chan) {			/* If we can't, just go on to the next call */
 		if (qe->chan->cdr)
 			ast_cdr_busy(qe->chan->cdr);
@@ -2577,6 +2733,7 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 
 	/* Inherit specially named variables from parent channel */
 	ast_channel_inherit_variables(qe->chan, tmp->chan);
+	ast_channel_datastore_inherit(qe->chan, tmp->chan);
 
 	/* Presense of ADSI CPE on outgoing channel follows ours */
 	tmp->chan->adsicpe = qe->chan->adsicpe;
@@ -2604,7 +2761,6 @@ static int ring_entry(struct queue_ent *qe, struct callattempt *tmp, int *busies
 		strcpy(tmp->chan->cdr->accountcode, qe->chan->cdr->accountcode);
 		strcpy(tmp->chan->cdr->userfield, qe->chan->cdr->userfield);
 	}
-	ast_channel_unlock(qe->chan);
 
 	/* Place the call, but don't wait on the answer */
 	if ((res = ast_call(tmp->chan, location, 0))) {
@@ -2788,7 +2944,7 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 	/* play the announcement */
 	res = play_file(qe->chan, ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]));
 
-	if ((res > 0 && !valid_exit(qe, res)) || res < 0)
+	if (res > 0 && !valid_exit(qe, res))
 		res = 0;
 
 	/* Resume Music on Hold if the caller is going to stay in the queue */
@@ -2871,6 +3027,8 @@ static void rna(int rnatime, struct queue_ent *qe, char *interface, char *member
  * \param[in] prebusies number of busy members calculated prior to calling wait_for_answer
  * \param[in] caller_disconnect if the 'H' option is used when calling Queue(), this is used to detect if the caller pressed * to disconnect the call
  * \param[in] forwardsallowed used to detect if we should allow call forwarding, based on the 'i' option to Queue()
+ *
+ * \todo eventually all call forward logic should be intergerated into and replaced by ast_call_forward()
  */
 static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callattempt *outgoing, int *to, char *digit, int prebusies, int caller_disconnect, int forwardsallowed, int update_connectedline)
 {
@@ -2948,21 +3106,29 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 			*to = 0;
 			return NULL;
 		}
+
+		/* Poll for events from both the incoming channel as well as any outgoing channels */
 		winner = ast_waitfor_n(watchers, pos, to);
+
+		/* Service all of the outgoing channels */
 		for (o = start; o; o = o->call_next) {
 			/* We go with a static buffer here instead of using ast_strdupa. Using
 			 * ast_strdupa in a loop like this one can cause a stack overflow
 			 */
 			char ochan_name[AST_CHANNEL_NAME];
-			ast_channel_lock(o->chan);
-			ast_copy_string(ochan_name, o->chan->name, sizeof(ochan_name));
-			ast_channel_unlock(o->chan);
+			if (o->chan) {
+				ast_channel_lock(o->chan);
+				ast_copy_string(ochan_name, o->chan->name, sizeof(ochan_name));
+				ast_channel_unlock(o->chan);
+			}
 			if (o->stillgoing && (o->chan) &&  (o->chan->_state == AST_STATE_UP)) {
 				if (!peer) {
 					ast_verb(3, "%s answered %s\n", ochan_name, inchan_name);
 					if (update_connectedline) {
 						if (o->connected.id.number) {
-							ast_channel_update_connected_line(in, &o->connected);
+							if (ast_channel_connected_line_macro(o->chan, in, &o->connected, 1, 0)) {
+								ast_channel_update_connected_line(in, &o->connected);
+							}
 						} else if (o->update_connectedline) {
 							ast_channel_lock(o->chan);
 							ast_connected_line_copy_from_caller(&connected_caller, &o->chan->cid);
@@ -3002,10 +3168,13 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 						stuff = tmpchan;
 						tech = "Local";
 					}
+
+					ast_cel_report_event(in, AST_CEL_FORWARD, NULL, o->chan->call_forward, NULL);
+
 					/* Before processing channel, go ahead and check for forwarding */
 					ast_verb(3, "Now forwarding %s to '%s/%s' (thanks to %s)\n", inchan_name, tech, stuff, ochan_name);
 					/* Setup parameters */
-					o->chan = ast_request(tech, in->nativeformats, stuff, &status);
+					o->chan = ast_request(tech, in->nativeformats, in, stuff, &status);
 					if (!o->chan) {
 						ast_log(LOG_NOTICE, "Unable to create local channel for call forward to '%s/%s'\n", tech, stuff);
 						o->stillgoing = 0;
@@ -3042,11 +3211,13 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 
 						if (ast_call(o->chan, tmpchan, 0)) {
 							ast_log(LOG_NOTICE, "Failed to dial on local channel for call forward to '%s'\n", tmpchan);
+							ast_channel_unlock(o->chan);
 							do_hang(o);
 							numnochan++;
+						} else {
+							ast_channel_unlock(o->chan);
 						}
 						ast_channel_unlock(in);
-						ast_channel_unlock(o->chan);
 					}
 					/* Hangup the original channel now, in case we needed it */
 					ast_hangup(winner);
@@ -3062,7 +3233,9 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 								ast_verb(3, "%s answered %s\n", ochan_name, inchan_name);
 								if (update_connectedline) {
 									if (o->connected.id.number) {
-										ast_channel_update_connected_line(in, &o->connected);
+										if (ast_channel_connected_line_macro(o->chan, in, &o->connected, 1, 0)) {
+											ast_channel_update_connected_line(in, &o->connected);
+										}
 									} else if (o->update_connectedline) {
 										ast_channel_lock(o->chan);
 										ast_connected_line_copy_from_caller(&connected_caller, &o->chan->cid);
@@ -3086,7 +3259,11 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 							if (qe->parent->strategy != QUEUE_STRATEGY_RINGALL) {
 								if (qe->parent->timeoutrestart)
 									*to = orig;
-								ring_one(qe, outgoing, &numbusies);
+								/* Have enough time for a queue member to answer? */
+								if (*to > 500) {
+									ring_one(qe, outgoing, &numbusies);
+									starttime = (long) time(NULL);
+								}
 							}
 							numbusies++;
 							break;
@@ -3101,7 +3278,10 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 							if (qe->parent->strategy != QUEUE_STRATEGY_RINGALL) {
 								if (qe->parent->timeoutrestart)
 									*to = orig;
-								ring_one(qe, outgoing, &numbusies);
+								if (*to > 500) {
+									ring_one(qe, outgoing, &numbusies);
+									starttime = (long) time(NULL);
+								}
 							}
 							numbusies++;
 							break;
@@ -3122,8 +3302,9 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 								ast_party_connected_line_set(&o->connected, &connected);
 								ast_party_connected_line_free(&connected);
 							} else {
-								ast_verb(3, "%s connected line has changed, passing it to %s\n", ochan_name, inchan_name);
-								ast_indicate_data(in, AST_CONTROL_CONNECTED_LINE, f->data.ptr, f->datalen);
+								if (ast_channel_connected_line_macro(o->chan, in, f, 1, 1)) {
+									ast_indicate_data(in, AST_CONTROL_CONNECTED_LINE, f->data.ptr, f->datalen);
+								}
 							}
 							break;
 						case AST_CONTROL_REDIRECTING:
@@ -3140,18 +3321,23 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 						}
 					}
 					ast_frfree(f);
-				} else {
+				} else { /* ast_read() returned NULL */
 					endtime = (long) time(NULL) - starttime;
 					rna(endtime * 1000, qe, on, membername, 1);
 					do_hang(o);
 					if (qe->parent->strategy != QUEUE_STRATEGY_RINGALL) {
 						if (qe->parent->timeoutrestart)
 							*to = orig;
-						ring_one(qe, outgoing, &numbusies);
+						if (*to > 500) {
+							ring_one(qe, outgoing, &numbusies);
+							starttime = (long) time(NULL);
+						}
 					}
 				}
 			}
 		}
+
+		/* If we received an event from the caller, deal with it. */
 		if (winner == in) {
 			f = ast_read(in);
 			if (!f || ((f->frametype == AST_FRAME_CONTROL) && (f->subclass == AST_CONTROL_HANGUP))) {
@@ -4115,18 +4301,16 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 				else
 					which = peer;
 				ast_channel_unlock(qe->chan);
-				if (ast_monitor_start) {
-					if (monitorfilename) {
-						ast_monitor_start(which, qe->parent->monfmt, monitorfilename, 1, X_REC_IN | X_REC_OUT);
-					} else if (qe->chan->cdr && ast_monitor_start) {
-						ast_monitor_start(which, qe->parent->monfmt, qe->chan->cdr->uniqueid, 1, X_REC_IN | X_REC_OUT);
-					} else if (ast_monitor_start) {
-						/* Last ditch effort -- no CDR, make up something */
-						snprintf(tmpid, sizeof(tmpid), "chan-%lx", ast_random());
-						ast_monitor_start(which, qe->parent->monfmt, tmpid, 1, X_REC_IN | X_REC_OUT);
-					}
+				if (monitorfilename) {
+					ast_monitor_start(which, qe->parent->monfmt, monitorfilename, 1, X_REC_IN | X_REC_OUT);
+				} else if (qe->chan->cdr) {
+					ast_monitor_start(which, qe->parent->monfmt, qe->chan->cdr->uniqueid, 1, X_REC_IN | X_REC_OUT);
+				} else {
+					/* Last ditch effort -- no CDR, make up something */
+					snprintf(tmpid, sizeof(tmpid), "chan-%lx", ast_random());
+					ast_monitor_start(which, qe->parent->monfmt, tmpid, 1, X_REC_IN | X_REC_OUT);
 				}
-				if (!ast_strlen_zero(monexec) && ast_monitor_setjoinfiles) {
+				if (!ast_strlen_zero(monexec)) {
 					ast_monitor_setjoinfiles(which, 1);
 				}
 			} else {
@@ -4378,7 +4562,9 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 		ast_channel_lock(qe->chan);
 		if (!attended_transfer_occurred(qe->chan)) {
 			struct ast_datastore *tds;
-			if (strcasecmp(oldcontext, qe->chan->context) || strcasecmp(oldexten, qe->chan->exten)) {
+
+			/* detect a blind transfer */
+			if (!(qe->chan->_softhangup | peer->_softhangup) && (strcasecmp(oldcontext, qe->chan->context) || strcasecmp(oldexten, qe->chan->exten))) {
 				ast_queue_log(queuename, qe->chan->uniqueid, member->membername, "TRANSFER", "%s|%s|%ld|%ld|%d",
 					qe->chan->exten, qe->chan->context, (long) (callstart - qe->start),
 					(long) (time(NULL) - callstart), qe->opos);
@@ -5011,7 +5197,7 @@ static int aqm_exec(struct ast_channel *chan, const char *data)
 	}
 
 	if (!ast_strlen_zero(args.penalty)) {
-		if ((sscanf(args.penalty, "%d", &penalty) != 1) || penalty < 0) {
+		if ((sscanf(args.penalty, "%30d", &penalty) != 1) || penalty < 0) {
 			ast_log(LOG_WARNING, "Penalty '%s' is invalid, must be an integer >= 0\n", args.penalty);
 			penalty = 0;
 		}
@@ -5172,7 +5358,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	ast_channel_lock(chan);
 	user_priority = pbx_builtin_getvar_helper(chan, "QUEUE_PRIO");
 	if (user_priority) {
-		if (sscanf(user_priority, "%d", &prio) == 1) {
+		if (sscanf(user_priority, "%30d", &prio) == 1) {
 			ast_debug(1, "%s: Got priority %d from ${QUEUE_PRIO}.\n", chan->name, prio);
 		} else {
 			ast_log(LOG_WARNING, "${QUEUE_PRIO}: Invalid value (%s), channel %s.\n",
@@ -5187,7 +5373,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	/* Get the maximum penalty from the variable ${QUEUE_MAX_PENALTY} */
 
 	if ((max_penalty_str = pbx_builtin_getvar_helper(chan, "QUEUE_MAX_PENALTY"))) {
-		if (sscanf(max_penalty_str, "%d", &max_penalty) == 1) {
+		if (sscanf(max_penalty_str, "%30d", &max_penalty) == 1) {
 			ast_debug(1, "%s: Got max penalty %d from ${QUEUE_MAX_PENALTY}.\n", chan->name, max_penalty);
 		} else {
 			ast_log(LOG_WARNING, "${QUEUE_MAX_PENALTY}: Invalid value (%s), channel %s.\n",
@@ -5199,7 +5385,7 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	}
 
 	if ((min_penalty_str = pbx_builtin_getvar_helper(chan, "QUEUE_MIN_PENALTY"))) {
-		if (sscanf(min_penalty_str, "%d", &min_penalty) == 1) {
+		if (sscanf(min_penalty_str, "%30d", &min_penalty) == 1) {
 			ast_debug(1, "%s: Got min penalty %d from ${QUEUE_MIN_PENALTY}.\n", chan->name, min_penalty);
 		} else {
 			ast_log(LOG_WARNING, "${QUEUE_MIN_PENALTY}: Invalid value (%s), channel %s.\n",
@@ -5242,8 +5428,8 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		set_queue_result(chan, reason);
 		return 0;
 	}
-	ast_queue_log(args.queuename, chan->uniqueid, "NONE", "ENTERQUEUE", "%s|%s", S_OR(args.url, ""),
-		S_OR(chan->cid.cid_num, ""));
+	ast_queue_log(args.queuename, chan->uniqueid, "NONE", "ENTERQUEUE", "%s|%s|%d", S_OR(args.url, ""),
+		S_OR(chan->cid.cid_num, ""), qe.opos);
 	copy_rules(&qe, args.rule);
 	qe.pr = AST_LIST_FIRST(&qe.qe_rules);
 check_turns:
@@ -5615,8 +5801,8 @@ static int queue_function_queuememberlist(struct ast_channel *chan, const char *
 				strncat(buf + buflen, ",", len - buflen - 1);
 				buflen++;
 			}
-			strncat(buf + buflen, m->membername, len - buflen - 1);
-			buflen += strlen(m->membername);
+			strncat(buf + buflen, m->interface, len - buflen - 1);
+			buflen += strlen(m->interface);
 			/* Safeguard against overflow (negative length) */
 			if (buflen >= len - 2) {
 				ao2_ref(m, -1);
@@ -6572,7 +6758,7 @@ static int manager_add_queue_member(struct mansession *s, const struct message *
 
 	if (ast_strlen_zero(penalty_s))
 		penalty = 0;
-	else if (sscanf(penalty_s, "%d", &penalty) != 1 || penalty < 0)
+	else if (sscanf(penalty_s, "%30d", &penalty) != 1 || penalty < 0)
 		penalty = 0;
 
 	if (ast_strlen_zero(paused_s))
@@ -6812,7 +6998,7 @@ static char *handle_queue_add_member(struct ast_cli_entry *e, int cmd, struct as
 	queuename = a->argv[5];
 	interface = a->argv[3];
 	if (a->argc >= 8) {
-		if (sscanf(a->argv[7], "%d", &penalty) == 1) {
+		if (sscanf(a->argv[7], "%30d", &penalty) == 1) {
 			if (penalty < 0) {
 				ast_cli(a->fd, "Penalty must be >= 0\n");
 				penalty = 0;
@@ -7330,17 +7516,17 @@ static int load_module(void)
 	res |= ast_register_application_xml(app_pqm, pqm_exec);
 	res |= ast_register_application_xml(app_upqm, upqm_exec);
 	res |= ast_register_application_xml(app_ql, ql_exec);
-	res |= ast_manager_register("Queues", 0, manager_queues_show, "Queues");
-	res |= ast_manager_register("QueueStatus", 0, manager_queues_status, "Queue Status");
-	res |= ast_manager_register("QueueSummary", 0, manager_queues_summary, "Queue Summary");
-	res |= ast_manager_register("QueueAdd", EVENT_FLAG_AGENT, manager_add_queue_member, "Add interface to queue.");
-	res |= ast_manager_register("QueueRemove", EVENT_FLAG_AGENT, manager_remove_queue_member, "Remove interface from queue.");
-	res |= ast_manager_register("QueuePause", EVENT_FLAG_AGENT, manager_pause_queue_member, "Makes a queue member temporarily unavailable");
-	res |= ast_manager_register("QueueLog", EVENT_FLAG_AGENT, manager_queue_log_custom, "Adds custom entry in queue_log");
-	res |= ast_manager_register("QueuePenalty", EVENT_FLAG_AGENT, manager_queue_member_penalty, "Set the penalty for a queue member"); 
-	res |= ast_manager_register("QueueRule", 0, manager_queue_rule_show, "Queue Rules");
-	res |= ast_manager_register("QueueReload", 0, manager_queue_reload, "Reload a queue, queues, or any sub-section of a queue or queues");
-	res |= ast_manager_register("QueueReset", 0, manager_queue_reset, "Reset queue statistics");
+	res |= ast_manager_register_xml("Queues", 0, manager_queues_show);
+	res |= ast_manager_register_xml("QueueStatus", 0, manager_queues_status);
+	res |= ast_manager_register_xml("QueueSummary", 0, manager_queues_summary);
+	res |= ast_manager_register_xml("QueueAdd", EVENT_FLAG_AGENT, manager_add_queue_member);
+	res |= ast_manager_register_xml("QueueRemove", EVENT_FLAG_AGENT, manager_remove_queue_member);
+	res |= ast_manager_register_xml("QueuePause", EVENT_FLAG_AGENT, manager_pause_queue_member);
+	res |= ast_manager_register_xml("QueueLog", EVENT_FLAG_AGENT, manager_queue_log_custom);
+	res |= ast_manager_register_xml("QueuePenalty", EVENT_FLAG_AGENT, manager_queue_member_penalty);
+	res |= ast_manager_register_xml("QueueRule", 0, manager_queue_rule_show);
+	res |= ast_manager_register_xml("QueueReload", 0, manager_queue_reload);
+	res |= ast_manager_register_xml("QueueReset", 0, manager_queue_reset);
 	res |= ast_custom_function_register(&queuevar_function);
 	res |= ast_custom_function_register(&queuemembercount_function);
 	res |= ast_custom_function_register(&queuemembercount_dep);
@@ -7352,7 +7538,8 @@ static int load_module(void)
 		ast_log(LOG_WARNING, "devicestate taskprocessor reference failed - devicestate notifications will not occur\n");
 	}
 
-	if (!(device_state_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE, device_state_cb, NULL, AST_EVENT_IE_END))) {
+	/* in the following subscribe call, do I use DEVICE_STATE, or DEVICE_STATE_CHANGE? */
+	if (!(device_state_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE, device_state_cb, "AppQueue Device state", NULL, AST_EVENT_IE_END))) {
 		res = -1;
 	}
 

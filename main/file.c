@@ -187,14 +187,20 @@ int ast_writestream(struct ast_filestream *fs, struct ast_frame *f)
 			struct ast_frame *trf;
 			fs->lastwriteformat = f->subclass;
 			/* Get the translated frame but don't consume the original in case they're using it on another stream */
-			trf = ast_translate(fs->trans, f, 0);
-			if (trf) {
-				res = fs->fmt->write(fs, trf);
+			if ((trf = ast_translate(fs->trans, f, 0))) {
+				struct ast_frame *cur;
+
+				/* the translator may have returned multiple frames, so process them */
+				for (cur = trf; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
+					if ((res = fs->fmt->write(fs, trf))) {
+						ast_log(LOG_WARNING, "Translated frame write failed\n");
+						break;
+					}
+				}
 				ast_frfree(trf);
-				if (res) 
-					ast_log(LOG_WARNING, "Translated frame write failed\n");
-			} else
+			} else {
 				res = 0;
+			}
 		}
 	}
 	return res;
@@ -322,6 +328,9 @@ static void filestream_destructor(void *arg)
 		fclose(f->f);
 	if (f->vfs)
 		ast_closestream(f->vfs);
+	if (f->write_buffer) {
+		ast_free(f->write_buffer);
+	}
 	if (f->orig_chan_name)
 		free((void *) f->orig_chan_name);
 	ast_module_unref(f->fmt->module);
@@ -548,10 +557,7 @@ static int fileexists_test(const char *filename, const char *fmt, const char *la
 /*!
  * \brief helper routine to locate a file with a given format
  * and language preference.
- * Try preflang, preflang with stripped '_' suffix, or NULL.
- * In the standard asterisk, language goes just before the last component.
- * In an alternative configuration, the language should be a prefix
- * to the actual filename.
+ * Try preflang, preflang with stripped '_' suffices, or NULL.
  *
  * The last parameter(s) point to a buffer of sufficient size,
  * which on success is filled with the matching filename.
@@ -560,36 +566,35 @@ static int fileexists_core(const char *filename, const char *fmt, const char *pr
 			   char *buf, int buflen)
 {
 	int res = -1;
-	char *lang = NULL;
+	char *lang;
 
 	if (buf == NULL) {
 		return -1;
 	}
 
 	/* We try languages in the following order:
-	 *    preflang (may include dialect)
+	 *    preflang (may include dialect and style codes)
 	 *    lang (preflang without dialect - if any)
 	 *    <none>
 	 *    default (unless the same as preflang or lang without dialect)
 	 */
 
-	/* Try preferred language */
-	if (!ast_strlen_zero(preflang)) {
-		/* try the preflang exactly as it was requested */
-		if ((res = fileexists_test(filename, fmt, preflang, buf, buflen)) > 0) {
-			return res;
-		} else {
-			/* try without a dialect */
-			char *postfix = NULL;
-			postfix = lang = ast_strdupa(preflang);
+	lang = ast_strdupa(preflang);
 
-			strsep(&postfix, "_");
-			if (postfix) {
-				if ((res = fileexists_test(filename, fmt, lang, buf, buflen)) > 0) {
-					return res;
-				}
-			}
+	/* Try preferred language, including removing any style or dialect codes */
+	while (!ast_strlen_zero(lang)) {
+		char *end;
+
+		if ((res = fileexists_test(filename, fmt, lang, buf, buflen)) > 0) {
+			return res;
 		}
+
+		if ((end = strrchr(lang, '_')) != NULL) {
+			*end = '\0';
+			continue;
+		}
+
+		break;
 	}
 
 	/* Try without any language */
@@ -1218,7 +1223,14 @@ static int waitstream_core(struct ast_channel *c, const char *breakon,
 				} else {
 					res = fr->subclass;
 					if (strchr(forward, res)) {
+						int eoftest;
 						ast_stream_fastforward(c->stream, skip_ms);
+						eoftest = fgetc(c->stream->f);
+						if (feof(c->stream->f)) {
+							ast_stream_rewind(c->stream, skip_ms);
+						} else {
+							ungetc(eoftest, c->stream->f);
+						}
 					} else if (strchr(reverse, res)) {
 						ast_stream_rewind(c->stream, skip_ms);
 					} else if (strchr(breakon, res)) {
@@ -1362,7 +1374,7 @@ static char *handle_cli_core_show_file_formats(struct ast_cli_entry *e, int cmd,
 #undef FORMAT2
 }
 
-struct ast_cli_entry cli_file[] = {
+static struct ast_cli_entry cli_file[] = {
 	AST_CLI_DEFINE(handle_cli_core_show_file_formats, "Displays file formats")
 };
 

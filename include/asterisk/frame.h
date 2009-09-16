@@ -151,7 +151,7 @@ struct ast_frame {
 	int subclass;				
 	/*! Length of data */
 	int datalen;				
-	/*! Number of 8khz samples in this frame */
+	/*! Number of samples in this frame */
 	int samples;				
 	/*! Was the data malloc'd?  i.e. should we free it when we discard the frame? */
 	int mallocd;				
@@ -319,11 +319,12 @@ enum ast_control_frame_type {
 	AST_CONTROL_HOLD = 16,		/*!< Indicate call is placed on hold */
 	AST_CONTROL_UNHOLD = 17,	/*!< Indicate call is left from hold */
 	AST_CONTROL_VIDUPDATE = 18,	/*!< Indicate video frame update */
-	AST_CONTROL_T38 = 19,		/*!< T38 state change request/notification */
+	_XXX_AST_CONTROL_T38 = 19,	/*!< T38 state change request/notification \deprecated This is no longer supported. Use AST_CONTROL_T38_PARAMETERS instead. */
 	AST_CONTROL_SRCUPDATE = 20,     /*!< Indicate source of media has changed */
 	AST_CONTROL_TRANSFER = 21,      /*!< Indicate status of a transfer request */
-	AST_CONTROL_CONNECTED_LINE = 22,  /*!< Indicate connected line has changed */
-	AST_CONTROL_REDIRECTING = 23	/*!< Indicate redirecting id has changed */
+	AST_CONTROL_CONNECTED_LINE = 22,/*!< Indicate connected line has changed */
+	AST_CONTROL_REDIRECTING = 23,    /*!< Indicate redirecting id has changed */
+	AST_CONTROL_T38_PARAMETERS = 24, /*! T38 state change request/notification with parameters */
 };
 
 enum ast_control_t38 {
@@ -332,6 +333,31 @@ enum ast_control_t38 {
 	AST_T38_NEGOTIATED,		/*!< T38 negotiated (fax mode) */
 	AST_T38_TERMINATED,		/*!< T38 terminated (back to voice) */
 	AST_T38_REFUSED			/*!< T38 refused for some reason (usually rejected by remote end) */
+};
+
+enum ast_control_t38_rate {
+	AST_T38_RATE_2400 = 0,
+	AST_T38_RATE_4800,
+	AST_T38_RATE_7200,
+	AST_T38_RATE_9600,
+	AST_T38_RATE_12000,
+	AST_T38_RATE_14400,
+};
+
+enum ast_control_t38_rate_management {
+	AST_T38_RATE_MANAGEMENT_TRANSFERRED_TCF = 0,
+	AST_T38_RATE_MANAGEMENT_LOCAL_TCF,
+};
+
+struct ast_control_t38_parameters {
+	enum ast_control_t38 request_response;			/*!< Request or response of the T38 control frame */
+	unsigned int version;					/*!< Supported T.38 version */
+	unsigned int max_ifp; 					/*!< Maximum IFP size supported */
+	enum ast_control_t38_rate rate;				/*!< Maximum fax rate supported */
+	enum ast_control_t38_rate_management rate_management;	/*!< Rate management setting */
+	unsigned int fill_bit_removal:1;			/*!< Set if fill bit removal can be used */
+	unsigned int transcoding_mmr:1;				/*!< Set if MMR transcoding can be used */
+	unsigned int transcoding_jbig:1;			/*!< Set if JBIG transcoding can be used */
 };
 
 enum ast_control_transfer {
@@ -400,6 +426,12 @@ enum ast_control_transfer {
 /*! Request that the channel driver make two channels of the same tech type compatible if possible */
 #define AST_OPTION_MAKE_COMPATIBLE      13
 
+/*! Get or set the digit detection state of the channel */
+#define AST_OPTION_DIGIT_DETECT		14
+
+/*! Get or set the fax tone detection state of the channel */
+#define AST_OPTION_FAX_DETECT		15
+
 struct oprmode {
 	struct ast_channel *peer;
 	int mode;
@@ -449,9 +481,9 @@ struct ast_frame *ast_fralloc(char *source, int len);
 #endif
 
 /*!  
- * \brief Frees a frame 
+ * \brief Frees a frame or list of frames
  * 
- * \param fr Frame to free
+ * \param fr Frame to free, or head of list to free
  * \param cache Whether to consider this frame for frame caching
  */
 void ast_frame_free(struct ast_frame *fr, int cache);
@@ -465,6 +497,11 @@ void ast_frame_free(struct ast_frame *fr, int cache);
  * data malloc'd.  If you need to store frames, say for queueing, then
  * you should call this function.
  * \return Returns a frame on success, NULL on error
+ * \note This function may modify the frame passed to it, so you must
+ * not assume the frame will be intact after the isolated frame has
+ * been produced. In other words, calling this function on a frame
+ * should be the last operation you do with that frame before freeing
+ * it (or exiting the block, if the frame is on the stack.)
  */
 struct ast_frame *ast_frisolate(struct ast_frame *fr);
 

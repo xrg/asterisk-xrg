@@ -16,7 +16,7 @@
 				; bindaddr if followed by colon and port
 				;  (e.g. bindaddr=192.168.0.1:4569)
 ;bindaddr=192.168.0.1		; more than once to bind to multiple
-;                               ; addresses, but the first will be the 
+;                               ; addresses, but the first will be the
 ;                               ; default
 ;
 ; Set iaxcompat to yes if you plan to use layered switches or
@@ -36,7 +36,7 @@
 ;
 ; For increased security against brute force password attacks
 ; enable "delayreject" which will delay the sending of authentication
-; reject for REGREQ or AUTHREP if there is a password.  
+; reject for REGREQ or AUTHREP if there is a password.
 ;
 ;delayreject=yes
 ;
@@ -60,7 +60,7 @@
 ;
 ;accountcode=lss0101
 ;
-; You may specify a global default language for users. 
+; You may specify a global default language for users.
 ; Can be specified also on a per-user basis
 ; If omitted, will fallback to english
 ;
@@ -111,7 +111,7 @@ disallow=lpc10			; Icky sound quality...  Mr. Roboto.
 ;
 ; forcejitterbuffer=yes|no: in the ideal world, when we bridge VoIP channels
 ; we don't want to do jitterbuffering on the switch, since the endpoints
-; can each handle this.  However, some endpoints may have poor jitterbuffers 
+; can each handle this.  However, some endpoints may have poor jitterbuffers
 ; themselves, so this option will force * to always jitterbuffer, even in this
 ; case.
 ;
@@ -166,7 +166,7 @@ forcejitterbuffer=no
 ;
 ; With a large amount of traffic on IAX2 trunks, there is a risk of bad voice quality due to
 ; the fact that the IAX2 trunking scheme depends on the Linux system to handle fragmentation of
-; UDP packets. This may not be very efficient. 
+; UDP packets. This may not be very efficient.
 ; This setting sets the maximum transmission unit for IAX2 UDP trunking.
 ; default is 1240 bytes. Zero disables this functionality and let's the O/S handle fragmentation.
 ;
@@ -177,7 +177,7 @@ forcejitterbuffer=no
 ; encryption = yes
 ;
 ; Force encryption insures no connection is established unless both sides support
-; encryption.  By turning this option on, encryption is automatically turned on as well.  
+; encryption.  By turning this option on, encryption is automatically turned on as well.
 ;
 ; forceencryption = yes
 
@@ -211,7 +211,7 @@ forcejitterbuffer=no
 ; Sample Registration for iaxtel
 ;
 ; Visit http://www.iaxtel.com to register with iaxtel.  Replace "user"
-; and "pass" with your username and password for iaxtel.  Incoming 
+; and "pass" with your username and password for iaxtel.  Incoming
 ; calls arrive at the "s" extension of "default" context.
 ;
 ;register => user:pass@iaxtel.com
@@ -228,7 +228,7 @@ forcejitterbuffer=no
 ;register => FWDNumber:passwd@iax.fwdnet.net
 ;
 ;
-; You can disable authentication debugging to reduce the amount of 
+; You can disable authentication debugging to reduce the amount of
 ; debugging traffic.
 ;
 ;authdebug=no
@@ -256,7 +256,7 @@ forcejitterbuffer=no
 autokill=yes
 ;
 ; codecpriority controls the codec negotiation of an inbound IAX call.
-; This option is inherited to all user entities.  It can also be defined 
+; This option is inherited to all user entities.  It can also be defined
 ; in each user entity separately which will override the setting in general.
 ;
 ; The valid values are:
@@ -287,6 +287,9 @@ autokill=yes
 			; just like friends added from the config file only on a
 			; as-needed basis? (yes|no)
 
+;rtsavesysname=yes    ; Save systemname in realtime database at registration
+                      ; Default = no
+
 ;rtupdate=yes		; Send registry updates to database using realtime? (yes|no)
 			; If set to yes, when a IAX2 peer registers successfully,
 			; the ip address, the origination port, the registration period,
@@ -307,6 +310,63 @@ autokill=yes
 ;parkinglot=edvina		; Default parkinglot for IAX peers and users
 				; This can also be configured per device
 				; Parkinglots are defined in features.conf
+
+
+;
+; The following two options are used to disable call token validation for the
+; purposes of interoperability with IAX2 endpoints that do not yet support it.
+;
+; Call token validation can be set as optional for a single IP address or IP
+; address range by using the 'calltokenoptional' option. 'calltokenoptional' is
+; only a global option.  
+;
+;calltokenoptional=209.16.236.73/255.255.255.0
+;
+; In a peer/user/friend definition, the 'requirecalltoken' option may be used.
+; By setting 'requirecalltoken=no', call token validation becomes optional for
+; that peer/user.  By setting 'requirecalltoken=auto', call token validation 
+; is optional until a call token supporting peer registers successfully using
+; call token validation.  This is used as an indication that from now on, we
+; can require it from this peer.  So, requirecalltoken is internally set to yes.
+; By default, 'requirecalltoken=yes'.
+;
+;requirecalltoken=no
+;
+
+;
+; These options are used to limit the amount of call numbers allocated to a
+; single IP address.  Before changing any of these values, it is highly encouraged
+; to read the user guide associated with these options first.  In most cases, the
+; default values for these options are sufficient.
+;
+; The 'maxcallnumbers' option limits the amount of call numbers allowed for each
+; individual remote IP address.  Once an IP address reaches it's call number
+; limit, no more new connections are allowed until the previous ones close.  This
+; option can be used in a peer definition as well, but only takes effect for
+; the IP of a dynamic peer after it completes registration.
+;
+;maxcallnumbers=512
+;
+; The 'maxcallnumbers_nonvalidated' is used to set the combined number of call
+; numbers that can be allocated for connections where call token  validation
+; has been disabled.  Unlike the 'maxcallnumbers' option, this limit is not
+; separate for each individual IP address.  Any connection resulting in a
+; non-call token validated call number being allocated contributes to this
+; limit.  For use cases, see the call token user guide.  This option's 
+; default value of 8192 should be sufficient in most cases.
+;
+;maxcallnumbers_nonvalidated=1024
+;
+; The [callnumberlimits] section allows custom call number limits to be set
+; for specific IP addresses and IP address ranges.  These limits take precedence
+; over the global 'maxcallnumbers' option, but may still be overridden by a
+; peer defined 'maxcallnumbers' entry.  Note that these limits take effect
+; for every individual address within the range, not the range as a whole. 
+;
+;[callnumberlimits]
+;10.1.1.0/255.255.255.0 = 24
+;10.1.2.0/255.255.255.0 = 32
+;
 
 ; Guest sections for unauthenticated connection attempts.  Just specify an
 ; empty secret, or provide no secret section.
@@ -346,7 +406,7 @@ inkeys=freeworlddialup
 ;
 ; Further user sections may be added, specifying a context and a secret used
 ; for connections with that given authentication name.  Limited IP based
-; access control is allowed by use of "allow" and "deny" keywords.  Multiple
+; access control is allowed by use of "permit" and "deny" keywords.  Multiple
 ; rules are permitted.  Multiple permitted contexts may be specified, in
 ; which case the first will be the default.  You can also override caller*ID
 ; so that when you receive a call you set the Caller*ID to be what you want
@@ -357,7 +417,7 @@ inkeys=freeworlddialup
 ; across the net.  "md5" uses a challenge/response md5 sum arrangement, but
 ; still requires both ends have plain text access to the secret.  "rsa" allows
 ; unidirectional secret knowledge through public/private keys.  If "rsa"
-; authentication is used, "inkeys" is a list of acceptable public keys on the 
+; authentication is used, "inkeys" is a list of acceptable public keys on the
 ; local system that can be used to authenticate the remote peer, separated by
 ; the ":" character.  "outkey" is a single, private key to use to authenticate
 ; to the other side.  Public keys are named /var/lib/asterisk/keys/<name>.pub
@@ -382,7 +442,7 @@ inkeys=freeworlddialup
                                                 ; an attended transfer.
 ;dbsecret=mysecrets/place	; Secrets can be stored in astdb, too
 ;transfer=no		; Disable IAX native transfer
-;transfer=mediaonly	; When doing IAX native transfers, transfer 
+;transfer=mediaonly	; When doing IAX native transfers, transfer
 			; only media stream
 ;jitterbuffer=yes	; Override global setting an enable jitter buffer
 ;			; for this user
@@ -395,10 +455,10 @@ inkeys=freeworlddialup
 ;language=en		; Use english as default language
 ;encryption=yes ; Enable IAX2 encryption.  The default is no.
 ;keyrotate=off ; This is a compatibility option for older versions of
-;              ; IAX2 that do not support key rotation with encryption. 
-;              ; This option will disable the IAX_COMMAND_RTENC message. 
+;              ; IAX2 that do not support key rotation with encryption.
+;              ; This option will disable the IAX_COMMAND_RTENC message.
 ;              ; default is on.
-;              ; 
+;              ;
 ;
 ; Peers may also be specified, with a secret and
 ; a remote hostname.
@@ -424,10 +484,10 @@ host=216.207.245.47
 ;
 ;encryption=yes ; Enable IAX2 encryption.  The default is no.
 ;keyrotate=off ; This is a compatibility option for older versions of
-;              ; IAX2 that do not support key rotation with encryption. 
-;              ; This option will disable the IAX_COMMAND_RTENC message. 
+;              ; IAX2 that do not support key rotation with encryption.
+;              ; This option will disable the IAX_COMMAND_RTENC message.
 ;              ; default is on.
-;              ; 
+;              ;
 ; Peers can remotely register as well, so that they can be mobile.  Default
 ; IP's can also optionally be given but are not required.  Caller*ID can be
 ; suggested to the other side as well if it is for example a phone instead of

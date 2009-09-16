@@ -1,4 +1,4 @@
-;;; odbc setup file 
+;;; odbc setup file
 
 ; ENV is a global set of environmental variables that will get set.
 ; Note that all environmental variables can be seen by all connections,

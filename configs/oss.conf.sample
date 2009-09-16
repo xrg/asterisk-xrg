@@ -130,7 +130,7 @@
     region = # rect  152 146   201 146  28
     region = pickup rect  229 15  267 15 40
     region = hangup rect  230 66  270 64 40
-    region = mute circle  232 141 264 141 33   
+    region = mute circle  232 141 264 141 33
     region = sendvideo circle  235 185 266 185 33
     region = autoanswer rect 228 212 275 212 50
 

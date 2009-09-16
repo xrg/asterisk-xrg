@@ -26,34 +26,40 @@
 /*!
  * \page AstRTPEngine Asterisk RTP Engine API
  *
- * The purpose of this API is to provide a way for multiple RTP stacks to be used inside
- * of Asterisk without any module that uses RTP knowing any different. To the module each RTP
- * stack behaves the same.
+ * The purpose of this API is to provide a way for multiple RTP stacks to be
+ * used inside of Asterisk without any module that uses RTP knowing any
+ * different. To the module each RTP stack behaves the same.
  *
- * An RTP session is called an instance and is made up of a combination of codec information,
- * RTP engine, RTP properties, and address information. An engine name may be passed in to explicitly
- * choose an RTP stack to be used but a default one will be used if none is provided. An address to use
- * for RTP may also be provided but the underlying RTP engine may choose a different address depending on
- * it's configuration.
+ * An RTP session is called an instance and is made up of a combination of codec
+ * information, RTP engine, RTP properties, and address information. An engine
+ * name may be passed in to explicitly choose an RTP stack to be used but a
+ * default one will be used if none is provided. An address to use for RTP may
+ * also be provided but the underlying RTP engine may choose a different address
+ * depending on it's configuration.
  *
- * An RTP engine is the layer between the RTP engine core and the RTP stack itself. The RTP engine core provides
- * a set of callbacks to do various things (such as write audio out) that the RTP engine has to have implemented.
+ * An RTP engine is the layer between the RTP engine core and the RTP stack
+ * itself. The RTP engine core provides a set of callbacks to do various things
+ * (such as write audio out) that the RTP engine has to have implemented.
  *
- * Glue is what binds an RTP instance to a channel. It is used to retrieve RTP instance information when
- * performing remote or local bridging and is used to have the channel driver tell the remote side to change
- * destination of the RTP stream.
+ * Glue is what binds an RTP instance to a channel. It is used to retrieve RTP
+ * instance information when performing remote or local bridging and is used to
+ * have the channel driver tell the remote side to change destination of the RTP
+ * stream.
  *
- * Statistics from an RTP instance can be retrieved using the ast_rtp_instance_get_stats API call. This essentially
- * asks the RTP engine in use to fill in a structure with the requested values. It is not required for an RTP engine
- * to support all statistic values.
+ * Statistics from an RTP instance can be retrieved using the
+ * ast_rtp_instance_get_stats API call. This essentially asks the RTP engine in
+ * use to fill in a structure with the requested values. It is not required for
+ * an RTP engine to support all statistic values.
  *
- * Properties allow behavior of the RTP engine and RTP engine core to be changed. For example, there is a property named
- * AST_RTP_PROPERTY_NAT which is used to tell the RTP engine to enable symmetric RTP if it supports it. It is not required
- * for an RTP engine to support all properties.
+ * Properties allow behavior of the RTP engine and RTP engine core to be
+ * changed. For example, there is a property named AST_RTP_PROPERTY_NAT which is
+ * used to tell the RTP engine to enable symmetric RTP if it supports it. It is
+ * not required for an RTP engine to support all properties.
  *
- * Codec information is stored using a separate data structure which has it's own set of API calls to add/remove/retrieve
- * information. They are used by the module after an RTP instance is created so that payload information is available for
- * the RTP engine.
+ * Codec information is stored using a separate data structure which has it's
+ * own set of API calls to add/remove/retrieve information. They are used by the
+ * module after an RTP instance is created so that payload information is
+ * available for the RTP engine.
  */
 
 #ifndef _ASTERISK_RTP_ENGINE_H
@@ -323,6 +329,8 @@ struct ast_rtp_engine {
 	void (*packetization_set)(struct ast_rtp_instance *instance, struct ast_codec_pref *pref);
 	/*! Callback for setting the remote address that RTP is to be sent to */
 	void (*remote_address_set)(struct ast_rtp_instance *instance, struct sockaddr_in *sin);
+	/*! Callback for setting an alternate remote address */
+	void (*alt_remote_address_set)(struct ast_rtp_instance *instance, struct sockaddr_in *sin);
 	/*! Callback for changing DTMF mode */
 	int (*dtmf_mode_set)(struct ast_rtp_instance *instance, enum ast_rtp_dtmf_mode dtmf_mode);
 	/*! Callback for retrieving statistics */
@@ -351,6 +359,8 @@ struct ast_rtp_engine {
 	int (*activate)(struct ast_rtp_instance *instance);
 	/*! Callback to request that the RTP engine send a STUN BIND request */
 	void (*stun_request)(struct ast_rtp_instance *instance, struct sockaddr_in *suggestion, const char *username);
+	/*! Callback to get the transcodeable formats supported */
+	int (*available_formats)(struct ast_rtp_instance *instance, int to_endpoint, int to_asterisk);
 	/*! Linked list information */
 	AST_RWLIST_ENTRY(ast_rtp_engine) entry;
 };
@@ -637,6 +647,28 @@ struct ast_frame *ast_rtp_instance_read(struct ast_rtp_instance *instance, int r
  * \since 1.6.3
  */
 int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, struct sockaddr_in *address);
+
+/*!
+ * \brief Set the address of an an alternate RTP address to receive from
+ *
+ * \param instance The RTP instance to change the address on
+ * \param address Address to set it to
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ *
+ * Example usage:
+ *
+ * \code
+ * ast_rtp_instance_set_alt_remote_address(instance, &sin);
+ * \endcode
+ *
+ * This changes the alternate remote address that RTP will be sent to on instance to the address given in the sin
+ * structure.
+ *
+ * \since 1.6.3
+ */
+int ast_rtp_instance_set_alt_remote_address(struct ast_rtp_instance *instance, struct sockaddr_in *address);
 
 /*!
  * \brief Set the address that we are expecting to receive RTP on
@@ -1473,6 +1505,26 @@ int ast_rtp_instance_set_write_format(struct ast_rtp_instance *instance, int for
  */
 int ast_rtp_instance_make_compatible(struct ast_channel *chan, struct ast_rtp_instance *instance, struct ast_channel *peer);
 
+/*! \brief Request the formats that can be transcoded
+ *
+ * \param instance The RTP instance
+ * \param to_endpoint Formats being sent/received towards the endpoint
+ * \param to_asterisk Formats being sent/received towards Asterisk
+ *
+ * \retval supported formats
+ *
+ * Example usage:
+ *
+ * \code
+ * ast_rtp_instance_available_formats(instance, AST_FORMAT_ULAW, AST_FORMAT_SLINEAR);
+ * \endcode
+ *
+ * This sees if it is possible to have ulaw communicated to the endpoint but signed linear received into Asterisk.
+ *
+ * \since 1.6.3
+ */
+int ast_rtp_instance_available_formats(struct ast_rtp_instance *instance, int to_endpoint, int to_asterisk);
+
 /*!
  * \brief Indicate to the RTP engine that packets are now expected to be sent/received on the RTP instance
  *
@@ -1586,6 +1638,65 @@ int ast_rtp_instance_get_timeout(struct ast_rtp_instance *instance);
  * \since 1.6.3
  */
 int ast_rtp_instance_get_hold_timeout(struct ast_rtp_instance *instance);
+
+/*!
+ * \brief Get the RTP engine in use on an RTP instance
+ *
+ * \param instance The RTP instance
+ *
+ * \retval pointer to the engine
+ *
+ * Example usage:
+ *
+ * \code
+ * struct ast_rtp_engine *engine = ast_rtp_instance_get_engine(instance);
+ * \endcode
+ *
+ * This gets the RTP engine currently in use on the RTP instance pointed to by 'instance'.
+ *
+ * \since 1.6.3
+ */
+struct ast_rtp_engine *ast_rtp_instance_get_engine(struct ast_rtp_instance *instance);
+
+/*!
+ * \brief Get the RTP glue in use on an RTP instance
+ *
+ * \param instance The RTP instance
+ *
+ * \retval pointer to the glue
+ *
+ * Example:
+ *
+ * \code
+ * struct ast_rtp_glue *glue = ast_rtp_instance_get_active_glue(instance);
+ * \endcode
+ *
+ * This gets the RTP glue currently in use on the RTP instance pointed to by 'instance'.
+ *
+ * \since 1.6.3
+ */
+struct ast_rtp_glue *ast_rtp_instance_get_active_glue(struct ast_rtp_instance *instance);
+
+/*!
+ * \brief Get the channel that is associated with an RTP instance while in a bridge
+ *
+ * \param instance The RTP instance
+ *
+ * \retval pointer to the channel
+ *
+ * Example:
+ *
+ * \code
+ * struct ast_channel *chan = ast_rtp_instance_get_chan(instance);
+ * \endcode
+ *
+ * This gets the channel associated with the RTP instance pointed to by 'instance'.
+ *
+ * \note This will only return a channel while in a local or remote bridge.
+ *
+ * \since 1.6.3
+ */
+struct ast_channel *ast_rtp_instance_get_chan(struct ast_rtp_instance *instance);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

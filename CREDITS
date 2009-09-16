@@ -198,7 +198,11 @@ Moises Silva (moy) - for writing LibOpenR2, and providing support for it in chan
      moises.silva(AT)gmail.com
 
 Eliel C. Sardanons - XML documentation implementation, and various other contributions
-     <eliels@gmail.com>
+     eliels(AT)gmail.com
+
+Sean Bright - Snom call pickup, newt interface for menuselect, cdr_tds rewrite,
+	countless other improvements, fixes, and good ideas.
+	sean(AT)malleable.com
 
 === OTHER CONTRIBUTIONS ===
 John Todd - Monkey sounds and associated teletorture prompt
@@ -209,7 +213,7 @@ Brian M. Clapper - poll.c emulation
 	This product includes software developed by Brian M. Clapper <bmc(AT)clapper.org>
 
 === HOLD MUSIC ===
-Music provided by www.freeplaymusic.com
+Music provided by www.opsound.org
 
 === OTHER SOURCE CODE IN ASTERISK ===
 Asterisk uses libedit, the lightweight readline replacement from NetBSD.

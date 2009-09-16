@@ -147,7 +147,7 @@ static unsigned int unique = 0;
 static call_options_t global_options;
 
 /*! \brief Private structure of a OpenH323 channel */
-struct oh323_pvt {
+static struct oh323_pvt {
 	ast_mutex_t lock;			/*!< Channel private lock */
 	call_options_t options;			/*!<!< Options to be used during call setup */
 	int alreadygone;			/*!< Whether or not we've already been destroyed by our peer */
@@ -230,7 +230,7 @@ static void delete_users(void);
 static void delete_aliases(void);
 static void prune_peers(void);
 
-static struct ast_channel *oh323_request(const char *type, int format, void *data, int *cause);
+static struct ast_channel *oh323_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause);
 static int oh323_digit_begin(struct ast_channel *c, char digit);
 static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int oh323_call(struct ast_channel *c, char *dest, int timeout);
@@ -958,7 +958,7 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 		ast_log(LOG_ERROR, "Unable to locate local IP address for RTP stream\n");
 		return -1;
 	}
-	pvt->rtp = ast_rtp_instance_new(NULL, sched, &our_addr, NULL);
+	pvt->rtp = ast_rtp_instance_new("asterisk", sched, &our_addr, NULL);
 	if (!pvt->rtp) {
 		ast_mutex_unlock(&pvt->lock);
 		ast_log(LOG_WARNING, "Unable to create RTP session: %s\n", strerror(errno));
@@ -994,7 +994,7 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 }
 
 /*! \brief Private structure should be locked on a call */
-static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const char *host)
+static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const char *host, const char *linkedid)
 {
 	struct ast_channel *ch;
 	char *cid_num, *cid_name;
@@ -1012,7 +1012,7 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 	
 	/* Don't hold a oh323_pvt lock while we allocate a chanel */
 	ast_mutex_unlock(&pvt->lock);
-	ch = ast_channel_alloc(1, state, cid_num, cid_name, pvt->accountcode, pvt->exten, pvt->context, pvt->amaflags, "H323/%s", host);
+	ch = ast_channel_alloc(1, state, cid_num, cid_name, pvt->accountcode, pvt->exten, pvt->context, linkedid, pvt->amaflags, "H323/%s", host);
 	/* Update usage counter */
 	ast_module_ref(ast_module_info->self);
 	ast_mutex_lock(&pvt->lock);
@@ -1717,7 +1717,7 @@ static int create_addr(struct oh323_pvt *pvt, char *opeer)
 		return 0;
 	}
 }
-static struct ast_channel *oh323_request(const char *type, int format, void *data, int *cause)
+static struct ast_channel *oh323_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	int oldformat;
 	struct oh323_pvt *pvt;
@@ -1793,7 +1793,7 @@ static struct ast_channel *oh323_request(const char *type, int format, void *dat
 	ast_mutex_unlock(&caplock);
 
 	ast_mutex_lock(&pvt->lock);
-	tmpc = __oh323_new(pvt, AST_STATE_DOWN, tmp1);
+	tmpc = __oh323_new(pvt, AST_STATE_DOWN, tmp1, requestor ? requestor->linkedid : NULL);
 	ast_mutex_unlock(&pvt->lock);
 	if (!tmpc) {
 		oh323_destroy(pvt);
@@ -2277,7 +2277,7 @@ static int answer_call(unsigned call_reference, const char *token)
 	}
 
 	/* allocate a channel and tell asterisk about it */
-	c = __oh323_new(pvt, AST_STATE_RINGING, pvt->cd.call_token);
+	c = __oh323_new(pvt, AST_STATE_RINGING, pvt->cd.call_token, NULL);
 
 	/* And release when done */
 	ast_mutex_unlock(&pvt->lock);

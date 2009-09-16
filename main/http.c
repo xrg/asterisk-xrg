@@ -116,7 +116,7 @@ struct http_uri_redirect {
 
 static AST_RWLIST_HEAD_STATIC(uri_redirects, http_uri_redirect);
 
-const struct ast_cfhttp_methods_text {
+static const struct ast_cfhttp_methods_text {
 	enum ast_http_method method;
 	const char text[];
 } ast_http_methods_text[] = {
@@ -154,7 +154,7 @@ uint32_t ast_http_manid_from_vars(struct ast_variable *headers)
 	cookies = ast_http_get_cookies(headers);
 	for (v = cookies; v; v = v->next) {
 		if (!strcasecmp(v->name, "mansession_id")) {
-			sscanf(v->value, "%x", &mngid);
+			sscanf(v->value, "%30x", &mngid);
 			break;
 		}
 	}
@@ -810,12 +810,13 @@ struct ast_variable *ast_http_get_cookies(struct ast_variable *headers)
 	struct ast_variable *v, *cookies=NULL;
 
 	for (v = headers; v; v = v->next) {
-                if (!strncasecmp(v->name, "Cookie", 6)) {
+		if (!strncasecmp(v->name, "Cookie", 6)) {
+			char *tmp = ast_strdupa(v->value);
 			if (cookies) {
 				ast_variables_destroy(cookies);
 			}
 
-			cookies = parse_cookies((char *)v->value);
+			cookies = parse_cookies(tmp);
 		}
 	}
 	return cookies;

@@ -111,7 +111,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * bridge lock if it is important.
  */
 
-static const char * const app = "ConfBridge";
+static const char app[] = "ConfBridge";
 
 enum {
 	OPTION_ADMIN = (1 << 0),             /*!< Set if the caller is an administrator */
@@ -559,7 +559,7 @@ static int play_sound_file(struct conference_bridge *conference_bridge, const ch
 	if (!(conference_bridge->playback_chan)) {
 		int cause;
 
-		if (!(conference_bridge->playback_chan = ast_request("Bridge", AST_FORMAT_SLINEAR, "", &cause))) {
+		if (!(conference_bridge->playback_chan = ast_request("Bridge", AST_FORMAT_SLINEAR, NULL, "", &cause))) {
 			ast_mutex_unlock(&conference_bridge->playback_lock);
 			return -1;
 		}

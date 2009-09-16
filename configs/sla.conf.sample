@@ -27,12 +27,12 @@
                             ;       require some indirect configuration which is
                             ;       described in doc/asterisk.pdf.
 
-;autocontext=line1          ; This supports automatic generation of the dialplan entries 
-                            ; if the autocontext option is used.  Each trunk should have 
-                            ; a unique context name.  Then, in dahdi.conf, this device 
+;autocontext=line1          ; This supports automatic generation of the dialplan entries
+                            ; if the autocontext option is used.  Each trunk should have
+                            ; a unique context name.  Then, in chan_dahdi.conf, this device
                             ; should be configured to have incoming calls go to this context.
 
-;ringtimeout=30             ; Set how long to allow this trunk to ring on an inbound call before hanging 
+;ringtimeout=30             ; Set how long to allow this trunk to ring on an inbound call before hanging
                             ; it up as an unanswered call.  The value is in seconds.
 
 ;barge=no                   ; If this option is set to "no", then no station will be
@@ -75,12 +75,12 @@
 
 ;device=SIP/station1        ; Each station must be mapped to a device.
 
-;autocontext=sla_stations   ; This supports automatic generation of the dialplan entries if 
-                            ; the autocontext option is used.  All stations can use the same 
-                            ; context without conflict.  The device for this station should 
+;autocontext=sla_stations   ; This supports automatic generation of the dialplan entries if
+                            ; the autocontext option is used.  All stations can use the same
+                            ; context without conflict.  The device for this station should
                             ; have its context configured to the same one listed here.
 
-;ringtimeout=10             ; Set a timeout for how long to allow the station to ring for an 
+;ringtimeout=10             ; Set a timeout for how long to allow the station to ring for an
                             ; incoming call, in seconds.
 
 ;ringdelay=10               ; Set a time for how long to wait before beginning to ring this station
@@ -97,7 +97,7 @@
                             ;   "private" - This means that once this station puts a
                             ;               call on hold, no other station will be
                             ;               allowed to retrieve the call from hold.
-      
+
 
 ;trunk=line1                ; Individually list all of the trunks that will appear on this station.  This
                             ; order is significant.  It should be the same order as they appear on the
@@ -121,9 +121,9 @@
 ;type=station
 ;autocontext=sla_stations
 ;trunk=line1
-;trunk=line2 
+;trunk=line2
 ;trunk=line3
-;trunk=line4 
+;trunk=line4
 
 ;[station2](station)        ; Define a station that uses the configuration from the template "station".
 ;device=SIP/station2

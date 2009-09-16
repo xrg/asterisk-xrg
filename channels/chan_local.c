@@ -60,7 +60,7 @@ static struct ast_jb_conf g_jb_conf = {
 	.impl = "",
 };
 
-static struct ast_channel *local_request(const char *type, int format, void *data, int *cause);
+static struct ast_channel *local_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause);
 static int local_digit_begin(struct ast_channel *ast, char digit);
 static int local_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
 static int local_call(struct ast_channel *ast, char *dest, int timeout);
@@ -236,6 +236,9 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		return and destroy p.  */
 		ast_mutex_unlock(&p->lock);
 		p = local_pvt_destroy(p);
+		if (other) {
+			ast_channel_unlock(other);
+		}
 		return -1;
 	}
 
@@ -416,6 +419,7 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 		 * we need to transmit the collected connected line information instead of whatever
 		 * happens to be in this control frame. The same applies for redirecting information, which
 		 * is why it is handled here as well.*/
+		ast_mutex_lock(&p->lock);
 		isoutbound = IS_OUTBOUND(ast, p);
 		if (isoutbound) {
 			this_channel = p->chan;
@@ -433,10 +437,11 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 			}
 			f.subclass = condition;
 			f.data.ptr = frame_data;
-			ast_mutex_lock(&p->lock);
 			if (!(res = local_queue_frame(p, isoutbound, &f, ast, 1))) {
 				ast_mutex_unlock(&p->lock);
 			}
+		} else {
+			ast_mutex_unlock(&p->lock);
 		}
 	} else {
 		/* Queue up a frame representing the indication as a control frame */
@@ -569,6 +574,8 @@ start_over:
 	 */
 	if (p->owner->cid.cid_rdnis) {
 		if (!(p->chan->cid.cid_rdnis = ast_strdup(p->owner->cid.cid_rdnis))) {
+			ast_mutex_unlock(&p->lock);
+			ast_channel_unlock(p->chan);
 			return -1;
 		}
 	}
@@ -576,6 +583,8 @@ start_over:
 
 	if (p->owner->cid.cid_dnid) {
 		if (!(p->chan->cid.cid_dnid = ast_strdup(p->owner->cid.cid_dnid))) {
+			ast_mutex_unlock(&p->lock);
+			ast_channel_unlock(p->chan);
 			return -1;
 		}
 	}
@@ -593,6 +602,7 @@ start_over:
 	if (!ast_exists_extension(NULL, p->chan->context, p->chan->exten, 1, p->owner->cid.cid_num)) {
 		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n", p->chan->exten, p->chan->context);
 		ast_mutex_unlock(&p->lock);
+		ast_channel_unlock(p->chan);
 		return -1;
 	}
 
@@ -773,7 +783,7 @@ static struct local_pvt *local_alloc(const char *data, int format)
 }
 
 /*! \brief Start new local channel */
-static struct ast_channel *local_new(struct local_pvt *p, int state)
+static struct ast_channel *local_new(struct local_pvt *p, int state, const char *linkedid)
 {
 	struct ast_channel *tmp = NULL, *tmp2 = NULL;
 	int randnum = ast_random() & 0xffff, fmt = 0;
@@ -791,8 +801,8 @@ static struct ast_channel *local_new(struct local_pvt *p, int state)
 		ama = p->owner->amaflags;
 	else
 		ama = 0;
-	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, ama, "Local/%s@%s-%04x;1", p->exten, p->context, randnum)) 
-			|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, t, p->exten, p->context, ama, "Local/%s@%s-%04x;2", p->exten, p->context, randnum))) {
+	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%04x;1", p->exten, p->context, randnum)) 
+		|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%04x;2", p->exten, p->context, randnum))) {
 		if (tmp) {
 			tmp = ast_channel_release(tmp);
 		}
@@ -836,14 +846,14 @@ static struct ast_channel *local_new(struct local_pvt *p, int state)
 }
 
 /*! \brief Part of PBX interface */
-static struct ast_channel *local_request(const char *type, int format, void *data, int *cause)
+static struct ast_channel *local_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	struct local_pvt *p = NULL;
 	struct ast_channel *chan = NULL;
 
 	/* Allocate a new private structure and then Asterisk channel */
 	if ((p = local_alloc(data, format))) {
-		if (!(chan = local_new(p, AST_STATE_DOWN))) {
+		if (!(chan = local_new(p, AST_STATE_DOWN, requestor ? requestor->linkedid : NULL))) {
 			AST_LIST_LOCK(&locals);
 			AST_LIST_REMOVE(&locals, p, list);
 			AST_LIST_UNLOCK(&locals);

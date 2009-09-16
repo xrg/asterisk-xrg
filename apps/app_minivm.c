@@ -400,6 +400,99 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		subscribed to the mailbox passed in the first parameter.</para>
 	</description>
 </application>
+<function name="MINIVMCOUNTER" language="en_US">
+	<synopsis>
+		Reads or sets counters for MiniVoicemail message.
+	</synopsis>
+	<syntax argsep=":">
+		<parameter name="account" required="true">
+			<para>If account is given and it exists, the counter is specific for the account.</para>
+			<para>If account is a domain and the domain directory exists, counters are specific for a domain.</para>
+		</parameter>
+		<parameter name="name" required="true">
+			<para>The name of the counter is a string, up to 10 characters.</para>
+		</parameter>
+		<parameter name="operand">
+			<para>The counters never goes below zero. Valid operands for changing the value of a counter when assigning a value are:</para>
+			<enumlist>
+				<enum name="i"><para>Increment by value.</para></enum>
+				<enum name="d"><para>Decrement by value.</para></enum>
+				<enum name="s"><para>Set to value.</para></enum>
+			</enumlist>
+		</parameter>
+	</syntax>
+	<description>
+		<para>The operation is atomic and the counter is locked while changing the value. The counters are stored as text files in the minivm account directories. It might be better to use realtime functions if you are using a database to operate your Asterisk.</para>
+	</description>
+	<see-also>
+		<ref type="application">MinivmRecord</ref>
+		<ref type="application">MinivmGreet</ref>
+		<ref type="application">MinivmNotify</ref>
+		<ref type="application">MinivmDelete</ref>
+		<ref type="application">MinivmAccMess</ref>
+		<ref type="application">MinivmMWI</ref>
+		<ref type="function">MINIVMACCOUNT</ref>
+	</see-also>
+</function>
+<function name="MINIVMACCOUNT" language="en_US">
+	<synopsis>
+		Gets MiniVoicemail account information.
+	</synopsis>
+	<syntax argsep=":">
+		<parameter name="account" required="true" />
+		<parameter name="item" required="true">
+			<para>Valid items are:</para>
+			<enumlist>
+				<enum name="path">
+					<para>Path to account mailbox (if account exists, otherwise temporary mailbox).</para>
+				</enum>
+				<enum name="hasaccount">
+					<para>1 is static Minivm account exists, 0 otherwise.</para>
+				</enum>
+				<enum name="fullname">
+					<para>Full name of account owner.</para>
+				</enum>
+				<enum name="email">
+					<para>Email address used for account.</para>
+				</enum>
+				<enum name="etemplate">
+					<para>Email template for account (default template if none is configured).</para>
+				</enum>
+				<enum name="ptemplate">
+					<para>Pager template for account (default template if none is configured).</para>
+				</enum>
+				<enum name="accountcode">
+					<para>Account code for the voicemail account.</para>
+				</enum>
+				<enum name="pincode">
+					<para>Pin code for voicemail account.</para>
+				</enum>
+				<enum name="timezone">
+					<para>Time zone for voicemail account.</para>
+				</enum>
+				<enum name="language">
+					<para>Language for voicemail account.</para>
+				</enum>
+				<enum name="&lt;channel variable name&gt;">
+					<para>Channel variable value (set in configuration for account).</para>
+				</enum>
+			</enumlist>
+		</parameter>
+	</syntax>
+	<description>
+		<para />
+	</description>
+	<see-also>
+		<ref type="application">MinivmRecord</ref>
+		<ref type="application">MinivmGreet</ref>
+		<ref type="application">MinivmNotify</ref>
+		<ref type="application">MinivmDelete</ref>
+		<ref type="application">MinivmAccMess</ref>
+		<ref type="application">MinivmMWI</ref>
+		<ref type="function">MINIVMCOUNTER</ref>
+	</see-also>
+</function>
+
 ***/
 
 #ifndef TRUE
@@ -455,19 +548,19 @@ static char *app_minivm_mwi = "MinivmMWI";
 
 
 
-enum {
+enum minivm_option_flags {
 	OPT_SILENT =	   (1 << 0),
 	OPT_BUSY_GREETING =    (1 << 1),
 	OPT_UNAVAIL_GREETING = (1 << 2),
 	OPT_TEMP_GREETING = (1 << 3),
 	OPT_NAME_GREETING = (1 << 4),
 	OPT_RECORDGAIN =  (1 << 5),
-} minivm_option_flags;
+};
 
-enum {
+enum minivm_option_args {
 	OPT_ARG_RECORDGAIN = 0,
 	OPT_ARG_ARRAY_SIZE = 1,
-} minivm_option_args;
+};
 
 AST_APP_OPTIONS(minivm_app_options, {
 	AST_APP_OPTION('s', OPT_SILENT),
@@ -577,7 +670,7 @@ static struct minivm_stats global_stats;
 AST_MUTEX_DEFINE_STATIC(minivmlock);	/*!< Lock to protect voicemail system */
 AST_MUTEX_DEFINE_STATIC(minivmloglock);	/*!< Lock to protect voicemail system log file */
 
-FILE *minivmlogfile;			/*!< The minivm log file */
+static FILE *minivmlogfile;		/*!< The minivm log file */
 
 static int global_vmminmessage;		/*!< Minimum duration of messages */
 static int global_vmmaxmessage;		/*!< Maximum duration of message */
@@ -1206,8 +1299,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 		return -1;
 	}
 	/* Allocate channel used for chanvar substitution */
-	ast = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", 0, "%s", "");
-
+	ast = ast_dummy_channel_alloc();
 
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
 
@@ -1368,9 +1460,8 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	ast_safe_system(tmp2);
 	ast_debug(1, "Sent message to %s with command '%s' - %s\n", vmu->email, global_mailcmd, template->attachment ? "(media attachment)" : "");
 	ast_debug(3, "Actual command used: %s\n", tmp2);
-	if (ast) {
+	if (ast)
 		ast = ast_channel_release(ast);
-	}
 	ast_free(str1);
 	ast_free(str2);
 	return 0;
@@ -2078,7 +2169,7 @@ static int minivm_record_exec(struct ast_channel *chan, const char *data)
 		if (ast_test_flag(&flags, OPT_RECORDGAIN)) {
 			int gain;
 
-			if (sscanf(opts[OPT_ARG_RECORDGAIN], "%d", &gain) != 1) {
+			if (sscanf(opts[OPT_ARG_RECORDGAIN], "%30d", &gain) != 1) {
 				ast_log(LOG_WARNING, "Invalid value '%s' provided for record gain option\n", opts[OPT_ARG_RECORDGAIN]);
 				return -1;
 			} else 
@@ -2505,7 +2596,7 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 		} else if (!strcasecmp(var->name, "pager")) {
 			ast_copy_string(vmu->pager, var->value, sizeof(vmu->pager));
 		} else if (!strcasecmp(var->name, "volgain")) {
-			sscanf(var->value, "%lf", &vmu->volgain);
+			sscanf(var->value, "%30lf", &vmu->volgain);
 		} else {
 			ast_log(LOG_ERROR, "Unknown configuration option for minivm account %s : %s\n", name, var->name);
 		}
@@ -2675,7 +2766,7 @@ static int apply_general_options(struct ast_variable *var)
 			global_silencethreshold = atoi(var->value);
 		} else if (!strcmp(var->name, "maxmessage")) {
 			int x;
-			if (sscanf(var->value, "%d", &x) == 1) {
+			if (sscanf(var->value, "%30d", &x) == 1) {
 				global_vmmaxmessage = x;
 			} else {
 				error ++;
@@ -2683,7 +2774,7 @@ static int apply_general_options(struct ast_variable *var)
 			}
 		} else if (!strcmp(var->name, "minmessage")) {
 			int x;
-			if (sscanf(var->value, "%d", &x) == 1) {
+			if (sscanf(var->value, "%30d", &x) == 1) {
 				global_vmminmessage = x;
 				if (global_maxsilence <= global_vmminmessage)
 					ast_log(LOG_WARNING, "maxsilence should be less than minmessage or you may get empty messages\n");
@@ -3361,41 +3452,13 @@ static struct ast_cli_entry cli_minivm[] = {
 
 static struct ast_custom_function minivm_counter_function = {
 	.name = "MINIVMCOUNTER",
-	.synopsis = "Reads or sets counters for MiniVoicemail message",
-	.syntax = "MINIVMCOUNTER(<account>:name[:operand])",
 	.read = minivm_counter_func_read,
 	.write = minivm_counter_func_write,
-	.desc = "Valid operands for changing the value of a counter when assigning a value are:\n"
-	"- i   Increment by value\n"
-	"- d   Decrement by value\n"
-	"- s   Set to value\n"
-	"\nThe counters never goes below zero.\n"
-	"- The name of the counter is a string, up to 10 characters\n"
-	"- If account is given and it exists, the counter is specific for the account\n"
-	"- If account is a domain and the domain directory exists, counters are specific for a domain\n"
-	"The operation is atomic and the counter is locked while changing the value\n"
-	"\nThe counters are stored as text files in the minivm account directories. It might be better to use\n"
-	"realtime functions if you are using a database to operate your Asterisk\n",
 };
 
 static struct ast_custom_function minivm_account_function = {
 	.name = "MINIVMACCOUNT",
-	.synopsis = "Gets MiniVoicemail account information",
-	.syntax = "MINIVMACCOUNT(<account>:item)",
 	.read = minivm_account_func_read,
-	.desc = "Valid items are:\n"
-	"- path           Path to account mailbox (if account exists, otherwise temporary mailbox)\n"
-	"- hasaccount     1 if static Minivm account exists, 0 otherwise\n"
-	"- fullname       Full name of account owner\n"
-	"- email          Email address used for account\n"
-	"- etemplate      E-mail template for account (default template if none is configured)\n"   
-	"- ptemplate      Pager template for account (default template if none is configured)\n"   
-	"- accountcode    Account code for voicemail account\n"
-	"- pincode        Pin code for voicemail account\n"
-	"- timezone       Time zone for voicemail account\n"
-	"- language       Language for voicemail account\n"
-	"- <channel variable name> Channel variable value (set in configuration for account)\n"
-	"\n",
 };
 
 /*! \brief Load mini voicemail module */
@@ -3462,6 +3525,8 @@ static int unload_module(void)
 	res |= ast_unregister_application(app_minivm_notify);
 	res |= ast_unregister_application(app_minivm_delete);
 	res |= ast_unregister_application(app_minivm_accmess);
+	res |= ast_unregister_application(app_minivm_mwi);
+
 	ast_cli_unregister_multiple(cli_minivm, ARRAY_LEN(cli_minivm));
 	ast_custom_function_unregister(&minivm_account_function);
 	ast_custom_function_unregister(&minivm_counter_function);

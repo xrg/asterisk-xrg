@@ -20,7 +20,7 @@ usage() {
 # Basic build system:
 PACKAGES_DEBIAN="build-essential"
 # Asterisk: basic requirements:
-PACKAGES_DEBIAN="$PACKAGES_DEBIAN libncurses-dev libz-dev libssl-dev"
+PACKAGES_DEBIAN="$PACKAGES_DEBIAN libncurses-dev libz-dev libssl-dev libxml2-dev"
 # Asterisk: very useful addons:
 PACKAGES_DEBIAN="$PACKAGES_DEBIAN libcurl-dev libspeex-dev libogg-dev libvorbis-dev libasound2-dev"
 # Asterisk: nice-to-have addons:
@@ -31,6 +31,8 @@ PACKAGES_DEBIAN="$PACKAGES_DEBIAN libopenh323-dev"
 PACKAGES_DEBIAN="$PACKAGES_DEBIAN libsnmp-dev libiksemel-dev "
 
 PACKAGES_RH="gcc gcc-c++ ncurses-devel openssl-devel"
+
+PACKAGES_OBSD="popt gmake wget libxml libogg libvorbis curl iksemel spandsp speex iodbc freetds-0.63p1-msdblib mysql-client gmime sqlite sqlite3 jack"
 
 KVERS=`uname -r`
 
@@ -45,10 +47,9 @@ in_test_mode() {
   test "$testcmd" != ''
 }
 
-# Fixme: should be done by apt and not by dpkg?
 check_installed_debs() {
-	 dpkg-query -W --showformat '${Status} ${Package}\n' "$@" 2>/dev/null \
-	 | awk '/ not-installed/{print $4}'
+	aptitude -F '%c %p' search "$@" 2>/dev/null \
+	| awk '/^p/{print $2}'
 }
 
 # parsing the output of yum is close to impossible.
@@ -62,10 +63,19 @@ check_installed_rpms() {
 	done
 }
 
+check_installed_pkgs() {
+	for pack in "$@"
+	do
+		if [ `pkg_info -a | grep $pack | wc -l` = 0 ]; then
+		echo $pack
+		fi
+	done
+}
+
 handle_debian() {
 	# echo "# Distribution is Debian or compatible"
 	extra_packs=`check_installed_debs $PACKAGES_DEBIAN`
-	$testcmd apt-get install -y $extra_packs
+	$testcmd aptitude install -y $extra_packs
 }
 
 handle_rh() {
@@ -73,6 +83,12 @@ handle_rh() {
 	extra_packs=`check_installed_rpms $PACKAGES_RH`
         # FIXME: is there yum with RHEL 4?
 	$testcmd yum install -y $extra_packs
+}
+
+handle_obsd() {
+	# echo "# Distribution is OpenBSD or compatible"
+	extra_packs=`check_installed_pkgs $PACKAGES_OBSD`
+	$testcmd pkg_add $extra_packs
 }
 
 if in_test_mode; then
@@ -86,7 +102,7 @@ OS=`uname -s`
 unsupported_distro=''
 
 # A number of distributions we don't (yet?) support.
-if [ "$OS" != 'Linux' ]; then
+if [ "$OS" != 'Linux' -a "$OS" != 'OpenBSD' ]; then
   echo >&2 "$0: Your OS ($OS) is currently not supported. Aborting."
   exit 1
 fi
@@ -117,6 +133,8 @@ if [ -r /etc/debian_version ]; then
   handle_debian
 elif [ -r /etc/redhat-release ]; then
   handle_rh
+elif [ "$OS" = 'OpenBSD' ]; then
+  handle_obsd
 fi
 
 if ! in_test_mode; then

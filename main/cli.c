@@ -74,7 +74,7 @@ static int cli_default_perm = 1;
  * it is already running. */
 AST_MUTEX_DEFINE_STATIC(permsconfiglock);
 /*! \brief  List of users and permissions. */
-AST_RWLIST_HEAD_STATIC(cli_perms, usergroup_cli_perm);
+static AST_RWLIST_HEAD_STATIC(cli_perms, usergroup_cli_perm);
 
 /*!
  * \brief map a debug or verbose value to a filename
@@ -235,8 +235,8 @@ static char *complete_fn(const char *word, int state)
 		c += (strlen(ast_config_AST_MODULE_DIR) + 1);
 	if (c)
 		c = ast_strdup(c);
-	if (d)
-		free(d);
+
+	free(d);
 	
 	return c;
 }
@@ -444,7 +444,7 @@ static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 		atleast = 1;
 	if (argc != e->args + atleast + 1 && argc != e->args + atleast + 2)
 		return CLI_SHOWUSAGE;
-	if (sscanf(argv[e->args + atleast], "%d", &newlevel) != 1)
+	if (sscanf(argv[e->args + atleast], "%30d", &newlevel) != 1)
 		return CLI_SHOWUSAGE;
 	if (argc == e->args + atleast + 2) {
 		unsigned int debug = (*what == 'C');
@@ -781,9 +781,9 @@ static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 {
 #define FORMAT_STRING  "%-20.20s %-20.20s %-7.7s %-30.30s\n"
 #define FORMAT_STRING2 "%-20.20s %-20.20s %-7.7s %-30.30s\n"
-#define CONCISE_FORMAT_STRING  "%s!%s!%s!%d!%s!%s!%s!%s!%s!%d!%s!%s!%s\n"
-#define VERBOSE_FORMAT_STRING  "%-20.20s %-20.20s %-16.16s %4d %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-20.20s\n"
-#define VERBOSE_FORMAT_STRING2 "%-20.20s %-20.20s %-16.16s %-4.4s %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-20.20s\n"
+#define CONCISE_FORMAT_STRING  "%s!%s!%s!%d!%s!%s!%s!%s!%s!%s!%d!%s!%s!%s\n"
+#define VERBOSE_FORMAT_STRING  "%-20.20s %-20.20s %-16.16s %4d %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-11.11s %-20.20s\n"
+#define VERBOSE_FORMAT_STRING2 "%-20.20s %-20.20s %-16.16s %-4.4s %-7.7s %-12.12s %-25.25s %-15.15s %8.8s %-11.11s %-11.11s %-20.20s\n"
 
 	struct ast_channel *c = NULL;
 	int numchans = 0, concise = 0, verbose = 0, count = 0;
@@ -824,7 +824,7 @@ static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 			ast_cli(a->fd, FORMAT_STRING2, "Channel", "Location", "State", "Application(Data)");
 		else if (verbose)
 			ast_cli(a->fd, VERBOSE_FORMAT_STRING2, "Channel", "Context", "Extension", "Priority", "State", "Application", "Data", 
-				"CallerID", "Duration", "Accountcode", "BridgedTo");
+				"CallerID", "Duration", "Accountcode", "PeerAccount", "BridgedTo");
 	}
 
 	if (!count && !(iter = ast_channel_iterator_all_new(0))) {
@@ -857,6 +857,7 @@ static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 					S_OR(c->data, ""),	/* XXX different from verbose ? */
 					S_OR(c->cid.cid_num, ""),
 					S_OR(c->accountcode, ""),
+					S_OR(c->peeraccount, ""),
 					c->amaflags, 
 					durbuf,
 					bc ? bc->name : "(None)",
@@ -868,6 +869,7 @@ static char *handle_chanlist(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 					S_OR(c->cid.cid_num, ""),
 					durbuf,
 					S_OR(c->accountcode, ""),
+					S_OR(c->peeraccount, ""),
 					bc ? bc->name : "(None)");
 			} else {
 				char locbuf[40] = "(None)";
@@ -1355,6 +1357,7 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 		"           Name: %s\n"
 		"           Type: %s\n"
 		"       UniqueID: %s\n"
+		"       LinkedID: %s\n"
 		"      Caller ID: %s\n"
 		" Caller ID Name: %s\n"
 		"    DNID Digits: %s\n"
@@ -1382,7 +1385,7 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 		"    Application: %s\n"
 		"           Data: %s\n"
 		"    Blocking in: %s\n",
-		c->name, c->tech->type, c->uniqueid,
+		c->name, c->tech->type, c->uniqueid, c->linkedid,
 		S_OR(c->cid.cid_num, "(N/A)"),
 		S_OR(c->cid.cid_name, "(N/A)"),
 		S_OR(c->cid.cid_dnid, "(N/A)"), 
@@ -1628,7 +1631,6 @@ int ast_cli_perms_init(int reload)
 
 	cfg = ast_config_load2(perms_config, "" /* core, can't reload */, config_flags);
 	if (!cfg) {
-		ast_log (LOG_WARNING, "No cli permissions file found (%s)\n", perms_config);
 		ast_mutex_unlock(&permsconfiglock);
 		return 1;
 	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED) {

@@ -62,7 +62,7 @@ struct event_node{
 
 typedef struct event_node event_node_t;
 
-static char *app = "AlarmReceiver";
+static const char app[] = "AlarmReceiver";
 /*** DOCUMENTATION
 	<application name="AlarmReceiver" language="en_US">
 		<synopsis>
@@ -124,7 +124,7 @@ static void database_increment( char *key )
 		return;
 	}
 	
-	sscanf(value, "%u", &v);
+	sscanf(value, "%30u", &v);
 	v++;
 
 	ast_verb(4, "AlarmReceiver: New value for %s: %u\n", key, v);

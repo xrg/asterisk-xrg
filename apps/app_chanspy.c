@@ -135,6 +135,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<option name="o">
 						<para>Only listen to audio coming from this channel.</para>
 					</option>
+					<option name="s">
+						<para>Stop when no more channels are left to spy on.</para>
+					</option>
 					<option name="X">
 						<para>Allow the user to exit ChanSpy to a valid single digit
 						numeric extension in the current context or the context
@@ -266,6 +269,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<option name="o">
 						<para>Only listen to audio coming from this channel.</para>
 					</option>
+					<option name="s">
+						<para>Stop when there are no more extensions left to spy on.</para>
+					</option>
 					<option name="X">
 						<para>Allow the user to exit ChanSpy to a valid single digit
 						numeric extension in the current context or the context
@@ -325,11 +331,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</application>
  ***/
 
-static const char * const app_chan = "ChanSpy";
+static const char app_chan[] = "ChanSpy";
 
-static const char * const app_ext = "ExtenSpy";
+static const char app_ext[] = "ExtenSpy";
 
-static const char * const app_dahdiscan = "DAHDIScan";
+static const char app_dahdiscan[] = "DAHDIScan";
 
 enum {
 	OPTION_QUIET             = (1 << 0),    /* Quiet, no announcement */
@@ -349,7 +355,8 @@ enum {
 	OPTION_DTMF_EXIT         = (1 << 14),	/* Set DTMF to exit, added for DAHDIScan integration */
 	OPTION_DTMF_CYCLE        = (1 << 15),	/* Custom DTMF for cycling next avaliable channel, (default is '*') */
 	OPTION_DAHDI_SCAN        = (1 << 16),	/* Scan groups in DAHDIScan mode */
-} chanspy_opt_flags;
+	OPTION_STOP              = (1 << 17),
+};
 
 enum {
 	OPT_ARG_VOLUME = 0,
@@ -360,7 +367,7 @@ enum {
 	OPT_ARG_EXIT,
 	OPT_ARG_CYCLE,
 	OPT_ARG_ARRAY_SIZE,
-} chanspy_opt_args;
+};
 
 AST_APP_OPTIONS(spy_opts, {
 	AST_APP_OPTION('q', OPTION_QUIET),
@@ -373,6 +380,7 @@ AST_APP_OPTIONS(spy_opts, {
 	AST_APP_OPTION_ARG('r', OPTION_RECORD, OPT_ARG_RECORD),
 	AST_APP_OPTION_ARG('e', OPTION_ENFORCED, OPT_ARG_ENFORCED),
 	AST_APP_OPTION('o', OPTION_READONLY),
+	AST_APP_OPTION('s', OPTION_STOP),
 	AST_APP_OPTION('X', OPTION_EXIT),
 	AST_APP_OPTION('s', OPTION_NOTECH),
 	AST_APP_OPTION_ARG('n', OPTION_NAME, OPT_ARG_NAME),
@@ -410,7 +418,7 @@ static void spy_release(struct ast_channel *chan, void *data)
 static int spy_generate(struct ast_channel *chan, void *data, int len, int samples)
 {
 	struct chanspy_translation_helper *csth = data;
-	struct ast_frame *f = NULL;
+	struct ast_frame *f, *cur;
 
 	ast_audiohook_lock(&csth->spy_audiohook);
 	if (csth->spy_audiohook.status != AST_AUDIOHOOK_STATUS_RUNNING) {
@@ -426,14 +434,16 @@ static int spy_generate(struct ast_channel *chan, void *data, int len, int sampl
 	if (!f)
 		return 0;
 
-	if (ast_write(chan, f)) {
-		ast_frfree(f);
-		return -1;
-	}
+	for (cur = f; cur; cur = AST_LIST_NEXT(cur, frame_list)) {
+		if (ast_write(chan, cur)) {
+			ast_frfree(f);
+			return -1;
+		}
 
-	if (csth->fd) {
-		if (write(csth->fd, f->data.ptr, f->datalen) < 0) {
-			ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+		if (csth->fd) {
+			if (write(csth->fd, cur->data.ptr, cur->datalen) < 0) {
+				ast_log(LOG_WARNING, "write() failed: %s\n", strerror(errno));
+			}
 		}
 	}
 
@@ -455,6 +465,7 @@ static int start_spying(struct ast_autochan *autochan, const char *spychan_name,
 
 	ast_log(LOG_NOTICE, "Attaching %s to %s\n", spychan_name, autochan->chan->name);
 
+	ast_set_flag(audiohook, AST_AUDIOHOOK_TRIGGER_SYNC | AST_AUDIOHOOK_SMALL_QUEUE);
 	res = ast_audiohook_attach(autochan->chan, audiohook);
 
 	if (!res && ast_test_flag(autochan->chan, AST_FLAG_NBRIDGE) && (peer = ast_bridged_channel(autochan->chan))) {
@@ -953,6 +964,9 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 
 		if (res == -1 || ast_check_hangup(chan))
 			break;
+		if (ast_test_flag(flags, OPTION_STOP) && !next_autochan) {
+			break;
+		}
 	}
 exit:
 
@@ -1023,7 +1037,7 @@ static int chanspy_exec(struct ast_channel *chan, const char *data)
 		if (ast_test_flag(&flags, OPTION_VOLUME) && opts[OPT_ARG_VOLUME]) {
 			int vol;
 
-			if ((sscanf(opts[OPT_ARG_VOLUME], "%d", &vol) != 1) || (vol > 4) || (vol < -4))
+			if ((sscanf(opts[OPT_ARG_VOLUME], "%30d", &vol) != 1) || (vol > 4) || (vol < -4))
 				ast_log(LOG_NOTICE, "Volume factor must be a number between -4 and 4\n");
 			else
 				volfactor = vol;
@@ -1144,7 +1158,7 @@ static int extenspy_exec(struct ast_channel *chan, const char *data)
 		if (ast_test_flag(&flags, OPTION_VOLUME) && opts[OPT_ARG_VOLUME]) {
 			int vol;
 
-			if ((sscanf(opts[OPT_ARG_VOLUME], "%d", &vol) != 1) || (vol > 4) || (vol < -4))
+			if ((sscanf(opts[OPT_ARG_VOLUME], "%30d", &vol) != 1) || (vol > 4) || (vol < -4))
 				ast_log(LOG_NOTICE, "Volume factor must be a number between -4 and 4\n");
 			else
 				volfactor = vol;

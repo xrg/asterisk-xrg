@@ -61,6 +61,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/global_datastores.h"
 #include "asterisk/dsp.h"
+#include "asterisk/cel.h"
 
 /*** DOCUMENTATION
 	<application name="Dial" language="en_US">
@@ -465,8 +466,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</application>
  ***/
 
-static char *app = "Dial";
-static char *rapp = "RetryDial";
+static const char app[] = "Dial";
+static const char rapp[] = "RetryDial";
 
 enum {
 	OPT_ANNOUNCE =          (1 << 0),
@@ -724,6 +725,8 @@ static void senddialendevent(const struct ast_channel *src, const char *dialstat
  *
  * XXX this code is highly suspicious, as it essentially overwrites
  * the outgoing channel without properly deleting it.
+ *
+ * \todo eventually this function should be intergrated into and replaced by ast_call_forward() 
  */
 static void do_forward(struct chanlist *o,
 	struct cause_args *num, struct ast_flags64 *peerflags, int single, int *to)
@@ -746,11 +749,17 @@ static void do_forward(struct chanlist *o,
 		const char *forward_context;
 		ast_channel_lock(c);
 		forward_context = pbx_builtin_getvar_helper(c, "FORWARD_CONTEXT");
+		if (ast_strlen_zero(forward_context)) {
+			forward_context = NULL;
+		}
 		snprintf(tmpchan, sizeof(tmpchan), "%s@%s", c->call_forward, forward_context ? forward_context : c->context);
 		ast_channel_unlock(c);
 		stuff = tmpchan;
 		tech = "Local";
 	}
+
+	ast_cel_report_event(in, AST_CEL_FORWARD, NULL, c->call_forward, NULL);
+
 	/* Before processing channel, go ahead and check for forwarding */
 	ast_verb(3, "Now forwarding %s to '%s/%s' (thanks to %s)\n", in->name, tech, stuff, c->name);
 	/* If we have been told to ignore forwards, just set this channel to null and continue processing extensions normally */
@@ -760,7 +769,7 @@ static void do_forward(struct chanlist *o,
 		cause = AST_CAUSE_BUSY;
 	} else {
 		/* Setup parameters */
-		c = o->chan = ast_request(tech, in->nativeformats, stuff, &cause);
+		c = o->chan = ast_request(tech, in->nativeformats, in, stuff, &cause);
 		if (c) {
 			if (single)
 				ast_channel_make_compatible(o->chan, in);
@@ -934,7 +943,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 					ast_verb(3, "%s answered %s\n", c->name, in->name);
 					if (!single && !ast_test_flag64(peerflags, OPT_IGNORE_CONNECTEDLINE)) {
 						if (o->connected.id.number) {
-							ast_channel_update_connected_line(in, &o->connected);
+							if (ast_channel_connected_line_macro(c, in, &o->connected, 1, 0)) {
+								ast_channel_update_connected_line(in, &o->connected);
+							}
 						} else if (!ast_test_flag64(o, DIAL_NOCONNECTEDLINE)) {
 							ast_channel_lock(c);
 							ast_connected_line_copy_from_caller(&connected_caller, &c->cid);
@@ -961,6 +972,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				continue;
 			/* here, o->chan == c == winner */
 			if (!ast_strlen_zero(c->call_forward)) {
+				pa->sentringing = 0;
 				do_forward(o, &num, peerflags, single, to);
 				continue;
 			}
@@ -984,7 +996,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 						ast_verb(3, "%s answered %s\n", c->name, in->name);
 						if (!single && !ast_test_flag64(peerflags, OPT_IGNORE_CONNECTEDLINE)) {
 							if (o->connected.id.number) {
-								ast_channel_update_connected_line(in, &o->connected);
+								if (ast_channel_connected_line_macro(c, in, &o->connected, 1, 0)) {
+									ast_channel_update_connected_line(in, &o->connected);
+								}
 							} else if (!ast_test_flag64(o, DIAL_NOCONNECTEDLINE)) {
 								ast_channel_lock(c);
 								ast_connected_line_copy_from_caller(&connected_caller, &c->cid);
@@ -1073,8 +1087,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 						ast_party_connected_line_set(&o->connected, &connected);
 						ast_party_connected_line_free(&connected);
 					} else {
-						ast_verb(3, "%s connected line has changed, passing it to %s\n", c->name, in->name);
-						ast_indicate_data(in, AST_CONTROL_CONNECTED_LINE, f->data.ptr, f->datalen);
+						if (ast_channel_connected_line_macro(c, in, f, 1, 1)) {
+							ast_indicate_data(in, AST_CONTROL_CONNECTED_LINE, f->data.ptr, f->datalen);
+						}
 					}
 					break;
 				case AST_CONTROL_REDIRECTING:
@@ -1083,6 +1098,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 					} else {
 						ast_verb(3, "%s redirecting info has changed, passing it to %s\n", c->name, in->name);
 						ast_indicate_data(in, AST_CONTROL_REDIRECTING, f->data.ptr, f->datalen);
+						pa->sentringing = 0;
 					}
 					break;
 				case AST_CONTROL_PROCEEDING:
@@ -1195,15 +1211,19 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				if (ast_write(outgoing->chan, f))
 					ast_log(LOG_WARNING, "Unable to forward voice or dtmf\n");
 			}
-			if (single && (f->frametype == AST_FRAME_CONTROL) &&
-				((f->subclass == AST_CONTROL_HOLD) ||
-				(f->subclass == AST_CONTROL_UNHOLD) ||
-				(f->subclass == AST_CONTROL_VIDUPDATE) ||
-				(f->subclass == AST_CONTROL_SRCUPDATE) ||
-				(f->subclass == AST_CONTROL_CONNECTED_LINE) ||
-				(f->subclass == AST_CONTROL_REDIRECTING))) {
-				ast_verb(3, "%s requested special control %d, passing it to %s\n", in->name, f->subclass, outgoing->chan->name);
-				ast_indicate_data(outgoing->chan, f->subclass, f->data.ptr, f->datalen);
+			if (single && (f->frametype == AST_FRAME_CONTROL)) { 
+				if ((f->subclass == AST_CONTROL_HOLD) ||
+				    (f->subclass == AST_CONTROL_UNHOLD) ||
+				    (f->subclass == AST_CONTROL_VIDUPDATE) ||
+				    (f->subclass == AST_CONTROL_SRCUPDATE) ||
+				    (f->subclass == AST_CONTROL_REDIRECTING)) {
+					ast_verb(3, "%s requested special control %d, passing it to %s\n", in->name, f->subclass, outgoing->chan->name);
+					ast_indicate_data(outgoing->chan, f->subclass, f->data.ptr, f->datalen);
+				} else if (f->subclass == AST_CONTROL_CONNECTED_LINE) {
+					if (ast_channel_connected_line_macro(in, outgoing->chan, f, 0, 1)) {
+						ast_indicate_data(outgoing->chan, f->subclass, f->data.ptr, f->datalen);
+					}
+				}
 			}
 			ast_frfree(f);
 		}
@@ -1858,7 +1878,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			AST_LIST_UNLOCK(dialed_interfaces);
 		}
 
-		tc = ast_request(tech, chan->nativeformats, numsubst, &cause);
+		tc = ast_request(tech, chan->nativeformats, chan, numsubst, &cause);
 		if (!tc) {
 			/* If we can't, just go on to the next call */
 			ast_log(LOG_WARNING, "Unable to create channel of type '%s' (cause %d - %s)\n",
@@ -1907,7 +1927,9 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 
 		tc->cid.cid_tns = chan->cid.cid_tns;
 
-		ast_string_field_set(tc, accountcode, chan->accountcode);
+		if (!ast_strlen_zero(chan->accountcode)) {
+			ast_string_field_set(tc, peeraccount, chan->accountcode);
+		}
 		tc->cdrflags = chan->cdrflags;
 		if (ast_strlen_zero(tc->musicclass))
 			ast_string_field_set(tc, musicclass, chan->musicclass);
@@ -2136,7 +2158,6 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			}
 
 			if (ast_autoservice_stop(chan) < 0) {
-				ast_log(LOG_ERROR, "Could not stop autoservice on calling channel\n");
 				res = -1;
 			}
 

@@ -15,12 +15,12 @@ keepalive=120
 
 ; If regcontext is specified, Asterisk will dynamically create and destroy a
 ; NoOp priority 1 extension for a given line which registers or unregisters with
-; us and have a "regexten=" configuration item.  
-; Multiple contexts may be specified by separating them with '&'. The 
+; us and have a "regexten=" configuration item.
+; Multiple contexts may be specified by separating them with '&'. The
 ; actual extension is the 'regexten' parameter of the registering line or its
 ; name if 'regexten' is not provided.  If more than one context is provided,
 ; the context must be specified within regexten by appending the desired
-; context after '@'.  More than one regexten may be supplied if they are 
+; context after '@'.  More than one regexten may be supplied if they are
 ; separated by '&'.  Patterns may be used in regexten.
 ;
 ;regcontext=skinnyregistrations
@@ -93,7 +93,7 @@ keepalive=120
 ;vmexten=8500			; Device level voicemailmain pilot number
 ;regexten=100
 ;context=inbound
-;linelabel="Support Line"	; Displays next to the line 
+;linelabel="Support Line"	; Displays next to the line
 				; button on 7940's and 7960s
 ;[110]
 ;callerid="John Chambers" <408-526-4000>
@@ -157,7 +157,7 @@ keepalive=120
 ;device=SEP00D0BA847E6B
 ;version=P002G204	; Thanks critch
 ;context=did
-;canreinvite=yes	; Allow media to go directly between two RTP endpoints.
+;directmedia=yes	; Allow media to go directly between two RTP endpoints.
 ;line=120		; Dial(Skinny/120@florian)
 
 ; Typical config for a 7910

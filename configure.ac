@@ -17,11 +17,23 @@ AC_CANONICAL_HOST
 # check existence of the package
 AC_CONFIG_SRCDIR([main/asterisk.c])
 
-# specify output header file
-AC_CONFIG_HEADER(include/asterisk/autoconfig.h)
-
 AC_COPYRIGHT("Asterisk")
 AC_REVISION($Revision$)
+
+# preserve any CFLAGS or LDFLAGS that may be set
+# NOTE: This must be done before calling any macros that end up
+# calling AC_PROG_CC or the like, since they will set a default
+# set of CFLAGS ("-g -O2") if the user did not supply any, and
+# we don't want those default flags to be carried over into the
+# rest of the build system since we have other means of controlling
+# debugging symbol generation and optimization.
+CONFIG_CFLAGS="${CFLAGS}"
+CONFIG_LDFLAGS="${LDFLAGS}"
+AC_SUBST(CONFIG_CFLAGS)
+AC_SUBST(CONFIG_LDFLAGS)
+
+# specify output header file
+AC_CONFIG_HEADER(include/asterisk/autoconfig.h)
 
 AC_USE_SYSTEM_EXTENSIONS	# note- does not work on FreeBSD
 
@@ -214,8 +226,13 @@ AC_ARG_ENABLE([dev-mode],
 	[case "${enableval}" in
 	      y|ye|yes) AST_DEVMODE=yes ;;
 	      n|no)  AST_DEVMODE=no ;;
+	      noisy)
+	      AST_DEVMODE=yes
+	      NOISY_BUILD=yes
+	      ;;
 	      *) AC_MSG_ERROR(bad value ${enableval} for --enable-dev-mode)  ;;
 	esac])
+AC_SUBST(NOISY_BUILD)
 AC_SUBST(AST_DEVMODE)
 
 # AST_EXT_LIB_SETUP is used to tell configure to handle variables for
@@ -233,6 +250,7 @@ AST_EXT_LIB_SETUP([ALSA], [Advanced Linux Sound Architecture], [asound])
 # BKTR is used for backtrace support on platforms that do not
 # have it natively.
 AST_EXT_LIB_SETUP([BKTR], [Stack Backtrace support], [execinfo])
+AST_EXT_LIB_SETUP([BLUETOOTH], [Bluetooth Support], [bluetooth])
 AST_EXT_LIB_SETUP([CAP], [POSIX 1.e capabilities], [cap])
 AST_EXT_LIB_SETUP([CURL], [cURL], [curl])
 AST_EXT_LIB_SETUP([CURSES], [curses], [curses])
@@ -244,6 +262,7 @@ AST_EXT_LIB_SETUP([GTK], [gtk libraries], [gtk])
 AST_EXT_LIB_SETUP([GTK2], [gtk2 libraries], [gtk2])
 AST_EXT_LIB_SETUP([GMIME], [GMime library], [gmime])
 AST_EXT_LIB_SETUP([HOARD], [Hoard Memory Allocator], [hoard])
+AST_EXT_LIB_SETUP([ICAL], [ical libraries], [ical])
 AST_EXT_LIB_SETUP([ICONV], [Iconv Library], [iconv])
 AST_EXT_LIB_SETUP([IKSEMEL], [Iksemel Jabber Library], [iksemel])
 AST_EXT_LIB_SETUP([IMAP_TK], [UW IMAP Toolkit], [imap])
@@ -256,8 +275,10 @@ AST_EXT_LIB_SETUP([LIBXML2], [LibXML2], [libxml2])
 AST_EXT_LIB_SETUP([LTDL], [libtool], [ltdl])
 AST_EXT_LIB_SETUP([LUA], [Lua], [lua])
 AST_EXT_LIB_SETUP([MISDN], [mISDN User Library], [misdn])
+AST_EXT_LIB_SETUP([MYSQLCLIENT], [mysqlclient], [mysqlclient])
 AST_EXT_LIB_SETUP([NBS], [Network Broadcast Sound], [nbs])
 AST_EXT_LIB_SETUP([NCURSES], [ncurses], [ncurses])
+AST_EXT_LIB_SETUP([NEON], [neon], [neon])
 AST_EXT_LIB_SETUP([NETSNMP], [Net-SNMP], [netsnmp])
 AST_EXT_LIB_SETUP([NEWT], [newt], [newt])
 AST_EXT_LIB_SETUP([OGG], [OGG], [ogg])
@@ -267,6 +288,11 @@ AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
+AST_EXT_LIB_SETUP_DEPENDENT([PRI_VERSION], [ISDN PRI get_version], [PRI], [pri])
+AST_EXT_LIB_SETUP_DEPENDENT([PRI_INBANDDISCONNECT], [ISDN PRI set_inbanddisconnect], [PRI], [pri])
+AST_EXT_LIB_SETUP_DEPENDENT([PRI_PROG_W_CAUSE], [ISDN progress with cause], [PRI], [pri])
+AST_EXT_LIB_SETUP_DEPENDENT([PRI_SERVICE_MESSAGES], [ISDN service messages], [PRI], [pri])
+AST_EXT_LIB_SETUP_DEPENDENT([PRI_REVERSE_CHARGE], [ISDN reverse charge], [PRI], [pri])
 AST_EXT_LIB_SETUP([RESAMPLE], [LIBRESAMPLE], [resample])
 AST_EXT_LIB_SETUP([SPANDSP], [SPANDSP], [spandsp])
 AST_EXT_LIB_SETUP([SS7], [ISDN SS7], [ss7])
@@ -280,6 +306,7 @@ AST_EXT_LIB_SETUP([OPENAIS], [OpenAIS], [openais])
 AST_EXT_LIB_SETUP([SPEEX], [Speex], [speex])
 AST_EXT_LIB_SETUP([SPEEX_PREPROCESS], [Speex preprocess routines], [speex])
 AST_EXT_LIB_SETUP([SPEEXDSP], [Speexdsp], [speexdsp])
+AST_EXT_LIB_SETUP_DEPENDENT([SPEEX_PREPROCESS], [speex_preprocess_ctl], [], [speex])
 AST_EXT_LIB_SETUP([SQLITE], [SQLite], [sqlite])
 AST_EXT_LIB_SETUP([SQLITE3], [SQLite], [sqlite3])
 AST_EXT_LIB_SETUP([SUPPSERV], [mISDN Supplemental Services], [suppserv])
@@ -351,9 +378,11 @@ AC_FUNC_STRNLEN
 AC_FUNC_STRTOD
 AC_FUNC_UTIME_NULL
 AC_FUNC_VPRINTF
-AC_CHECK_FUNCS([asprintf atexit closefrom dup2 eaccess endpwent euidaccess ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday ioperm inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtol strtoq unsetenv utime vasprintf getpeereid sysctl swapctl])
+AC_CHECK_FUNCS([asprintf atexit closefrom dup2 eaccess endpwent euidaccess ftruncate getcwd gethostbyname gethostname getloadavg gettimeofday glob ioperm inet_ntoa isascii localtime_r memchr memmove memset mkdir munmap putenv re_comp regcomp select setenv socket strcasecmp strcasestr strchr strcspn strdup strerror strlcat strlcpy strncasecmp strndup strnlen strrchr strsep strspn strstr strtod strtol strtold strtoq unsetenv utime vasprintf getpeereid sysctl swapctl])
 
-AC_CHECK_FUNCS([glob])
+# BSD might not have exp2, and/or log2
+AC_CHECK_LIB([m], [sqrt])
+AC_CHECK_FUNCS([exp2l log2l exp10l log10l sinl cosl tanl asinl acosl atanl atan2l powl sqrtl rintl expl logl remainderl fmodl roundl truncl floorl ceill exp2 log2 exp10 log10 sin cos tan asin acos atan atan2 pow rint exp log remainder fmod round trunc floor ceil])
 
 AC_MSG_CHECKING(for timersub in time.h)
 AC_LINK_IFELSE(
@@ -512,9 +541,8 @@ AST_GCC_ATTRIBUTE(always_inline)
 AST_GCC_ATTRIBUTE(deprecated)
 AST_GCC_ATTRIBUTE(sentinel)
 AST_GCC_ATTRIBUTE(warn_unused_result)
-AST_GCC_ATTRIBUTE(weak)
+AST_GCC_ATTRIBUTE(weakref, [weakref("foo")], static)
 AST_GCC_ATTRIBUTE(weak_import)
-AST_GCC_ATTRIBUTE(alias, [alias("foo")])
 
 AC_MSG_CHECKING(for -ffunction-sections support)
 saved_CFLAGS="${CFLAGS}"
@@ -623,6 +651,25 @@ AC_LINK_IFELSE(
 		AC_MSG_RESULT(yes)
 		AC_DEFINE([HAVE_RES_NDESTROY], 1, [Define to 1 if your system has the ndestroy resolver function.]),
 		AC_MSG_RESULT(no)
+	)
+	AC_SEARCH_LIBS(res_9_close, resolv)
+	AC_MSG_CHECKING(for res_close)
+	AC_LINK_IFELSE(
+		AC_LANG_PROGRAM([
+				#ifdef HAVE_SYS_SOCKET_H
+				#include <sys/socket.h>
+				#endif
+				#ifdef HAVE_NETINET_IN_H
+				#include <netinet/in.h>
+				#endif
+				#ifdef HAVE_ARPA_NAMESER_H
+				#include <arpa/nameser.h>
+				#endif
+				#include <resolv.h>],
+				[res_close();]),
+		AC_MSG_RESULT(yes)
+		AC_DEFINE([HAVE_RES_CLOSE], 1, [Define to 1 if your system has the close resolver function.]),
+		AC_MSG_RESULT(no)
 	),
 	AC_MSG_RESULT(no)
 )
@@ -655,54 +702,6 @@ AST_C_DEFINE_CHECK([DAHDI_HALF_FULL], [DAHDI_POLICY_HALF_FULL], [dahdi/user.h])
 AST_C_COMPILE_CHECK([DAHDI_LINEREVERSE_VMWI], [struct dahdi_vmwi_info booger], [dahdi/user.h], , [enhanced dahdi vmwi support])
 
 AST_C_COMPILE_CHECK([DAHDI_ECHOCANCEL_FAX_MODE], [int foo = DAHDI_ECHOCANCEL_FAX_MODE], [dahdi/user.h])
-
-# BSD might not have exp2, and/or log2
-AST_EXT_LIB_CHECK([EXP2L], [m], [exp2l])
-AST_EXT_LIB_CHECK([LOG2L], [m], [log2l])
-AST_EXT_LIB_CHECK([EXP10L], [m], [exp10l])
-AST_EXT_LIB_CHECK([LOG10L], [m], [log10l])
-AST_EXT_LIB_CHECK([SINL], [m], [sinl])
-AST_EXT_LIB_CHECK([COSL], [m], [cosl])
-AST_EXT_LIB_CHECK([TANL], [m], [tanl])
-AST_EXT_LIB_CHECK([ASINL], [m], [asinl])
-AST_EXT_LIB_CHECK([ACOSL], [m], [acosl])
-AST_EXT_LIB_CHECK([ATANL], [m], [atanl])
-AST_EXT_LIB_CHECK([ATAN2L], [m], [atan2l])
-AST_EXT_LIB_CHECK([POWL], [m], [powl])
-AST_EXT_LIB_CHECK([SQRTL], [m], [sqrtl])
-AST_EXT_LIB_CHECK([RINTL], [m], [rintl])
-AST_EXT_LIB_CHECK([EXPL], [m], [expl])
-AST_EXT_LIB_CHECK([LOGL], [m], [logl])
-AST_EXT_LIB_CHECK([REMAINDERL], [m], [remainderl])
-AST_EXT_LIB_CHECK([FMODL], [m], [fmodl])
-AST_EXT_LIB_CHECK([ROUNDL], [m], [roundl])
-AST_EXT_LIB_CHECK([TRUNCL], [m], [truncl])
-AST_EXT_LIB_CHECK([STRTOLD], [c], [strtold], [stdlib.h])
-AST_EXT_LIB_CHECK([FLOORL], [m], [floorl])
-AST_EXT_LIB_CHECK([CEILL], [m], [ceill])
-AST_EXT_LIB_CHECK([EXP2], [m], [exp2])
-AST_EXT_LIB_CHECK([LOG2], [m], [log2])
-AST_EXT_LIB_CHECK([EXP10], [m], [exp10])
-AST_EXT_LIB_CHECK([LOG10], [m], [log10])
-AST_EXT_LIB_CHECK([SIN], [m], [sin])
-AST_EXT_LIB_CHECK([COS], [m], [cos])
-AST_EXT_LIB_CHECK([TAN], [m], [tan])
-AST_EXT_LIB_CHECK([ASIN], [m], [asin])
-AST_EXT_LIB_CHECK([ACOS], [m], [acos])
-AST_EXT_LIB_CHECK([ATAN], [m], [atan])
-AST_EXT_LIB_CHECK([ATAN2], [m], [atan2])
-AST_EXT_LIB_CHECK([POW], [m], [pow])
-AST_EXT_LIB_CHECK([SQRT], [m], [sqrt])
-AST_EXT_LIB_CHECK([RINT], [m], [rint])
-AST_EXT_LIB_CHECK([EXP], [m], [exp])
-AST_EXT_LIB_CHECK([LOG], [m], [log])
-AST_EXT_LIB_CHECK([REMAINDER], [m], [remainder])
-AST_EXT_LIB_CHECK([FMOD], [m], [fmod])
-AST_EXT_LIB_CHECK([ROUND], [m], [round])
-AST_EXT_LIB_CHECK([TRUNC], [m], [trunc])
-AST_EXT_LIB_CHECK([STRTOD], [c], [strtod], [stdlib.h])
-AST_EXT_LIB_CHECK([FLOOR], [m], [floor])
-AST_EXT_LIB_CHECK([CEIL], [m], [ceil])
 
 AST_C_COMPILE_CHECK([GETIFADDRS], [struct ifaddrs *p; getifaddrs(&p)], [ifaddrs.h], , [getifaddrs() support])
 AST_C_COMPILE_CHECK([TIMERFD], [timerfd_create(0,0); timerfd_settime(0,0,NULL,NULL);], [sys/timerfd.h], , [timerfd support])
@@ -773,11 +772,11 @@ if test "${USE_GSM}" != "no"; then
    fi
 fi
 
-if test "${host_os}" != "linux-gnu" ; then
-  AST_EXT_LIB_CHECK([ICONV], [iconv], [iconv_open], [iconv.h])
-else
-  PBX_ICONV=1
-fi
+AST_EXT_LIB_CHECK([ICONV], [iconv], [iconv_open], [iconv.h])
+# Some versions of Linux package iconv in glibc
+AST_EXT_LIB_CHECK([ICONV], [c], [iconv_close], [iconv.h])
+
+AST_EXT_LIB_CHECK([ICAL], [ical], [icaltimezone_new], [libical/ical.h], [-lpthread])
 
 AST_EXT_LIB_CHECK([IKSEMEL], [iksemel], [iks_start_sasl], [iksemel.h])
 
@@ -1325,7 +1324,7 @@ AC_ARG_ENABLE([xmldoc],
 	esac], [disable_xmldoc=no])
 
 if test "${disable_xmldoc}" != "yes"; then
-	AST_EXT_TOOL_CHECK([LIBXML2], [xml2], , ,
+	AST_EXT_TOOL_CHECK([LIBXML2], [xml2-config], , ,
 	[#include <libxml/tree.h>
 	#include <libxml/parser.h>],
 	[LIBXML_TEST_VERSION])
@@ -1347,9 +1346,13 @@ if test "${PBX_MISDN}" = 1; then
    AC_CHECK_HEADER([linux/mISDNdsp.h], [AC_DEFINE_UNQUOTED([MISDN_1_2], 1, [Build chan_misdn for mISDN 1.2 or later.])])
 fi
 
+AST_EXT_TOOL_CHECK([MYSQLCLIENT], [mysql_config])
+
 AST_EXT_LIB_CHECK([NBS], [nbs], [nbs_connect], [nbs.h])
 
 AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
+
+AST_EXT_TOOL_CHECK([NEON], [neon-config])
 
 AST_EXT_TOOL_CHECK([NETSNMP], [net-snmp], , [--base-agent-libs --external-agent-libs ],
 [#include <net-snmp/net-snmp-config.h>
@@ -1367,6 +1370,8 @@ AST_EXT_LIB_CHECK([OGG], [ogg], [ogg_sync_init], [])
 AST_EXT_LIB_CHECK([BKTR], [execinfo], [backtrace], [execinfo.h])
 # Linux, however, has backtrace directly in glibc
 AST_EXT_LIB_CHECK([BKTR], [c], [backtrace], [execinfo.h])
+
+AST_EXT_LIB_CHECK([BLUETOOTH], [bluetooth], [ba2str], [bluetooth/bluetooth.h])
 
 # possible places for oss definitions
 AST_EXT_LIB_CHECK([OSS], [ossaudio], [], [linux/soundcard.h])
@@ -1423,13 +1428,16 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
 AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
-AST_EXT_LIB_CHECK([PRI], [pri], [pri_new_bri], [libpri.h])
+AST_EXT_LIB_CHECK([PRI], [pri], [pri_connected_line_update], [libpri.h])
 
+# ------------------------------------v
+# TODO: The code can be changed to always include these features now.
+# These features will always be present if pri_connected_line_update is available.
 AST_EXT_LIB_CHECK([PRI_PROG_W_CAUSE], [pri], [pri_progress_with_cause], [libpri.h])
-
 AST_EXT_LIB_CHECK([PRI_INBANDDISCONNECT], [pri], [pri_set_inbanddisconnect], [libpri.h])
-
 AST_EXT_LIB_CHECK([PRI_SERVICE_MESSAGES], [pri], [pri_maintenance_service], [libpri.h])
+AST_EXT_LIB_CHECK([PRI_REVERSE_CHARGE], [pri], [pri_sr_set_reversecharge], [libpri.h])
+# ------------------------------------^
 
 AST_EXT_LIB_CHECK([RESAMPLE], [resample], [resample_open], [libresample.h], [-lm])
 
@@ -1450,10 +1458,6 @@ if test "x${PBX_SPANDSP}" = "x1" ; then
 	# We also need t38_terminal_init()
 	PBX_SPANDSP=0
 	AST_EXT_LIB_CHECK([SPANDSP], [spandsp], [t38_terminal_init], [spandsp.h], [-ltiff])
-fi
-
-if test "x${PBX_SPANDSP}" = "x1" ; then
-	AC_CHECK_HEADER([spandsp/expose.h], [AC_DEFINE_UNQUOTED([HAVE_SPANDSP_EXPOSE_H], 1, [Define to 1 if spandsp/expose.h is available.])], [], [#include <spandsp.h>])
 fi
 
 AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_pollflags], [libss7.h])
@@ -1561,10 +1565,10 @@ fi
 
 if test "$PBX_OPENSSL" = "1";
 then
-    AST_EXT_LIB_CHECK([OSPTK], [osptk], [OSPPCryptoDecrypt], [osp/osp.h], [-lcrypto -lssl])
+    AST_CHECK_OSPTK([3], [5], [0])
 fi
 
-AST_EXT_TOOL_CHECK([GMIME], [gmime], [--cflags], [--libs], [#include <gmime/gmime.h>], [gboolean q = g_mime_check_version(0,0,0);])
+AST_EXT_TOOL_CHECK([GMIME], [gmime-config], [--cflags], [--libs], [#include <gmime/gmime.h>], [gboolean q = g_mime_check_version(0,0,0);])
 
 AST_EXT_LIB_CHECK([HOARD], [hoard], [malloc], [])
 
@@ -1654,6 +1658,20 @@ else
 fi
 AC_SUBST(EDITLINE_LIB)
 
+if test "x${PBX_UNIXODBC}" = "x1" -o "x${PBX_IODBC}" = "x1"; then
+	# Does ODBC support wide characters?
+	AC_MSG_CHECKING(whether ODBC has support for Unicode types)
+	AC_LINK_IFELSE(
+		AC_LANG_PROGRAM(
+			[#include <sql.h>
+#include <sqlext.h>],
+			[int foo = SQL_WCHAR]),
+		AC_MSG_RESULT(yes)
+			AC_DEFINE([HAVE_ODBC_WCHAR], [1], [Define to 1 if your ODBC library has wide (Unicode) types.]),
+		AC_MSG_RESULT(no)
+	)
+fi
+
 AC_CHECK_HEADER([h323.h], [PBX_H323=1], [PBX_H323=0])
 AC_SUBST(PBX_H323)
 
@@ -1668,7 +1686,7 @@ AC_CHECK_HEADER([linux/ixjuser.h], [PBX_IXJUSER=1], [PBX_IXJUSER=0], [
 				   ])
 AC_SUBST(PBX_IXJUSER)
 
-AST_EXT_TOOL_CHECK([SDL], [sdl])
+AST_EXT_TOOL_CHECK([SDL], [sdl-config])
 AST_EXT_LIB_CHECK([SDL_IMAGE], [SDL_image], [IMG_Load], [SDL_image.h], [${SDL_LIB}], [${SDL_INCLUDE}])
 AST_EXT_LIB_CHECK([FFMPEG], [avcodec], [sws_getContext], [libavcodec/avcodec.h], [-lpthread -lz -lm])
 AST_EXT_LIB_CHECK([FFMPEG], [avcodec], [sws_getContext], [ffmpeg/avcodec.h], [-lpthread -lz -lm])
@@ -1687,7 +1705,7 @@ then
 fi
 
 PBX_GTK=0
-AST_EXT_TOOL_CHECK([GTK], [gtk], [--cflags gthread], [--libs gthread])
+AST_EXT_TOOL_CHECK([GTK], [gtk-config], [--cflags gthread], [--libs gthread])
 
 PBX_GTK2=0
 AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)
@@ -1701,37 +1719,7 @@ AC_SUBST(PBX_GTK2)
 AC_SUBST(GTK2_INCLUDE)
 AC_SUBST(GTK2_LIB)
 
-if test "${USE_CURL}" != "no"; then
-   AC_PATH_TOOL([CURL_CONFIG], [curl-config], No)
-   if test ! x"${CURL_CONFIG}" = xNo; then
-   # check for version
-      if test $(printf "%d" 0x$(${CURL_CONFIG} --vernum)) -ge $(printf "%d" 0x070907); then
-         CURL_INCLUDE=$(${CURL_CONFIG} --cflags)
-         CURL_LIB=$(${CURL_CONFIG} --libs)
-
-         AC_MSG_CHECKING(for curl_version() in curl/curl.h)
-         saved_cppflags="${CPPFLAGS}"
-         CPPFLAGS="${CPPFLAGS} ${CURL_INCLUDE}"
-         AC_COMPILE_IFELSE(
-            [AC_LANG_PROGRAM(
-                [#include <curl/curl.h>],
-                    [curl_version();])
-            ],[
-                AC_MSG_RESULT(yes)
-                ac_cv_curl_h="yes"
-            ],[
-                AC_MSG_RESULT(no)
-                ac_cv_curl_h="no"
-            ]
-	 )
-	 CPPFLAGS="${saved_cppflags}"
-         if test "${ac_cv_curl_h}" = "yes"; then
-             PBX_CURL=1
-             AC_DEFINE([HAVE_CURL], 1, [Define if your system has the curl libraries.])
-         fi
-      fi
-   fi
-fi
+AST_LIBCURL_CHECK_CONFIG([], [7.10.1])
 
 # build a GENERIC_ODBC result based on the presence of either UnixODBC (preferred)
 # or iODBC
@@ -1751,6 +1739,26 @@ fi
 AC_SUBST([GENERIC_ODBC_LIB])
 AC_SUBST([GENERIC_ODBC_INCLUDE])
 AC_SUBST([PBX_GENERIC_ODBC])
+
+PBX_SYSLOG=0
+
+if test "${ac_cv_header_syslog_h}" = "yes"; then
+   # syslog facilities
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_AUTH],     [LOG_AUTH],     [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_AUTHPRIV], [LOG_AUTHPRIV], [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_CRON],     [LOG_CRON],     [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_DAEMON],   [LOG_DAEMON],   [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_FTP],      [LOG_FTP],      [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_KERN],     [LOG_KERN],     [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_LPR],      [LOG_LPR],      [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_MAIL],     [LOG_MAIL],     [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_NEWS],     [LOG_NEWS],     [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_SYSLOG],   [LOG_SYSLOG],   [syslog.h])
+   AST_C_DEFINE_CHECK([SYSLOG_FACILITY_LOG_UUCP],     [LOG_UUCP],     [syslog.h])
+   PBX_SYSLOG=1
+fi
+
+AC_SUBST([PBX_SYSLOG])
 
 AC_CONFIG_FILES([build_tools/menuselect-deps makeopts channels/h323/Makefile])
 AST_CHECK_MANDATORY

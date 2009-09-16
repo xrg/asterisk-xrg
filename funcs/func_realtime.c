@@ -190,6 +190,8 @@ static int function_realtime_read(struct ast_channel *chan, const char *cmd, cha
 		ast_str_append(&out, 0, "%s%s%s%s", var->name, args.delim2, var->value, args.delim1);
 	ast_copy_string(buf, ast_str_buffer(out), len);
 
+	ast_variables_destroy(head);
+
 	if (chan)
 		ast_autoservice_stop(chan);
 
@@ -403,6 +405,7 @@ static int function_realtime_readdestroy(struct ast_channel *chan, const char *c
 	ast_copy_string(buf, ast_str_buffer(out), len);
 
 	ast_destroy_realtime(args.family, args.fieldmatch, args.value, SENTINEL);
+	ast_variables_destroy(head);
 
 	if (chan)
 		ast_autoservice_stop(chan);
@@ -410,29 +413,29 @@ static int function_realtime_readdestroy(struct ast_channel *chan, const char *c
 	return 0;
 }
 
-struct ast_custom_function realtime_function = {
+static struct ast_custom_function realtime_function = {
 	.name = "REALTIME",
 	.read = function_realtime_read,
 	.write = function_realtime_write,
 };
 
-struct ast_custom_function realtimefield_function = {
+static struct ast_custom_function realtimefield_function = {
 	.name = "REALTIME_FIELD",
 	.read = realtimefield_read,
 	.write = function_realtime_write,
 };
 
-struct ast_custom_function realtimehash_function = {
+static struct ast_custom_function realtimehash_function = {
 	.name = "REALTIME_HASH",
 	.read = realtimefield_read,
 };
 
-struct ast_custom_function realtime_store_function = {
+static struct ast_custom_function realtime_store_function = {
 	.name = "REALTIME_STORE",
 	.write = function_realtime_store,
 };
 
-struct ast_custom_function realtime_destroy_function = {
+static struct ast_custom_function realtime_destroy_function = {
 	.name = "REALTIME_DESTROY",
 	.read = function_realtime_readdestroy,
 };

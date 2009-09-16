@@ -16,11 +16,11 @@
  * at the top of the source tree.
  */
 
-/*! 
+/*!
  * \file
  * \author Russell Bryant <russell@digium.com>
  *
- * \brief pthread timing interface 
+ * \brief pthread timing interface
  */
 
 #include "asterisk.h"
@@ -75,7 +75,6 @@ enum {
 enum pthread_timer_state {
 	TIMER_STATE_IDLE,
 	TIMER_STATE_TICKING,
-	TIMER_STATE_CONTINUOUS,
 };
 
 struct pthread_timer {
@@ -85,13 +84,15 @@ struct pthread_timer {
 	/*! Interval in ms for current rate */
 	unsigned int interval;
 	unsigned int tick_count;
+	unsigned int pending_ticks;
 	struct timeval start;
+	unsigned int continuous:1;
 };
 
 static void pthread_timer_destructor(void *obj);
 static struct pthread_timer *find_timer(int handle, int unlinkobj);
-static void write_byte(int wr_fd);
-static void read_pipe(int rd_fd, unsigned int num, int clear);
+static void write_byte(struct pthread_timer *timer);
+static void read_pipe(struct pthread_timer *timer, unsigned int num);
 
 /*!
  * \brief Data for the timing thread
@@ -148,23 +149,6 @@ static void pthread_timer_close(int handle)
 	ao2_ref(timer, -1);
 }
 
-static void set_state(struct pthread_timer *timer)
-{
-	unsigned int rate = timer->rate;
-
-	if (rate) {
-		timer->state = TIMER_STATE_TICKING;
-		timer->interval = roundf(1000.0 / ((float) rate));
-		timer->start = ast_tvnow();
-	} else {
-		timer->state = TIMER_STATE_IDLE;
-		timer->interval = 0;
-		timer->start = ast_tv(0, 0);
-	}
-
-	timer->tick_count = 0;
-}
-
 static int pthread_timer_set_rate(int handle, unsigned int rate)
 {
 	struct pthread_timer *timer;
@@ -175,18 +159,25 @@ static int pthread_timer_set_rate(int handle, unsigned int rate)
 	}
 
 	if (rate > MAX_RATE) {
-		ast_log(LOG_ERROR, "res_timing_pthread only supports timers at a max rate of %d / sec\n",
-			MAX_RATE);
+		ast_log(LOG_ERROR, "res_timing_pthread only supports timers at a "
+				"max rate of %d / sec\n", MAX_RATE);
 		errno = EINVAL;
 		return -1;
 	}
 
 	ao2_lock(timer);
-	timer->rate = rate;
-	if (timer->state != TIMER_STATE_CONTINUOUS) {
-		set_state(timer);
+
+	if ((timer->rate = rate)) {
+		timer->interval = roundf(1000.0 / ((float) rate));
+		timer->start = ast_tvnow();
+		timer->state = TIMER_STATE_TICKING;
+	} else {
+		timer->interval = 0;
+		timer->start = ast_tv(0, 0);
+		timer->state = TIMER_STATE_IDLE;
 	}
-	
+	timer->tick_count = 0;
+
 	ao2_unlock(timer);
 
 	ao2_ref(timer, -1);
@@ -204,12 +195,9 @@ static void pthread_timer_ack(int handle, unsigned int quantity)
 		return;
 	}
 
-	if (timer->state == TIMER_STATE_CONTINUOUS) {
-		/* Leave the pipe alone, please! */
-		return;
-	}
-
-	read_pipe(timer->pipe[PIPE_READ], quantity, 0);
+	ao2_lock(timer);
+	read_pipe(timer, quantity);
+	ao2_unlock(timer);
 
 	ao2_ref(timer, -1);
 }
@@ -224,8 +212,10 @@ static int pthread_timer_enable_continuous(int handle)
 	}
 
 	ao2_lock(timer);
-	timer->state = TIMER_STATE_CONTINUOUS;
-	write_byte(timer->pipe[PIPE_WRITE]);
+	if (!timer->continuous) {
+		timer->continuous = 1;
+		write_byte(timer);
+	}
 	ao2_unlock(timer);
 
 	ao2_ref(timer, -1);
@@ -243,8 +233,10 @@ static int pthread_timer_disable_continuous(int handle)
 	}
 
 	ao2_lock(timer);
-	set_state(timer);
-	read_pipe(timer->pipe[PIPE_READ], 0, 1);
+	if (timer->continuous) {
+		timer->continuous = 0;
+		read_pipe(timer, 1);
+	}
 	ao2_unlock(timer);
 
 	ao2_ref(timer, -1);
@@ -261,9 +253,11 @@ static enum ast_timer_event pthread_timer_get_event(int handle)
 		return res;
 	}
 
-	if (timer->state == TIMER_STATE_CONTINUOUS) {
+	ao2_lock(timer);
+	if (timer->continuous && timer->pending_ticks == 1) {
 		res = AST_TIMING_EVENT_CONTINUOUS;
 	}
+	ao2_unlock(timer);
 
 	ao2_ref(timer, -1);
 
@@ -311,7 +305,7 @@ static void pthread_timer_destructor(void *obj)
 }
 
 /*!
- * \note only PIPE_READ is guaranteed valid 
+ * \note only PIPE_READ is guaranteed valid
  */
 static int pthread_timer_hash(const void *obj, const int flags)
 {
@@ -321,7 +315,7 @@ static int pthread_timer_hash(const void *obj, const int flags)
 }
 
 /*!
- * \note only PIPE_READ is guaranteed valid 
+ * \note only PIPE_READ is guaranteed valid
  */
 static int pthread_timer_cmp(void *obj, void *arg, int flags)
 {
@@ -338,15 +332,16 @@ static int check_timer(struct pthread_timer *timer)
 {
 	struct timeval now;
 
-	if (timer->state == TIMER_STATE_IDLE || timer->state == TIMER_STATE_CONTINUOUS) {
-		return 0;	
+	if (timer->state == TIMER_STATE_IDLE) {
+		return 0;
 	}
-	
+
 	now = ast_tvnow();
 
 	if (timer->tick_count < (ast_tvdiff_ms(now, timer->start) / timer->interval)) {
 		timer->tick_count++;
 		if (!timer->tick_count) {
+			/* Handle overflow. */
 			timer->start = now;
 		}
 		return 1;
@@ -355,12 +350,27 @@ static int check_timer(struct pthread_timer *timer)
 	return 0;
 }
 
-static void read_pipe(int rd_fd, unsigned int quantity, int clear)
+/*!
+ * \internal
+ * \pre timer is locked
+ */
+static void read_pipe(struct pthread_timer *timer, unsigned int quantity)
 {
-	ast_assert(quantity || clear);
+	int rd_fd = timer->pipe[PIPE_READ];
+	int pending_ticks = timer->pending_ticks;
 
-	if (!quantity && clear) {
-		quantity = 1;
+	ast_assert(quantity);
+
+	if (timer->continuous && pending_ticks) {
+		pending_ticks--;
+	}
+
+	if (quantity > pending_ticks) {
+		quantity = pending_ticks;
+	}
+
+	if (!quantity) {
+		return;
 	}
 
 	do {
@@ -376,43 +386,47 @@ static void read_pipe(int rd_fd, unsigned int quantity, int clear)
 		FD_SET(rd_fd, &rfds);
 
 		if (select(rd_fd + 1, &rfds, NULL, NULL, &timeout) != 1) {
+			ast_debug(1, "Reading not available on timing pipe, "
+					"quantity: %u\n", quantity);
 			break;
 		}
 
-		res = read(rd_fd, buf, 
+		res = read(rd_fd, buf,
 			(quantity < sizeof(buf)) ? quantity : sizeof(buf));
 
 		if (res == -1) {
 			if (errno == EAGAIN) {
 				continue;
 			}
-			ast_log(LOG_ERROR, "read failed on timing pipe: %s\n", strerror(errno));
+			ast_log(LOG_ERROR, "read failed on timing pipe: %s\n",
+					strerror(errno));
 			break;
 		}
 
-		if (clear) {
-			continue;
-		}
-
 		quantity -= res;
+		timer->pending_ticks -= res;
 	} while (quantity);
 }
 
-static void write_byte(int wr_fd)
+/*!
+ * \internal
+ * \pre timer is locked
+ */
+static void write_byte(struct pthread_timer *timer)
 {
+	ssize_t res;
+	unsigned char x = 42;
+
 	do {
-		ssize_t res;
-		unsigned char x = 42;
+		res = write(timer->pipe[PIPE_WRITE], &x, 1);
+	} while (res == -1 && errno == EAGAIN);
 
-		res = write(wr_fd, &x, 1); 
-
-		if (res == -1) {
-			if (errno == EAGAIN) {
-				continue;
-			}
-			ast_log(LOG_ERROR, "Error writing to timing pipe: %s\n", strerror(errno));
-		}
-	} while (0);
+	if (res == -1) {
+		ast_log(LOG_ERROR, "Error writing to timing pipe: %s\n",
+				strerror(errno));
+	} else {
+		timer->pending_ticks++;
+	}
 }
 
 static int run_timer(void *obj, void *arg, int flags)
@@ -424,11 +438,9 @@ static int run_timer(void *obj, void *arg, int flags)
 	}
 
 	ao2_lock(timer);
-
 	if (check_timer(timer)) {
-		write_byte(timer->pipe[PIPE_WRITE]);
+		write_byte(timer);
 	}
-	
 	ao2_unlock(timer);
 
 	return 0;
@@ -477,7 +489,7 @@ static int init_timing_thread(void)
 
 static int load_module(void)
 {
-	if (!(pthread_timers = ao2_container_alloc(PTHREAD_TIMER_BUCKETS, 
+	if (!(pthread_timers = ao2_container_alloc(PTHREAD_TIMER_BUCKETS,
 		pthread_timer_hash, pthread_timer_cmp))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
@@ -509,5 +521,8 @@ static int unload_module(void)
 
 	return res;
 }
-
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "pthread Timing Interface");
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "pthread Timing Interface",
+		.load = load_module,
+		.unload = unload_module,
+		.load_pri = 10,
+		);

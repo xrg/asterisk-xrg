@@ -109,6 +109,26 @@ int ast_app_getdata(struct ast_channel *c, const char *prompt, char *s, int maxl
 int ast_app_getdata_full(struct ast_channel *c, const char *prompt, char *s, int maxlen, int timeout, int audiofd, int ctrlfd);
 
 /*!
+ * \since 1.6.3
+ * \brief Run a macro on a channel, placing a second channel into autoservice.
+ *
+ * This is a shorthand method that makes it very easy to run a macro on any given 
+ * channel. It is perfectly reasonable to supply a NULL autoservice_chan here in case
+ * there is no channel to place into autoservice. It is very important that the 
+ * autoservice_chan parameter is not locked prior to calling ast_app_run_macro. A 
+ * deadlock could result, otherwise.
+ *
+ * \param autoservice_chan A channel to place into autoservice while the macro is run
+ * \param macro_chan The channel to run the macro on
+ * \param macro_name The name of the macro to run
+ * \param macro_args The arguments to pass to the macro
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_app_run_macro(struct ast_channel *autoservice_chan, struct ast_channel 
+		*macro_chan, const char * const macro_name, const char * const macro_args);
+
+/*!
  * \brief Set voicemail function callbacks
  * \param[in] inboxcount2_func set function pointer
  * \param[in] sayname_func set function pointer
@@ -360,7 +380,9 @@ int ast_app_group_list_unlock(void);
   the argc argument counter field.
  */
 #define AST_STANDARD_APP_ARGS(args, parse) \
-	args.argc = ast_app_separate_args(parse, ',', args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
+	args.argc = __ast_app_separate_args(parse, ',', 1, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
+#define AST_STANDARD_RAW_ARGS(args, parse) \
+	args.argc = __ast_app_separate_args(parse, ',', 0, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
 
 /*!
   \brief Performs the 'nonstandard' argument separation process for an application.
@@ -373,12 +395,15 @@ int ast_app_group_list_unlock(void);
   the argc argument counter field.
  */
 #define AST_NONSTANDARD_APP_ARGS(args, parse, sep) \
-	args.argc = ast_app_separate_args(parse, sep, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
+	args.argc = __ast_app_separate_args(parse, sep, 1, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
+#define AST_NONSTANDARD_RAW_ARGS(args, parse, sep) \
+	args.argc = __ast_app_separate_args(parse, sep, 0, args.argv, ((sizeof(args) - offsetof(typeof(args), argv)) / sizeof(args.argv[0])))
 
 /*!
   \brief Separate a string into arguments in an array
   \param buf The string to be parsed (this must be a writable copy, as it will be modified)
   \param delim The character to be used to delimit arguments
+  \param remove_chars Remove backslashes and quote characters, while parsing
   \param array An array of 'char *' to be filled in with pointers to the found arguments
   \param arraylen The number of elements in the array (i.e. the number of arguments you will accept)
 
@@ -389,7 +414,8 @@ int ast_app_group_list_unlock(void);
 
   \return The number of arguments found, or zero if the function arguments are not valid.
 */
-unsigned int ast_app_separate_args(char *buf, char delim, char **array, int arraylen);
+unsigned int __ast_app_separate_args(char *buf, char delim, int remove_chars, char **array, int arraylen);
+#define ast_app_separate_args(a,b,c,d)	__ast_app_separate_args(a,b,1,c,d)
 
 /*!
   \brief A structure to hold the description of an application 'option'.
@@ -427,19 +453,19 @@ struct ast_app_option {
 
   Example usage:
   \code
-  enum {
+  enum my_app_option_flags {
         OPT_JUMP = (1 << 0),
         OPT_BLAH = (1 << 1),
         OPT_BLORT = (1 << 2),
-  } my_app_option_flags;
+  };
 
-  enum {
+  enum my_app_option_args {
         OPT_ARG_BLAH = 0,
         OPT_ARG_BLORT,
         !! this entry tells how many possible arguments there are,
            and must be the last entry in the list
         OPT_ARG_ARRAY_SIZE,
-  } my_app_option_args;
+  };
 
   AST_APP_OPTIONS(my_app_options, {
         AST_APP_OPTION('j', OPT_JUMP),

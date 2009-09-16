@@ -24,9 +24,11 @@
 #define _ASTERISK_PBX_H
 
 #include "asterisk/sched.h"
+#include "asterisk/devicestate.h"
 #include "asterisk/chanvars.h"
 #include "asterisk/hashtab.h"
 #include "asterisk/stringfields.h"
+#include "asterisk/xmldoc.h"
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -72,12 +74,6 @@ struct ast_sw;
 
 /*! \brief Typedef for devicestate and hint callbacks */
 typedef int (*ast_state_cb_type)(char *context, char* id, enum ast_extension_states state, void *data);
-
-/*! \brief From where the documentation come from */
-enum ast_doc_src {
-	AST_XML_DOC,            /*!< From XML documentation */
-	AST_STATIC_DOC          /*!< From application/function registration */
-};
 
 /*! \brief Data structure associated with a custom dialplan function */
 struct ast_custom_function {
@@ -366,6 +362,14 @@ int ast_add_extension2(struct ast_context *con, int replace, const char *extensi
 	int priority, const char *label, const char *callerid, 
 	const char *application, void *data, void (*datad)(void *), const char *registrar);
 
+/*!
+ * \brief Map devstate to an extension state.
+ *
+ * \param[in] device state
+ *
+ * \return the extension state mapping.
+ */
+enum ast_extension_states ast_devstate_to_extenstate(enum ast_device_state devstate);
 
 /*! 
  * \brief Uses hint and devicestate callback to get the state of an extension
@@ -1203,6 +1207,14 @@ int ast_wrlock_contexts_version(void);
 int ast_hashtab_compare_contexts(const void *ah_a, const void *ah_b);
 unsigned int ast_hashtab_hash_contexts(const void *obj);
 /*! @} */
+
+/*!
+ * \brief Command completion for the list of installed applications.
+ *
+ * This can be called from a CLI command completion function that wants to
+ * complete from the list of available applications.
+ */
+char *ast_complete_applications(const char *line, const char *word, int state);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

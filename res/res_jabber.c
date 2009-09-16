@@ -166,6 +166,26 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</enumlist>
 		</description>
 	</function>
+	<manager name="JabberSend" language="en_US">
+		<synopsis>
+			Sends a message to a Jabber Client.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Jabber" required="true">
+				<para>Client or transport Asterisk uses to connect to JABBER.</para>
+			</parameter>
+			<parameter name="JID" required="true">
+				<para>XMPP/Jabber JID (Name) of recipient.</para>
+			</parameter>
+			<parameter name="Message" required="true">
+				<para>Message to be sent to the buddy.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Sends a message to a Jabber Client.</para>
+		</description>
+	</manager>
  ***/
 
 /*! \todo This should really be renamed to xmpp.conf. For backwards compatibility, we
@@ -241,8 +261,8 @@ static char *app_ajisend = "JabberSend";
 
 static char *app_ajistatus = "JabberStatus";
 
-struct aji_client_container clients;
-struct aji_capabilities *capabilities = NULL;
+static struct aji_client_container clients;
+static struct aji_capabilities *capabilities = NULL;
 
 /*! \brief Global flags, initialized to default values */
 static struct ast_flags globalflags = { AJI_AUTOREGISTER };
@@ -540,7 +560,7 @@ static struct ast_custom_function jabberstatus_function = {
 /*!
  * \brief Dial plan function to send a message.
  * \param chan ast_channel
- * \param data  Data is sender|reciever|message.
+ * \param data  Data is sender|receiver|message.
  * \return 0 on success,-1 on error.
  */
 static int aji_send_exec(struct ast_channel *chan, const char *data)
@@ -561,7 +581,7 @@ static int aji_send_exec(struct ast_channel *chan, const char *data)
 
 	AST_STANDARD_APP_ARGS(args, s);
 	if (args.argc < 3) {
-		ast_log(LOG_ERROR, "JabberSend requires 3 arguments: '%s'\n", (char *) data);
+		ast_log(LOG_ERROR, "JabberSend requires 3 arguments: '%s'\n", data);
 		return -1;
 	}
 
@@ -618,10 +638,6 @@ static int aji_tls_handshake(struct aji_client *client)
 	int sock;
 	
 	ast_debug(1, "Starting TLS handshake\n"); 
-
-	/* Load encryption, hashing algorithms and error strings */
-	SSL_library_init();
-	SSL_load_error_strings();
 
 	/* Choose an SSL/TLS protocol version, create SSL_CTX */
 	client->ssl_method = SSLv3_method();
@@ -723,8 +739,8 @@ static int aji_io_recv(struct aji_client *client, char *buffer, size_t buf_len, 
 static int aji_recv (struct aji_client *client, int timeout)
 {
 	int len, ret;
-	char buf[NET_IO_BUF_SIZE -1];
-	char newbuf[NET_IO_BUF_SIZE -1];
+	char buf[NET_IO_BUF_SIZE - 1];
+	char newbuf[NET_IO_BUF_SIZE - 1];
 	int pos = 0;
 	int newbufpos = 0;
 	unsigned char c;
@@ -733,7 +749,7 @@ static int aji_recv (struct aji_client *client, int timeout)
 	memset(newbuf, 0, sizeof(newbuf));
 
 	while (1) {
-		len = aji_io_recv(client, buf, NET_IO_BUF_SIZE - 1, timeout);
+		len = aji_io_recv(client, buf, NET_IO_BUF_SIZE - 2, timeout);
 		if (len < 0) return IKS_NET_RWERR;
 		if (len == 0) return IKS_NET_EXPIRED;
 		buf[len] = '\0';
@@ -766,8 +782,18 @@ static int aji_recv (struct aji_client *client, int timeout)
 		ret = iks_parse(client->p, newbuf, 0, 0);
 		memset(newbuf, 0, sizeof(newbuf));
 
+		switch (ret) {
+		case IKS_NOMEM:
+			ast_log(LOG_WARNING, "Parsing failure: Out of memory.\n");
+			break;
+		case IKS_BADXML:
+			ast_log(LOG_WARNING, "Parsing failure: Invalid XML.\n");
+			break;
+		case IKS_HOOK:
+			ast_log(LOG_WARNING, "Parsing failure: Hook returned an error.\n");
+			break;
+		}
 		if (ret != IKS_OK) {
-			ast_log(LOG_WARNING, "XML parsing failed\n");
 			return ret;
 		}
 		ast_debug(3, "XML parsing successful\n");	
@@ -1411,7 +1437,7 @@ static int aji_dinfo_handler(void *data, ikspak *pak)
 
 	resource = aji_find_resource(buddy, pak->from->resource);
 	if (pak->subtype == IKS_TYPE_ERROR) {
-		ast_log(LOG_WARNING, "Recieved error from a client, turn on jabber debug!\n");
+		ast_log(LOG_WARNING, "Received error from a client, turn on jabber debug!\n");
 		return IKS_FILTER_EAT;
 	}
 	if (pak->subtype == IKS_TYPE_RESULT) {
@@ -2970,13 +2996,6 @@ struct aji_client_container *ast_aji_get_clients(void)
 	return &clients;
 }
 
-static const char mandescr_jabber_send[] =
-"Description: Sends a message to a Jabber Client.\n"
-"Variables: \n"
-"  Jabber:    Client or transport Asterisk uses to connect to JABBER\n"
-"  JID:       XMPP/Jabber JID (Name) of recipient\n" 
-"  Message:   Message to be sent to the buddy\n";
-
 /*! 
  * \brief  Send a Jabber Message via call from the Manager 
  * \param s mansession Manager session
@@ -3009,17 +3028,17 @@ static int manager_jabber_send(struct mansession *s, const struct message *m)
 	if (!client) {
 		astman_send_error(s, m, "Could not find Sender");
 		return 0;
-	}	
-	if (strchr(screenname, '@') && message){
-		ast_aji_send_chat(client, screenname, message);	
-		astman_append(s, "Response: Success\r\n");
-		if (!ast_strlen_zero(id))
-			astman_append(s, "ActionID: %s\r\n",id);
-		return 0;
 	}
-	astman_append(s, "Response: Error\r\n");
-	if (!ast_strlen_zero(id))
+	if (strchr(screenname, '@') && message) {
+		ast_aji_send_chat(client, screenname, message);
+		astman_append(s, "Response: Success\r\n");
+	} else {
+		astman_append(s, "Response: Error\r\n");
+	}
+	if (!ast_strlen_zero(id)) {
 		astman_append(s, "ActionID: %s\r\n",id);
+	}
+	astman_append(s, "\r\n");
 	return 0;
 }
 
@@ -3079,8 +3098,7 @@ static int load_module(void)
 	ASTOBJ_CONTAINER_INIT(&clients);
 	if(!aji_reload(0))
 		return AST_MODULE_LOAD_DECLINE;
-	ast_manager_register2("JabberSend", EVENT_FLAG_SYSTEM, manager_jabber_send,
-			"Sends a message to a Jabber Client", mandescr_jabber_send);
+	ast_manager_register_xml("JabberSend", EVENT_FLAG_SYSTEM, manager_jabber_send);
 	ast_register_application_xml(app_ajisend, aji_send_exec);
 	ast_register_application_xml(app_ajistatus, aji_status_exec);
 	ast_cli_register_multiple(aji_cli, ARRAY_LEN(aji_cli));

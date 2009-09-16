@@ -101,13 +101,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  */
 #define TEXT_SIZE	256
 
-#ifndef MIN
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#endif
-#ifndef MAX
-#define MAX(a,b) ((a) > (b) ? (a) : (b))
-#endif
-
 /*! \brief Dance, Kirby, Dance! @{ */
 #define V_BEGIN " --- <(\"<) --- "
 #define V_END   " --- (>\")> ---\n"
@@ -189,8 +182,8 @@ static struct ast_jb_conf default_jbconf = {
 static struct ast_jb_conf global_jbconf;
 
 /*! Channel Technology Callbacks @{ */
-static struct ast_channel *console_request(const char *type, int format, 
-	void *data, int *cause);
+static struct ast_channel *console_request(const char *type, int format,
+	const struct ast_channel *requestor, void *data, int *cause);
 static int console_digit_begin(struct ast_channel *c, char digit);
 static int console_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int console_text(struct ast_channel *c, const char *text);
@@ -413,12 +406,12 @@ static int stop_stream(struct console_pvt *pvt)
 /*!
  * \note Called with the pvt struct locked
  */
-static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext, const char *ctx, int state)
+static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext, const char *ctx, int state, const char *linkedid)
 {
 	struct ast_channel *chan;
 
 	if (!(chan = ast_channel_alloc(1, state, pvt->cid_num, pvt->cid_name, NULL, 
-		ext, ctx, 0, "Console/%s", pvt->name))) {
+		ext, ctx, linkedid, 0, "Console/%s", pvt->name))) {
 		return NULL;
 	}
 
@@ -447,7 +440,7 @@ static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext,
 	return chan;
 }
 
-static struct ast_channel *console_request(const char *type, int format, void *data, int *cause)
+static struct ast_channel *console_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	int oldformat = format;
 	struct ast_channel *chan = NULL;
@@ -471,7 +464,7 @@ static struct ast_channel *console_request(const char *type, int format, void *d
 	}
 
 	console_pvt_lock(pvt);
-	chan = console_new(pvt, NULL, NULL, AST_STATE_DOWN);
+	chan = console_new(pvt, NULL, NULL, AST_STATE_DOWN, requestor ? requestor->linkedid : NULL);
 	console_pvt_unlock(pvt);
 
 	if (!chan)
@@ -833,13 +826,12 @@ static char *cli_console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 	if (ast_exists_extension(NULL, myc, mye, 1, NULL)) {
 		console_pvt_lock(pvt);
 		pvt->hookstate = 1;
-		console_new(pvt, mye, myc, AST_STATE_RINGING);
+		console_new(pvt, mye, myc, AST_STATE_RINGING, NULL);
 		console_pvt_unlock(pvt);
 	} else
 		ast_cli(a->fd, "No such extension '%s' in context '%s'\n", mye, myc);
 
-	if (s)
-		free(s);
+	free(s);
 
 	unref_pvt(pvt);
 
@@ -1380,7 +1372,7 @@ static void destroy_pvts(void)
 /*!
  * \brief Load the configuration
  * \param reload if this was called due to a reload
- * \retval 0 succcess
+ * \retval 0 success
  * \retval -1 failure
  */
 static int load_config(int reload)

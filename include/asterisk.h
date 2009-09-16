@@ -49,18 +49,20 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
-#include <unistd.h>
 #include <fcntl.h>
 
 #define	open(a,...)	__ast_fdleak_open(__FILE__,__LINE__,__PRETTY_FUNCTION__, a, __VA_ARGS__)
-#define pipe(a)	__ast_fdleak_pipe(a, __FILE__,__LINE__,__PRETTY_FUNCTION__)
+#define pipe(a)		__ast_fdleak_pipe(a, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 #define socket(a,b,c)	__ast_fdleak_socket(a, b, c, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 #define close(a)	__ast_fdleak_close(a)
 #define	fopen(a,b)	__ast_fdleak_fopen(a, b, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 #define	fclose(a)	__ast_fdleak_fclose(a)
 #define	dup2(a,b)	__ast_fdleak_dup2(a, b, __FILE__,__LINE__,__PRETTY_FUNCTION__)
-#define dup(a)	__ast_fdleak_dup(a, __FILE__,__LINE__,__PRETTY_FUNCTION__)
+#define dup(a)		__ast_fdleak_dup(a, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 
+#if defined(__cplusplus) || defined(c_plusplus)
+extern "C" {
+#endif
 int __ast_fdleak_open(const char *file, int line, const char *func, const char *path, int flags, ...);
 int __ast_fdleak_pipe(int *fds, const char *file, int line, const char *func);
 int __ast_fdleak_socket(int domain, int type, int protocol, const char *file, int line, const char *func);
@@ -69,6 +71,9 @@ FILE *__ast_fdleak_fopen(const char *path, const char *mode, const char *file, i
 int __ast_fdleak_fclose(FILE *ptr);
 int __ast_fdleak_dup2(int oldfd, int newfd, const char *file, int line, const char *func);
 int __ast_fdleak_dup(int oldfd, const char *file, int line, const char *func);
+#if defined(__cplusplus) || defined(c_plusplus)
+}
+#endif
 #endif
 
 int ast_set_priority(int);			/*!< Provided by asterisk.c */

@@ -19,54 +19,22 @@
 /*! \file
  *
  * \brief Asterisk Logger
- * 
+ *
  * Logging routines
  *
  * \author Mark Spencer <markster@digium.com>
  */
 
-/*
- * define _ASTERISK_LOGGER_H to prevent the inclusion of logger.h;
- * it redefines LOG_* which we need to define syslog_level_map.
- * later, we force the inclusion of logger.h again.
- */
-#define _ASTERISK_LOGGER_H
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-/*
- * WARNING: additional #include directives should NOT be placed here, they 
- * should be placed AFTER '#undef _ASTERISK_LOGGER_H' below
- */
-#include "asterisk/_private.h"
-#include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
-#include <signal.h>
-#include <time.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#ifdef HAVE_BKTR
-#include <execinfo.h>
-#define MAX_BACKTRACE_FRAMES 20
-#endif
-
-#define SYSLOG_NAMES /* so we can map syslog facilities names to their numeric values,
-		        from <syslog.h> which is included by logger.h */
+/* When we include logger.h again it will trample on some stuff in syslog.h, but
+ * nothing we care about in here. */
 #include <syslog.h>
 
-static const int syslog_level_map[] = {
-	LOG_DEBUG,
-	LOG_INFO,    /* arbitrary equivalent of LOG_EVENT */
-	LOG_NOTICE,
-	LOG_WARNING,
-	LOG_ERR,
-	LOG_DEBUG,
-	LOG_DEBUG
-};
-
-#define SYSLOG_NLEVELS sizeof(syslog_level_map) / sizeof(int)
-
-#undef _ASTERISK_LOGGER_H	/* now include logger.h */
+#include "asterisk/_private.h"
+#include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
 #include "asterisk/logger.h"
 #include "asterisk/lock.h"
 #include "asterisk/channel.h"
@@ -79,6 +47,16 @@ static const int syslog_level_map[] = {
 #include "asterisk/strings.h"
 #include "asterisk/pbx.h"
 #include "asterisk/app.h"
+#include "asterisk/syslog.h"
+
+#include <signal.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#ifdef HAVE_BKTR
+#include <execinfo.h>
+#define MAX_BACKTRACE_FRAMES 20
+#endif
 
 #if defined(__linux__) && !defined(__NR_gettid)
 #include <asm/unistd.h>
@@ -97,7 +75,7 @@ static char exec_after_rotate[256] = "";
 static int filesize_reload_needed;
 static unsigned int global_logmask = 0xFFFF;
 
-enum rotatestrategy {
+static enum rotatestrategy {
 	SEQUENTIAL = 1 << 0,     /* Original method - create a new file, in order */
 	ROTATE = 1 << 1,         /* Rotate all files, such that the oldest file has the highest suffix */
 	TIMESTAMP = 1 << 2,      /* Append the epoch timestamp onto the end of the archived file */
@@ -256,9 +234,6 @@ static struct logchannel *make_logchannel(const char *channel, const char *compo
 {
 	struct logchannel *chan;
 	char *facility;
-#ifndef SOLARIS
-	CODE *cptr;
-#endif
 
 	if (ast_strlen_zero(channel) || !(chan = ast_calloc(1, sizeof(*chan) + strlen(components) + 1)))
 		return NULL;
@@ -278,61 +253,9 @@ static struct logchannel *make_logchannel(const char *channel, const char *compo
 			facility = "local0";
 		}
 
-#ifndef SOLARIS
-		/*
- 		* Walk through the list of facilitynames (defined in sys/syslog.h)
-		* to see if we can find the one we have been given
-		*/
-		chan->facility = -1;
- 		cptr = facilitynames;
-		while (cptr->c_name) {
-			if (!strcasecmp(facility, cptr->c_name)) {
-		 		chan->facility = cptr->c_val;
-				break;
-			}
-			cptr++;
-		}
-#else
-		chan->facility = -1;
-		if (!strcasecmp(facility, "kern")) 
-			chan->facility = LOG_KERN;
-		else if (!strcasecmp(facility, "USER")) 
-			chan->facility = LOG_USER;
-		else if (!strcasecmp(facility, "MAIL")) 
-			chan->facility = LOG_MAIL;
-		else if (!strcasecmp(facility, "DAEMON")) 
-			chan->facility = LOG_DAEMON;
-		else if (!strcasecmp(facility, "AUTH")) 
-			chan->facility = LOG_AUTH;
-		else if (!strcasecmp(facility, "SYSLOG")) 
-			chan->facility = LOG_SYSLOG;
-		else if (!strcasecmp(facility, "LPR")) 
-			chan->facility = LOG_LPR;
-		else if (!strcasecmp(facility, "NEWS")) 
-			chan->facility = LOG_NEWS;
-		else if (!strcasecmp(facility, "UUCP")) 
-			chan->facility = LOG_UUCP;
-		else if (!strcasecmp(facility, "CRON")) 
-			chan->facility = LOG_CRON;
-		else if (!strcasecmp(facility, "LOCAL0")) 
-			chan->facility = LOG_LOCAL0;
-		else if (!strcasecmp(facility, "LOCAL1")) 
-			chan->facility = LOG_LOCAL1;
-		else if (!strcasecmp(facility, "LOCAL2")) 
-			chan->facility = LOG_LOCAL2;
-		else if (!strcasecmp(facility, "LOCAL3")) 
-			chan->facility = LOG_LOCAL3;
-		else if (!strcasecmp(facility, "LOCAL4")) 
-			chan->facility = LOG_LOCAL4;
-		else if (!strcasecmp(facility, "LOCAL5")) 
-			chan->facility = LOG_LOCAL5;
-		else if (!strcasecmp(facility, "LOCAL6")) 
-			chan->facility = LOG_LOCAL6;
-		else if (!strcasecmp(facility, "LOCAL7")) 
-			chan->facility = LOG_LOCAL7;
-#endif /* Solaris */
+		chan->facility = ast_syslog_facility(facility);
 
-		if (0 > chan->facility) {
+		if (chan->facility < 0) {
 			fprintf(stderr, "Logger Warning: bad syslog facility in logger.conf\n");
 			ast_free(chan);
 			return NULL;
@@ -612,11 +535,11 @@ static int rotate_file(const char *filename)
 	}
 
 	if (!ast_strlen_zero(exec_after_rotate)) {
-		struct ast_channel *c = ast_channel_alloc(0, 0, "", "", "", "", "", 0, "Logger/rotate");
+		struct ast_channel *c = ast_dummy_channel_alloc();
 		char buf[512];
 		pbx_builtin_setvar_helper(c, "filename", filename);
 		pbx_substitute_variables_helper(c, exec_after_rotate, buf, sizeof(buf));
-		if (ast_safe_system(buf) != -1) {
+		if (ast_safe_system(buf) == -1) {
 			ast_log(LOG_WARNING, "error executing '%s'\n", buf);
 		}
 		c = ast_channel_release(c);
@@ -840,29 +763,30 @@ static int handle_SIGXFSZ(int sig)
 	return 0;
 }
 
-static void ast_log_vsyslog(int level, const char *file, int line, const char *function, const char *str, long pid)
+static void ast_log_vsyslog(struct logmsg *msg)
 {
 	char buf[BUFSIZ];
+	int syslog_level = ast_syslog_priority_from_loglevel(msg->level);
 
-	if (level >= SYSLOG_NLEVELS) {
+	if (syslog_level < 0) {
 		/* we are locked here, so cannot ast_log() */
-		fprintf(stderr, "ast_log_vsyslog called with bogus level: %d\n", level);
+		fprintf(stderr, "ast_log_vsyslog called with bogus level: %d\n", msg->level);
 		return;
 	}
 
-	if (level == __LOG_VERBOSE) {
-		snprintf(buf, sizeof(buf), "VERBOSE[%ld]: %s", pid, str);
-		level = __LOG_DEBUG;
-	} else if (level == __LOG_DTMF) {
-		snprintf(buf, sizeof(buf), "DTMF[%ld]: %s", pid, str);
-		level = __LOG_DEBUG;
+	if (msg->level == __LOG_VERBOSE) {
+		snprintf(buf, sizeof(buf), "VERBOSE[%ld]: %s", msg->process_id, msg->message);
+		msg->level = __LOG_DEBUG;
+	} else if (msg->level == __LOG_DTMF) {
+		snprintf(buf, sizeof(buf), "DTMF[%ld]: %s", msg->process_id, msg->message);
+		msg->level = __LOG_DEBUG;
 	} else {
 		snprintf(buf, sizeof(buf), "%s[%ld]: %s:%d in %s: %s",
-			 levels[level], pid, file, line, function, str);
+			 levels[msg->level], msg->process_id, msg->file, msg->line, msg->function, msg->message);
 	}
 
 	term_strip(buf, buf, strlen(buf) + 1);
-	syslog(syslog_level_map[level], "%s", buf);
+	syslog(syslog_level, "%s", buf);
 }
 
 /*! \brief Print a normal log message to the channels */
@@ -880,7 +804,7 @@ static void logger_print_normal(struct logmsg *logmsg)
 				continue;
 			/* Check syslog channels */
 			if (chan->type == LOGTYPE_SYSLOG && (chan->logmask & (1 << logmsg->level))) {
-				ast_log_vsyslog(logmsg->level, logmsg->file, logmsg->line, logmsg->function, logmsg->message, logmsg->process_id);
+				ast_log_vsyslog(logmsg);
 			/* Console channels */
 			} else if (chan->type == LOGTYPE_CONSOLE && (chan->logmask & (1 << logmsg->level))) {
 				char linestr[128];
@@ -987,7 +911,6 @@ static void *logger_thread(void *data)
 				logger_print_verbose(msg);
 
 			/* Free the data since we are done */
-			ast_string_field_free_memory(msg);
 			ast_free(msg);
 		}
 

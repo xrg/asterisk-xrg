@@ -285,6 +285,23 @@ struct ast_party_id {
 
 /*!
  * \since 1.6.3
+ * \brief Caller Party information.
+ * \note All string fields here are malloc'ed, so they need to be
+ * freed when the structure is deleted.
+ * \note NULL and "" must be considered equivalent.
+ */
+struct ast_party_caller {
+	struct ast_party_id id;		/*! \brief Caller party ID */
+
+	/*! \brief Automatic Number Identification (ANI) (Malloced) */
+	char *ani;
+
+	/*! \brief Automatic Number Identification 2 (Info Digits) */
+	int ani2;
+};
+
+/*!
+ * \since 1.6.3
  * \brief Connected Line/Party information.
  * \note All string fields here are malloc'ed, so they need to be
  * freed when the structure is deleted.
@@ -361,7 +378,7 @@ struct ast_channel_tech {
 	int properties;			/*!< Technology Properties */
 
 	/*! \brief Requester - to set up call data structures (pvt's) */
-	struct ast_channel *(* const requester)(const char *type, int format, void *data, int *cause);
+	struct ast_channel *(* const requester)(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause);
 
 	int (* const devicestate)(void *data);	/*!< Devicestate call back */
 
@@ -612,9 +629,13 @@ struct ast_channel {
 		AST_STRING_FIELD(language);		/*!< Language requested for voice prompts */
 		AST_STRING_FIELD(musicclass);		/*!< Default music class */
 		AST_STRING_FIELD(accountcode);		/*!< Account code for billing */
+		AST_STRING_FIELD(peeraccount);		/*!< Peer account code for billing */
+		AST_STRING_FIELD(userfield);		/*!< Userfield for CEL billing */
 		AST_STRING_FIELD(call_forward);		/*!< Where to forward to if asked to dial on this interface */
 		AST_STRING_FIELD(uniqueid);		/*!< Unique Channel Identifier */
+		AST_STRING_FIELD(linkedid);		/*!< Linked Channel Identifier -- gets propagated by linkage */
 		AST_STRING_FIELD(parkinglot);		/*! Default parking lot, if empty, default parking lot  */
+		AST_STRING_FIELD(hangupsource);		/*! Who is responsible for hanging up this channel */
 		AST_STRING_FIELD(dialcontext);		/*!< Dial: Extension context that we were called from */
 	);
 
@@ -906,6 +927,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
 
 /*!
  * \brief Create a channel structure
+ * \since 1.6.3
  *
  * \retval NULL failure
  * \retval non-NULL successfully allocated channel
@@ -913,31 +935,56 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
  * \note By default, new channels are set to the "s" extension
  *       and "default" context.
  */
-struct ast_channel * attribute_malloc __attribute__((format(printf, 12, 13)))
+struct ast_channel * attribute_malloc __attribute__((format(printf, 13, 14)))
 	__ast_channel_alloc(int needqueue, int state, const char *cid_num,
 			    const char *cid_name, const char *acctcode,
 			    const char *exten, const char *context,
-			    const int amaflag, const char *file, int line,
-			    const char *function, const char *name_fmt, ...);
+			    const char *linkedid, const int amaflag,
+			    const char *file, int line, const char *function,
+			    const char *name_fmt, ...);
 
-#define ast_channel_alloc(needqueue, state, cid_num, cid_name, acctcode, exten, context, amaflag, ...) \
-	__ast_channel_alloc(needqueue, state, cid_num, cid_name, acctcode, exten, context, amaflag, \
+#define ast_channel_alloc(needqueue, state, cid_num, cid_name, acctcode, exten, context, linkedid, amaflag, ...) \
+	__ast_channel_alloc(needqueue, state, cid_num, cid_name, acctcode, exten, context, linkedid, amaflag, \
 			    __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
 
 /*!
- * \brief Queue an outgoing frame
+ * \brief Create a fake channel structure
  *
- * \note The channel does not need to be locked before calling this function.
+ * \retval NULL failure
+ * \retval non-NULL successfully allocated channel
+ *
+ * \note This function should ONLY be used to create a fake channel
+ *       that can then be populated with data for use in variable
+ *       substitution when a real channel does not exist.
+ */
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
+#define ast_dummy_channel_alloc()	__ast_dummy_channel_alloc(__FILE__, __LINE__, __PRETTY_FUNCTION__)
+struct ast_channel *__ast_dummy_channel_alloc(const char *file, int line, const char *function);
+#else
+struct ast_channel *ast_dummy_channel_alloc(void);
+#endif
+
+/*!
+ * \brief Queue one or more frames to a channel's frame queue
+ *
+ * \param chan the channel to queue the frame(s) on
+ * \param f the frame(s) to queue.  Note that the frame(s) will be duplicated
+ *        by this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame(s) being passed if
+ *        necessary.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
  */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
 
 /*!
- * \brief Queue an outgoing frame to the head of the frame queue
+ * \brief Queue one or more frames to the head of a channel's frame queue
  *
- * \param chan the channel to queue the frame on
- * \param f the frame to queue.  Note that this frame will be duplicated by
- *        this function.  It is the responsibility of the caller to handle
- *        freeing the memory associated with the frame being passed if
+ * \param chan the channel to queue the frame(s) on
+ * \param f the frame(s) to queue.  Note that the frame(s) will be duplicated
+ *        by this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame(s) being passed if
  *        necessary.
  *
  * \retval 0 success
@@ -1043,7 +1090,7 @@ struct ast_channel *ast_channel_release(struct ast_channel *chan);
  * \retval NULL failure
  * \retval non-NULL channel on success
  */
-struct ast_channel *ast_request(const char *type, int format, void *data, int *status);
+struct ast_channel *ast_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *status);
 
 /*!
  * \brief Request a channel of a given type, with data as optional information used
@@ -1060,7 +1107,7 @@ struct ast_channel *ast_request(const char *type, int format, void *data, int *s
  * \return Returns an ast_channel on success or no answer, NULL on failure.  Check the value of chan->_state
  * to know if the call was answered or not.
  */
-struct ast_channel *ast_request_and_dial(const char *type, int format, void *data,
+struct ast_channel *ast_request_and_dial(const char *type, int format, const struct ast_channel *requestor, void *data,
 	int timeout, int *reason, const char *cid_num, const char *cid_name);
 
 /*!
@@ -1077,8 +1124,20 @@ struct ast_channel *ast_request_and_dial(const char *type, int format, void *dat
  * \return Returns an ast_channel on success or no answer, NULL on failure.  Check the value of chan->_state
  * to know if the call was answered or not.
  */
-struct ast_channel *__ast_request_and_dial(const char *type, int format, void *data,
+struct ast_channel *__ast_request_and_dial(const char *type, int format, const struct ast_channel *requestor, void *data,
 	int timeout, int *reason, const char *cid_num, const char *cid_name, struct outgoing_helper *oh);
+
+/*!
+ * \brief Forwards a call to a new channel specified by the original channel's call_forward str.  If possible, the new forwarded channel is created and returned while the original one is terminated.
+ * \param caller in channel that requested orig
+ * \param orig channel being replaced by the call forward channel
+ * \param timeout maximum amount of time to wait for setup of new forward channel
+ * \param format requested channel format
+ * \param oh outgoing helper used with original channel
+ * \param outstate reason why unsuccessful (if uncuccessful)
+ * \return Returns the forwarded call's ast_channel on success or NULL on failure
+ */
+struct ast_channel *ast_call_forward(struct ast_channel *caller, struct ast_channel *orig, int *timeout, int format, struct outgoing_helper *oh, int *outstate);
 
 /*!
  * \brief Register a channel technology (a new channel driver)
@@ -1168,6 +1227,20 @@ int ast_softhangup(struct ast_channel *chan, int cause);
  * \param cause	Ast hangupcause for hangup (see cause.h)
  */
 int ast_softhangup_nolock(struct ast_channel *chan, int cause);
+
+/*!
+ * \brief Set the source of the hangup in this channel and it's bridge
+ *
+ * \param chan channel to set the field on
+ * \param source a string describing the source of the hangup for this channel
+ *
+ * \since 1.6.3
+ *
+ * Hangupsource is generally the channel name that caused the bridge to be
+ * hung up, but it can also be other things such as "dialplan/agi"
+ * This can then be logged in the CDR or CEL
+ */
+void ast_set_hangupsource(struct ast_channel *chan, const char *source, int force);
 
 /*! \brief Check to see if a channel is needing hang up
  * \param chan channel on which to check for hang up
@@ -2262,6 +2335,22 @@ struct ast_channel *ast_channel_get_by_exten(const char *exten, const char *cont
 /*! @} End channel search functions. */
 
 /*!
+  \brief propagate the linked id between chan and peer
+ */
+void ast_channel_set_linkgroup(struct ast_channel *chan, struct ast_channel *peer);
+
+
+/*!
+ * \since 1.6.3
+ * \brief Initialize the given caller structure.
+ *
+ * \param init Caller structure to initialize.
+ *
+ * \return Nothing
+ */
+void ast_party_caller_init(struct ast_party_caller *init);
+
+/*!
  * \since 1.6.3
  * \brief Copy the source caller information to the destination caller.
  *
@@ -2550,6 +2639,34 @@ void ast_channel_update_redirecting(struct ast_channel *chan, const struct ast_p
  */
 void ast_channel_queue_redirecting_update(struct ast_channel *chan, const struct ast_party_redirecting *redirecting);
 
+/*!
+ * \since 1.6.3
+ * \brief Run a connected line interception macro and update a channel's connected line
+ * information
+ *
+ * Whenever we want to update a channel's connected line information, we may need to run
+ * a macro so that an administrator can manipulate the information before sending it
+ * out. This function both runs the macro and sends the update to the channel.
+ *
+ * \param autoservice_chan Channel to place into autoservice while the macro is running.
+ * 	It is perfectly safe for this to be NULL
+ * \param macro_chan The channel to run the macro on. Also the channel from which we
+ * 	determine which macro we need to run.
+ * \param connected_info Either an ast_party_connected_line or ast_frame pointer of type
+ * 	AST_CONTROL_CONNECTED_LINE
+ * \param caller If true, then run CONNECTED_LINE_CALLER_SEND_MACRO, otherwise run
+ * 	CONNECTED_LINE_CALLEE_SEND_MACRO
+ * \param frame If true, then connected_info is an ast_frame pointer, otherwise it is an
+ * 	ast_party_connected_line pointer.
+ * \retval 0 Success
+ * \retval -1 Either the macro does not exist, or there was an error while attempting to
+ * 	run the macro
+ *
+ * \todo Have multiple return codes based on the MACRO_RESULT
+ * \todo Make constants so that caller and frame can be more expressive than just '1' and
+ * 	'0'
+ */
+int ast_channel_connected_line_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const void *connected_info, int caller, int frame);
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif

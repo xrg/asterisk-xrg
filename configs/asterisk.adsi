@@ -86,10 +86,10 @@ SUB "main" IS
 	IFEVENT OFFHOOK THEN
 		CLEAR
 		CLEARFLAG "nocallwaiting"
-		CLEARDISPLAY 
+		CLEARDISPLAY
 		SHOWDISPLAY "titles" AT 1
-		SHOWKEYS "vmail" 
-		SHOWKEYS "cidblock" 
+		SHOWKEYS "vmail"
+		SHOWKEYS "cidblock"
 		SHOWKEYS "cwdisable" UNLESS "nocallwaiting"
 		GOTO "offHook"
 	ENDIF
@@ -117,9 +117,9 @@ SUB "main" IS
 		SHOWKEYS "vmail_OH"
 	ENDIF
 	IFEVENT TIMER THEN
-		CLEAR	
+		CLEAR
 		SHOWDISPLAY "empty" AT 4
-	ENDIF		
+	ENDIF
 ENDSUB
 
 SUB "offHook" IS
