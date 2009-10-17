@@ -7662,10 +7662,12 @@ int ast_async_goto(struct ast_channel *chan, const char *context, const char *ex
 				tmpchan = NULL;
 				res = -1;
 			} else {
-				/* Grab the locks and get going */
-				ast_channel_lock(tmpchan);
+				/* it may appear odd to unlock chan here since the masquerade is on
+				 * tmpchan, but no channel locks should be held when doing a masquerade
+				 * since a masquerade requires a lock on the channels ao2 container. */
+				ast_channel_unlock(chan);
 				ast_do_masquerade(tmpchan);
-				ast_channel_unlock(tmpchan);
+				ast_channel_lock(chan);
 				/* Start the PBX going on our stolen channel */
 				if (ast_pbx_start(tmpchan)) {
 					ast_log(LOG_WARNING, "Unable to start PBX on %s\n", tmpchan->name);
@@ -8025,7 +8027,7 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 			else if (e->matchcid && !tmp->matchcid)
 				res = -1;
 			else
-				res = strcasecmp(e->cidmatch, tmp->cidmatch);
+				res = ext_cmp(e->cidmatch, tmp->cidmatch);
 		}
 		if (res >= 0)
 			break;
@@ -8999,12 +9001,10 @@ static int pbx_builtin_execiftime(struct ast_channel *chan, const char *data)
  */
 static int pbx_builtin_wait(struct ast_channel *chan, const char *data)
 {
-	double s;
 	int ms;
 
 	/* Wait for "n" seconds */
-	if (data && (s = atof(data)) > 0.0) {
-		ms = s * 1000.0;
+	if (!ast_app_parse_timelen(data, &ms, TIMELEN_SECONDS) && ms > 0) {
 		return ast_safe_sleep(chan, ms);
 	}
 	return 0;
@@ -9016,7 +9016,6 @@ static int pbx_builtin_wait(struct ast_channel *chan, const char *data)
 static int pbx_builtin_waitexten(struct ast_channel *chan, const char *data)
 {
 	int ms, res;
-	double s;
 	struct ast_flags flags = {0};
 	char *opts[1] = { NULL };
 	char *parse;
@@ -9048,12 +9047,13 @@ static int pbx_builtin_waitexten(struct ast_channel *chan, const char *data)
 		}
 	}
 	/* Wait for "n" seconds */
-	if (args.timeout && (s = atof(args.timeout)) > 0)
-		 ms = s * 1000.0;
-	else if (chan->pbx)
+	if (!ast_app_parse_timelen(args.timeout, &ms, TIMELEN_SECONDS) && ms > 0) {
+		/* Yay! */
+	} else if (chan->pbx) {
 		ms = chan->pbx->rtimeoutms;
-	else
+	} else {
 		ms = 10000;
+	}
 
 	res = ast_waitfordigit(chan, ms);
 	if (!res) {
@@ -9126,8 +9126,6 @@ static int pbx_builtin_background(struct ast_channel *chan, const char *data)
 		} else if (!ast_test_flag(&flags, BACKGROUND_NOANSWER)) {
 			res = ast_answer(chan);
 		}
-		/* Send progress control frame to start early media */
-		ast_indicate(chan, AST_CONTROL_PROGRESS);
 	}
 
 	if (!res) {

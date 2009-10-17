@@ -24,6 +24,7 @@
 #include "asterisk/config.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/lock.h"
+#include "asterisk/dial.h"
 
 /*! \file calendar.h
  * \brief A general API for managing calendar events with Asterisk
@@ -59,8 +60,6 @@
  * which will only be called when the resource module calls ast_calendar_unregister()
  * to unregister that module's calendar type (usually done in module_unload())
  */
-
-extern struct ast_config *ast_calendar_config;
 
 struct ast_calendar;
 struct ast_calendar_event;
@@ -105,6 +104,8 @@ struct ast_calendar_event {
 	int notify_sched;    /*!< The sched for event notification */
 	int bs_start_sched;  /*!< The sched for changing the device state at the start of an event */
 	int bs_end_sched;    /*!< The sched for changing the device state at the end of an event */
+	struct ast_dial *dial;
+	struct ast_channel *notify_chan;
 	AST_LIST_HEAD_NOLOCK(attendees, ast_calendar_attendee) attendees;
 };
 
@@ -183,5 +184,17 @@ struct ast_calendar_event *ast_calendar_unref_event(struct ast_calendar_event *e
  * \param cal calendar whose events need to be cleared
  */
 void ast_calendar_clear_events(struct ast_calendar *cal);
+
+/*! \brief Grab and lock pointer to the calendar config (read only)
+ *
+ * \note ast_calendar_config_release must be called when finished with the pointer
+ *
+ * \return the parsed calendar config
+ */
+const struct ast_config *ast_calendar_config_acquire(void);
+
+/*! \brief Release the calendar config
+ */
+void ast_calendar_config_release(void);
 
 #endif /* _ASTERISK_CALENDAR_H */

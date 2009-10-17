@@ -160,6 +160,32 @@ static icalcomponent *fetch_icalendar(struct icalendar_pvt *pvt)
 	return comp;
 }
 
+static time_t icalfloat_to_timet(icaltimetype time) 
+{
+	struct ast_tm tm = {0,};
+	struct timeval tv;
+
+	tm.tm_mday = time.day;
+	tm.tm_mon = time.month - 1;
+	tm.tm_year = time.year - 1900;
+	tm.tm_hour = time.hour;
+	tm.tm_min = time.minute;
+	tm.tm_sec = time.second;
+	tm.tm_isdst = -1;
+	tv = ast_mktime(&tm, NULL);
+
+	return tv.tv_sec;
+}
+
+/* span->start & span->end may be dates or floating times which have no timezone,
+ * which would mean that they should apply to the local timezone for all recepients.
+ * For example, if a meeting was set for 1PM-2PM floating time, people in different time
+ * zones would not be scheduled at the same local times.  Dates are often treated as
+ * floating times, so all day events will need to be converted--so we can trust the
+ * span here, and instead will grab the start and end from the component, which will
+ * allow us to test for floating times or dates.
+ */
+
 static void icalendar_add_event(icalcomponent *comp, struct icaltime_span *span, void *data)
 {
 	struct icalendar_pvt *pvt = data;
@@ -180,23 +206,12 @@ static void icalendar_add_event(icalcomponent *comp, struct icaltime_span *span,
 		return;
 	}
 
-	start = icaltime_from_timet_with_zone(span->start, 0, utc);
-	end = icaltime_from_timet_with_zone(span->end, 0, utc);
-	event->start = span->start;
-	event->end = span->end;
+	start = icalcomponent_get_dtstart(comp);
+	end = icalcomponent_get_dtend(comp);
 
-	switch(icalcomponent_get_status(comp)) {
-	case ICAL_STATUS_CONFIRMED:
-		event->busy_state = AST_CALENDAR_BS_BUSY;
-		break;
-
-	case ICAL_STATUS_TENTATIVE:
-		event->busy_state = AST_CALENDAR_BS_BUSY_TENTATIVE;
-		break;
-
-	default:
-		event->busy_state = AST_CALENDAR_BS_FREE;
-	}
+	event->start = icaltime_get_tzid(start) ? span->start : icalfloat_to_timet(start);
+	event->end = icaltime_get_tzid(end) ? span->end : icalfloat_to_timet(end);
+	event->busy_state = span->is_busy ? AST_CALENDAR_BS_BUSY : AST_CALENDAR_BS_FREE;
 
 	if ((prop = icalcomponent_get_first_property(comp, ICAL_SUMMARY_PROPERTY))) {
 		ast_string_field_set(event, summary, icalproperty_get_value_as_string(prop));
@@ -324,11 +339,12 @@ static void icalendar_add_event(icalcomponent *comp, struct icaltime_span *span,
 static void *ical_load_calendar(void *void_data)
 {
 	struct icalendar_pvt *pvt;
+	const struct ast_config *cfg;
 	struct ast_variable *v;
 	struct ast_calendar *cal = void_data;
 	ast_mutex_t refreshlock;
 
-	if (!(cal && ast_calendar_config)) {
+	if (!(cal && (cfg = ast_calendar_config_acquire()))) {
 		ast_log(LOG_ERROR, "You must enable calendar support for res_icalendar to load\n");
 		return NULL;
 	}
@@ -338,11 +354,13 @@ static void *ical_load_calendar(void *void_data)
 		} else {
 			ast_log(LOG_WARNING, "Could not lock calendar, aborting!\n");
 		}
+		ast_calendar_config_release();
 		return NULL;
 	}
 
 	if (!(pvt = ao2_alloc(sizeof(*pvt), icalendar_destructor))) {
 		ast_log(LOG_ERROR, "Could not allocate icalendar_pvt structure for calendar: %s\n", cal->name);
+		ast_calendar_config_release();
 		return NULL;
 	}
 
@@ -352,6 +370,7 @@ static void *ical_load_calendar(void *void_data)
 		ast_log(LOG_ERROR, "Could not allocate space for fetching events for calendar: %s\n", cal->name);
 		pvt = unref_icalendar(pvt);
 		ao2_unlock(cal);
+		ast_calendar_config_release();
 		return NULL;
 	}
 
@@ -359,10 +378,11 @@ static void *ical_load_calendar(void *void_data)
 		ast_log(LOG_ERROR, "Couldn't allocate string field space for calendar: %s\n", cal->name);
 		pvt = unref_icalendar(pvt);
 		ao2_unlock(cal);
+		ast_calendar_config_release();
 		return NULL;
 	}
 
-	for (v = ast_variable_browse(ast_calendar_config, cal->name); v; v = v->next) {
+	for (v = ast_variable_browse(cfg, cal->name); v; v = v->next) {
 		if (!strcasecmp(v->name, "url")) {
 			ast_string_field_set(pvt, url, v->value);
 		} else if (!strcasecmp(v->name, "user")) {
@@ -371,6 +391,8 @@ static void *ical_load_calendar(void *void_data)
 			ast_string_field_set(pvt, secret, v->value);
 		}
 	}
+
+	ast_calendar_config_release();
 
 	if (ast_strlen_zero(pvt->url)) {
 		ast_log(LOG_WARNING, "No URL was specified for iCalendar '%s' - skipping.\n", cal->name);

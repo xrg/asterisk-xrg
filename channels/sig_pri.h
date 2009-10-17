@@ -166,7 +166,6 @@ struct sig_pri_chan {
 
 	struct sig_pri_callback *calls;
 	void *chan_pvt;					/*!< Private structure of the user of this module. */
-	ast_mutex_t service_lock;						/*!< Mutex for service messages */
 #if defined(HAVE_PRI_REVERSE_CHARGE)
 	int reverse_charging_indication;
 #endif
@@ -212,6 +211,7 @@ struct sig_pri_pri {
 	int resetting;							/*!< true if span is being reset/restarted */
 	int resetpos;							/*!< current position during a reset (-1 if not started) */
 	int sig;								/*!< ISDN signalling type (SIG_PRI, SIG_BRI, SIG_BRI_PTMP, etc...) */
+	int new_chan_seq;						/*!< New struct ast_channel sequence number */
 
 	/* Everything after here is internally set */
 	struct pri *dchans[NUM_DCHANS];				/*!< Actual d-channels */

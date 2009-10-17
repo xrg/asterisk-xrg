@@ -293,8 +293,6 @@ static struct ast_jb_conf global_jbconf;
 /*! \brief Typically, how many rings before we should send Caller*ID */
 #define DEFAULT_CIDRINGS 1
 
-#define CHANNEL_PSEUDO -12
-
 #define AST_LAW(p) (((p)->law == DAHDI_LAW_ALAW) ? AST_FORMAT_ALAW : AST_FORMAT_ULAW)
 
 
@@ -1640,11 +1638,11 @@ static int my_get_callerid(void *pvt, char *namebuf, char *numbuf, enum analog_e
 			}
 		}
 
-		if (analog_p->ringt) {
-			analog_p->ringt--;
-		}
-		if (analog_p->ringt == 1) {
-			return -1;
+		if (analog_p->ringt > 0) {
+			if (!(--analog_p->ringt)) {
+				/* only return if we timeout from a ring event */
+				return -1;
+			}
 		}
 
 		if (p->cid_signalling == CID_SIG_V23_JP) {
@@ -1744,11 +1742,11 @@ static int my_distinctive_ring(struct ast_channel *chan, void *pvt, int idx, int
 					}
 					break;
 				}
-				if (analog_p->ringt)
-					analog_p->ringt--;
-				if (analog_p->ringt == 1) {
-					res = -1;
-					break;
+				if (analog_p->ringt > 0) {
+					if (!(--analog_p->ringt)) {
+						res = -1;
+						break;
+					}
 				}
 			}
 		}
@@ -2120,6 +2118,18 @@ static void my_cancel_cidspill(void *pvt)
 	}
 }
 
+static int my_confmute(void *pvt, int mute)
+{
+	struct dahdi_pvt *p = pvt;
+	return dahdi_confmute(p, mute);
+}
+
+static void my_set_pulsedial(void *pvt, int flag)
+{
+	struct dahdi_pvt *p = pvt;
+	p->pulsedial = flag;
+}
+
 static void my_increase_ss_count(void)
 {
 	ast_mutex_lock(&ss_thread_lock);
@@ -2372,20 +2382,17 @@ static int my_play_tone(void *pvt, enum analog_sub sub, enum analog_tone tone)
 
 static enum analog_event dahdievent_to_analogevent(int event)
 {
-	enum analog_event res = ANALOG_EVENT_ERROR;
+	enum analog_event res;
 
 	switch (event) {
-	case DAHDI_EVENT_DIALCOMPLETE:
-		res = ANALOG_EVENT_DIALCOMPLETE;
-		break;
-	case DAHDI_EVENT_WINKFLASH:
-		res = ANALOG_EVENT_WINKFLASH;
-		break;
 	case DAHDI_EVENT_ONHOOK:
 		res = ANALOG_EVENT_ONHOOK;
 		break;
 	case DAHDI_EVENT_RINGOFFHOOK:
 		res = ANALOG_EVENT_RINGOFFHOOK;
+		break;
+	case DAHDI_EVENT_WINKFLASH:
+		res = ANALOG_EVENT_WINKFLASH;
 		break;
 	case DAHDI_EVENT_ALARM:
 		res = ANALOG_EVENT_ALARM;
@@ -2393,11 +2400,8 @@ static enum analog_event dahdievent_to_analogevent(int event)
 	case DAHDI_EVENT_NOALARM:
 		res = ANALOG_EVENT_NOALARM;
 		break;
-	case DAHDI_EVENT_HOOKCOMPLETE:
-		res = ANALOG_EVENT_HOOKCOMPLETE;
-		break;
-	case DAHDI_EVENT_POLARITY:
-		res = ANALOG_EVENT_POLARITY;
+	case DAHDI_EVENT_DIALCOMPLETE:
+		res = ANALOG_EVENT_DIALCOMPLETE;
 		break;
 	case DAHDI_EVENT_RINGERON:
 		res = ANALOG_EVENT_RINGERON;
@@ -2405,20 +2409,66 @@ static enum analog_event dahdievent_to_analogevent(int event)
 	case DAHDI_EVENT_RINGEROFF:
 		res = ANALOG_EVENT_RINGEROFF;
 		break;
-	case DAHDI_EVENT_RINGBEGIN:
-		res = ANALOG_EVENT_RINGBEGIN;
+	case DAHDI_EVENT_HOOKCOMPLETE:
+		res = ANALOG_EVENT_HOOKCOMPLETE;
 		break;
 	case DAHDI_EVENT_PULSE_START:
 		res = ANALOG_EVENT_PULSE_START;
-	break;
+		break;
+	case DAHDI_EVENT_POLARITY:
+		res = ANALOG_EVENT_POLARITY;
+		break;
+	case DAHDI_EVENT_RINGBEGIN:
+		res = ANALOG_EVENT_RINGBEGIN;
+		break;
+	case DAHDI_EVENT_EC_DISABLED:
+		res = ANALOG_EVENT_EC_DISABLED;
+		break;
 	case DAHDI_EVENT_REMOVED:
 		res = ANALOG_EVENT_REMOVED;
-	break;
+		break;
 	case DAHDI_EVENT_NEONMWI_ACTIVE:
 		res = ANALOG_EVENT_NEONMWI_ACTIVE;
 		break;
 	case DAHDI_EVENT_NEONMWI_INACTIVE:
 		res = ANALOG_EVENT_NEONMWI_INACTIVE;
+		break;
+#ifdef HAVE_DAHDI_ECHOCANCEL_FAX_MODE
+	case DAHDI_EVENT_TX_CED_DETECTED:
+		res = ANALOG_EVENT_TX_CED_DETECTED;
+		break;
+	case DAHDI_EVENT_RX_CED_DETECTED:
+		res = ANALOG_EVENT_RX_CED_DETECTED;
+		break;
+	case DAHDI_EVENT_EC_NLP_DISABLED:
+		res = ANALOG_EVENT_EC_NLP_DISABLED;
+		break;
+	case DAHDI_EVENT_EC_NLP_ENABLED:
+		res = ANALOG_EVENT_EC_NLP_ENABLED;
+		break;
+#endif
+	case DAHDI_EVENT_PULSEDIGIT:
+		res = ANALOG_EVENT_PULSEDIGIT;
+		break;
+	case DAHDI_EVENT_DTMFDOWN:
+		res = ANALOG_EVENT_DTMFDOWN;
+		break;
+	case DAHDI_EVENT_DTMFUP:
+		res = ANALOG_EVENT_DTMFUP;
+		break;
+	default:
+		switch(event & 0xFFFF0000) {
+		case DAHDI_EVENT_PULSEDIGIT:
+		case DAHDI_EVENT_DTMFDOWN:
+		case DAHDI_EVENT_DTMFUP:
+			/* The event includes a digit number in the low word.
+			 * Converting it to a 'enum analog_event' would remove
+			 * that information. Thus it is returned as-is.
+			 */
+			return event;
+		}
+
+		res = ANALOG_EVENT_ERROR;
 		break;
 	}
 
@@ -2590,17 +2640,10 @@ static void my_pri_fixup_chans(void *chan_old, void *chan_new)
 {
 	struct dahdi_pvt *old_chan = chan_old;
 	struct dahdi_pvt *new_chan = chan_new;
-	struct sig_pri_chan *pchan = new_chan->sig_pvt;
-	struct sig_pri_pri *pri = pchan->pri;
 
 	new_chan->owner = old_chan->owner;
 	old_chan->owner = NULL;
 	if (new_chan->owner) {
-		char newname[AST_CHANNEL_NAME];
-
-		snprintf(newname, sizeof(newname), "DAHDI/%d:%d-%d", pri->trunkgroup, new_chan->channel, 1);
-		ast_change_name(new_chan->owner, newname);
-
 		new_chan->owner->tech_pvt = new_chan;
 		new_chan->owner->fds[0] = new_chan->subs[SUB_REAL].dfd;
 		new_chan->subs[SUB_REAL].owner = old_chan->subs[SUB_REAL].owner;
@@ -2855,6 +2898,8 @@ static struct analog_callback dahdi_analog_callbacks =
 	.set_confirmanswer = my_set_confirmanswer,
 	.check_confirmanswer = my_check_confirmanswer,
 	.cancel_cidspill = my_cancel_cidspill,
+	.confmute = my_confmute,
+	.set_pulsedial = my_set_pulsedial,
 };
 
 static struct dahdi_pvt *round_robin[32];
@@ -4836,8 +4881,9 @@ static void destroy_dahdi_pvt(struct dahdi_pvt *pvt)
 		ast_smdi_interface_unref(p->smdi_iface);
 	if (p->mwi_event_sub)
 		ast_event_unsubscribe(p->mwi_event_sub);
-	if (p->vars)
+	if (p->vars) {
 		ast_variables_destroy(p->vars);
+	}
 	ast_mutex_destroy(&p->lock);
 	dahdi_close_sub(p, SUB_REAL);
 	if (p->owner)
@@ -5194,8 +5240,7 @@ static int dahdi_hangup(struct ast_channel *ast)
 		dahdi_setlinear(p->subs[SUB_REAL].dfd, 0);
 		law = DAHDI_LAW_DEFAULT;
 		res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_SETLAW, &law);
-		if (p->sig)
-			dahdi_disable_ec(p);
+		dahdi_disable_ec(p);
 		update_conf(p);
 		reset_conf(p);
 		sig_pri_hangup(p->sig_pvt, ast);
@@ -7629,7 +7674,10 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 		return NULL;
 	}
 
-	if ((p->radio || (p->oprmode < 0)) && p->inalarm) return NULL;
+	if ((p->radio || (p->oprmode < 0)) && p->inalarm) {
+		ast_mutex_unlock(&p->lock);
+		return NULL;
+	}
 
 	p->subs[idx].f.frametype = AST_FRAME_NULL;
 	p->subs[idx].f.datalen = 0;
@@ -7665,12 +7713,12 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 		ast_mutex_unlock(&p->lock);
 		return &p->subs[idx].f;
 	}
-	if (p->ringt == 1) {
-		ast_mutex_unlock(&p->lock);
-		return NULL;
+	if (p->ringt > 0) {
+		if (!(--p->ringt)) {
+			ast_mutex_unlock(&p->lock);
+			return NULL;
+		}
 	}
-	else if (p->ringt > 0)
-		p->ringt--;
 
 #ifdef HAVE_OPENR2
 	if (p->mfcr2) {
@@ -7932,6 +7980,7 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 							if (res < 0) {
 								ast_log(LOG_WARNING, "Unable to initiate dialing on trunk channel %d\n", p->channel);
 								p->dop.dialstr[0] = '\0';
+								ast_mutex_unlock(&p->lock);
 								return NULL;
 							} else {
 								ast_log(LOG_DEBUG, "Sent deferred digit string: %s\n", p->dop.dialstr);
@@ -8203,23 +8252,36 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 	struct ast_str *chan_name;
 	struct ast_variable *v;
 	struct dahdi_params ps;
+
 	if (i->subs[idx].owner) {
 		ast_log(LOG_WARNING, "Channel %d already has a %s call\n", i->channel,subnames[idx]);
 		return NULL;
 	}
-	y = 1;
+
+	/* Create the new channel name tail. */
 	chan_name = ast_str_alloca(32);
-	do {
-		if (i->channel == CHAN_PSEUDO)
-			ast_str_set(&chan_name, 0, "pseudo-%ld", ast_random());
-		else
+	if (i->channel == CHAN_PSEUDO) {
+		ast_str_set(&chan_name, 0, "pseudo-%ld", ast_random());
+#if defined(HAVE_PRI)
+	} else if (i->pri) {
+		ast_mutex_lock(&i->pri->lock);
+		ast_str_set(&chan_name, 0, "ISDN-%d-%d", i->pri->span, ++i->pri->new_chan_seq);
+		ast_mutex_unlock(&i->pri->lock);
+#endif	/* defined(HAVE_PRI) */
+	} else {
+		y = 1;
+		do {
 			ast_str_set(&chan_name, 0, "%d-%d", i->channel, y);
-		for (x = 0; x < 3; x++) {
-			if ((idx != x) && i->subs[x].owner && !strcasecmp(ast_str_buffer(chan_name), i->subs[x].owner->name + 6))
-				break;
-		}
-		y++;
-	} while (x < 3);
+			for (x = 0; x < 3; ++x) {
+				if (i->subs[x].owner && !strcasecmp(ast_str_buffer(chan_name),
+					i->subs[x].owner->name + 6)) {
+					break;
+				}
+			}
+			++y;
+		} while (x < 3);
+	}
+
 	tmp = ast_channel_alloc(0, state, i->cid_num, i->cid_name, i->accountcode, i->exten, i->context, linkedid, i->amaflags, "DAHDI/%s", ast_str_buffer(chan_name));
 	if (!tmp)
 		return NULL;
@@ -9229,11 +9291,11 @@ static void *analog_ss_thread(void *data)
 									}
 									break;
 								}
-								if (p->ringt)
-									p->ringt--;
-								if (p->ringt == 1) {
-									res = -1;
-									break;
+								if (p->ringt > 0) {
+									if (!(--p->ringt)) {
+										res = -1;
+										break;
+									}
 								}
 							}
 						}
@@ -9386,12 +9448,11 @@ static void *analog_ss_thread(void *data)
 								}
 								break;
 							}
-							if (p->ringt) {
-								p->ringt--;
-							}
-							if (p->ringt == 1) {
-								res = -1;
-								break;
+							if (p->ringt > 0) {
+								if (!(--p->ringt)) {
+									res = -1;
+									break;
+								}
 							}
 							samples += res;
 							res = callerid_feed(cs, buf, res, AST_LAW(p));
@@ -9448,11 +9509,11 @@ static void *analog_ss_thread(void *data)
 									}
 									break;
 								}
-							if (p->ringt)
-								p->ringt--;
-								if (p->ringt == 1) {
-									res = -1;
-									break;
+								if (p->ringt > 0) {
+									if (!(--p->ringt)) {
+										res = -1;
+										break;
+									}
 								}
 							}
 						}
@@ -11251,7 +11312,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		tmp->callgroup = conf->chan.callgroup;
 		tmp->pickupgroup= conf->chan.pickupgroup;
 		if (conf->chan.vars) {
-			tmp->vars = conf->chan.vars;
+			tmp->vars = ast_variable_new(conf->chan.vars->name, conf->chan.vars->value, "");
 		}
 		tmp->cid_rxgain = conf->chan.cid_rxgain;
 		tmp->rxgain = conf->chan.rxgain;
@@ -11390,7 +11451,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 				analog_config_complete(analog_p);
 			}
 		}
-#ifdef HAVE_PRI
+#if defined(HAVE_PRI)
 		else if (pchan != NULL) {
 			pchan->channel = tmp->channel;
 			pchan->hidecallerid = tmp->hidecallerid;
@@ -11405,7 +11466,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 			ast_copy_string(pchan->mohinterpret, tmp->mohinterpret, sizeof(pchan->mohinterpret));
 			pchan->stripmsd = tmp->stripmsd;
 		}
-#endif
+#endif	/* defined(HAVE_PRI) */
 	}
 	if (tmp && !here) {
 		/* Add the new channel interface to the sorted channel interface list. */

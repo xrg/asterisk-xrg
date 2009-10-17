@@ -222,7 +222,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<option name="a">
 						<argument name="folder" required="true" />
 						<para>Skip folder prompt and go directly to <replaceable>folder</replaceable> specified.
-						Defaults to <literal>INBOX</literal>.</para>
+						Defaults to <literal>INBOX</literal> (or <literal>0</literal>).</para>
+						<enumlist>
+							<enum name="0"><para>INBOX</para></enum>
+							<enum name="1"><para>Old</para></enum>
+							<enum name="2"><para>Work</para></enum>
+							<enum name="3"><para>Family</para></enum>
+							<enum name="4"><para>Friends</para></enum>
+							<enum name="5"><para>Cust1</para></enum>
+							<enum name="6"><para>Cust2</para></enum>
+							<enum name="7"><para>Cust3</para></enum>
+							<enum name="8"><para>Cust4</para></enum>
+							<enum name="9"><para>Cust5</para></enum>
+						</enumlist>
 					</option>
 				</optionlist>
 			</parameter>
@@ -323,6 +335,7 @@ static char imapparentfolder[64] = "\0";
 static char greetingfolder[64];
 static char authuser[32];
 static char authpassword[42];
+static int imapversion = 1;
 
 static int expungeonhangup = 1;
 static int imapgreetings = 0;
@@ -337,7 +350,7 @@ AST_THREADSTORAGE(ts_vmstate);
 static int init_mailstream(struct vm_state *vms, int box);
 static void write_file(char *filename, char *buffer, unsigned long len);
 static char *get_header_by_tag(char *header, char *tag, char *buf, size_t len);
-static void vm_imap_delete(int msgnum, struct ast_vm_user *vmu);
+static void vm_imap_delete(char *file, int msgnum, struct ast_vm_user *vmu);
 static char *get_user_by_mailbox(char *mailbox, char *buf, size_t len);
 static struct vm_state *get_vm_state_by_imapuser(const char *user, int interactive);
 static struct vm_state *get_vm_state_by_mailbox(const char *mailbox, const char *context, int interactive);
@@ -592,6 +605,7 @@ struct ast_vm_user {
 	char imapuser[80];               /*!< IMAP server login */
 	char imappassword[80];           /*!< IMAP server password if authpassword not defined */
 	char imapvmshareid[80];          /*!< Shared mailbox ID to use rather than the dialed one */
+	int imapversion;                 /*!< If configuration changes, use the new values */
 #endif
 	double volgain;                  /*!< Volume gain for voicemails sent via email */
 	AST_LIST_ENTRY(ast_vm_user) list;
@@ -632,6 +646,7 @@ struct vm_state {
 	MAILSTREAM *mailstream;
 	int vmArrayIndex;
 	char imapuser[80];                   /*!< IMAP server login */
+	int imapversion;
 	int interactive;
 	char introfn[PATH_MAX];              /*!< Name of prepended file */
 	unsigned int quota_limit;
@@ -658,7 +673,7 @@ static char odbc_table[80];
 #define EXISTS(a,b,c,d) (ast_fileexists(c,NULL,d) > 0)
 #define RENAME(a,b,c,d,e,f,g,h) (rename_file(g,h));
 #define COPY(a,b,c,d,e,f,g,h) (copy_file(g,h));
-#define DELETE(a,b,c,d) (vm_imap_delete(b,d))
+#define DELETE(a,b,c,d) (vm_imap_delete(a,b,d))
 #else
 #define RETRIEVE(a,b,c,d)
 #define DISPOSE(a,b)
@@ -901,10 +916,13 @@ static void apply_option(struct ast_vm_user *vmu, const char *var, const char *v
 #ifdef IMAP_STORAGE
 	} else if (!strcasecmp(var, "imapuser")) {
 		ast_copy_string(vmu->imapuser, value, sizeof(vmu->imapuser));
+		vmu->imapversion = imapversion;
 	} else if (!strcasecmp(var, "imappassword") || !strcasecmp(var, "imapsecret")) {
 		ast_copy_string(vmu->imappassword, value, sizeof(vmu->imappassword));
+		vmu->imapversion = imapversion;
 	} else if (!strcasecmp(var, "imapvmshareid")) {
 		ast_copy_string(vmu->imapvmshareid, value, sizeof(vmu->imapvmshareid));
+		vmu->imapversion = imapversion;
 #endif
 	} else if (!strcasecmp(var, "delete") || !strcasecmp(var, "deletevoicemail")) {
 		ast_set2_flag(vmu, ast_true(value), VM_DELETE);	
@@ -943,6 +961,7 @@ static void apply_option(struct ast_vm_user *vmu, const char *var, const char *v
 	} else if (!strcasecmp(var, "exitcontext")) {
 		ast_copy_string(vmu->exit, value, sizeof(vmu->exit));
 	} else if (!strcasecmp(var, "maxmessage") || !strcasecmp(var, "maxsecs")) {
+		vmu->maxsecs = atoi(value);
 		if (vmu->maxsecs <= 0) {
 			ast_log(AST_LOG_WARNING, "Invalid max message length of %s. Using global value %d\n", value, vmmaxsecs);
 			vmu->maxsecs = vmmaxsecs;
@@ -1138,10 +1157,13 @@ static void apply_options_full(struct ast_vm_user *retval, struct ast_variable *
 #ifdef IMAP_STORAGE
 		} else if (!strcasecmp(var->name, "imapuser")) {
 			ast_copy_string(retval->imapuser, var->value, sizeof(retval->imapuser));
+			retval->imapversion = imapversion;
 		} else if (!strcasecmp(var->name, "imappassword") || !strcasecmp(var->name, "imapsecret")) {
 			ast_copy_string(retval->imappassword, var->value, sizeof(retval->imappassword));
+			retval->imapversion = imapversion;
 		} else if (!strcasecmp(var->name, "imapvmshareid")) {
 			ast_copy_string(retval->imapvmshareid, var->value, sizeof(retval->imapvmshareid));
+			retval->imapversion = imapversion;
 #endif
 		} else
 			apply_option(retval, var->name, var->value);
@@ -1227,6 +1249,11 @@ static struct ast_vm_user *find_user(struct ast_vm_user *ivm, const char *contex
 		context = "default";
 
 	AST_LIST_TRAVERSE(&users, cur, list) {
+#ifdef IMAP_STORAGE
+		if (cur->imapversion != imapversion) {
+			continue;
+		}
+#endif
 		if (ast_test_flag((&globalflags), VM_SEARCH) && !strcasecmp(mailbox, cur->mailbox))
 			break;
 		if (context && (!strcasecmp(context, cur->context)) && (!strcasecmp(mailbox, cur->mailbox)))
@@ -1429,27 +1456,41 @@ static int create_dirpath(char *dest, int len, const char *context, const char *
 	return 0;
 }
 
+static const char * const mailbox_folders[] = {
+#ifdef IMAP_STORAGE
+	imapfolder,
+#else
+	"INBOX",
+#endif
+	"Old",
+	"Work",
+	"Family",
+	"Friends",
+	"Cust1",
+	"Cust2",
+	"Cust3",
+	"Cust4",
+	"Cust5",
+	"Deleted",
+	"Urgent",
+};
+
 static const char *mbox(int id)
 {
-	static const char * const msgs[] = {
-#ifdef IMAP_STORAGE
-		imapfolder,
-#else
-		"INBOX",
-#endif
-		"Old",
-		"Work",
-		"Family",
-		"Friends",
-		"Cust1",
-		"Cust2",
-		"Cust3",
-		"Cust4",
-		"Cust5",
-		"Deleted",
-		"Urgent"
-	};
-	return (id >= 0 && id < ARRAY_LEN(msgs)) ? msgs[id] : "Unknown";
+	return (id >= 0 && id < ARRAY_LEN(mailbox_folders)) ? mailbox_folders[id] : "Unknown";
+}
+
+static int get_folder_by_name(const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < ARRAY_LEN(mailbox_folders); i++) {
+		if (strcasecmp(name, mailbox_folders[i]) == 0) {
+			return i;
+		}
+	}
+
+	return -1;
 }
 
 static void free_user(struct ast_vm_user *vmu)
@@ -1470,14 +1511,15 @@ static void free_user(struct ast_vm_user *vmu)
 /* All IMAP-specific functions should go in this block. This
  * keeps them from being spread out all over the code */
 #ifdef IMAP_STORAGE
-static void vm_imap_delete(int msgnum, struct ast_vm_user *vmu)
+static void vm_imap_delete(char *file, int msgnum, struct ast_vm_user *vmu)
 {
 	char arg[10];
 	struct vm_state *vms;
 	unsigned long messageNum;
 
-	/* Greetings aren't stored in IMAP, so we can't delete them there */
-	if (msgnum < 0) {
+	/* If greetings aren't stored in IMAP, just delete the file */
+	if (msgnum < 0 && !imapgreetings) {
+		ast_filedelete(file, NULL);
 		return;
 	}
 
@@ -1499,6 +1541,7 @@ static void vm_imap_delete(int msgnum, struct ast_vm_user *vmu)
 	snprintf (arg, sizeof(arg), "%lu", messageNum);
 	ast_mutex_lock(&vms->lock);
 	mail_setflag (vms->mailstream, arg, "\\DELETED");
+	mail_expunge(vms->mailstream);
 	ast_mutex_unlock(&vms->lock);
 }
 
@@ -2253,6 +2296,7 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu, int box)
 	}
 
 	ast_copy_string(vms->imapuser, vmu->imapuser, sizeof(vms->imapuser));
+	vms->imapversion = vmu->imapversion;
 	ast_debug(3, "Before init_mailstream, user is %s\n", vmu->imapuser);
 
 	if ((ret = init_mailstream(vms, box)) || !vms->mailstream) {
@@ -2609,6 +2653,7 @@ static struct vm_state *create_vm_state_from_user(struct ast_vm_user *vmu)
 	ast_copy_string(vms_p->username, vmu->mailbox, sizeof(vms_p->username)); /* save for access from interactive entry point */
 	ast_copy_string(vms_p->context, vmu->context, sizeof(vms_p->context));
 	vms_p->mailstream = NIL; /* save for access from interactive entry point */
+	vms_p->imapversion = vmu->imapversion;
 	if (option_debug > 4)
 		ast_log(AST_LOG_DEBUG, "Copied %s to %s\n", vmu->imapuser, vms_p->imapuser);
 	vms_p->updated = 1;
@@ -2634,6 +2679,9 @@ static struct vm_state *get_vm_state_by_imapuser(const char *user, int interacti
 	AST_LIST_TRAVERSE(&vmstates, vlist, list) {
 		if (!vlist->vms) {
 			ast_debug(3, "error: vms is NULL for %s\n", user);
+			continue;
+		}
+		if (vlist->vms->imapversion != imapversion) {
 			continue;
 		}
 		if (!vlist->vms->imapuser) {
@@ -2670,6 +2718,9 @@ static struct vm_state *get_vm_state_by_mailbox(const char *mailbox, const char 
 	AST_LIST_TRAVERSE(&vmstates, vlist, list) {
 		if (!vlist->vms) {
 			ast_debug(3, "error: vms is NULL for %s\n", mailbox);
+			continue;
+		}
+		if (vlist->vms->imapversion != imapversion) {
 			continue;
 		}
 		if (!vlist->vms->username || !vlist->vms->context) {
@@ -6459,7 +6510,7 @@ static int notify_new_message(struct ast_channel *chan, struct ast_vm_user *vmu,
 #ifdef IMAP_STORAGE
 	vm_delete(fn);  /* Delete the file, but not the IMAP message */
 	if (ast_test_flag(vmu, VM_DELETE))  { /* Delete the IMAP message if delete = yes */
-		vm_imap_delete(vms->curmsg, vmu);
+		vm_imap_delete(NULL, vms->curmsg, vmu);
 		vms->newmessages--;  /* Fix new message count */
 	}
 #endif
@@ -9053,15 +9104,22 @@ static int vm_execmain(struct ast_channel *chan, const char *data)
 			}
 			if (ast_test_flag(&flags, OPT_AUTOPLAY) ) {
 				play_auto = 1;
-				if (opts[OPT_ARG_PLAYFOLDER]) {
-					if (sscanf(opts[OPT_ARG_PLAYFOLDER], "%30d", &play_folder) != 1) {
-						ast_log(AST_LOG_WARNING, "Invalid value '%s' provided for folder autoplay option\n", opts[OPT_ARG_PLAYFOLDER]);
+				if (!ast_strlen_zero(opts[OPT_ARG_PLAYFOLDER])) {
+					/* See if it is a folder name first */
+					if (isdigit(opts[OPT_ARG_PLAYFOLDER][0])) {
+						if (sscanf(opts[OPT_ARG_PLAYFOLDER], "%30d", &play_folder) != 1) {
+							play_folder = -1;
+						}
+					} else {
+						play_folder = get_folder_by_name(opts[OPT_ARG_PLAYFOLDER]);
 					}
 				} else {
 					ast_log(AST_LOG_WARNING, "Invalid folder set with option a\n");
-				}	
-				if ( play_folder > 9 || play_folder < 0) {
-					ast_log(AST_LOG_WARNING, "Invalid value '%d' provided for folder autoplay option\n", play_folder);
+				}
+				if (play_folder > 9 || play_folder < 0) {
+					ast_log(AST_LOG_WARNING,
+						"Invalid value '%s' provided for folder autoplay option. Defaulting to 'INBOX'\n",
+						opts[OPT_ARG_PLAYFOLDER]);
 					play_folder = 0;
 				}
 			}
@@ -10720,6 +10778,8 @@ static int load_config(int reload)
 			mail_parameters(NIL, SET_CLOSETIMEOUT, (void *) 60L);
 		}
 
+		/* Increment configuration version */
+		imapversion++;
 #endif
 		/* External voicemail notify application */
 		if ((val = ast_variable_retrieve(cfg, "general", "externnotify"))) {

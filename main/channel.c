@@ -1367,6 +1367,45 @@ struct ast_channel *ast_channel_iterator_next(struct ast_channel_iterator *i)
 	return chan;
 }
 
+static int ast_channel_cmp_cb(void *obj, void *arg, int flags)
+{
+	struct ast_channel *chan = obj, *cmp_args = arg;
+	size_t name_len;
+	int ret = CMP_MATCH;
+
+	/* This is sort of a hack.  Basically, we're using an arbitrary field
+	 * in ast_channel to pass the name_len for a prefix match.  If this
+	 * gets changed, then the uses of ao2_find() must be changed, too. */
+	name_len = cmp_args->rings;
+
+	ast_channel_lock(chan);
+
+	if (cmp_args->name) { /* match by name */
+		if ((!name_len && strcasecmp(chan->name, cmp_args->name)) ||
+				(name_len && strncasecmp(chan->name, cmp_args->name, name_len))) {
+			ret = 0; /* name match failed */
+		}
+	} else if (cmp_args->exten) {
+		if (cmp_args->context && strcasecmp(chan->context, cmp_args->context) &&
+				strcasecmp(chan->macrocontext, cmp_args->context)) {
+			ret = 0; /* context match failed */
+		}
+		if (ret && strcasecmp(chan->exten, cmp_args->exten) &&
+				strcasecmp(chan->macroexten, cmp_args->exten)) {
+			ret = 0; /* exten match failed */
+		}
+	} else if (cmp_args->uniqueid) {
+		if ((!name_len && strcasecmp(chan->uniqueid, cmp_args->uniqueid)) ||
+				(name_len && strncasecmp(chan->uniqueid, cmp_args->uniqueid, name_len))) {
+			ret = 0; /* uniqueid match failed */
+		}
+	}
+
+	ast_channel_unlock(chan);
+
+	return ret;
+}
+
 static struct ast_channel *ast_channel_get_full(const char *name, size_t name_len,
 	const char *exten, const char *context)
 {
@@ -1387,7 +1426,8 @@ static struct ast_channel *ast_channel_get_full(const char *name, size_t name_le
 		ast_copy_string(tmp_chan.context, context, sizeof(tmp_chan.context));
 	}
 
-	if ((chan = ao2_find(channels, &tmp_chan, !ast_strlen_zero(name) ? OBJ_POINTER : 0))) {
+	if ((chan = ao2_find(channels, &tmp_chan,
+			     (!ast_strlen_zero(name) && (name_len == 0)) ? OBJ_POINTER : 0))) {
 		return chan;
 	}
 
@@ -2103,8 +2143,11 @@ int ast_hangup(struct ast_channel *chan)
 	ast_autoservice_stop(chan);
 
 	if (chan->masq) {
-		if (ast_do_masquerade(chan))
+		ast_channel_unlock(chan);
+		if (ast_do_masquerade(chan)) {
 			ast_log(LOG_WARNING, "Failed to perform masquerade\n");
+		}
+		ast_channel_lock(chan);
 	}
 
 	if (chan->masq) {
@@ -2119,6 +2162,11 @@ int ast_hangup(struct ast_channel *chan)
 		ast_channel_unlock(chan);
 		return 0;
 	}
+	ast_channel_unlock(chan);
+
+	ao2_unlink(channels, chan);
+
+	ast_channel_lock(chan);
 	free_translation(chan);
 	/* Close audio stream */
 	if (chan->stream) {
@@ -2469,13 +2517,13 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 	
 	/* Perform any pending masquerades */
 	for (x = 0; x < n; x++) {
-		ast_channel_lock(c[x]);
 		if (c[x]->masq && ast_do_masquerade(c[x])) {
 			ast_log(LOG_WARNING, "Masquerade failed\n");
 			*ms = -1;
-			ast_channel_unlock(c[x]);
 			return NULL;
 		}
+
+		ast_channel_lock(c[x]);
 		if (!ast_tvzero(c[x]->whentohangup)) {
 			if (ast_tvzero(whentohangup))
 				now = ast_tvnow();
@@ -2596,16 +2644,15 @@ static struct ast_channel *ast_waitfor_nandfds_simple(struct ast_channel *chan, 
 	struct ast_channel *winner = NULL;
 	struct ast_epoll_data *aed = NULL;
 
-	ast_channel_lock(chan);
 
 	/* See if this channel needs to be masqueraded */
 	if (chan->masq && ast_do_masquerade(chan)) {
 		ast_log(LOG_WARNING, "Failed to perform masquerade on %s\n", chan->name);
 		*ms = -1;
-		ast_channel_unlock(chan);
 		return NULL;
 	}
 
+	ast_channel_lock(chan);
 	/* Figure out their timeout */
 	if (!ast_tvzero(chan->whentohangup)) {
 		if ((diff = ast_tvdiff_ms(chan->whentohangup, ast_tvnow())) < 0) {
@@ -2681,13 +2728,13 @@ static struct ast_channel *ast_waitfor_nandfds_complex(struct ast_channel **c, i
 	struct ast_channel *winner = NULL;
 
 	for (i = 0; i < n; i++) {
-		ast_channel_lock(c[i]);
 		if (c[i]->masq && ast_do_masquerade(c[i])) {
 			ast_log(LOG_WARNING, "Masquerade failed\n");
 			*ms = -1;
-			ast_channel_unlock(c[i]);
 			return NULL;
 		}
+
+		ast_channel_lock(c[i]);
 		if (!ast_tvzero(c[i]->whentohangup)) {
 			if (whentohangup == 0)
 				now = ast_tvnow();
@@ -2932,9 +2979,9 @@ static void send_dtmf_event(const struct ast_channel *chan, const char *directio
 
 static void ast_read_generator_actions(struct ast_channel *chan, struct ast_frame *f)
 {
-	if (chan->generatordata &&  !ast_internal_timing_enabled(chan)) {
+	if (chan->generator && chan->generator->generate && chan->generatordata &&  !ast_internal_timing_enabled(chan)) {
 		void *tmp = chan->generatordata;
-		int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples) = NULL;
+		int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples) = chan->generator->generate;
 		int res;
 		int samples;
 
@@ -2953,9 +3000,6 @@ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_fram
 			samples = f->samples;
 		}
 		
-		if (chan->generator->generate) {
-			generate = chan->generator->generate;
-		}
 		/* This unlock is here based on two assumptions that hold true at this point in the
 		 * code. 1) this function is only called from within __ast_read() and 2) all generators
 		 * call ast_write() in their generate callback.
@@ -3022,25 +3066,22 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 	struct ast_frame *f = NULL;	/* the return value */
 	int blah;
 	int prestate;
-	int count = 0, cause = 0;
+	int cause = 0;
 
 	/* this function is very long so make sure there is only one return
 	 * point at the end (there are only two exceptions to this).
 	 */
-	while(ast_channel_trylock(chan)) {
-		if(count++ > 10) 
-			/*cannot goto done since the channel is not locked*/
-			return &ast_null_frame;
-		usleep(1);
-	}
 
 	if (chan->masq) {
 		if (ast_do_masquerade(chan))
 			ast_log(LOG_WARNING, "Failed to perform masquerade\n");
 		else
 			f =  &ast_null_frame;
-		goto done;
+		return f;
 	}
+
+	/* if here, no masq has happened, lock the channel and proceed */
+	ast_channel_lock(chan);
 
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(chan, AST_FLAG_ZOMBIE) || ast_check_hangup(chan)) {
@@ -3851,9 +3892,13 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 		goto done;
 
 	/* Handle any pending masquerades */
-	if (chan->masq && ast_do_masquerade(chan)) {
-		ast_log(LOG_WARNING, "Failed to perform masquerade\n");
-		goto done;
+	if (chan->masq) {
+		ast_channel_unlock(chan);
+		if (ast_do_masquerade(chan)) {
+			ast_log(LOG_WARNING, "Failed to perform masquerade\n");
+			return res; /* no need to goto done: chan is already unlocked for masq */
+		}
+		ast_channel_lock(chan);
 	}
 	if (chan->masqr) {
 		res = 0;	/* XXX explain, why 0 ? */
@@ -4329,7 +4374,11 @@ struct ast_channel *__ast_request_and_dial(const char *type, int format, const s
 		while (timeout && chan->_state != AST_STATE_UP) {
 			struct ast_frame *f;
 			res = ast_waitfor(chan, timeout);
-			if (res <= 0) /* error, timeout, or done */
+			if (res == 0) { /* timeout, treat it like ringing */
+				*outstate = AST_CONTROL_RINGING;
+				break;
+			}
+			if (res < 0) /* error or done */
 				break;
 			if (timeout > -1)
 				timeout = res;
@@ -4764,15 +4813,23 @@ retrymasq:
 	return res;
 }
 
+/*! \brief this function simply changes the name of the channel and issues a manager_event
+ *         with out unlinking and linking the channel from the ao2_container.  This should
+ *         only be used when the channel has already been unlinked from the ao2_container.
+ */
+static void __ast_change_name_nolink(struct ast_channel *chan, const char *newname)
+{
+	manager_event(EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", chan->name, newname, chan->uniqueid);
+	ast_string_field_set(chan, name, newname);
+}
+
 void ast_change_name(struct ast_channel *chan, const char *newname)
 {
 	/* We must re-link, as the hash value will change here. */
 	ao2_unlink(channels, chan);
-
-	manager_event(EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", chan->name, newname, chan->uniqueid);
-
-	ast_string_field_set(chan, name, newname);
-
+	ast_channel_lock(chan);
+	__ast_change_name_nolink(chan, newname);
+	ast_channel_unlock(chan);
 	ao2_link(channels, chan);
 }
 
@@ -5021,7 +5078,9 @@ static void report_new_callerid(const struct ast_channel *chan)
 /*!
   \brief Masquerade a channel
 
-  \note Assumes channel will be locked when called
+  \note Assumes _NO_ channels and _NO_ channel pvt's are locked.  If a channel is locked while calling
+        this function, it invalidates our channel container locking order.  All channels
+		must be unlocked before it is permissible to lock the channels' ao2 container.
 */
 int ast_do_masquerade(struct ast_channel *original)
 {
@@ -5036,7 +5095,7 @@ int ast_do_masquerade(struct ast_channel *original)
 		struct ast_party_connected_line connected;
 		struct ast_party_redirecting redirecting;
 	} exchange;
-	struct ast_channel *clonechan = original->masq;
+	struct ast_channel *clonechan;
 	struct ast_cdr *cdr;
 	int rformat = original->readformat;
 	int wformat = original->writeformat;
@@ -5050,8 +5109,52 @@ int ast_do_masquerade(struct ast_channel *original)
 	 * original channel's backend.  While the features are nice, which is the
 	 * reason we're keeping it, it's still awesomely weird. XXX */
 
-	/* We need the clone's lock, too */
-	ast_channel_lock(clonechan);
+	/* The reasoning for the channels ao2_container lock here is complex.
+	 * 
+	 * In order to check for a race condition, the original channel must
+	 * be locked.  If it is determined that the masquerade should proceed
+	 * the original channel can absolutely not be unlocked until the end
+	 * of the function.  Since after determining the masquerade should
+	 * continue requires the channels to be unlinked from the ao2_container,
+	 * the container lock must be held first to achieve proper locking order.
+	 */
+	ao2_lock(channels);
+
+	/* lock the original channel to determine if the masquerade is require or not */
+	ast_channel_lock(original);
+
+	/* This checks to see if the masquerade has already happened or not.  There is a
+	 * race condition that exists for this function. Since all pvt and channel locks
+	 * must be let go before calling do_masquerade, it is possible that it could be
+	 * called multiple times for the same channel.  This check verifies whether
+	 * or not the masquerade has already been completed by another thread */
+	if (!original->masq) {
+		ast_channel_unlock(original);
+		ao2_unlock(channels);
+		return 0; /* masq already completed by another thread, or never needed to be done to begin with */
+	}
+
+	/* now that we have verified no race condition exists, set the clone channel */
+	clonechan = original->masq;
+
+	/* since this function already holds the global container lock, unlocking original
+	 * for deadlock avoidance will not result in any sort of masquerade race condition.
+	 * If masq is called by a different thread while this happens, it will be stuck waiting
+	 * until we unlock the container. */
+	while (ast_channel_trylock(clonechan)) {
+		CHANNEL_DEADLOCK_AVOIDANCE(original);
+	}
+
+	/* clear the masquerade channels */
+	original->masq = NULL;
+	clonechan->masqr = NULL;
+
+	/* unlink from channels container as name (which is the hash value) will change */
+	ao2_unlink(channels, original);
+	ao2_unlink(channels, clonechan);
+
+	/* now that both channels are locked and unlinked from the container, it is safe to unlock it */
+	ao2_unlock(channels);
 
 	ast_debug(4, "Actually Masquerading %s(%d) into the structure of %s(%d)\n",
 		clonechan->name, clonechan->_state, original->name, original->_state);
@@ -5064,10 +5167,6 @@ int ast_do_masquerade(struct ast_channel *original)
 	free_translation(clonechan);
 	free_translation(original);
 
-	/* Unlink the masquerade */
-	original->masq = NULL;
-	clonechan->masqr = NULL;
-
 	/* Save the original name */
 	ast_copy_string(orig, original->name, sizeof(orig));
 	/* Save the new name */
@@ -5076,10 +5175,10 @@ int ast_do_masquerade(struct ast_channel *original)
 	snprintf(masqn, sizeof(masqn), "%s<MASQ>", newn);
 
 	/* Mangle the name of the clone channel */
-	ast_change_name(clonechan, masqn);
+	__ast_change_name_nolink(clonechan, masqn);
 
 	/* Copy the name from the clone channel */
-	ast_change_name(original, newn);
+	__ast_change_name_nolink(original, newn);
 
 	/* share linked id's */
 	ast_channel_set_linkgroup(original, clonechan);
@@ -5153,24 +5252,20 @@ int ast_do_masquerade(struct ast_channel *original)
 	original->_state = clonechan->_state;
 	clonechan->_state = origstate;
 
-	if (clonechan->tech->fixup){
-		res = clonechan->tech->fixup(original, clonechan);
-		if (res)
-			ast_log(LOG_WARNING, "Fixup failed on channel %s, strange things may happen.\n", clonechan->name);
+	if (clonechan->tech->fixup && clonechan->tech->fixup(original, clonechan)) {
+		ast_log(LOG_WARNING, "Fixup failed on channel %s, strange things may happen.\n", clonechan->name);
 	}
 
 	/* Start by disconnecting the original's physical side */
-	if (clonechan->tech->hangup)
-		res = clonechan->tech->hangup(clonechan);
-	if (res) {
+	if (clonechan->tech->hangup && clonechan->tech->hangup(clonechan)) {
 		ast_log(LOG_WARNING, "Hangup failed!  Strange things may happen!\n");
-		ast_channel_unlock(clonechan);
-		return -1;
+		res = -1;
+		goto done;
 	}
 
 	/* Mangle the name of the clone channel */
-	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig);
-	ast_change_name(clonechan, zombn);
+	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig); /* quick, hide the brains! */
+	__ast_change_name_nolink(clonechan, zombn);
 
 	/* Update the type. */
 	t_pvt = original->monitor;
@@ -5264,12 +5359,11 @@ int ast_do_masquerade(struct ast_channel *original)
 	/* Okay.  Last thing is to let the channel driver know about all this mess, so he
 	   can fix up everything as best as possible */
 	if (original->tech->fixup) {
-		res = original->tech->fixup(clonechan, original);
-		if (res) {
+		if (original->tech->fixup(clonechan, original)) {
 			ast_log(LOG_WARNING, "Channel for type '%s' could not fixup channel %s\n",
 				original->tech->type, original->name);
-			ast_channel_unlock(clonechan);
-			return -1;
+			res = -1;
+			goto done;
 		}
 	} else
 		ast_log(LOG_WARNING, "Channel type '%s' does not have a fixup routine (for %s)!  Bad things may happen.\n",
@@ -5308,13 +5402,24 @@ int ast_do_masquerade(struct ast_channel *original)
 		ast_debug(1, "Released clone lock on '%s'\n", clonechan->name);
 		ast_set_flag(clonechan, AST_FLAG_ZOMBIE);
 		ast_queue_frame(clonechan, &ast_null_frame);
-		ast_channel_unlock(clonechan);
 	}
 
 	/* Signal any blocker */
 	if (ast_test_flag(original, AST_FLAG_BLOCKING))
 		pthread_kill(original->blocker, SIGURG);
 	ast_debug(1, "Done Masquerading %s (%d)\n", original->name, original->_state);
+
+done:
+	/* it is possible for the clone channel to disappear during this */
+	if (clonechan) {
+		ast_channel_unlock(original);
+		ast_channel_unlock(clonechan);
+		ao2_link(channels, clonechan);
+		ao2_link(channels, original);
+	} else {
+		ast_channel_unlock(original);
+		ao2_link(channels, original);
+	}
 	return 0;
 }
 
@@ -6241,45 +6346,6 @@ static int ast_channel_hash_cb(const void *obj, const int flags)
 	}
 
 	return ast_str_case_hash(chan->name);
-}
-
-static int ast_channel_cmp_cb(void *obj, void *arg, int flags)
-{
-	struct ast_channel *chan = obj, *cmp_args = arg;
-	size_t name_len;
-	int ret = CMP_MATCH;
-
-	/* This is sort of a hack.  Basically, we're using an arbitrary field
-	 * in ast_channel to pass the name_len for a prefix match.  If this
-	 * gets changed, then the uses of ao2_find() must be changed, too. */
-	name_len = cmp_args->rings;
-
-	ast_channel_lock(chan);
-
-	if (cmp_args->name) { /* match by name */
-		if ((!name_len && strcasecmp(chan->name, cmp_args->name)) ||
-				(name_len && strncasecmp(chan->name, cmp_args->name, name_len))) {
-			ret = 0; /* name match failed */
-		}
-	} else if (cmp_args->exten) {
-		if (cmp_args->context && strcasecmp(chan->context, cmp_args->context) &&
-				strcasecmp(chan->macrocontext, cmp_args->context)) {
-			ret = 0; /* context match failed */
-		}
-		if (ret && strcasecmp(chan->exten, cmp_args->exten) &&
-				strcasecmp(chan->macroexten, cmp_args->exten)) {
-			ret = 0; /* exten match failed */
-		}
-	} else if (cmp_args->uniqueid) {
-		if ((!name_len && strcasecmp(chan->uniqueid, cmp_args->uniqueid)) ||
-				(name_len && strncasecmp(chan->uniqueid, cmp_args->uniqueid, name_len))) {
-			ret = 0; /* uniqueid match failed */
-		}
-	}
-
-	ast_channel_unlock(chan);
-
-	return ret;
 }
 
 void ast_channels_init(void)

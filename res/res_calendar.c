@@ -190,7 +190,25 @@ struct evententry {
 static AST_LIST_HEAD_STATIC(techs, ast_calendar_tech);
 AST_LIST_HEAD_NOLOCK(eventlist, evententry); /* define the type */
 
-struct ast_config *ast_calendar_config;
+static struct ast_config *calendar_config;
+AST_RWLOCK_DEFINE_STATIC(config_lock);
+
+const struct ast_config *ast_calendar_config_acquire(void)
+{
+	ast_rwlock_rdlock(&config_lock);
+
+	if (!calendar_config) {
+		ast_rwlock_unlock(&config_lock);
+		return NULL;
+	}
+
+	return calendar_config;
+}
+
+void ast_calendar_config_release(void)
+{
+	ast_rwlock_unlock(&config_lock);
+}
 
 static struct ast_calendar *unref_calendar(struct ast_calendar *cal)
 {
@@ -390,28 +408,32 @@ static int load_tech_calendars(struct ast_calendar_tech *tech)
 	const char *cat = NULL;
 	const char *val;
 
-	if (!ast_calendar_config) {
+	if (!calendar_config) {
 		ast_log(LOG_WARNING, "Calendar support disabled, not loading %s calendar module\n", tech->type);
 		return -1;
 	}
 
-	while ((cat = ast_category_browse(ast_calendar_config, cat))) {
+	ast_rwlock_wrlock(&config_lock);
+	while ((cat = ast_category_browse(calendar_config, cat))) {
 		if (!strcasecmp(cat, "general")) {
 			continue;
 		}
 
-		if (!(val = ast_variable_retrieve(ast_calendar_config, cat, "type")) || strcasecmp(val, tech->type)) {
+		if (!(val = ast_variable_retrieve(calendar_config, cat, "type")) || strcasecmp(val, tech->type)) {
 			continue;
 		}
 
 		/* A serious error occurred loading calendars from this tech and it should be disabled */
-		if (!(cal = build_calendar(ast_calendar_config, cat, tech))) {
+		if (!(cal = build_calendar(calendar_config, cat, tech))) {
 			ast_calendar_unregister(tech);
+			ast_rwlock_unlock(&config_lock);
 			return -1;
 		}
 
 		cal = unref_calendar(cal);
 	}
+
+	ast_rwlock_unlock(&config_lock);
 
 	return 0;
 }
@@ -502,9 +524,9 @@ static struct ast_calendar_event *destroy_event(struct ast_calendar_event *event
 	 * but haven't hit the end event yet, go ahead and set the devicestate to the current busy status */
 	if (event->bs_start_sched < 0 && event->bs_end_sched >= 0) {
 		if (!calendar_is_busy(event->owner)) {
-			ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Calendar/%s", event->owner->name);
+			ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Calendar:%s", event->owner->name);
 		} else {
-			ast_devstate_changed(AST_DEVICE_BUSY, "Calendar/%s", event->owner->name);
+			ast_devstate_changed(AST_DEVICE_BUSY, "Calendar:%s", event->owner->name);
 		}
 	}
 
@@ -589,33 +611,35 @@ static char *generate_random_string(char *buf, size_t size)
 	return buf;
 }
 
-static int calendar_event_notify(const void *data)
+static int null_chan_write(struct ast_channel *chan, struct ast_frame *frame)
 {
-	struct ast_calendar_event *event = (void *)data;
-	char tech[256], dest[256], buf[8], *tmp;
+	return 0;
+}
+
+static const struct ast_channel_tech null_tech = {
+        .type = "NULL",
+        .description = "Null channel (should not see this)",
+		.write = null_chan_write,
+};
+
+static void *do_notify(void *data)
+{
+	struct ast_calendar_event *event = data;
 	struct ast_dial *dial = NULL;
-	struct ast_channel *chan = NULL;
 	struct ast_str *apptext = NULL;
-	int res = -1;
-	char start[12], end[12], busystate[2];
 	struct ast_datastore *datastore;
+	enum ast_dial_result res;
+	struct ast_channel *chan = NULL;
+	char *tech, *dest;
+	char buf[8];
 
-	if (!(event && event->owner)) {
-		ast_log(LOG_ERROR, "Extremely low-cal...in fact cal is NULL!\n");
-		goto notify_cleanup;
-	}
+	tech = ast_strdupa(event->owner->notify_channel);
 
-	ao2_ref(event, +1);
-	event->notify_sched = -1;
-
-	ast_copy_string(tech, event->owner->notify_channel, sizeof(tech));
-
-	if ((tmp = strchr(tech, '/'))) {
-		*tmp = '\0';
-		tmp++;
-		ast_copy_string(dest, tmp, sizeof(dest));
+	if ((dest = strchr(tech, '/'))) {
+		*dest = '\0';
+		dest++;
 	} else {
-		ast_log(LOG_WARNING, "Channel should be in form Tech/Dest\n");
+		ast_log(LOG_WARNING, "Channel should be in form Tech/Dest (was '%s')\n", tech);
 		goto notify_cleanup;
 	}
 
@@ -631,16 +655,15 @@ static int calendar_event_notify(const void *data)
 
 	ast_dial_set_global_timeout(dial, event->owner->notify_waittime);
 	generate_random_string(buf, sizeof(buf));
+
 	if (!(chan = ast_channel_alloc(1, AST_STATE_DOWN, 0, 0, 0, 0, 0, 0, 0, "Calendar/%s-%s", event->owner->name, buf))) {
 		ast_log(LOG_ERROR, "Could not allocate notification channel\n");
 		goto notify_cleanup;
 	}
 
-	snprintf(busystate, sizeof(busystate), "%d", event->busy_state);
-	snprintf(start, sizeof(start), "%lu", (long) event->start);
-	snprintf(end, sizeof(end), "%lu", (long) event->end);
-
-	chan->nativeformats = AST_FORMAT_SLINEAR;
+	chan->tech = &null_tech;
+	chan->nativeformats = chan->writeformat = chan->rawwriteformat =
+		chan->readformat = chan->rawreadformat = AST_FORMAT_SLINEAR;
 
 	if (!(datastore = ast_datastore_alloc(&event_notification_datastore, NULL))) {
 		ast_log(LOG_ERROR, "Could not allocate datastore, notification not being sent!\n");
@@ -659,25 +682,63 @@ static int calendar_event_notify(const void *data)
 
 	if (!ast_strlen_zero(event->owner->notify_app)) {
 		ast_str_set(&apptext, 0, "%s,%s", event->owner->notify_app, event->owner->notify_appdata);
+		ast_dial_option_global_enable(dial, AST_DIAL_OPTION_ANSWER_EXEC, ast_str_buffer(apptext));
 	} else {
-		ast_str_set(&apptext, 0, "Dial,Local/%s@%s", event->owner->notify_extension, event->owner->notify_context);
 	}
-	ast_dial_option_global_enable(dial, AST_DIAL_OPTION_ANSWER_EXEC, ast_str_buffer(apptext));
 
-	ast_dial_run(dial, chan, 1);
-	res = 0;
+	ast_verb(3, "Dialing %s for notification on calendar %s\n", event->owner->notify_channel, event->owner->name);
+	res = ast_dial_run(dial, chan, 0);
+
+	if (res != AST_DIAL_RESULT_ANSWERED) {
+		ast_verb(3, "Notification call for %s was not completed\n", event->owner->name);
+	} else {
+		struct ast_channel *answered;
+
+		answered = ast_dial_answered_steal(dial);
+		if (ast_strlen_zero(event->owner->notify_app)) {
+			ast_copy_string(answered->context, event->owner->notify_context, sizeof(answered->context));
+			ast_copy_string(answered->exten, event->owner->notify_extension, sizeof(answered->exten));
+			answered->priority = 1;
+			ast_pbx_run(answered);
+		}
+	}
 
 notify_cleanup:
-	event = ast_calendar_unref_event(event);
-	if (res == -1 && dial) {
-		ast_dial_destroy(dial);
-	}
 	if (apptext) {
 		ast_free(apptext);
+	}
+	if (dial) {
+		ast_dial_destroy(dial);
 	}
 	if (chan) {
 		ast_channel_release(chan);
 	}
+
+	event = ast_calendar_unref_event(event);
+
+	return NULL;
+}
+
+static int calendar_event_notify(const void *data)
+{
+	struct ast_calendar_event *event = (void *)data;
+	int res = -1;
+	pthread_t notify_thread = AST_PTHREADT_NULL;
+
+	if (!(event && event->owner)) {
+		ast_log(LOG_ERROR, "Extremely low-cal...in fact cal is NULL!\n");
+		return res;
+	}
+
+	ao2_ref(event, +1);
+	event->notify_sched = -1;
+
+	if (ast_pthread_create_background(&notify_thread, NULL, do_notify, event) < 0) {
+		ast_log(LOG_ERROR, "Could not create notification thread\n");
+		return res;
+	}
+
+	res = 0;
 
 	return res;
 }
@@ -706,9 +767,9 @@ static int calendar_devstate_change(const void *data)
 	/* We can have overlapping events, so ignore the event->busy_state and check busy state
 	 * based on all events in the calendar */
 	if (!calendar_is_busy(event->owner)) {
-		ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Calendar/%s", event->owner->name);
+		ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Calendar:%s", event->owner->name);
 	} else {
-		ast_devstate_changed(AST_DEVICE_BUSY, "Calendar/%s", event->owner->name);
+		ast_devstate_changed(AST_DEVICE_BUSY, "Calendar:%s", event->owner->name);
 	}
 
 	event = ast_calendar_unref_event(event);
@@ -731,6 +792,12 @@ static void copy_event_data(struct ast_calendar_event *dst, struct ast_calendar_
 	dst->alarm = src->alarm;
 	dst->busy_state = src->busy_state;
 
+	/* Delete any existing attendees */
+	while ((attendee = AST_LIST_REMOVE_HEAD(&dst->attendees, next))) {
+		ast_free(attendee);
+	}
+
+	/* Copy over the new attendees */
 	while ((attendee = AST_LIST_REMOVE_HEAD(&src->attendees, next))) {
 		AST_LIST_INSERT_TAIL(&dst->attendees, attendee, next);
 	}
@@ -862,11 +929,13 @@ static int load_config(void *data)
 		return 0;
 	}
 
-	if (ast_calendar_config) {
-		ast_config_destroy(ast_calendar_config);
+	ast_rwlock_wrlock(&config_lock);
+	if (calendar_config) {
+		ast_config_destroy(calendar_config);
 	}
 
-	ast_calendar_config = tmpcfg;
+	calendar_config = tmpcfg;
+	ast_rwlock_unlock(&config_lock);
 
 	return 0;
 }
@@ -1043,12 +1112,14 @@ static int calendar_query_exec(struct ast_channel *chan, const char *cmd, char *
 			ast_debug(10, "%s (%ld - %ld) overlapped with (%ld - %ld)\n", event->summary, (long) event->start, (long) event->end, (long) start, (long) end);
 			if (add_event_to_list(events, event, start, end) < 0) {
 				event = ast_calendar_unref_event(event);
+				ao2_iterator_destroy(&i);
 				return -1;
 			}
 		}
 
 		event = ast_calendar_unref_event(event);
 	}
+	ao2_iterator_destroy(&i);
 
 	ast_channel_lock(chan);
 	do {
@@ -1100,6 +1171,7 @@ static int calendar_query_result_exec(struct ast_channel *chan, const char *cmd,
 	struct eventlist *events;
 	struct evententry *entry;
 	int row = 1;
+	size_t listlen = 0;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(id);
 		AST_APP_ARG(field);
@@ -1133,6 +1205,15 @@ static int calendar_query_result_exec(struct ast_channel *chan, const char *cmd,
 
 	if (!ast_strlen_zero(args.row)) {
 		row = atoi(args.row);
+	}
+
+	AST_LIST_TRAVERSE(events, entry, list) {
+		listlen++;
+	}
+
+	if (!strcasecmp(args.field, "getnum")) {
+		snprintf(buf, len, "%zu", listlen);
+		return 0;
 	}
 
 	AST_LIST_TRAVERSE(events, entry, list) {
@@ -1292,6 +1373,7 @@ static char *handle_show_calendars(struct ast_cli_entry *e, int cmd, struct ast_
 		ast_cli(a->fd, FORMAT, cal->name, cal->tech->type, calendar_is_busy(cal) ? "busy" : "free");
 		cal = unref_calendar(cal);
 	}
+	ao2_iterator_destroy(&i);
 
 	return CLI_SUCCESS;
 #undef FORMAT
@@ -1309,7 +1391,7 @@ static char *epoch_to_string(char *buf, size_t buflen, time_t epoch)
 		return buf;
 	}
 	ast_localtime(&tv, &tm, NULL);
-	ast_strftime(buf, buflen, "%F %r", &tm);
+	ast_strftime(buf, buflen, "%F %r %z", &tm);
 
 	return buf;
 }
@@ -1345,6 +1427,7 @@ static char *handle_show_calendar(struct ast_cli_entry *e, int cmd, struct ast_c
 			}
 			cal = unref_calendar(cal);
 		}
+		ao2_iterator_destroy(&i);
 		return ret;
 	}
 
@@ -1384,6 +1467,7 @@ static char *handle_show_calendar(struct ast_cli_entry *e, int cmd, struct ast_c
 
 		event = ast_calendar_unref_event(event);
 	}
+	ao2_iterator_destroy(&i);
 	cal = unref_calendar(cal);
 	return CLI_SUCCESS;
 #undef FORMAT

@@ -6970,8 +6970,12 @@ static struct ast_frame *process_ast_dsp(struct chan_list *tmp, struct ast_frame
 		return NULL;
 	}
 
- 	if (!f || (f->frametype != AST_FRAME_DTMF))
- 		return frame;
+	if (!f || (f->frametype != AST_FRAME_DTMF)) {
+		if (f) {
+			ast_frfree(f);
+		}
+		return frame;
+	}
 
 	ast_debug(1, "Detected inband DTMF digit: %c\n", f->subclass);
 
@@ -7758,9 +7762,7 @@ static void update_name(struct ast_channel *tmp, int port, int c)
 	snprintf(newname, sizeof(newname), "%s/%d-", misdn_type, chan_offset + c);
 	if (strncmp(tmp->name, newname, strlen(newname))) {
 		snprintf(newname, sizeof(newname), "%s/%d-u%d", misdn_type, chan_offset + c, glob_channel++);
-		ast_channel_lock(tmp);
 		ast_change_name(tmp, newname);
-		ast_channel_unlock(tmp);
 		chan_misdn_log(3, port, " --> updating channel name to [%s]\n", tmp->name);
 	}
 }

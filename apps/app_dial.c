@@ -582,6 +582,12 @@ struct chanlist {
 
 static int detect_disconnect(struct ast_channel *chan, char code, struct ast_str *featurecode);
 
+static void chanlist_free(struct chanlist *outgoing)
+{
+	ast_party_connected_line_free(&outgoing->connected);
+	ast_free(outgoing);
+}
+
 static void hanguptree(struct chanlist *outgoing, struct ast_channel *exception, int answered_elsewhere)
 {
 	/* Hang up a tree of stuff */
@@ -600,7 +606,7 @@ static void hanguptree(struct chanlist *outgoing, struct ast_channel *exception,
 		}
 		oo = outgoing;
 		outgoing = outgoing->next;
-		ast_free(oo);
+		chanlist_free(oo);
 	}
 }
 
@@ -1062,7 +1068,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 					if (single && CAN_EARLY_BRIDGE(peerflags, in, c))
 						ast_channel_early_bridge(in, c);
 					if (!ast_test_flag64(outgoing, OPT_RINGBACK))
-						ast_indicate(in, AST_CONTROL_PROGRESS);
+						if (single || (!single && !pa->sentringing)) {
+							ast_indicate(in, AST_CONTROL_PROGRESS);
+						}
 						if(!ast_strlen_zero(dtmf_progress)) {
 							ast_verb(3, "Sending DTMF '%s' to the called party as result of receiving a PROGRESS message.\n", dtmf_progress);
 							ast_dtmf_stream(c, in, dtmf_progress, 250, 0);
@@ -1279,113 +1287,6 @@ static int valid_priv_reply(struct ast_flags64 *opts, int res)
 		return 1;
 	if (ast_test_flag64(opts, OPT_SCREENING) && res <= '4')
 		return 1;
-	return 0;
-}
-
-static int do_timelimit(struct ast_channel *chan, struct ast_bridge_config *config,
-	char *parse, struct timeval *calldurationlimit)
-{
-	char *stringp = ast_strdupa(parse);
-	char *limit_str, *warning_str, *warnfreq_str;
-	const char *var;
-	int play_to_caller = 0, play_to_callee = 0;
-	int delta;
-
-	limit_str = strsep(&stringp, ":");
-	warning_str = strsep(&stringp, ":");
-	warnfreq_str = strsep(&stringp, ":");
-
-	config->timelimit = atol(limit_str);
-	if (warning_str)
-		config->play_warning = atol(warning_str);
-	if (warnfreq_str)
-		config->warning_freq = atol(warnfreq_str);
-
-	if (!config->timelimit) {
-		ast_log(LOG_WARNING, "Dial does not accept L(%s), hanging up.\n", limit_str);
-		config->timelimit = config->play_warning = config->warning_freq = 0;
-		config->warning_sound = NULL;
-		return -1; /* error */
-	} else if ( (delta = config->play_warning - config->timelimit) > 0) {
-		int w = config->warning_freq;
-
-		/* If the first warning is requested _after_ the entire call would end,
-		   and no warning frequency is requested, then turn off the warning. If
-		   a warning frequency is requested, reduce the 'first warning' time by
-		   that frequency until it falls within the call's total time limit.
-		   Graphically:
-				  timelim->|    delta        |<-playwarning
-			0__________________|_________________|
-					 | w  |    |    |    |
-
-		   so the number of intervals to cut is 1+(delta-1)/w
-		*/
-
-		if (w == 0) {
-			config->play_warning = 0;
-		} else {
-			config->play_warning -= w * ( 1 + (delta-1)/w );
-			if (config->play_warning < 1)
-				config->play_warning = config->warning_freq = 0;
-		}
-	}
-	
-	ast_channel_lock(chan);
-
-	var = pbx_builtin_getvar_helper(chan, "LIMIT_PLAYAUDIO_CALLER");
-
-	play_to_caller = var ? ast_true(var) : 1;
-
-	var = pbx_builtin_getvar_helper(chan, "LIMIT_PLAYAUDIO_CALLEE");
-	play_to_callee = var ? ast_true(var) : 0;
-
-	if (!play_to_caller && !play_to_callee)
-		play_to_caller = 1;
-
-	var = pbx_builtin_getvar_helper(chan, "LIMIT_WARNING_FILE");
-	config->warning_sound = !ast_strlen_zero(var) ? ast_strdup(var) : ast_strdup("timeleft");
-
-	/* The code looking at config wants a NULL, not just "", to decide
-	 * that the message should not be played, so we replace "" with NULL.
-	 * Note, pbx_builtin_getvar_helper _can_ return NULL if the variable is
-	 * not found.
-	 */
-
-	var = pbx_builtin_getvar_helper(chan, "LIMIT_TIMEOUT_FILE");
-	config->end_sound = !ast_strlen_zero(var) ? ast_strdup(var) : NULL;
-
-	var = pbx_builtin_getvar_helper(chan, "LIMIT_CONNECT_FILE");
-	config->start_sound = !ast_strlen_zero(var) ? ast_strdup(var) : NULL;
-
-	ast_channel_unlock(chan);
-
-	/* undo effect of S(x) in case they are both used */
-	calldurationlimit->tv_sec = 0;
-	calldurationlimit->tv_usec = 0;
-
-	/* more efficient to do it like S(x) does since no advanced opts */
-	if (!config->play_warning && !config->start_sound && !config->end_sound && config->timelimit) {
-		calldurationlimit->tv_sec = config->timelimit / 1000;
-		calldurationlimit->tv_usec = (config->timelimit % 1000) * 1000;
-		ast_verb(3, "Setting call duration limit to %.3lf seconds.\n",
-			calldurationlimit->tv_sec + calldurationlimit->tv_usec / 1000000.0);
-		config->timelimit = play_to_caller = play_to_callee =
-		config->play_warning = config->warning_freq = 0;
-	} else {
-		ast_verb(3, "Limit Data for this call:\n");
-		ast_verb(4, "timelimit      = %ld\n", config->timelimit);
-		ast_verb(4, "play_warning   = %ld\n", config->play_warning);
-		ast_verb(4, "play_to_caller = %s\n", play_to_caller ? "yes" : "no");
-		ast_verb(4, "play_to_callee = %s\n", play_to_callee ? "yes" : "no");
-		ast_verb(4, "warning_freq   = %ld\n", config->warning_freq);
-		ast_verb(4, "start_sound    = %s\n", S_OR(config->start_sound, ""));
-		ast_verb(4, "warning_sound  = %s\n", config->warning_sound);
-		ast_verb(4, "end_sound      = %s\n", S_OR(config->end_sound, ""));
-	}
-	if (play_to_caller)
-		ast_set_flag(&(config->features_caller), AST_FEATURE_PLAY_WARNING);
-	if (play_to_callee)
-		ast_set_flag(&(config->features_callee), AST_FEATURE_PLAY_WARNING);
 	return 0;
 }
 
@@ -1741,7 +1642,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 	}
 
 	if (ast_test_flag64(&opts, OPT_DURATION_LIMIT) && !ast_strlen_zero(opt_args[OPT_ARG_DURATION_LIMIT])) {
-		if (do_timelimit(chan, &config, opt_args[OPT_ARG_DURATION_LIMIT], &calldurationlimit))
+		if (ast_bridge_timelimit(chan, &config, opt_args[OPT_ARG_DURATION_LIMIT], &calldurationlimit))
 			goto done;
 	}
 
@@ -1826,14 +1727,15 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		else {
 			if (!(datastore = ast_datastore_alloc(&dialed_interface_info, NULL))) {
 				ast_log(LOG_WARNING, "Unable to create channel datastore for dialed interfaces. Aborting!\n");
-				ast_free(tmp);
+				chanlist_free(tmp);
 				goto out;
 			}
 
 			datastore->inheritance = DATASTORE_INHERIT_FOREVER;
 
 			if (!(dialed_interfaces = ast_calloc(1, sizeof(*dialed_interfaces)))) {
-				ast_free(tmp);
+				ast_datastore_free(datastore);
+				chanlist_free(tmp);
 				goto out;
 			}
 
@@ -1857,7 +1759,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 
 		if (di) {
 			fulldial++;
-			ast_free(tmp);
+			chanlist_free(tmp);
 			continue;
 		}
 
@@ -1868,7 +1770,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		if (strcasecmp(tech, "Local")) {
 			if (!(di = ast_calloc(1, sizeof(*di) + strlen(interface)))) {
 				AST_LIST_UNLOCK(dialed_interfaces);
-				ast_free(tmp);
+				chanlist_free(tmp);
 				goto out;
 			}
 			strcpy(di->interface, interface);
@@ -1886,7 +1788,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			handle_cause(cause, &num);
 			if (!rest) /* we are on the last destination */
 				chan->hangupcause = cause;
-			ast_free(tmp);
+			chanlist_free(tmp);
 			continue;
 		}
 		pbx_builtin_setvar_helper(tc, "DIALEDPEERNUMBER", numsubst);
@@ -1975,7 +1877,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			ast_channel_unlock(chan);
 			ast_hangup(tc);
 			tc = NULL;
-			ast_free(tmp);
+			chanlist_free(tmp);
 			continue;
 		} else {
 			const char *tmpexten = ast_strdupa(S_OR(chan->macroexten, chan->exten));

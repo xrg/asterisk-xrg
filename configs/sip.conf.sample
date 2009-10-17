@@ -152,6 +152,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; Disabling DNS SRV lookups disables the
                                 ; ability to place SIP calls based on domain
                                 ; names to some other SIP users on the Internet
+                                ; Specifying a port in a SIP peer definition or
+                                ; when dialing outbound calls will supress SRV
+                                ; lookups for that peer or call.
 
 ;pedantic=yes                   ; Enable checking of tags in headers,
                                 ; international character conversions in URIs
@@ -242,6 +245,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 				; which will be empty - thus users get no ring signal.
 				; Setting this to "no" will stop any media before we have
 				; call progress. Default is "yes".
+				;
+				; In order for "noanswer" applications to work, you need to run
+				; the progress() application in the priority before the app.
 
 ;progressinband=never           ; If we should generate in-band ringing always
                                 ; use 'never' to never use in-band signalling, even in cases
@@ -490,22 +496,32 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;callcounter = yes              ; Enable call counters on devices. This can be set per
                                 ; device too.
 
-;----------------------------------------- T.38 FAX PASSTHROUGH SUPPORT -----------------------
+;----------------------------------------- T.38 FAX SUPPORT ----------------------------------
 ;
 ; This setting is available in the [general] section as well as in device configurations.
-; Setting this to yes, enables T.38 fax (UDPTL) passthrough on SIP to SIP calls, provided
-; both parties have T38 support enabled in their Asterisk configuration
-; This has to be enabled in the general section for all devices to work. You can then
-; disable it on a per device basis.
-;
-; T.38 faxing only works in SIP to SIP calls. It defaults to off.
+; Setting this to yes enables T.38 FAX (UDPTL) on SIP calls; it defaults to off.
 ;
 ; t38pt_udptl = yes            ; Enables T.38 with FEC error correction.
 ; t38pt_udptl = yes,fec        ; Enables T.38 with FEC error correction.
 ; t38pt_udptl = yes,redundancy ; Enables T.38 with redundancy error correction.
 ; t38pt_udptl = yes,none       ; Enables T.38 with no error correction.
 ;
-; Faxs Detect will cause the SIP channel to jump to the 'fax' extension (if it exists)
+; In some cases, T.38 endpoints will provide a T38FaxMaxDatagram value (during T.38 setup) that
+; is based on an incorrect interpretation of the T.38 recommendation, and results in failures
+; because Asterisk does not believe it can send T.38 packets of a reasonable size to that
+; endpoint (Cisco media gateways are one example of this situation). In these cases, during a
+; T.38 call you will see warning messages on the console/in the logs from the Asterisk UDPTL
+; stack complaining about lack of buffer space to send T.38 FAX packets. If this occurs, you
+; can set an override (globally, or on a per-device basis) to make Asterisk ignore the
+; T38FaxMaxDatagram value specified by the other endpoint, and use a configured value instead.
+; This can be done by appending 'maxdatagram=<value>' to the t38pt_udptl configuration option,
+; like this:
+;
+; t38pt_udptl = yes,fec,maxdatagram=400 ; Enables T.38 with FEC error correction and overrides
+;                                       ; the other endpoint's provided value to assume we can
+;                                       ; send 400 byte T.38 FAX packets to it.
+;
+; FAX detection will cause the SIP channel to jump to the 'fax' extension (if it exists)
 ; after T.38 is successfully negotiated.
 ;
 ; faxdetect = yes              ; Default false
@@ -627,6 +643,10 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;        externip = 12.34.56.78          ; use this address.
 ;        externip = 12.34.56.78:9900     ; use this address and port.
 ;        externip = mynat.my.org:12600   ; Public address of my nat box.
+;        externtcpport = 9900   ; The externally mapped tcp port, when Asterisk is behind a static NAT or PAT. 
+;                               ; externtcpport will default to the externip or externhost port if either one is set. 
+;        externtlsport = 12600  ; The externally mapped tls port, when Asterisk is behind a static NAT or PAT.
+;                               ; externtlsport port will default to the RFC designated port of 5061.	
 ;
 ;   b. "externhost = hostname[:port]" is similar to "externip" except
 ;      that the hostname is looked up every "externrefresh" seconds
@@ -726,6 +746,8 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; also contains the Asterisk version.
 ;sdpowner=root                  ; Allows you to change the username field in the SDP owner string, (o=)
                                 ; This field MUST NOT contain spaces
+
+;constantssrc=yes               ; Don't change the RTP SSRC when our media stream changes
 
 ;----------------------------------------- REALTIME SUPPORT ------------------------
 ; For additional information on ARA, the Asterisk Realtime Architecture,
@@ -932,6 +954,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; timerb
 ; qualifyfreq
 ; t38pt_usertpsource
+; constantssrc
 ; contactpermit         ; Limit what a host may register as (a neat trick
 ; contactdeny           ; is to register at the same IP as a SIP provider,
 ;                       ; then call oneself, and get redirected to that

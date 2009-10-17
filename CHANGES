@@ -44,11 +44,21 @@ SIP Changes
  * Slave SIP channels now set HASH(SIP_CAUSE,<slave-channel-name>) on each
    response.  This permits the master channel to know how each channel dialled
    in a multi-channel setup resolved in an individual way.
+ * Added 'externtcpport' and 'externtlsport' options to allow custom port
+   configuration for the externip and externhost options when tcp or tls is used.
+ * Added support for message body (stored in content variable) to SIP NOTIFY message
+   accessible via AMI and CLI.
 
 IAX2 Changes
 -----------
  * Added rtsavesysname option into iax.conf to allow the systname to be saved
    on realtime updates.
+
+MGCP Changes
+------------
+ * Added ability to preset channel variables on indicated lines with the setvar
+   configuration option.  Also, clearvars=all resets the list of variables back
+   to none.
 
 Applications
 ------------
@@ -63,9 +73,11 @@ Applications
    exit the application.
  * The Voicemail application has been improved to automatically ignore messages
    that only contain silence.
- * The ChanSpy application now has the 's' option, which makes the application
+ * The ChanSpy application now has the 'S' option, which makes the application
    automatically exit once it hits a point where no more channels are available
    to spy on.
+ * The ChanSpy application also now has the 'E' option, which spies on a single
+   channel and exits when that channel hangs up.
 
 Dialplan Functions
 ------------------
@@ -109,6 +121,8 @@ Dialplan Functions
    mode=multirow.  If rowlimit is set, then additional rows may be retrieved
    from the same query by using the name of the function which retrieved the
    first row as an argument to ODBC_FETCH().
+  * Added JABBER_RECEIVE, which permits receiving XMPP messages from the
+    dialplan. This function returns the content of the received message.
 
 Dialplan Variables
 ------------------
@@ -256,6 +270,11 @@ Security Events Framework
    Asterisk component that reports security events.  However, SIP support will be
    coming soon.  For more information on the security events framework, see the
    "Security Events" chapter of the included documentation - doc/tex/asterisk.pdf.
+
+Miscellaneous
+-------------
+ * SendText is now implemented in chan_gtalk and chan_jingle. It will simply send
+   XMPP text messages to the remote JID.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------
@@ -406,7 +425,7 @@ Miscellaneous
    can connect calls in passthrough mode, as well as record and play back files.
  * Successful and unsuccessful call pickup can now be alerted through sounds, by
    using pickupsound and pickupfailsound in features.conf.
- * ASTVARRUNDIR is now set to $(localstatedir)/run/asterisk by default. 
+ * ASTVARRUNDIR is now set to $(localstatedir)/run/asterisk by default.
    This means the asterisk pid file will now be in /var/run/asterisk/asterisk.pid on LINUX
    instead of the /var/run/asterisk.pid where it used to be. This will make
    installs as non-root easier to manage.

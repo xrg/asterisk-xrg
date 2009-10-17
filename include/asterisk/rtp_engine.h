@@ -94,6 +94,8 @@ enum ast_rtp_property {
 	AST_RTP_PROPERTY_RTCP,
 	/*! Maximum number of RTP properties supported */
 	AST_RTP_PROPERTY_MAX,
+	/*! Don't force a new SSRC on new source */
+	AST_RTP_PROPERTY_CONSTANT_SSRC,
 };
 
 /*! Additional RTP options */
@@ -317,6 +319,8 @@ struct ast_rtp_engine {
 	int (*dtmf_end)(struct ast_rtp_instance *instance, char digit);
 	/*! Callback to indicate that a new source of media has come in */
 	void (*new_source)(struct ast_rtp_instance *instance);
+	/*! Callback to tell new_source not to change SSRC */
+	void (*constant_ssrc_set)(struct ast_rtp_instance *instance);
 	/*! Callback for setting an extended RTP property */
 	int (*extended_prop_set)(struct ast_rtp_instance *instance, int property, void *value);
 	/*! Callback for getting an extended RTP property */
