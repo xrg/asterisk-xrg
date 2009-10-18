@@ -2096,9 +2096,12 @@ static void *pri_dchannel(void *vpri)
 							if (pri->pvts[chanpos]->owner) {
 								/* Queue a BUSY instead of a hangup if our cause is appropriate */
 								pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
-								if (pri->pvts[chanpos]->owner->_state == AST_STATE_UP)
+								switch (pri->pvts[chanpos]->owner->_state) {
+								case AST_STATE_BUSY:
+								case AST_STATE_UP:
 									ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
-								else {
+									break;
+								default:
 									switch (e->hangup.cause) {
 									case PRI_CAUSE_USER_BUSY:
 										pri_queue_control(pri->pvts[chanpos], AST_CONTROL_BUSY, pri);
@@ -2115,6 +2118,7 @@ static void *pri_dchannel(void *vpri)
 										ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
 										break;
 									}
+									break;
 								}
 							}
 							ast_verb(3, "Channel %d/%d, span %d got hangup, cause %d\n",
@@ -2167,9 +2171,12 @@ static void *pri_dchannel(void *vpri)
 							e->hangup.subcmds);
 						if (pri->pvts[chanpos]->owner) {
 							pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
-							if (pri->pvts[chanpos]->owner->_state == AST_STATE_UP)
+							switch (pri->pvts[chanpos]->owner->_state) {
+							case AST_STATE_BUSY:
+							case AST_STATE_UP:
 								ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
-							else {
+								break;
+							default:
 								switch (e->hangup.cause) {
 								case PRI_CAUSE_USER_BUSY:
 									pri_queue_control(pri->pvts[chanpos], AST_CONTROL_BUSY, pri);
@@ -2186,6 +2193,7 @@ static void *pri_dchannel(void *vpri)
 									ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
 									break;
 								}
+								break;
 							}
 							ast_verb(3, "Channel %d/%d, span %d got hangup request, cause %d\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span, e->hangup.cause);
 							if (e->hangup.aoc_units > -1)
@@ -2402,6 +2410,8 @@ int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 	p->progress = 0;
 	p->alerting = 0;
 	p->setup_ack = 0;
+	p->cid_num[0] = '\0';
+	p->cid_name[0] = '\0';
 	p->exten[0] = '\0';
 	sig_pri_set_dialing(p, 0);
 
