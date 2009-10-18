@@ -1072,7 +1072,7 @@ static void ast_bridge_frames(fax_session *s)
 								case 'e':ftone=2;
 							}
 							/* tickle the channel as we have fax tone */
-							ast_indicate_data(inactive, AST_CONTROL_T38, &t38control, sizeof(t38control));
+							ast_indicate_data(inactive, AST_CONTROL_T38_PARAMETERS, &t38control, sizeof(t38control));
 							t38control = AST_T38_REQUEST_NEGOTIATE;
 							ast_debug(1, "Fax %s Tone Detected On %s\n", (ftone == 1) ? "CNG" : "CED", active->name);
 						} else {
@@ -1092,7 +1092,7 @@ static void ast_bridge_frames(fax_session *s)
 		ast_dsp_free(dsp);
 }
 
-static int app_t38gateway_exec(struct ast_channel *chan, void *data)
+static int app_t38gateway_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	char *parse;
@@ -1159,7 +1159,7 @@ static int app_t38gateway_exec(struct ast_channel *chan, void *data)
 	oh.vars = vars;
 
 	oh.parent_channel=chan;
-	if (!(s->peer = __ast_request_and_dial(tech, AST_FORMAT_SLINEAR, numsubst, timeout, &state, chan->cid.cid_num, chan->cid.cid_name, &oh))) {
+	if (!(s->peer = __ast_request_and_dial(tech, AST_FORMAT_SLINEAR, chan, numsubst, timeout, &state, chan->cid.cid_num, chan->cid.cid_name, &oh))) {
 		chan->hangupcause = state;
 		ast_free(s);
 		return -1;
