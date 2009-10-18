@@ -389,70 +389,10 @@ static char *handle_cli_dialplan_remove_extension(struct ast_cli_entry *e, int c
 	return ret;
 }
 
-#define BROKEN_READLINE 1
-
-#ifdef BROKEN_READLINE
-/*
- * There is one funny thing, when you have word like 300@ and you hit
- * <tab>, you arguments will act as your word is '300 ', so the '@'
- * character acts sometimes as a word delimiter and sometimes as a part
- * of a word.
- *
- * This fix function allocates a new word variable and stores it every
- * time as xxx@yyy. The correct pos is set, too.
- *
- * It's ugly, I know, but I'm waiting for Mark's suggestion if the
- * previous is a bug or a feature ...
- */
-static int fix_complete_args(const char *line, char **word, int *pos)
-{
-	char *_line, *_strsep_line, *_previous_word = NULL, *_word = NULL;
-	int words = 0;
-
-	_line = strdup(line);
-
-	_strsep_line = _line;
-	while (_strsep_line) {
-		_previous_word = _word;
-		_word = strsep(&_strsep_line, " ");
-
-		if (_word && strlen(_word)) words++;
-	}
-
-
-	if (_word || _previous_word) {
-		if (_word) {
-			if (!strlen(_word)) words++;
-			*word = strdup(_word);
-		} else
-			*word = strdup(_previous_word);
-		*pos = words - 1;
-		free(_line);
-		return 0;
-	}
-
-	free(_line);
-	return -1;
-}
-#endif /* BROKEN_READLINE */
-
 static char *complete_dialplan_remove_extension(struct ast_cli_args *a)
 {
 	char *ret = NULL;
 	int which = 0;
-
-#ifdef BROKEN_READLINE
-	char *word2;
-	/*
-	 * Fix arguments, *word is a new allocated structure, REMEMBER to
-	 * free *word when you want to return from this function ...
-	 */
-	if (fix_complete_args(a->line, &word2, &a->pos)) {
-		ast_log(LOG_ERROR, "Out of free memory\n");
-		return NULL;
-	}
-	a->word = word2;
-#endif
 
 	if (a->pos == 3) { /* 'dialplan remove extension _X_' (exten@context ... */
 		struct ast_context *c = NULL;
@@ -463,9 +403,6 @@ static char *complete_dialplan_remove_extension(struct ast_cli_args *a)
 
 		lc = split_ec(a->word, &exten, &context, &cid);
 		if (lc)	{ /* error */
-#ifdef BROKEN_READLINE
-			free(word2);
-#endif
 			return NULL;
 		}
 		le = strlen(exten);
@@ -514,8 +451,7 @@ static char *complete_dialplan_remove_extension(struct ast_cli_args *a)
 
 		ast_unlock_contexts();
 	error2:
-		if (exten)
-			free(exten);
+		free(exten);
 	} else if (a->pos == 4) { /* 'dialplan remove extension EXT _X_' (priority) */
 		char *exten = NULL, *context, *cid, *p;
 		struct ast_context *c;
@@ -572,12 +508,8 @@ static char *complete_dialplan_remove_extension(struct ast_cli_args *a)
 		}
 		ast_unlock_contexts();
 	error3:
-		if (exten)
-			free(exten);
+		free(exten);
 	}
-#ifdef BROKEN_READLINE
-	free(word2);
-#endif
 	return ret; 
 }
 
@@ -1015,7 +947,7 @@ static char *handle_cli_dialplan_add_extension(struct ast_cli_entry *e, int cmd,
 		if (!strcmp(prior, "hint")) {
 			iprior = PRIORITY_HINT;
 		} else {
-			if (sscanf(prior, "%d", &iprior) != 1) {
+			if (sscanf(prior, "%30d", &iprior) != 1) {
 				ast_cli(a->fd, "'%s' is not a valid priority\n", prior);
 				prior = NULL;
 			}
@@ -1205,8 +1137,7 @@ static char *complete_dialplan_add_ignorepat(struct ast_cli_args *a)
 				ret = strdup(ast_get_context_name(c));
 		}
 
-		if (ignorepat)
-			free(ignorepat);
+		free(ignorepat);
 		ast_unlock_contexts();
 		return ret;
 	}
@@ -1510,7 +1441,7 @@ static int pbx_load_config(const char *config_file)
 					goto process_extension;
 				}
 			} else if (!strcasecmp(v->name, "exten")) {
-				int ipri = -2;
+				int ipri;
 				char *plus, *firstp;
 				char *pri, *appl, *data, *cidmatch;
 
@@ -1522,6 +1453,7 @@ static int pbx_load_config(const char *config_file)
 				pbx_substitute_variables_helper(NULL, ext, realext, sizeof(realext) - 1);
 				ast_copy_string(lastextension, realext, sizeof(lastextension));
 process_extension:
+				ipri = -2;
 				if ((cidmatch = strchr(realext, '/'))) {
 					*cidmatch++ = '\0';
 					ast_shrink_phone_number(cidmatch);
@@ -1554,7 +1486,7 @@ process_extension:
 					} else {
 						ast_log(LOG_WARNING, "Can't use 'same' priority on the first entry!\n");
 					}
-				} else if (sscanf(pri, "%d", &ipri) != 1 &&
+				} else if (sscanf(pri, "%30d", &ipri) != 1 &&
 					   (ipri = ast_findlabel_extension2(NULL, con, realext, pri, cidmatch)) < 1) {
 					ast_log(LOG_WARNING, "Invalid priority/label '%s' at line %d\n", pri, v->lineno);
 					ipri = 0;
@@ -1707,9 +1639,9 @@ static void pbx_load_users(void)
 			c = dahdicopy;
 			chan = strsep(&c, ",");
 			while (chan) {
-				if (sscanf(chan, "%d-%d", &start, &finish) == 2) {
+				if (sscanf(chan, "%30d-%30d", &start, &finish) == 2) {
 					/* Range */
-				} else if (sscanf(chan, "%d", &start)) {
+				} else if (sscanf(chan, "%30d", &start)) {
 					/* Just one */
 					finish = start;
 				} else {

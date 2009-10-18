@@ -201,21 +201,20 @@ static int frame_set_var(struct ast_channel *chan, struct gosub_stack_frame *fra
 		}
 	}
 
-	if (!ast_strlen_zero(value)) {
-		if (!found) {
-			variables = ast_var_assign(var, "");
-			AST_LIST_INSERT_HEAD(&frame->varshead, variables, entries);
-			pbx_builtin_pushvar_helper(chan, var, value);
-		} else
-			pbx_builtin_setvar_helper(chan, var, value);
-
-		manager_event(EVENT_FLAG_DIALPLAN, "VarSet", 
-			"Channel: %s\r\n"
-			"Variable: LOCAL(%s)\r\n"
-			"Value: %s\r\n"
-			"Uniqueid: %s\r\n", 
-			chan->name, var, value, chan->uniqueid);
+	if (!found) {
+		variables = ast_var_assign(var, "");
+		AST_LIST_INSERT_HEAD(&frame->varshead, variables, entries);
+		pbx_builtin_pushvar_helper(chan, var, value);
+	} else {
+		pbx_builtin_setvar_helper(chan, var, value);
 	}
+
+	manager_event(EVENT_FLAG_DIALPLAN, "VarSet",
+		"Channel: %s\r\n"
+		"Variable: LOCAL(%s)\r\n"
+		"Value: %s\r\n"
+		"Uniqueid: %s\r\n",
+		chan->name, var, value, chan->uniqueid);
 	return 0;
 }
 
@@ -366,7 +365,7 @@ static int gosub_exec(struct ast_channel *chan, void *data)
 			*endparen = '\0';
 		else
 			ast_log(LOG_WARNING, "Ouch.  No closing paren: '%s'?\n", (char *)data);
-		AST_STANDARD_APP_ARGS(args2, tmp);
+		AST_STANDARD_RAW_ARGS(args2, tmp);
 	} else
 		args2.argc = 0;
 
@@ -430,13 +429,13 @@ static int gosubif_exec(struct ast_channel *chan, void *data)
 	}
 
 	args = ast_strdupa(data);
-	AST_NONSTANDARD_APP_ARGS(cond, args, '?');
+	AST_NONSTANDARD_RAW_ARGS(cond, args, '?');
 	if (cond.argc != 2) {
 		ast_log(LOG_WARNING, "GosubIf requires an argument: GosubIf(cond?label1(args):label2(args)\n");
 		return 0;
 	}
 
-	AST_NONSTANDARD_APP_ARGS(label, cond.labels, ':');
+	AST_NONSTANDARD_RAW_ARGS(label, cond.labels, ':');
 
 	if (pbx_checkcondition(cond.ition)) {
 		if (!ast_strlen_zero(label.iftrue))
@@ -460,7 +459,12 @@ static int local_read(struct ast_channel *chan, const char *cmd, char *data, cha
 
 	oldlist = stack_store->data;
 	AST_LIST_LOCK(oldlist);
-	frame = AST_LIST_FIRST(oldlist);
+	if (!(frame = AST_LIST_FIRST(oldlist))) {
+		/* Not within a Gosub routine */
+		AST_LIST_UNLOCK(oldlist);
+		return -1;
+	}
+
 	AST_LIST_TRAVERSE(&frame->varshead, variables, entries) {
 		if (!strcmp(data, ast_var_name(variables))) {
 			const char *tmp;
@@ -518,7 +522,7 @@ static int peek_read(struct ast_channel *chan, const char *cmd, char *data, char
 		return -1;
 	}
 
-	AST_STANDARD_APP_ARGS(args, data);
+	AST_STANDARD_RAW_ARGS(args, data);
 	n = atoi(args.n);
 	*buf = '\0';
 
@@ -551,7 +555,7 @@ static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, char **arg
 
 	ast_debug(1, "Gosub called with %d arguments: 0:%s 1:%s 2:%s 3:%s 4:%s\n", argc, argv[0], argv[1], argv[2], argv[3], argc == 5 ? argv[4] : "");
 
-	if (sscanf(argv[3], "%d", &priority) != 1 || priority < 1) {
+	if (sscanf(argv[3], "%30d", &priority) != 1 || priority < 1) {
 		/* Lookup the priority label */
 		if ((priority = ast_findlabel_extension(chan, argv[1], argv[2], argv[3], chan->cid.cid_num)) < 0) {
 			ast_log(LOG_ERROR, "Priority '%s' not found in '%s@%s'\n", argv[3], argv[2], argv[1]);

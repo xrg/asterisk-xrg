@@ -235,8 +235,8 @@ static char *complete_fn(const char *word, int state)
 		c += (strlen(ast_config_AST_MODULE_DIR) + 1);
 	if (c)
 		c = ast_strdup(c);
-	if (d)
-		free(d);
+
+	free(d);
 	
 	return c;
 }
@@ -444,7 +444,7 @@ static char *handle_verbose(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 		atleast = 1;
 	if (argc != e->args + atleast + 1 && argc != e->args + atleast + 2)
 		return CLI_SHOWUSAGE;
-	if (sscanf(argv[e->args + atleast], "%d", &newlevel) != 1)
+	if (sscanf(argv[e->args + atleast], "%30d", &newlevel) != 1)
 		return CLI_SHOWUSAGE;
 	if (argc == e->args + atleast + 2) {
 		unsigned int debug = (*what == 'C');
@@ -1259,7 +1259,7 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 {
 	struct ast_channel *c=NULL;
 	struct timeval now;
-	struct ast_str *out = ast_str_thread_get(&global_app_buf, 16);
+	struct ast_str *out = ast_str_thread_get(&ast_str_thread_global_buf, 16);
 	char cdrtime[256];
 	char nf[256], wf[256], rf[256];
 	long elapsed_seconds=0;
@@ -1439,7 +1439,7 @@ static char *group_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cl
 			ast_cli(a->fd, FORMAT_STRING, gi->chan->name, gi->group, (ast_strlen_zero(gi->category) ? "(default)" : gi->category));
 			numchans++;
 		}
-		gi = AST_LIST_NEXT(gi, list);
+		gi = AST_LIST_NEXT(gi, group_list);
 	}
 	
 	ast_app_group_list_unlock();
@@ -1559,7 +1559,6 @@ int ast_cli_perms_init(int reload)
 
 	cfg = ast_config_load2(perms_config, "" /* core, can't reload */, config_flags);
 	if (!cfg) {
-		ast_log (LOG_WARNING, "No cli permissions file found (%s)\n", perms_config);
 		ast_mutex_unlock(&permsconfiglock);
 		return 1;
 	} else if (cfg == CONFIG_STATUS_FILEUNCHANGED) {

@@ -187,8 +187,7 @@ static int disa_exec(struct ast_channel *chan, void *data)
 			/* answer */
 			ast_answer(chan);
 		}
-	} else
-		special_noanswer = 1;
+	} else special_noanswer = 1;
 
 	ast_debug(1, "Context: %s\n",args.context);
 
@@ -250,7 +249,7 @@ static int disa_exec(struct ast_channel *chan, void *data)
 			if (!(k&1)) { /* if in password state */
 				if (j == '#') { /* end of password */
 					  /* see if this is an integer */
-					if (sscanf(args.passcode,"%d",&j) < 1) { /* nope, it must be a filename */
+					if (sscanf(args.passcode,"%30d",&j) < 1) { /* nope, it must be a filename */
 						fp = fopen(args.passcode,"r");
 						if (!fp) {
 							ast_log(LOG_WARNING,"DISA password file %s not found on chan %s\n",args.passcode,chan->name);
@@ -276,7 +275,7 @@ static int disa_exec(struct ast_channel *chan, void *data)
 							ast_debug(1, "Mailbox: %s\n",args.mailbox);
 
 							/* password must be in valid format (numeric) */
-							if (sscanf(args.passcode,"%d", &j) < 1)
+							if (sscanf(args.passcode,"%30d", &j) < 1)
 								continue;
 							 /* if we got it */
 							if (!strcmp(exten,args.passcode)) {

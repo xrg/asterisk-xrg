@@ -37,7 +37,7 @@ accountcode character varying(20),
 amaflags character varying(7),
 callgroup character varying(10),
 callerid character varying(80),
-canreinvite character varying(3) DEFAULT 'yes',
+directmedia character varying(3) DEFAULT 'yes',
 context character varying(80),
 defaultip character varying(15),
 dtmfmode character varying(7),
@@ -67,7 +67,8 @@ musiconhold character varying(100),
 regseconds bigint DEFAULT 0::bigint NOT NULL,
 ipaddr character varying(15) DEFAULT '' NOT NULL,
 regexten character varying(80) DEFAULT '' NOT NULL,
-cancallforward character varying(3) DEFAULT 'yes'
+cancallforward character varying(3) DEFAULT 'yes',
+lastms integer DEFAULT -1 NOT NULL
 );
 
 drop table voicemail_users;

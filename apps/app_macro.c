@@ -62,16 +62,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			at the location of the Goto.</para>
 			<para>If <variable>MACRO_OFFSET</variable> is set at termination, Macro will attempt to continue
 			at priority MACRO_OFFSET + N + 1 if such a step exists, and N + 1 otherwise.</para>
-			<para>Extensions: While a macro is being executed, it becomes the current context. This means that if
-			a hangup occurs, for instance, that the macro will be searched for an <literal>h</literal> extension,
-			NOT the context from which the macro was called. So, make sure to define all appropriate extensions
-			in your macro! (Note: AEL does not use macros)</para>
 			<warning><para>Because of the way Macro is implemented (it executes the priorities contained within
 			it via sub-engine), and a fixed per-thread memory stack allowance, macros are limited to 7 levels
 			of nesting (macro calling macro calling macro, etc.); It may be possible that stack-intensive
 			applications in deeply nested macros could cause asterisk to crash earlier than this limit.
 			It is advised that if you need to deeply nest macro calls, that you use the Gosub application
 			(now allows arguments like a Macro) with explict Return() calls instead.</para></warning>
+			<warning><para>Use of the application <literal>WaitExten</literal> within a macro will not function
+			as expected. Please use the <literal>Read</literal> application in order to read DTMF from a channel
+			currently executing a macro.</para></warning>
 		</description>
 		<see-also>
 			<ref type="application">MacroExit</ref>
@@ -101,6 +100,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<replaceable>expr</replaceable> is true (otherwise <replaceable>macroiffalse</replaceable>
 			if provided)</para>
 			<para>Arguments and return values as in application Macro()</para>
+			<xi:include xpointer="xpointer(/docs/application[@name='Macro']/description/warning[2])" />
 		</description>
 		<see-also>
 			<ref type="application">GotoIf</ref>
@@ -124,6 +124,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			Only one call at a time may run the macro. (we'll wait if another call is busy
 			executing in the Macro)</para>
 			<para>Arguments and return values as in application Macro()</para>
+			<xi:include xpointer="xpointer(/docs/application[@name='Macro']/description/warning[2])" />
 		</description>
 		<see-also>
 			<ref type="application">Macro</ref>
@@ -263,12 +264,12 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 	/* does the user want a deeper rabbit hole? */
 	ast_channel_lock(chan);
 	if ((s = pbx_builtin_getvar_helper(chan, "MACRO_RECURSION"))) {
-		sscanf(s, "%d", &maxdepth);
+		sscanf(s, "%30d", &maxdepth);
 	}
 	
 	/* Count how many levels deep the rabbit hole goes */
 	if ((s = pbx_builtin_getvar_helper(chan, "MACRO_DEPTH"))) {
-		sscanf(s, "%d", &depth);
+		sscanf(s, "%30d", &depth);
 	}
 	
 	/* Used for detecting whether to return when a Macro is called from another Macro after hangup */
@@ -276,7 +277,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		pbx_builtin_setvar_helper(chan, "MACRO_IN_HANGUP", "1");
 	
 	if ((inhangupc = pbx_builtin_getvar_helper(chan, "MACRO_IN_HANGUP"))) {
-		sscanf(inhangupc, "%d", &inhangup);
+		sscanf(inhangupc, "%30d", &inhangup);
 	}
 	ast_channel_unlock(chan);
 
@@ -529,7 +530,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 			if ((offsets = pbx_builtin_getvar_helper(chan, "MACRO_OFFSET"))) {
 				/* Handle macro offset if it's set by checking the availability of step n + offset + 1, otherwise continue
 			   	normally if there is any problem */
-				if (sscanf(offsets, "%d", &offset) == 1) {
+				if (sscanf(offsets, "%30d", &offset) == 1) {
 					if (ast_exists_extension(chan, chan->context, chan->exten, chan->priority + offset + 1, chan->cid.cid_num)) {
 						chan->priority += offset;
 					}

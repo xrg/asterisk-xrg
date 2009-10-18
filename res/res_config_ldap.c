@@ -1229,16 +1229,21 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 			mods_size++;
 			ldap_mods = ast_realloc(ldap_mods, sizeof(LDAPMod *) * mods_size);
 			ldap_mods[mods_size - 1] = NULL;
+			
 			ldap_mods[mods_size - 2] = ast_calloc(1, sizeof(LDAPMod));
-
-			ldap_mods[mods_size - 2]->mod_op = LDAP_MOD_REPLACE;
 
 			ldap_mods[mods_size - 2]->mod_type = ast_calloc(sizeof(char), strlen(newparam) + 1);
 			strcpy(ldap_mods[mods_size - 2]->mod_type, newparam);
 
-			ldap_mods[mods_size - 2]->mod_values = ast_calloc(sizeof(char *), 2);
-			ldap_mods[mods_size - 2]->mod_values[0] = ast_calloc(sizeof(char), strlen(newval) + 1);
-			strcpy(ldap_mods[mods_size - 2]->mod_values[0], newval);
+			if (strlen(newval) == 0) {
+				ldap_mods[mods_size - 2]->mod_op = LDAP_MOD_DELETE;
+			} else {
+				ldap_mods[mods_size - 2]->mod_op = LDAP_MOD_REPLACE;
+
+				ldap_mods[mods_size - 2]->mod_values = ast_calloc(sizeof(char *), 2);
+				ldap_mods[mods_size - 2]->mod_values[0] = ast_calloc(sizeof(char), strlen(newval) + 1);
+				strcpy(ldap_mods[mods_size - 2]->mod_values[0], newval);
+			}
 		}
 	}
 	/* freeing ldap_mods further down */
@@ -1271,10 +1276,8 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 			ldap_err2string(result));
 
 		ast_mutex_unlock(&ldap_lock);
-		if (filter)
-			free(filter);
-		if (clean_basedn)
-			free(clean_basedn);
+		free(filter);
+		free(clean_basedn);
 		ldap_msgfree(ldap_result_msg);
 		ldap_mods_free(ldap_mods, 0);
 		return -1;
@@ -1282,9 +1285,13 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 	/* Ready to update */
 	if ((num_entries = ldap_count_entries(ldapConn, ldap_result_msg)) > 0) {
 		ast_debug(3, "LINE(%d) Modifying %s=%s hits: %d\n", __LINE__, attribute, lookup, num_entries);
-		for (i = 0; option_debug > 2 && i < mods_size - 1; i++)
-			ast_debug(3, "LINE(%d) %s=%s \n", __LINE__, ldap_mods[i]->mod_type, ldap_mods[i]->mod_values[0]);
-
+		for (i = 0; option_debug > 2 && i < mods_size - 1; i++) {
+			if (ldap_mods[i]->mod_op != LDAP_MOD_DELETE) {
+				ast_debug(3, "LINE(%d) %s=%s \n", __LINE__, ldap_mods[i]->mod_type, ldap_mods[i]->mod_values[0]);
+			} else {
+				ast_debug(3, "LINE(%d) deleting %s \n", __LINE__, ldap_mods[i]->mod_type);
+			}
+		}
 		ldap_entry = ldap_first_entry(ldapConn, ldap_result_msg);
 
 		for (i = 0; ldap_entry; i++) { 
@@ -1297,10 +1304,8 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 	}
 
 	ast_mutex_unlock(&ldap_lock);
-	if (filter)
-		free(filter);
-	if (clean_basedn)
-		free(clean_basedn);
+	free(filter);
+	free(clean_basedn);
 	ldap_msgfree(ldap_result_msg);
 	ldap_mods_free(ldap_mods, 0);
 	return num_entries;
@@ -1458,10 +1463,8 @@ static int update2_ldap(const char *basedn, const char *table_name, va_list ap)
 			ldap_err2string(result));
 
 		ast_mutex_unlock(&ldap_lock);
-		if (filter)
-			free(filter);
-		if (clean_basedn)
-			free(clean_basedn);
+		free(filter);
+		free(clean_basedn);
 		ldap_msgfree(ldap_result_msg);
 		ldap_mods_free(ldap_mods, 0);
 		return -1;
@@ -1603,7 +1606,7 @@ int parse_config(void)
 	if ((s = ast_variable_retrieve(config, "_general", "url"))) {
 		ast_copy_string(url, s, sizeof(url));
 	} else if ((host = ast_variable_retrieve(config, "_general", "host"))) {
-		if (!(s = ast_variable_retrieve(config, "_general", "port")) || sscanf(s, "%d", &port) != 1) {
+		if (!(s = ast_variable_retrieve(config, "_general", "port")) || sscanf(s, "%5d", &port) != 1 || port > 65535) {
 			ast_log(LOG_NOTICE, "No directory port found, using 389 as default.\n");
 			port = 389;
 		}
@@ -1624,7 +1627,7 @@ int parse_config(void)
 	if (!(s = ast_variable_retrieve(config, "_general", "version")) && !(s = ast_variable_retrieve(config, "_general", "protocol"))) {
 		ast_log(LOG_NOTICE, "No explicit LDAP version found, using 3 as default.\n");
 		version = 3;
-	} else if (sscanf(s, "%d", &version) != 1 || version < 1 || version > 6) {
+	} else if (sscanf(s, "%30d", &version) != 1 || version < 1 || version > 6) {
 		ast_log(LOG_WARNING, "Invalid LDAP version '%s', using 3 as default.\n", s);
 		version = 3;
 	}

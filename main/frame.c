@@ -40,11 +40,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dsp.h"
 #include "asterisk/file.h"
 
-#ifdef TRACE_FRAMES
-static int headers;
-static AST_LIST_HEAD_STATIC(headerlist, ast_frame);
-#endif
-
 #if !defined(LOW_MEMORY)
 static void frame_cache_cleanup(void *data);
 
@@ -256,7 +251,7 @@ struct ast_frame *ast_smoother_read(struct ast_smoother *s)
 	/* Make sure we have enough data */
 	if (s->len < s->size) {
 		/* Or, if this is a G.729 frame with VAD on it, send it immediately anyway */
-		if (!((s->flags & AST_SMOOTHER_FLAG_G729) && (s->size % 10)))
+		if (!((s->flags & AST_SMOOTHER_FLAG_G729) && (s->len % 10)))
 			return NULL;
 	}
 	len = s->size;
@@ -318,12 +313,6 @@ static struct ast_frame *ast_frame_header_new(void)
 #endif
 
 	f->mallocd_hdr_len = sizeof(*f);
-#ifdef TRACE_FRAMES
-	AST_LIST_LOCK(&headerlist);
-	headers++;
-	AST_LIST_INSERT_HEAD(&headerlist, f, frame_list);
-	AST_LIST_UNLOCK(&headerlist);
-#endif	
 	
 	return f;
 }
@@ -341,7 +330,7 @@ static void frame_cache_cleanup(void *data)
 }
 #endif
 
-void ast_frame_free(struct ast_frame *fr, int cache)
+static void __frame_free(struct ast_frame *fr, int cache)
 {
 	if (ast_test_flag(fr, AST_FRFLAG_FROM_TRANSLATOR)) {
 		ast_translate_frame_freed(fr);
@@ -360,8 +349,8 @@ void ast_frame_free(struct ast_frame *fr, int cache)
 		 * to keep things simple... */
 		struct ast_frame_cache *frames;
 
-		if ((frames = ast_threadstorage_get(&frame_cache, sizeof(*frames))) 
-		    && frames->size < FRAME_CACHE_MAX_SIZE) {
+		if ((frames = ast_threadstorage_get(&frame_cache, sizeof(*frames))) &&
+		    (frames->size < FRAME_CACHE_MAX_SIZE)) {
 			AST_LIST_INSERT_HEAD(&frames->list, fr, frame_list);
 			frames->size++;
 			return;
@@ -375,16 +364,22 @@ void ast_frame_free(struct ast_frame *fr, int cache)
 	}
 	if (fr->mallocd & AST_MALLOCD_SRC) {
 		if (fr->src)
-			ast_free((char *)fr->src);
+			ast_free((void *) fr->src);
 	}
 	if (fr->mallocd & AST_MALLOCD_HDR) {
-#ifdef TRACE_FRAMES
-		AST_LIST_LOCK(&headerlist);
-		headers--;
-		AST_LIST_REMOVE(&headerlist, fr, frame_list);
-		AST_LIST_UNLOCK(&headerlist);
-#endif			
 		ast_free(fr);
+	}
+}
+
+
+void ast_frame_free(struct ast_frame *frame, int cache)
+{
+	struct ast_frame *next;
+
+	for (next = AST_LIST_NEXT(frame, frame_list);
+	     frame;
+	     frame = next, next = frame ? AST_LIST_NEXT(frame, frame_list) : NULL) {
+		__frame_free(frame, cache);
 	}
 }
 
@@ -398,19 +393,29 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr)
 	struct ast_frame *out;
 	void *newdata;
 
-	ast_clear_flag(fr, AST_FRFLAG_FROM_TRANSLATOR);
-	ast_clear_flag(fr, AST_FRFLAG_FROM_DSP);
+	/* if none of the existing frame is malloc'd, let ast_frdup() do it
+	   since it is more efficient
+	*/
+	if (fr->mallocd == 0) {
+		return ast_frdup(fr);
+	}
+
+	/* if everything is already malloc'd, we are done */
+	if ((fr->mallocd & (AST_MALLOCD_HDR | AST_MALLOCD_SRC | AST_MALLOCD_DATA)) ==
+	    (AST_MALLOCD_HDR | AST_MALLOCD_SRC | AST_MALLOCD_DATA)) {
+		return fr;
+	}
 
 	if (!(fr->mallocd & AST_MALLOCD_HDR)) {
 		/* Allocate a new header if needed */
-		if (!(out = ast_frame_header_new()))
+		if (!(out = ast_frame_header_new())) {
 			return NULL;
+		}
 		out->frametype = fr->frametype;
 		out->subclass = fr->subclass;
 		out->datalen = fr->datalen;
 		out->samples = fr->samples;
 		out->offset = fr->offset;
-		out->data = fr->data;
 		/* Copy the timing data */
 		ast_copy_flags(out, fr, AST_FRFLAG_HAS_TIMING_INFO);
 		if (ast_test_flag(fr, AST_FRFLAG_HAS_TIMING_INFO)) {
@@ -418,26 +423,34 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr)
 			out->len = fr->len;
 			out->seqno = fr->seqno;
 		}
-	} else
+	} else {
+		ast_clear_flag(fr, AST_FRFLAG_FROM_TRANSLATOR);
+		ast_clear_flag(fr, AST_FRFLAG_FROM_DSP);
+		ast_clear_flag(fr, AST_FRFLAG_FROM_FILESTREAM);
 		out = fr;
+	}
 	
-	if (!(fr->mallocd & AST_MALLOCD_SRC)) {
-		if (fr->src) {
-			if (!(out->src = ast_strdup(fr->src))) {
-				if (out != fr)
-					ast_free(out);
-				return NULL;
+	if (!(fr->mallocd & AST_MALLOCD_SRC) && fr->src) {
+		if (!(out->src = ast_strdup(fr->src))) {
+			if (out != fr) {
+				ast_free(out);
 			}
+			return NULL;
 		}
-	} else
+	} else {
 		out->src = fr->src;
+		fr->src = NULL;
+		fr->mallocd &= ~AST_MALLOCD_SRC;
+	}
 	
 	if (!(fr->mallocd & AST_MALLOCD_DATA))  {
 		if (!(newdata = ast_malloc(fr->datalen + AST_FRIENDLY_OFFSET))) {
-			if (out->src != fr->src)
+			if (out->src != fr->src) {
 				ast_free((void *) out->src);
-			if (out != fr)
+			}
+			if (out != fr) {
 				ast_free(out);
+			}
 			return NULL;
 		}
 		newdata += AST_FRIENDLY_OFFSET;
@@ -445,6 +458,10 @@ struct ast_frame *ast_frisolate(struct ast_frame *fr)
 		out->datalen = fr->datalen;
 		memcpy(newdata, fr->data.ptr, fr->datalen);
 		out->data.ptr = newdata;
+	} else {
+		out->data = fr->data;
+		memset(&fr->data, 0, sizeof(fr->data));
+		fr->mallocd &= ~AST_MALLOCD_DATA;
 	}
 
 	out->mallocd = AST_MALLOCD_HDR | AST_MALLOCD_SRC | AST_MALLOCD_DATA;
@@ -718,7 +735,7 @@ static char *show_codec_n(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 	if (a->argc != 4)
 		return CLI_SHOWUSAGE;
 
-	if (sscanf(a->argv[3],"%d",&codec) != 1)
+	if (sscanf(a->argv[3], "%30d", &codec) != 1)
 		return CLI_SHOWUSAGE;
 
 	for (i = 0; i < 32; i++)
@@ -822,11 +839,12 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 		case AST_CONTROL_UNHOLD:
 			strcpy(subclass, "Unhold");
 			break;
-		case AST_CONTROL_T38:
-			if (f->datalen != sizeof(enum ast_control_t38)) {
+		case AST_CONTROL_T38_PARAMETERS:
+			if (f->datalen != sizeof(struct ast_control_t38_parameters)) {
 				message = "Invalid";
 			} else {
-				enum ast_control_t38 state = *((enum ast_control_t38 *) f->data.ptr);
+				struct ast_control_t38_parameters *parameters = f->data.ptr;
+				enum ast_control_t38 state = parameters->request_response;
 				if (state == AST_T38_REQUEST_NEGOTIATE)
 					message = "Negotiation Requested";
 				else if (state == AST_T38_REQUEST_TERMINATE)
@@ -838,7 +856,7 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 				else if (state == AST_T38_REFUSED)
 					message = "Refused";
 			}
-			snprintf(subclass, sizeof(subclass), "T38/%s", message);
+			snprintf(subclass, sizeof(subclass), "T38_Parameters/%s", message);
 			break;
 		case -1:
 			strcpy(subclass, "Stop generators");
@@ -939,44 +957,10 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 }
 
 
-#ifdef TRACE_FRAMES
-static char *show_frame_stats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	struct ast_frame *f;
-	int x=1;
-
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "core show frame stats";
-		e->usage = 
-			"Usage: core show frame stats\n"
-			"       Displays debugging statistics from framer\n";
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;	
-	}
-
-	if (a->argc != 4)
-		return CLI_SHOWUSAGE;
-	AST_LIST_LOCK(&headerlist);
-	ast_cli(a->fd, "     Framer Statistics     \n");
-	ast_cli(a->fd, "---------------------------\n");
-	ast_cli(a->fd, "Total allocated headers: %d\n", headers);
-	ast_cli(a->fd, "Queue Dump:\n");
-	AST_LIST_TRAVERSE(&headerlist, f, frame_list)
-		ast_cli(a->fd, "%d.  Type %d, subclass %d from %s\n", x++, f->frametype, f->subclass, f->src ? f->src : "<Unknown>");
-	AST_LIST_UNLOCK(&headerlist);
-	return CLI_SUCCESS;
-}
-#endif
-
 /* Builtin Asterisk CLI-commands for debugging */
 static struct ast_cli_entry my_clis[] = {
 	AST_CLI_DEFINE(show_codecs, "Displays a list of codecs"),
 	AST_CLI_DEFINE(show_codec_n, "Shows a specific codec"),
-#ifdef TRACE_FRAMES
-	AST_CLI_DEFINE(show_frame_stats, "Shows frame statistics"),
-#endif
 };
 
 int init_framer(void)

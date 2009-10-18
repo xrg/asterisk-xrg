@@ -542,7 +542,7 @@ static struct ast_custom_function jabberstatus_function = {
 /*!
  * \brief Dial plan function to send a message.
  * \param chan ast_channel
- * \param data  Data is sender|reciever|message.
+ * \param data  Data is sender|receiver|message.
  * \return 0 on success,-1 on error.
  */
 static int aji_send_exec(struct ast_channel *chan, void *data)
@@ -620,10 +620,6 @@ static int aji_tls_handshake(struct aji_client *client)
 	int sock;
 	
 	ast_debug(1, "Starting TLS handshake\n"); 
-
-	/* Load encryption, hashing algorithms and error strings */
-	SSL_library_init();
-	SSL_load_error_strings();
 
 	/* Choose an SSL/TLS protocol version, create SSL_CTX */
 	client->ssl_method = SSLv3_method();
@@ -725,8 +721,8 @@ static int aji_io_recv(struct aji_client *client, char *buffer, size_t buf_len, 
 static int aji_recv (struct aji_client *client, int timeout)
 {
 	int len, ret;
-	char buf[NET_IO_BUF_SIZE -1];
-	char newbuf[NET_IO_BUF_SIZE -1];
+	char buf[NET_IO_BUF_SIZE - 1];
+	char newbuf[NET_IO_BUF_SIZE - 1];
 	int pos = 0;
 	int newbufpos = 0;
 	unsigned char c;
@@ -735,7 +731,7 @@ static int aji_recv (struct aji_client *client, int timeout)
 	memset(newbuf, 0, sizeof(newbuf));
 
 	while (1) {
-		len = aji_io_recv(client, buf, NET_IO_BUF_SIZE - 1, timeout);
+		len = aji_io_recv(client, buf, NET_IO_BUF_SIZE - 2, timeout);
 		if (len < 0) return IKS_NET_RWERR;
 		if (len == 0) return IKS_NET_EXPIRED;
 		buf[len] = '\0';
@@ -768,8 +764,18 @@ static int aji_recv (struct aji_client *client, int timeout)
 		ret = iks_parse(client->p, newbuf, 0, 0);
 		memset(newbuf, 0, sizeof(newbuf));
 
+		switch (ret) {
+		case IKS_NOMEM:
+			ast_log(LOG_WARNING, "Parsing failure: Out of memory.\n");
+			break;
+		case IKS_BADXML:
+			ast_log(LOG_WARNING, "Parsing failure: Invalid XML.\n");
+			break;
+		case IKS_HOOK:
+			ast_log(LOG_WARNING, "Parsing failure: Hook returned an error.\n");
+			break;
+		}
 		if (ret != IKS_OK) {
-			ast_log(LOG_WARNING, "XML parsing failed\n");
 			return ret;
 		}
 		ast_debug(3, "XML parsing successful\n");	
@@ -1413,7 +1419,7 @@ static int aji_dinfo_handler(void *data, ikspak *pak)
 
 	resource = aji_find_resource(buddy, pak->from->resource);
 	if (pak->subtype == IKS_TYPE_ERROR) {
-		ast_log(LOG_WARNING, "Recieved error from a client, turn on jabber debug!\n");
+		ast_log(LOG_WARNING, "Received error from a client, turn on jabber debug!\n");
 		return IKS_FILTER_EAT;
 	}
 	if (pak->subtype == IKS_TYPE_RESULT) {
@@ -3011,17 +3017,17 @@ static int manager_jabber_send(struct mansession *s, const struct message *m)
 	if (!client) {
 		astman_send_error(s, m, "Could not find Sender");
 		return 0;
-	}	
-	if (strchr(screenname, '@') && message){
-		ast_aji_send_chat(client, screenname, message);	
-		astman_append(s, "Response: Success\r\n");
-		if (!ast_strlen_zero(id))
-			astman_append(s, "ActionID: %s\r\n",id);
-		return 0;
 	}
-	astman_append(s, "Response: Error\r\n");
-	if (!ast_strlen_zero(id))
+	if (strchr(screenname, '@') && message) {
+		ast_aji_send_chat(client, screenname, message);
+		astman_append(s, "Response: Success\r\n");
+	} else {
+		astman_append(s, "Response: Error\r\n");
+	}
+	if (!ast_strlen_zero(id)) {
 		astman_append(s, "ActionID: %s\r\n",id);
+	}
+	astman_append(s, "\r\n");
 	return 0;
 }
 

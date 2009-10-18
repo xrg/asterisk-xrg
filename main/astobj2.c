@@ -135,7 +135,6 @@ enum ao2_callback_type {
 /* the underlying functions common to debug and non-debug versions */
 
 static int __ao2_ref(void *user_data, const int delta);
-static void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn);
 static struct ao2_container *__ao2_container_alloc(struct ao2_container *c, const uint n_buckets, ao2_hash_fn *hash_fn,
 											ao2_callback_fn *cmp_fn);
 static struct bucket_list *__ao2_link(struct ao2_container *c, void *user_data, const char *file, int line, const char *func);
@@ -303,7 +302,7 @@ static int __ao2_ref(void *user_data, const int delta)
  * We always alloc at least the size of a void *,
  * for debugging purposes.
  */
-static void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
+static void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, const char *file, int line, const char *funcname)
 {
 	/* allocation */
 	struct astobj2 *obj;
@@ -311,7 +310,11 @@ static void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
 	if (data_size < sizeof(void *))
 		data_size = sizeof(void *);
 
+#if defined(__AST_DEBUG_MALLOC)
+	obj = __ast_calloc(1, sizeof(*obj) + data_size, file, line, funcname);
+#else
 	obj = ast_calloc(1, sizeof(*obj) + data_size);
+#endif
 
 	if (obj == NULL)
 		return NULL;
@@ -332,13 +335,14 @@ static void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
 	return EXTERNAL_OBJ(obj);
 }
 
-void *_ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, char *tag, char *file, int line, const char *funcname)
+void *_ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, char *tag,
+		       const char *file, int line, const char *funcname, int ref_debug)
 {
 	/* allocation */
 	void *obj;
-	FILE *refo = fopen(REF_FILE,"a");
+	FILE *refo = ref_debug ? fopen(REF_FILE,"a") : NULL;
 
-	obj = __ao2_alloc(data_size, destructor_fn);
+	obj = __ao2_alloc(data_size, destructor_fn, file, line, funcname);
 
 	if (obj == NULL)
 		return NULL;
@@ -354,7 +358,7 @@ void *_ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, char *
 
 void *_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
 {
-	return __ao2_alloc(data_size, destructor_fn);
+	return __ao2_alloc(data_size, destructor_fn, __FILE__, __LINE__, __FUNCTION__);
 }
 
 
@@ -440,12 +444,13 @@ static struct ao2_container *__ao2_container_alloc(struct ao2_container *c, cons
 }
 
 struct ao2_container *_ao2_container_alloc_debug(const unsigned int n_buckets, ao2_hash_fn *hash_fn,
-		ao2_callback_fn *cmp_fn, char *tag, char *file, int line, const char *funcname)
+						  ao2_callback_fn *cmp_fn, char *tag, char *file, int line,
+						  const char *funcname, int ref_debug)
 {
 	/* XXX maybe consistency check on arguments ? */
 	/* compute the container size */
 	size_t container_size = sizeof(struct ao2_container) + n_buckets * sizeof(struct bucket);
-	struct ao2_container *c = _ao2_alloc_debug(container_size, container_destruct_debug, tag, file, line, funcname);
+	struct ao2_container *c = _ao2_alloc_debug(container_size, container_destruct_debug, tag, file, line, funcname, ref_debug);
 
 	return __ao2_container_alloc(c, n_buckets, hash_fn, cmp_fn);
 }
@@ -503,7 +508,7 @@ static struct bucket_list *__ao2_link(struct ao2_container *c, void *user_data, 
 	if (!p)
 		return NULL;
 
-	i = c->hash_fn(user_data, OBJ_POINTER);
+	i = abs(c->hash_fn(user_data, OBJ_POINTER));
 
 	ao2_lock(c);
 	i %= c->n_buckets;
@@ -599,7 +604,7 @@ static void *__ao2_callback(struct ao2_container *c,
 	const enum search_flags flags, void *cb_fn, void *arg, void *data, enum ao2_callback_type type,
 	char *tag, char *file, int line, const char *funcname)
 {
-	int i, last;	/* search boundaries */
+	int i, start, last;	/* search boundaries */
 	void *ret = NULL;
 	ao2_callback_fn *cb_default = NULL;
 	ao2_callback_data_fn *cb_withdata = NULL;
@@ -636,13 +641,15 @@ static void *__ao2_callback(struct ao2_container *c,
 	 * (this only for the time being. We need to optimize this.)
 	 */
 	if ((flags & OBJ_POINTER))	/* we know hash can handle this case */
-		i = c->hash_fn(arg, flags & OBJ_POINTER) % c->n_buckets;
+		start = i = c->hash_fn(arg, flags & OBJ_POINTER) % c->n_buckets;
 	else			/* don't know, let's scan all buckets */
-		i = -1;		/* XXX this must be fixed later. */
+		start = i = -1;		/* XXX this must be fixed later. */
 
 	/* determine the search boundaries: i..last-1 */
 	if (i < 0) {
-		i = 0;
+		start = i = 0;
+		last = c->n_buckets;
+	} else if ((flags & OBJ_CONTINUE)) {
 		last = c->n_buckets;
 	} else {
 		last = i + 1;
@@ -710,6 +717,17 @@ static void *__ao2_callback(struct ao2_container *c,
 			}
 		}
 		AST_LIST_TRAVERSE_SAFE_END;
+
+		if (ret) {
+			/* This assumes OBJ_MULTIPLE with !OBJ_NODATA is still not implemented */
+			break;
+		}
+
+		if (i == c->n_buckets - 1 && (flags & OBJ_POINTER) && (flags & OBJ_CONTINUE)) {
+			/* Move to the beginning to ensure we check every bucket */
+			i = -1;
+			last = start;
+		}
 	}
 	ao2_unlock(c);
 	return ret;
@@ -765,8 +783,19 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
 		.c = c,
 		.flags = flags
 	};
+
+	ao2_ref(c, +1);
 	
 	return a;
+}
+
+/*!
+ * destroy an iterator
+ */
+void ao2_iterator_destroy(struct ao2_iterator *i)
+{
+	ao2_ref(i->c, -1);
+	i->c = NULL;
 }
 
 /*
@@ -783,7 +812,7 @@ static void * __ao2_iterator_next(struct ao2_iterator *a, struct bucket_list **q
 	if (INTERNAL_OBJ(a->c) == NULL)
 		return NULL;
 
-	if (!(a->flags & F_AO2I_DONTLOCK))
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
 		ao2_lock(a->c);
 
 	/* optimization. If the container is unchanged and
@@ -839,7 +868,7 @@ void * _ao2_iterator_next_debug(struct ao2_iterator *a, char *tag, char *file, i
 		_ao2_ref_debug(ret, 1, tag, file, line, funcname);
 	}
 
-	if (!(a->flags & F_AO2I_DONTLOCK))
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
 		ao2_unlock(a->c);
 
 	return ret;
@@ -857,7 +886,7 @@ void * _ao2_iterator_next(struct ao2_iterator *a)
 		_ao2_ref(ret, 1);
 	}
 
-	if (!(a->flags & F_AO2I_DONTLOCK))
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
 		ao2_unlock(a->c);
 
 	return ret;

@@ -499,7 +499,7 @@ static struct ast_manager_user *get_manager_by_name_locked(const char *name)
 }
 
 /*! \brief Get displayconnects config option.
- *  \param s manager session to get parameter from.
+ *  \param session manager session to get parameter from.
  *  \return displayconnects config option value.
  */
 static int manager_displayconnects (struct mansession_session *session)
@@ -525,7 +525,7 @@ static char *handle_showmancmd(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	case CLI_INIT:
 		e->command = "manager show command";
 		e->usage = 
-			"Usage: manager show command <actionname>\n"
+			"Usage: manager show command <actionname> [<actionname> [<actionname> [...]]]\n"
 			"	Shows the detailed description for a specific Asterisk manager interface command.\n";
 		return NULL;
 	case CLI_GENERATE:
@@ -542,8 +542,9 @@ static char *handle_showmancmd(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		return ret;
 	}
 	authority = ast_str_alloca(80);
-	if (a->argc != 4)
+	if (a->argc < 4) {
 		return CLI_SHOWUSAGE;
+	}
 
 	AST_RWLIST_RDLOCK(&actions);
 	AST_RWLIST_TRAVERSE(&actions, cur, list) {
@@ -1168,8 +1169,11 @@ static int action_getconfig(struct mansession *s, const struct message *m)
 		return 0;
 	}
 	cfg = ast_config_load2(fn, "manager", config_flags);
-	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEINVALID) {
+	if (cfg == CONFIG_STATUS_FILEMISSING) {
 		astman_send_error(s, m, "Config file not found");
+		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		astman_send_error(s, m, "Config file has invalid format");
 		return 0;
 	}
 
@@ -1210,7 +1214,10 @@ static int action_listcategories(struct mansession *s, const struct message *m)
 		return 0;
 	}
 	if (!(cfg = ast_config_load2(fn, "manager", config_flags))) {
-		astman_send_error(s, m, "Config file not found or file has invalid syntax");
+		astman_send_error(s, m, "Config file not found");
+		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		astman_send_error(s, m, "Config file has invalid format");
 		return 0;
 	}
 	astman_start_ack(s, m);
@@ -1265,6 +1272,9 @@ static int action_getconfigjson(struct mansession *s, const struct message *m)
 
 	if (!(cfg = ast_config_load2(fn, "manager", config_flags))) {
 		astman_send_error(s, m, "Config file not found");
+		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		astman_send_error(s, m, "Config file has invalid format");
 		return 0;
 	}
 
@@ -1485,6 +1495,9 @@ static int action_updateconfig(struct mansession *s, const struct message *m)
 	if (!(cfg = ast_config_load2(sfn, "manager", config_flags))) {
 		astman_send_error(s, m, "Config file not found");
 		return 0;
+	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
+		astman_send_error(s, m, "Config file has invalid format");
+		return 0;
 	}
 	result = handle_updates(s, m, cfg, dfn);
 	if (!result) {
@@ -1590,7 +1603,7 @@ static int action_waitevent(struct mansession *s, const struct message *m)
 		idText[0] = '\0';
 
 	if (!ast_strlen_zero(timeouts)) {
-		sscanf(timeouts, "%i", &timeout);
+		sscanf(timeouts, "%30i", &timeout);
 		if (timeout < -1)
 			timeout = -1;
 		/* XXX maybe put an upper bound, or prevent the use of 0 ? */
@@ -1851,6 +1864,7 @@ static int action_getvar(struct mansession *s, const struct message *m)
 			if (c) {
 				ast_func_read(c, (char *) varname, workspace, sizeof(workspace));
 				ast_channel_free(c);
+				c = NULL;
 			} else
 				ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 		} else
@@ -2075,7 +2089,7 @@ static int action_redirect(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Channel not specified");
 		return 0;
 	}
-	if (!ast_strlen_zero(priority) && (sscanf(priority, "%d", &pi) != 1)) {
+	if (!ast_strlen_zero(priority) && (sscanf(priority, "%30d", &pi) != 1)) {
 		if ((pi = ast_findlabel_extension(NULL, context, exten, priority, NULL)) < 1) {
 			astman_send_error(s, m, "Invalid priority");
 			return 0;
@@ -2240,7 +2254,7 @@ static int action_command(struct mansession *s, const struct message *m)
 	const char *id = astman_get_header(m, "ActionID");
 	char *buf, *final_buf;
 	char template[] = "/tmp/ast-ami-XXXXXX";	/* template for temporary file */
-	int fd = mkstemp(template);
+	int fd;
 	off_t l;
 
 	if (ast_strlen_zero(cmd)) {
@@ -2252,6 +2266,8 @@ static int action_command(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Command blacklisted");
 		return 0;
 	}
+
+	fd = mkstemp(template);
 
 	astman_append(s, "Response: Follows\r\nPrivilege: Command\r\n");
 	if (!ast_strlen_zero(id))
@@ -2327,7 +2343,7 @@ static void *fast_originate(void *data)
 		snprintf(requested_channel, AST_CHANNEL_NAME, "%s/%s", in->tech, in->data);	
 	/* Tell the manager what happened with the channel */
 	manager_event(EVENT_FLAG_CALL, "OriginateResponse",
-		"%s"
+		"%s%s"
 		"Response: %s\r\n"
 		"Channel: %s\r\n"
 		"Context: %s\r\n"
@@ -2336,7 +2352,8 @@ static void *fast_originate(void *data)
 		"Uniqueid: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n",
-		in->idtext, res ? "Failure" : "Success", chan ? chan->name : requested_channel, in->context, in->exten, reason, 
+		in->idtext, ast_strlen_zero(in->idtext) ? "" : "\r\n", res ? "Failure" : "Success", 
+		chan ? chan->name : requested_channel, in->context, in->exten, reason, 
 		chan ? chan->uniqueid : "<null>",
 		S_OR(in->cid_num, "<unknown>"),
 		S_OR(in->cid_name, "<unknown>")
@@ -2359,7 +2376,7 @@ static char mandescr_originate[] =
 "	Priority: Priority to use (requires 'Exten' and 'Context')\n"
 "	Application: Application to use\n"
 "	Data: Data to use (requires 'Application')\n"
-"	Timeout: How long to wait for call to be answered (in ms)\n"
+"	Timeout: How long to wait for call to be answered (in ms. Default: 30000)\n"
 "	CallerID: Caller ID to be set on the outgoing channel\n"
 "	Variable: Channel variable to set, multiple Variable: headers are allowed\n"
 "	Account: Account code\n"
@@ -2395,13 +2412,13 @@ static int action_originate(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Channel not specified");
 		return 0;
 	}
-	if (!ast_strlen_zero(priority) && (sscanf(priority, "%d", &pi) != 1)) {
+	if (!ast_strlen_zero(priority) && (sscanf(priority, "%30d", &pi) != 1)) {
 		if ((pi = ast_findlabel_extension(NULL, context, exten, priority, NULL)) < 1) {
 			astman_send_error(s, m, "Invalid priority");
 			return 0;
 		}
 	}
-	if (!ast_strlen_zero(timeout) && (sscanf(timeout, "%d", &to) != 1)) {
+	if (!ast_strlen_zero(timeout) && (sscanf(timeout, "%30d", &to) != 1)) {
 		astman_send_error(s, m, "Invalid timeout");
 		return 0;
 	}
@@ -2434,7 +2451,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 			res = -1;
 		} else {
 			if (!ast_strlen_zero(id))
-				snprintf(fast->idtext, sizeof(fast->idtext), "ActionID: %s\r\n", id);
+				snprintf(fast->idtext, sizeof(fast->idtext), "ActionID: %s", id);
 			ast_copy_string(fast->tech, tech, sizeof(fast->tech));
    			ast_copy_string(fast->data, data, sizeof(fast->data));
 			ast_copy_string(fast->app, app, sizeof(fast->app));
@@ -2789,15 +2806,15 @@ static char mandescr_coreshowchannels[] =
 static int action_coreshowchannels(struct mansession *s, const struct message *m)
 {
 	const char *actionid = astman_get_header(m, "ActionID");
-	char actionidtext[256];
+	char idText[256];
 	struct ast_channel *c = NULL;
 	int numchans = 0;
 	int duration, durh, durm, durs;
 
 	if (!ast_strlen_zero(actionid))
-		snprintf(actionidtext, sizeof(actionidtext), "ActionID: %s\r\n", actionid);
+		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", actionid);
 	else
-		actionidtext[0] = '\0';
+		idText[0] = '\0';
 
 	astman_send_listack(s, m, "Channels will follow", "start");	
 
@@ -2815,6 +2832,7 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 
 		astman_append(s,
 			"Event: CoreShowChannel\r\n"
+			"%s"
 			"Channel: %s\r\n"
 			"UniqueID: %s\r\n"
 			"Context: %s\r\n"
@@ -2829,8 +2847,8 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 			"AccountCode: %s\r\n"
 			"BridgedChannel: %s\r\n"
 			"BridgedUniqueID: %s\r\n"
-			"\r\n", c->name, c->uniqueid, c->context, c->exten, c->priority, c->_state, ast_state2str(c->_state),
-			c->appl ? c->appl : "", c->data ? S_OR(c->data, ""): "",
+			"\r\n", idText, c->name, c->uniqueid, c->context, c->exten, c->priority, c->_state,
+			ast_state2str(c->_state), c->appl ? c->appl : "", c->data ? S_OR(c->data, "") : "",
 			S_OR(c->cid.cid_num, ""), durbuf, S_OR(c->accountcode, ""), bc ? bc->name : "", bc ? bc->uniqueid : "");
 		ast_channel_unlock(c);
 		numchans++;
@@ -2841,7 +2859,7 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 		"EventList: Complete\r\n"
 		"ListItems: %d\r\n"
 		"%s"
-		"\r\n", numchans, actionidtext);
+		"\r\n", numchans, idText);
 
 	return 0;
 }
@@ -3349,8 +3367,12 @@ int __manager_event(int category, const char *event,
 int ast_manager_unregister(char *action)
 {
 	struct manager_action *cur;
+	struct timespec tv = { 5, };
 
-	AST_RWLIST_WRLOCK(&actions);
+	if (AST_RWLIST_TIMEDWRLOCK(&actions, &tv)) {
+		ast_log(LOG_ERROR, "Could not obtain lock on manager list\n");
+		return -1;
+	}
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&actions, cur, list) {
 		if (!strcasecmp(action, cur->action)) {
 			AST_RWLIST_REMOVE_CURRENT(list);
@@ -3378,8 +3400,12 @@ static int manager_state_cb(char *context, char *exten, int state, void *data)
 static int ast_manager_register_struct(struct manager_action *act)
 {
 	struct manager_action *cur, *prev = NULL;
+	struct timespec tv = { 5, };
 
-	AST_RWLIST_WRLOCK(&actions);
+	if (AST_RWLIST_TIMEDWRLOCK(&actions, &tv)) {
+		ast_log(LOG_ERROR, "Could not obtain lock on manager list\n");
+		return -1;
+	}
 	AST_RWLIST_TRAVERSE(&actions, cur, list) {
 		int ret = strcasecmp(cur->action, act->action);
 		if (ret == 0) {
@@ -3392,8 +3418,8 @@ static int ast_manager_register_struct(struct manager_action *act)
 			break;
 		}
 	}
-	
-	if (prev)	
+
+	if (prev)
 		AST_RWLIST_INSERT_AFTER(&actions, prev, act, list);
 	else
 		AST_RWLIST_INSERT_HEAD(&actions, act, list);
@@ -3420,7 +3446,10 @@ int ast_manager_register2(const char *action, int auth, int (*func)(struct manse
 	cur->synopsis = synopsis;
 	cur->description = description;
 
-	ast_manager_register_struct(cur);
+	if (ast_manager_register_struct(cur)) {
+		ast_free(cur);
+		return -1;
+	}
 
 	return 0;
 }
@@ -3778,7 +3807,7 @@ static struct ast_str *generic_http_callback(enum output_format format,
 
 	for (v = params; v; v = v->next) {
 		if (!strcasecmp(v->name, "mansession_id")) {
-			sscanf(v->value, "%x", &ident);
+			sscanf(v->value, "%30x", &ident);
 			break;
 		}
 	}
@@ -3803,7 +3832,7 @@ static struct ast_str *generic_http_callback(enum output_format format,
 		 * properties of the rand() function (and the constantcy of s), that
 		 * won't happen twice in a row.
 		 */
-		while ((session->managerid = rand() ^ (unsigned long) session) == 0);
+		while ((session->managerid = ast_random() ^ (unsigned long) session) == 0);
 		session->last_ev = grab_last();
 		AST_LIST_HEAD_INIT_NOLOCK(&session->datastores);
 		AST_LIST_LOCK(&sessions);
@@ -4074,8 +4103,8 @@ static int __init_manager(int reload)
 		return 0;
 
 	displayconnects = 1;
-	if (!cfg) {
-		ast_log(LOG_NOTICE, "Unable to open AMI configuration manager.conf. Asterisk management interface (AMI) disabled.\n");
+	if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_NOTICE, "Unable to open AMI configuration manager.conf, or configuration is invalid. Asterisk management interface (AMI) disabled.\n");
 		return 0;
 	}
 
@@ -4153,7 +4182,7 @@ static int __init_manager(int reload)
 
 	/* First, get users from users.conf */
 	ucfg = ast_config_load2("users.conf", "manager", config_flags);
-	if (ucfg && (ucfg != CONFIG_STATUS_FILEUNCHANGED)) {
+	if (ucfg && (ucfg != CONFIG_STATUS_FILEUNCHANGED) && ucfg != CONFIG_STATUS_FILEINVALID) {
 		const char *hasmanager;
 		int genhasmanager = ast_true(ast_variable_retrieve(ucfg, "general", "hasmanager"));
 

@@ -13,29 +13,23 @@
 
 # All Makefiles use the following variables:
 #
-# ASTCFLAGS - compiler options
-# ASTLDFLAGS - linker flags (not libraries)
+# ASTCFLAGS - compiler options provided by the user (if any)
+# _ASTCFLAGS - compiler options provided by the build system
+# ASTLDFLAGS - linker flags (not libraries) provided by the user (if any)
+# _ASTLDFLAGS - linker flags (not libraries) provided by the build system
 # LIBS - additional libraries, at top-level for all links,
 #      on a single object just for that object
 # SOLINK - linker flags used only for creating shared objects (.so files),
 #      used for all .so links
 #
-# Initial values for ASTCFLAGS and ASTLDFLAGS can be specified in the
+# Values for ASTCFLAGS and ASTLDFLAGS can be specified in the
 # environment when running make, as follows:
 #
 #	$ ASTCFLAGS="-Werror" make ...
 #
-# note that this is different from
+# or as a variable value on the make command line itself:
 #
 #	$ make ASTCFLAGS="-Werror" ...
-#
-# If you need to pass compiler/linker flags as 'make' variables, please use
-#
-#	$ make COPTS="..." LDOPTS="..." ...
-#
-#
-# You can add the path of local module subdirs from the command line with
-#   make LOCAL_MOD_SUBDIRS= ....
 
 export ASTTOPDIR		# Top level dir, used in subdirs' Makefiles
 export ASTERISKVERSION
@@ -101,13 +95,20 @@ ifneq ($(wildcard makeopts),)
   include makeopts
 endif
 
+# start the primary CFLAGS and LDFLAGS with any that were provided
+# to the configure script
+_ASTCFLAGS:=$(CONFIG_CFLAGS)
+_ASTLDFLAGS:=$(CONFIG_LDFLAGS)
+
 # Some build systems, such as the one in openwrt, like to pass custom target
-# CFLAGS and LDFLAGS in the COPTS and LDOPTS variables.
-ASTCFLAGS+=$(COPTS)
-ASTLDFLAGS+=$(LDOPTS)
+# CFLAGS and LDFLAGS in the COPTS and LDOPTS variables; these should also
+# go before any build-system computed flags, since they are defaults, not
+# overrides
+_ASTCFLAGS+=$(COPTS)
+_ASTLDFLAGS+=$(LDOPTS)
 
 # libxml2 cflags
-ASTCFLAGS+=$(LIBXML2_INCLUDE)
+_ASTCFLAGS+=$(LIBXML2_INCLUDE)
 
 #Uncomment this to see all build commands instead of 'quiet' output
 #NOISY_BUILD=yes
@@ -174,7 +175,7 @@ HTTP_DOCSDIR=/var/www/html
 HTTP_CGIDIR=/var/www/cgi-bin
 
 # Uncomment this to use the older DSP routines
-#ASTCFLAGS+=-DOLD_DSP_ROUTINES
+#_ASTCFLAGS+=-DOLD_DSP_ROUTINES
 
 # If the file .asterisk.makeopts is present in your home directory, you can
 # include all of your favorite menuselect options so that every time you download
@@ -224,59 +225,58 @@ ifeq ($(OSARCH),linux-gnu)
   endif
 endif
 
-ifeq ($(findstring -save-temps,$(ASTCFLAGS)),)
-  ifeq ($(findstring -pipe,$(ASTCFLAGS)),)
-    ASTCFLAGS+=-pipe
+ifeq ($(findstring -save-temps,$(_ASTCFLAGS) $(ASTCFLAGS)),)
+  ifeq ($(findstring -pipe,$(_ASTCFLAGS) $(ASTCFLAGS)),)
+    _ASTCFLAGS+=-pipe
   endif
 endif
 
-ifeq ($(findstring -Wall,$(ASTCFLAGS)),)
-  ASTCFLAGS+=-Wall
+ifeq ($(findstring -Wall,$(_ASTCFLAGS) $(ASTCFLAGS)),)
+  _ASTCFLAGS+=-Wall
 endif
 
-ASTCFLAGS+=-Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
+_ASTCFLAGS+=-Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
 
 ifeq ($(AST_DEVMODE),yes)
-  ASTCFLAGS+=-Werror
-  ASTCFLAGS+=-Wunused
-  ASTCFLAGS+=$(AST_DECLARATION_AFTER_STATEMENT)
-  ASTCFLAGS+=$(AST_FORTIFY_SOURCE)
-  ASTCFLAGS+=-Wundef 
-  ASTCFLAGS+=-Wmissing-format-attribute
-  ASTCFLAGS+=-Wformat=2
+  _ASTCFLAGS+=-Werror
+  _ASTCFLAGS+=-Wunused
+  _ASTCFLAGS+=$(AST_DECLARATION_AFTER_STATEMENT)
+  _ASTCFLAGS+=$(AST_FORTIFY_SOURCE)
+  _ASTCFLAGS+=-Wundef 
+  _ASTCFLAGS+=-Wmissing-format-attribute
+  _ASTCFLAGS+=-Wformat=2
 endif
 
 ifneq ($(findstring BSD,$(OSARCH)),)
-  ASTCFLAGS+=-I/usr/local/include
-  ASTLDFLAGS+=-L/usr/local/lib
+  _ASTCFLAGS+=-isystem /usr/local/include
 endif
 
-ifeq ($(findstring -march,$(ASTCFLAGS)),)
+ifeq ($(findstring -march,$(_ASTCFLAGS) $(ASTCFLAGS)),)
   ifneq ($(PROC),ultrasparc)
-    ASTCFLAGS+=$(shell if $(CC) -march=$(PROC) -S -o /dev/null -xc /dev/null >/dev/null 2>&1; then echo "-march=$(PROC)"; fi)
+    _ASTCFLAGS+=$(shell if $(CC) -march=$(PROC) -S -o /dev/null -xc /dev/null >/dev/null 2>&1; then echo "-march=$(PROC)"; fi)
   endif
 endif
 
 ifeq ($(PROC),ppc)
-  ASTCFLAGS+=-fsigned-char
+  _ASTCFLAGS+=-fsigned-char
 endif
 
 ifeq ($(OSARCH),FreeBSD)
   # -V is understood by BSD Make, not by GNU make.
   BSDVERSION=$(shell make -V OSVERSION -f /usr/share/mk/bsd.port.subdir.mk)
-  ASTCFLAGS+=$(shell if test $(BSDVERSION) -lt 500016 ; then echo "-D_THREAD_SAFE"; fi)
+  _ASTCFLAGS+=$(shell if test $(BSDVERSION) -lt 500016 ; then echo "-D_THREAD_SAFE"; fi)
 endif
 
 ifeq ($(OSARCH),NetBSD)
-  ASTCFLAGS+=-pthread -I/usr/pkg/include
+  _ASTCFLAGS+=-pthread -I/usr/pkg/include
 endif
 
 ifeq ($(OSARCH),OpenBSD)
-  ASTCFLAGS+=-pthread -ftrampolines
+  _ASTCFLAGS+=-pthread -ftrampolines
 endif
 
 ifeq ($(OSARCH),SunOS)
-  ASTCFLAGS+=-Wcast-align -DSOLARIS -I../include/solaris-compat -I/opt/ssl/include -I/usr/local/ssl/include -D_XPG4_2
+  _ASTCFLAGS+=-Wcast-align -DSOLARIS -I../include/solaris-compat -I/opt/ssl/include -I/usr/local/ssl/include -D_XPG4_2
 endif
 
 ASTERISKVERSION:=$(shell GREP=$(GREP) AWK=$(AWK) build_tools/make_version .)
@@ -289,9 +289,7 @@ ifneq ($(wildcard .svn),)
   ASTERISKVERSIONNUM:=999999
 endif
 
-# XXX MALLOC_DEBUG is probably unused, Makefile.moddir_rules adds the
-#	value directly to ASTCFLAGS
-ASTCFLAGS+=$(MALLOC_DEBUG)$(OPTIONS)
+_ASTCFLAGS+=$(OPTIONS)
 
 MOD_SUBDIRS:=channels pbx apps codecs formats cdr bridges funcs tests main res $(LOCAL_MOD_SUBDIRS)
 OTHER_SUBDIRS:=utils agi
@@ -306,13 +304,13 @@ MOD_SUBDIRS_EMBED_LIBS:=$(MOD_SUBDIRS:%=%-embed-libs)
 MOD_SUBDIRS_MENUSELECT_TREE:=$(MOD_SUBDIRS:%=%-menuselect-tree)
 
 ifneq ($(findstring darwin,$(OSARCH)),)
-  ASTCFLAGS+=-D__Darwin__ -fnested-functions
-  SOLINK=-dynamic -bundle -undefined suppress -force_flat_namespace
+  _ASTCFLAGS+=-D__Darwin__
+  SOLINK=-dynamic -bundle -Xlinker -macosx_version_min -Xlinker 10.4 -Xlinker -undefined -Xlinker dynamic_lookup -force_flat_namespace
 else
 # These are used for all but Darwin
   SOLINK=-shared
   ifneq ($(findstring BSD,$(OSARCH)),)
-    LDFLAGS+=-L/usr/local/lib
+    _ASTLDFLAGS+=-L/usr/local/lib
   endif
 endif
 
@@ -371,24 +369,24 @@ menuselect.makeopts: menuselect-tree makeopts
 	ast_menuselect --check-deps menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
 
 $(MOD_SUBDIRS_EMBED_LDSCRIPT):
-	@echo "EMBED_LDSCRIPTS+="`$(SILENTMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
+	+@echo "EMBED_LDSCRIPTS+="`$(SILENTMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_EMBED_LDFLAGS):
-	@echo "EMBED_LDFLAGS+="`$(SILENTMAKE) -C $(@:-embed-ldflags=) SUBDIR=$(@:-embed-ldflags=) __embed_ldflags` >> makeopts.embed_rules
+	+@echo "EMBED_LDFLAGS+="`$(SILENTMAKE) -C $(@:-embed-ldflags=) SUBDIR=$(@:-embed-ldflags=) __embed_ldflags` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_EMBED_LIBS):
-	@echo "EMBED_LIBS+="`$(SILENTMAKE) -C $(@:-embed-libs=) SUBDIR=$(@:-embed-libs=) __embed_libs` >> makeopts.embed_rules
+	+@echo "EMBED_LIBS+="`$(SILENTMAKE) -C $(@:-embed-libs=) SUBDIR=$(@:-embed-libs=) __embed_libs` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_MENUSELECT_TREE):
-	@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) moduleinfo
-	@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) makeopts
+	+@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) moduleinfo
+	+@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) makeopts
 
 makeopts.embed_rules: menuselect.makeopts
 	@echo "Generating embedded module rules ..."
 	@rm -f $@
-	@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LDSCRIPT)
-	@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LDFLAGS)
-	@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LIBS)
+	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LDSCRIPT)
+	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LDFLAGS)
+	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LIBS)
 
 $(SUBDIRS): main/version.c include/asterisk/version.h include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
 
@@ -411,10 +409,10 @@ res:	main
 endif
 
 $(MOD_SUBDIRS):
-	@+ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
+	+@_ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS)" _ASTLDFLAGS="$(_ASTLDFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 $(OTHER_SUBDIRS):
-	@+ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(ASTCFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
+	+@_ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS)" _ASTLDFLAGS="$(_ASTLDFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 defaults.h: makeopts
 	@build_tools/make_defaults_h > $@.tmp
@@ -442,10 +440,10 @@ include/asterisk/build.h:
 	@rm -f $@.tmp
 
 $(SUBDIRS_CLEAN):
-	@+$(SUBMAKE) -C $(@:-clean=) clean
+	+@$(SUBMAKE) -C $(@:-clean=) clean
 
 $(SUBDIRS_DIST_CLEAN):
-	@+$(SUBMAKE) -C $(@:-dist-clean=) dist-clean
+	+@$(SUBMAKE) -C $(@:-dist-clean=) dist-clean
 
 clean: $(SUBDIRS_CLEAN) _clean
 
@@ -493,13 +491,13 @@ datafiles:
 	mkdir -p $(DESTDIR)$(AGI_DIR)
 	$(MAKE) -C sounds install
 
-doc/core-en_US.xml: $(foreach dir,$(MOD_SUBDIRS),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) 
-	@echo -n "Building Documentation For: "
+doc/core-en_US.xml: $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
+	@printf "Building Documentation For: "
 	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
 	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
-	@echo "<docs>" >> $@
+	@echo "<docs xmlns:xi=\"http://www.w3.org/2001/XInclude\">" >> $@
 	@for x in $(MOD_SUBDIRS); do \
-		echo -n "$$x " ; \
+		printf "$$x " ; \
 		for i in $$x/*.c; do \
 			$(AWK) -f build_tools/get_documentation $$i >> $@ ; \
 		done ; \
@@ -573,7 +571,7 @@ bininstall: _all installdirs $(SUBDIRS_INSTALL)
 	mkdir -p $(DESTDIR)$(ASTDATADIR)/firmware/iax
 	mkdir -p $(DESTDIR)$(ASTMANDIR)/man8
 	$(INSTALL) -m 644 doc/core-*.xml $(DESTDIR)$(ASTDATADIR)/documentation
-	$(INSTALL) -m 644 doc/appdocsxml.dtd $(DESTDIR)$(ASTVARLIBDIR)/documentation
+	$(INSTALL) -m 644 doc/appdocsxml.dtd $(DESTDIR)$(ASTDATADIR)/documentation
 	$(INSTALL) -m 644 keys/iaxtel.pub $(DESTDIR)$(ASTDATADIR)/keys
 	$(INSTALL) -m 644 keys/freeworlddialup.pub $(DESTDIR)$(ASTDATADIR)/keys
 	$(INSTALL) -m 644 doc/asterisk.8 $(DESTDIR)$(ASTMANDIR)/man8
@@ -811,7 +809,7 @@ config:
 		elif [ -f /etc/debian_version ]; then \
 			cat contrib/init.d/rc.debian.asterisk | sed 's|__ASTERISK_ETC_DIR__|$(ASTETCDIR)|;s|__ASTERISK_SBIN_DIR__|$(ASTSBINDIR)|;s|__ASTERISK_VARRUN_DIR__|$(ASTVARRUNDIR)|;' > $(DESTDIR)/etc/init.d/asterisk ;\
 			chmod 755 $(DESTDIR)/etc/init.d/asterisk;\
-			if [ -z "$(DESTDIR)" ]; then /usr/sbin/update-rc.d asterisk start 50 2 3 4 5 . stop 91 2 3 4 5 .; fi; \
+			if [ -z "$(DESTDIR)" ]; then /usr/sbin/update-rc.d asterisk defaults 50 91; fi; \
 		elif [ -f /etc/gentoo-release ]; then \
 			cat contrib/init.d/rc.gentoo.asterisk | sed 's|__ASTERISK_ETC_DIR__|$(ASTETCDIR)|;s|__ASTERISK_SBIN_DIR__|$(ASTSBINDIR)|;s|__ASTERISK_VARRUN_DIR__|$(ASTVARRUNDIR)|;' > $(DESTDIR)/etc/init.d/asterisk ;\
 			chmod 755 $(DESTDIR)/etc/init.d/asterisk;\
@@ -828,7 +826,7 @@ config:
 			cat contrib/init.d/rc.archlinux.asterisk | sed 's|__ASTERISK_ETC_DIR__|$(ASTETCDIR)|;s|__ASTERISK_SBIN_DIR__|$(ASTSBINDIR)|;s|__ASTERISK_VARRUN_DIR__|$(ASTVARRUNDIR)|;' > $(DESTDIR)/etc/rc.d/asterisk ;\
 			chmod 755 $(DESTDIR)/etc/rc.d/asterisk;\
 		elif [ -f /etc/slackware-version ]; then \
-			echo "Slackware is not currently supported, although an init script does exist for it." \
+			echo "Slackware is not currently supported, although an init script does exist for it."; \
 		else \
 			echo "We could not install init scripts for your distribution."; \
 		fi \
@@ -928,9 +926,9 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 	@echo "<?xml version=\"1.0\"?>" > $@
 	@echo >> $@
 	@echo "<menu name=\"Asterisk Module and Build Option Selection\">" >> $@
-	@for dir in $(sort $(filter-out main,$(MOD_SUBDIRS))); do $(SILENTMAKE) -C $${dir} SUBDIR=$${dir} moduleinfo >> $@; done
+	+@for dir in $(sort $(filter-out main,$(MOD_SUBDIRS))); do $(SILENTMAKE) -C $${dir} SUBDIR=$${dir} moduleinfo >> $@; done
 	@cat build_tools/cflags.xml >> $@
-	@for dir in $(sort $(filter-out main,$(MOD_SUBDIRS))); do $(SILENTMAKE) -C $${dir} SUBDIR=$${dir} makeopts >> $@; done
+	+@for dir in $(sort $(filter-out main,$(MOD_SUBDIRS))); do $(SILENTMAKE) -C $${dir} SUBDIR=$${dir} makeopts >> $@; done
 	@if [ "${AST_DEVMODE}" = "yes" ]; then \
 		cat build_tools/cflags-devmode.xml >> $@; \
 	fi

@@ -123,6 +123,7 @@ int ast_audiohook_write_frame(struct ast_audiohook *audiohook, enum ast_audiohoo
 	struct ast_slinfactory *factory = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->read_factory : &audiohook->write_factory);
 	struct ast_slinfactory *other_factory = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->write_factory : &audiohook->read_factory);
 	struct timeval *rwtime = (direction == AST_AUDIOHOOK_DIRECTION_READ ? &audiohook->read_time : &audiohook->write_time), previous_time = *rwtime;
+	int our_factory_samples;
 	int our_factory_ms;
 	int other_factory_samples;
 	int other_factory_ms;
@@ -130,13 +131,22 @@ int ast_audiohook_write_frame(struct ast_audiohook *audiohook, enum ast_audiohoo
 	/* Update last feeding time to be current */
 	*rwtime = ast_tvnow();
 
-	our_factory_ms = ast_tvdiff_ms(*rwtime, previous_time) + (ast_slinfactory_available(factory) / 8);
+	our_factory_samples = ast_slinfactory_available(factory);
+	our_factory_ms = ast_tvdiff_ms(*rwtime, previous_time) + (our_factory_samples / 8);
 	other_factory_samples = ast_slinfactory_available(other_factory);
 	other_factory_ms = other_factory_samples / 8;
 
 	if (ast_test_flag(audiohook, AST_AUDIOHOOK_TRIGGER_SYNC) && other_factory_samples && (our_factory_ms - other_factory_ms > AST_AUDIOHOOK_SYNC_TOLERANCE)) {
 		if (option_debug)
 			ast_log(LOG_DEBUG, "Flushing audiohook %p so it remains in sync\n", audiohook);
+		ast_slinfactory_flush(factory);
+		ast_slinfactory_flush(other_factory);
+	}
+
+	if (ast_test_flag(audiohook, AST_AUDIOHOOK_SMALL_QUEUE) && (our_factory_samples > 640 || other_factory_samples > 640)) {
+		if (option_debug) {
+			ast_log(LOG_DEBUG, "Audiohook %p has stale audio in its factories. Flushing them both\n", audiohook);
+		}
 		ast_slinfactory_flush(factory);
 		ast_slinfactory_flush(other_factory);
 	}
@@ -441,12 +451,12 @@ static struct ast_audiohook *find_audiohook_by_source(struct ast_audiohook_list 
 
 void ast_audiohook_move_by_source(struct ast_channel *old_chan, struct ast_channel *new_chan, const char *source)
 {
-	struct ast_audiohook *audiohook = find_audiohook_by_source(old_chan->audiohooks, source);
+	struct ast_audiohook *audiohook;
 
-	if (!audiohook) {
+	if (!old_chan->audiohooks || !(audiohook = find_audiohook_by_source(old_chan->audiohooks, source))) {
 		return;
 	}
-	
+
 	/* By locking both channels and the audiohook, we can assure that
 	 * another thread will not have a chance to read the audiohook's status
 	 * as done, even though ast_audiohook_remove signals the trigger
@@ -576,6 +586,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 		}
 		if (!(middle_frame = ast_translate(in_translate->trans_pvt, frame, 0)))
 			return frame;
+		samples = middle_frame->samples;
 	}
 
 	/* Queue up signed linear frame to each spy */
@@ -591,7 +602,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 		ast_audiohook_write_frame(audiohook, direction, middle_frame);
 		ast_audiohook_unlock(audiohook);
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 
 	/* If this frame is being written out to the channel then we need to use whisper sources */
 	if (direction == AST_AUDIOHOOK_DIRECTION_WRITE && !AST_LIST_EMPTY(&audiohook_list->whisper_list)) {
@@ -614,7 +625,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 			}
 			ast_audiohook_unlock(audiohook);
 		}
-		AST_LIST_TRAVERSE_SAFE_END
+		AST_LIST_TRAVERSE_SAFE_END;
 		/* We take all of the combined whisper sources and combine them into the audio being written out */
 		for (i = 0, data1 = middle_frame->data.ptr, data2 = combine_buf; i < samples; i++, data1++, data2++)
 			ast_slinear_saturated_add(data1, data2);
@@ -637,7 +648,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 			audiohook->manipulate_callback(audiohook, chan, middle_frame, direction);
 			ast_audiohook_unlock(audiohook);
 		}
-		AST_LIST_TRAVERSE_SAFE_END
+		AST_LIST_TRAVERSE_SAFE_END;
 		end_frame = middle_frame;
 	}
 

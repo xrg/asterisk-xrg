@@ -1177,7 +1177,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	} 
 	ast_debug(4, "Fromstring now: %s\n", ast_strlen_zero(passdata) ? "-default-" : passdata);
 
-	fprintf(p, "Message-ID: <Asterisk-%d-%s-%d-%s>\n", (unsigned int)rand(), vmu->username, (int)getpid(), who);
+	fprintf(p, "Message-ID: <Asterisk-%d-%s-%d-%s>\n", (unsigned int)ast_random(), vmu->username, (int)getpid(), who);
 	len_passdata = strlen(vmu->fullname) * 2 + 3;
 	passdata2 = alloca(len_passdata);
 	if (!ast_strlen_zero(vmu->email))
@@ -1210,7 +1210,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	fprintf(p, "MIME-Version: 1.0\n");
 
 	/* Something unique. */
-	snprintf(bound, sizeof(bound), "voicemail_%s%d%d", vmu->username, (int)getpid(), (unsigned int)rand());
+	snprintf(bound, sizeof(bound), "voicemail_%s%d%d", vmu->username, (int)getpid(), (unsigned int)ast_random());
 
 	fprintf(p, "Content-Type: multipart/mixed; boundary=\"%s\"\n\n\n", bound);
 
@@ -1785,13 +1785,10 @@ static void queue_mwi_event(const char *mbx, const char *ctx, int urgent, int ne
 			AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_UINT, (new+urgent),
 			AST_EVENT_IE_OLDMSGS, AST_EVENT_IE_PLTYPE_UINT, old,
 			AST_EVENT_IE_END))) {
- 		return;
+		return;
 	}
 
-	ast_event_queue_and_cache(event,
-		AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR,
-		AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR,
-		AST_EVENT_IE_END);
+	ast_event_queue_and_cache(event);
 }
 
 /*! \brief Send MWI using interal Asterisk event subsystem */
@@ -1949,7 +1946,7 @@ static int minivm_record_exec(struct ast_channel *chan, void *data)
 		if (ast_test_flag(&flags, OPT_RECORDGAIN)) {
 			int gain;
 
-			if (sscanf(opts[OPT_ARG_RECORDGAIN], "%d", &gain) != 1) {
+			if (sscanf(opts[OPT_ARG_RECORDGAIN], "%30d", &gain) != 1) {
 				ast_log(LOG_WARNING, "Invalid value '%s' provided for record gain option\n", opts[OPT_ARG_RECORDGAIN]);
 				return -1;
 			} else 
@@ -2374,7 +2371,7 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 		} else if (!strcasecmp(var->name, "pager")) {
 			ast_copy_string(vmu->pager, var->value, sizeof(vmu->pager));
 		} else if (!strcasecmp(var->name, "volgain")) {
-			sscanf(var->value, "%lf", &vmu->volgain);
+			sscanf(var->value, "%30lf", &vmu->volgain);
 		} else {
 			ast_log(LOG_ERROR, "Unknown configuration option for minivm account %s : %s\n", name, var->name);
 		}
@@ -2544,7 +2541,7 @@ static int apply_general_options(struct ast_variable *var)
 			global_silencethreshold = atoi(var->value);
 		} else if (!strcmp(var->name, "maxmessage")) {
 			int x;
-			if (sscanf(var->value, "%d", &x) == 1) {
+			if (sscanf(var->value, "%30d", &x) == 1) {
 				global_vmmaxmessage = x;
 			} else {
 				error ++;
@@ -2552,7 +2549,7 @@ static int apply_general_options(struct ast_variable *var)
 			}
 		} else if (!strcmp(var->name, "minmessage")) {
 			int x;
-			if (sscanf(var->value, "%d", &x) == 1) {
+			if (sscanf(var->value, "%30d", &x) == 1) {
 				global_vmminmessage = x;
 				if (global_maxsilence <= global_vmminmessage)
 					ast_log(LOG_WARNING, "maxsilence should be less than minmessage or you may get empty messages\n");
@@ -3332,6 +3329,8 @@ static int unload_module(void)
 	res |= ast_unregister_application(app_minivm_notify);
 	res |= ast_unregister_application(app_minivm_delete);
 	res |= ast_unregister_application(app_minivm_accmess);
+	res |= ast_unregister_application(app_minivm_mwi);
+
 	ast_cli_unregister_multiple(cli_minivm, ARRAY_LEN(cli_minivm));
 	ast_custom_function_unregister(&minivm_account_function);
 	ast_custom_function_unregister(&minivm_counter_function);

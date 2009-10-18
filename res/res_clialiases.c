@@ -98,7 +98,9 @@ static char *cli_alias_passthrough(struct ast_cli_entry *e, int cmd, struct ast_
 	case CLI_GENERATE:
 		line = a->line;
 		line += (strlen(alias->alias));
-		if (!ast_strlen_zero(a->word)) {
+		if (!strncasecmp(alias->alias, alias->real_cmd, strlen(alias->alias))) {
+			generator = NULL;
+		} else if (!ast_strlen_zero(a->word)) {
 			struct ast_str *real_cmd = ast_str_alloca(strlen(alias->real_cmd) + strlen(line) + 1);
 			ast_str_append(&real_cmd, 0, "%s%s", alias->real_cmd, line);
 			generator = ast_cli_generator(ast_str_buffer(real_cmd), a->word, a->n);
@@ -152,10 +154,10 @@ static char *alias_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a
 	ast_cli(a->fd, FORMAT, "Alias Command", "Real Command");
 
 	i = ao2_iterator_init(cli_aliases, 0);
-
 	for (; (alias = ao2_iterator_next(&i)); ao2_ref(alias, -1)) {
 		ast_cli(a->fd, FORMAT, alias->alias, alias->real_cmd);
 	}
+	ao2_iterator_destroy(&i);
 
 	return CLI_SUCCESS;
 #undef FORMAT

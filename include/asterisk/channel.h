@@ -125,11 +125,7 @@ References:
 
 #include "asterisk/abstract_jb.h"
 
-#ifdef HAVE_SYS_POLL_H
-#include <sys/poll.h>
-#else
 #include "asterisk/poll-compat.h"
-#endif
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -500,6 +496,7 @@ struct ast_channel {
 		char unused_old_dtmfq[AST_MAX_EXTENSION];			/*!< (deprecated, use readq instead) Any/all queued DTMF characters */
 		struct {
 			struct ast_bridge *bridge;                                      /*!< Bridge this channel is participating in */
+			struct ast_timer *timer;					/*!< timer object that provided timingfd */
 		};
 	};
 
@@ -566,6 +563,8 @@ enum {
 	 *  bridge terminates, this will allow the hangup in the pbx loop to be run instead.
 	 *  */
 	AST_FLAG_BRIDGE_HANGUP_DONT = (1 << 18),
+	/*! This flag indicates whether the channel is in the channel list or not. */
+	AST_FLAG_IN_CHANNEL_LIST = (1 << 19),
 };
 
 /*! \brief ast_bridge_config flags */
@@ -587,6 +586,7 @@ struct ast_bridge_config {
 	struct ast_flags features_callee;
 	struct timeval start_time;
 	struct timeval nexteventts;
+	struct timeval partialfeature_timer;
 	long feature_timer;
 	long timelimit;
 	long play_warning;
@@ -656,7 +656,7 @@ enum channelreloadreason {
  * \deprecated You should use the ast_datastore_alloc() generic function instead.
  * \version 1.6.1 deprecated
  */
-struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
+struct ast_datastore * attribute_malloc ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
 	__attribute__((deprecated));
 
 /*!
@@ -716,22 +716,38 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
  * \note By default, new channels are set to the "s" extension
  *       and "default" context.
  */
-struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num, const char *cid_name, const char *acctcode, const char *exten, const char *context, const int amaflag, const char *name_fmt, ...) __attribute__((format(printf, 9, 10)));
+struct ast_channel * attribute_malloc __attribute__((format(printf, 12, 13)))
+	__ast_channel_alloc(int needqueue, int state, const char *cid_num,
+			    const char *cid_name, const char *acctcode,
+			    const char *exten, const char *context,
+			    const int amaflag, const char *file, int line,
+			    const char *function, const char *name_fmt, ...);
+
+#define ast_channel_alloc(needqueue, state, cid_num, cid_name, acctcode, exten, context, amaflag, ...) \
+	__ast_channel_alloc(needqueue, state, cid_num, cid_name, acctcode, exten, context, amaflag, \
+			    __FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
 
 /*!
- * \brief Queue an outgoing frame
+ * \brief Queue one or more frames to a channel's frame queue
  *
- * \note The channel does not need to be locked before calling this function.
+ * \param chan the channel to queue the frame(s) on
+ * \param f the frame(s) to queue.  Note that the frame(s) will be duplicated
+ *        by this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame(s) being passed if
+ *        necessary.
+ *
+ * \retval 0 success
+ * \retval non-zero failure
  */
 int ast_queue_frame(struct ast_channel *chan, struct ast_frame *f);
 
 /*!
- * \brief Queue an outgoing frame to the head of the frame queue
+ * \brief Queue one or more frames to the head of a channel's frame queue
  *
- * \param chan the channel to queue the frame on
- * \param f the frame to queue.  Note that this frame will be duplicated by
- *        this function.  It is the responsibility of the caller to handle
- *        freeing the memory associated with the frame being passed if
+ * \param chan the channel to queue the frame(s) on
+ * \param f the frame(s) to queue.  Note that the frame(s) will be duplicated
+ *        by this function.  It is the responsibility of the caller to handle
+ *        freeing the memory associated with the frame(s) being passed if
  *        necessary.
  *
  * \retval 0 success
@@ -857,6 +873,17 @@ struct ast_channel *ast_request_and_dial(const char *type, int format, void *dat
  */
 struct ast_channel *__ast_request_and_dial(const char *type, int format, void *data,
 	int timeout, int *reason, const char *cid_num, const char *cid_name, struct outgoing_helper *oh);
+/*!
+* \brief Forwards a call to a new channel specified by the original channel's call_forward str.  If possible, the new forwarded channel is created and returned while the original one is terminated.
+* \param caller in channel that requested orig
+* \param orig channel being replaced by the call forward channel
+* \param timeout maximum amount of time to wait for setup of new forward channel
+* \param format requested channel format
+* \param oh outgoing helper used with original channel
+* \param outstate reason why unsuccessful (if uncuccessful)
+* \return Returns the forwarded call's ast_channel on success or NULL on failure
+*/
+struct ast_channel *ast_call_forward(struct ast_channel *caller, struct ast_channel *orig, int *timeout, int format, struct outgoing_helper *oh, int *outstate);
 
 /*!\brief Register a channel technology (a new channel driver)
  * Called by a channel module to register the kind of channels it supports.
@@ -1008,12 +1035,61 @@ void ast_channel_setwhentohangup_tv(struct ast_channel *chan, struct timeval off
  * This function answers a channel and handles all necessary call
  * setup functions.
  *
- * \note The channel passed does not need to be locked.
+ * \note The channel passed does not need to be locked, but is locked
+ * by the function when needed.
+ *
+ * \note This function will wait up to 500 milliseconds for media to
+ * arrive on the channel before returning to the caller, so that the
+ * caller can properly assume the channel is 'ready' for media flow.
  *
  * \retval 0 on success
  * \retval non-zero on failure
  */
 int ast_answer(struct ast_channel *chan);
+
+/*!
+ * \brief Answer a channel
+ *
+ * \param chan channel to answer
+ * \param cdr_answer flag to control whether any associated CDR should be marked as 'answered'
+ *
+ * This function answers a channel and handles all necessary call
+ * setup functions.
+ *
+ * \note The channel passed does not need to be locked, but is locked
+ * by the function when needed.
+ *
+ * \note Unlike ast_answer(), this function will not wait for media
+ * flow to begin. The caller should be careful before sending media
+ * to the channel before incoming media arrives, as the outgoing
+ * media may be lost.
+ *
+ * \retval 0 on success
+ * \retval non-zero on failure
+ */
+int ast_raw_answer(struct ast_channel *chan, int cdr_answer);
+
+/*!
+ * \brief Answer a channel, with a selectable delay before returning
+ *
+ * \param chan channel to answer
+ * \param delay maximum amount of time to wait for incoming media
+ * \param cdr_answer flag to control whether any associated CDR should be marked as 'answered'
+ *
+ * This function answers a channel and handles all necessary call
+ * setup functions.
+ *
+ * \note The channel passed does not need to be locked, but is locked
+ * by the function when needed.
+ *
+ * \note This function will wait up to 'delay' milliseconds for media to
+ * arrive on the channel before returning to the caller, so that the
+ * caller can properly assume the channel is 'ready' for media flow. If
+ * 'delay' is less than 500, the function will wait up to 500 milliseconds.
+ *
+ * \retval 0 on success
+ * \retval non-zero on failure
+ */
 int __ast_answer(struct ast_channel *chan, unsigned int delay, int cdr_answer);
 
 /*! \brief Make a call
@@ -1715,7 +1791,7 @@ struct ast_group_info {
 	struct ast_channel *chan;
 	char *category;
 	char *group;
-	AST_LIST_ENTRY(ast_group_info) list;
+	AST_LIST_ENTRY(ast_group_info) group_list;
 };
 
 

@@ -78,6 +78,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="agi">hangup</ref>
 		</see-also>
 	</agi>
+	<agi name="asyncagi break" language="en_US">
+		<synopsis>
+			Interrupts Async AGI
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Interrupts expected flow of Async AGI commands and returns control to previous source
+			(typically, the PBX dialplan).</para>
+		</description>
+		<see-also>
+			<ref type="agi">hangup</ref>
+		</see-also>
+	</agi>
 	<agi name="channel status" language="en_US">
 		<synopsis>
 			Returns status of the connected channel.
@@ -204,7 +217,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="maxdigits" />
 		</syntax>
 		<description>
-			<para>Stream the given <replaceable>file</replaceable>, and recieve DTMF data.</para>
+			<para>Stream the given <replaceable>file</replaceable>, and receive DTMF data.</para>
 			<para>Returns the digits received from the channel at the other end.</para>
 		</description>
 	</agi>
@@ -737,6 +750,10 @@ static enum agi_result launch_asyncagi(struct ast_channel *chan, char *argv[], i
 			ast_frfree(f);
 		}
 	}
+
+	if (async_agi.speech) {
+		ast_speech_destroy(async_agi.speech);
+	}
 quit:
 	/* notify manager users this channel cannot be
 	   controlled anymore by Async AGI */
@@ -814,7 +831,7 @@ static enum agi_result launch_netscript(char *agiurl, char *argv[], int *fds, in
 
 	pfds[0].fd = s;
 	pfds[0].events = POLLOUT;
-	while ((res = poll(pfds, 1, MAX_AGI_CONNECT)) != 1) {
+	while ((res = ast_poll(pfds, 1, MAX_AGI_CONNECT)) != 1) {
 		if (errno != EINTR) {
 			if (!res) {
 				ast_log(LOG_WARNING, "FastAGI connection to '%s' timed out after MAX_AGI_CONNECT (%d) milliseconds.\n",
@@ -1014,13 +1031,19 @@ static int handle_answer(struct ast_channel *chan, AGI *agi, int argc, char *arg
 	return (res >= 0) ? RESULT_SUCCESS : RESULT_FAILURE;
 }
 
+static int handle_asyncagi_break(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
+{
+	ast_agi_send(agi->fd, chan, "200 result=0\n");
+	return RESULT_FAILURE;
+}
+
 static int handle_waitfordigit(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
 {
 	int res, to;
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[3], "%d", &to) != 1)
+	if (sscanf(argv[3], "%30d", &to) != 1)
 		return RESULT_SHOWUSAGE;
 	res = ast_waitfordigit_full(chan, to, agi->audio, agi->ctrl);
 	ast_agi_send(agi->fd, chan, "200 result=%d\n", res);
@@ -1139,7 +1162,7 @@ static int handle_controlstreamfile(struct ast_channel *chan, AGI *agi, int argc
 		stop = argv[4];
 	}
 
-	if ((argc > 5) && (sscanf(argv[5], "%d", &skipms) != 1)) {
+	if ((argc > 5) && (sscanf(argv[5], "%30d", &skipms) != 1)) {
 		return RESULT_SHOWUSAGE;
 	}
 
@@ -1175,7 +1198,7 @@ static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, char 
 	if (argv[3])
 		edigits = argv[3];
 
-	if ((argc > 4) && (sscanf(argv[4], "%ld", &sample_offset) != 1))
+	if ((argc > 4) && (sscanf(argv[4], "%30ld", &sample_offset) != 1))
 		return RESULT_SHOWUSAGE;
 
 	if (!(fs = ast_openstream(chan, argv[2], chan->language))) {
@@ -1287,7 +1310,7 @@ static int handle_saynumber(struct ast_channel *chan, AGI *agi, int argc, char *
 
 	if (argc < 4 || argc > 5)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%d", &num) != 1)
+	if (sscanf(argv[2], "%30d", &num) != 1)
 		return RESULT_SHOWUSAGE;
 	res = ast_say_number_full(chan, num, argv[3], chan->language, argc > 4 ? argv[4] : NULL, agi->audio, agi->ctrl);
 	if (res == 1)
@@ -1302,7 +1325,7 @@ static int handle_saydigits(struct ast_channel *chan, AGI *agi, int argc, char *
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%d", &num) != 1)
+	if (sscanf(argv[2], "%30d", &num) != 1)
 		return RESULT_SHOWUSAGE;
 
 	res = ast_say_digit_str_full(chan, argv[2], argv[3], chan->language, agi->audio, agi->ctrl);
@@ -1332,7 +1355,7 @@ static int handle_saydate(struct ast_channel *chan, AGI *agi, int argc, char *ar
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%d", &num) != 1)
+	if (sscanf(argv[2], "%30d", &num) != 1)
 		return RESULT_SHOWUSAGE;
 	res = ast_say_date(chan, num, argv[3], chan->language);
 	if (res == 1)
@@ -1347,7 +1370,7 @@ static int handle_saytime(struct ast_channel *chan, AGI *agi, int argc, char *ar
 
 	if (argc != 4)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%d", &num) != 1)
+	if (sscanf(argv[2], "%30d", &num) != 1)
 		return RESULT_SHOWUSAGE;
 	res = ast_say_time(chan, num, argv[3], chan->language);
 	if (res == 1)
@@ -1457,7 +1480,7 @@ static int handle_setpriority(struct ast_channel *chan, AGI *agi, int argc, char
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
 
-	if (sscanf(argv[2], "%d", &pri) != 1) {
+	if (sscanf(argv[2], "%30d", &pri) != 1) {
 		if ((pri = ast_findlabel_extension(chan, chan->context, chan->exten, argv[2], chan->cid.cid_num)) < 1)
 			return RESULT_SHOWUSAGE;
 	}
@@ -1488,7 +1511,7 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
 
 	if (argc < 6)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[5], "%d", &ms) != 1)
+	if (sscanf(argv[5], "%30d", &ms) != 1)
 		return RESULT_SHOWUSAGE;
 
 	if (argc > 6)
@@ -1529,7 +1552,7 @@ static int handle_recordfile(struct ast_channel *chan, AGI *agi, int argc, char 
 	/* backward compatibility, if no offset given, arg[6] would have been
 	 * caught below and taken to be a beep, else if it is a digit then it is a
 	 * offset */
-	if ((argc >6) && (sscanf(argv[6], "%ld", &sample_offset) != 1) && (!strchr(argv[6], '=')))
+	if ((argc >6) && (sscanf(argv[6], "%30ld", &sample_offset) != 1) && (!strchr(argv[6], '=')))
 		res = ast_streamfile(chan, "beep", chan->language);
 
 	if ((argc > 7) && (!strchr(argv[7], '=')))
@@ -1651,7 +1674,7 @@ static int handle_autohangup(struct ast_channel *chan, AGI *agi, int argc, char 
 
 	if (argc != 3)
 		return RESULT_SHOWUSAGE;
-	if (sscanf(argv[2], "%lf", &timeout) != 1)
+	if (sscanf(argv[2], "%30lf", &timeout) != 1)
 		return RESULT_SHOWUSAGE;
 	if (timeout < 0)
 		timeout = 0;
@@ -1839,7 +1862,7 @@ static int handle_verbose(struct ast_channel *chan, AGI *agi, int argc, char **a
 		return RESULT_SHOWUSAGE;
 
 	if (argv[2])
-		sscanf(argv[2], "%d", &level);
+		sscanf(argv[2], "%30d", &level);
 
 	ast_verb(level, "%s: %s\n", chan->data, argv[1]);
 
@@ -2445,6 +2468,7 @@ static char usage_speechrecognize[] =
  */
 static struct agi_command commands[] = {
 	{ { "answer", NULL }, handle_answer, NULL, NULL, 0 },
+	{ { "asyncagi", "break", NULL }, handle_asyncagi_break, NULL, NULL, 1 },
 	{ { "channel", "status", NULL }, handle_channelstatus, NULL, NULL, 0 },
 	{ { "database", "del", NULL }, handle_dbdel, NULL, NULL, 1 },
 	{ { "database", "deltree", NULL }, handle_dbdeltree, NULL, NULL, 1 },
@@ -2928,6 +2952,9 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				break;
 			}
 		}
+	}
+	if (agi->speech) {
+		ast_speech_destroy(agi->speech);
 	}
 	/* Notify process */
 	if (send_sighup) {

@@ -40,7 +40,12 @@ SIP Changes
    version received is different from the current SDP session version.  This
    option is required to interoperate with devices that have non-standard SDP
    session version implementations (observed with Microsoft OCS).  This option
-   is disabled by default.
+   is disabled by default. In addition, this behavior is automatic when the SDP received
+   is in response to a T.38 re-INVITE that Asterisk initiated. In this situation,
+   since the call will fail if Asterisk does not process the incoming SDP, Asterisk
+   will accept the SDP even if the SDP version number is not properly incremented,
+   but will generate a warning in the log indicating that the SIP peer that sent
+   the SDP should have the 'ignoresdpversion' option set.
  * The parsing of register => lines in sip.conf has been modified to allow a port
    to be present in the "user" portion. Please see the sip.conf.sample file for more
    information
@@ -51,6 +56,10 @@ SIP Changes
  * Channel variables set with setvar= in a device configuration is now 
    set both for inbound and outbound calls.
  * Added support for ITU G.722.1 and G.722.1C (Siren7 and Siren14) media streams.
+ * Added a new option "prematuremedia" that defaults to "yes". If you turn this
+   option on, chan_sip will not automatically initiate early media if it receives
+   audio from the incoming channel before there's been a progress indication.
+
 
 IAX2 changes
 ------------
@@ -66,6 +75,8 @@ Skinny Changes
 
 DAHDI Changes
 -------------
+ * chan_dahdi now supports MFC/R2 signaling when Asterisk is compiled with
+   support for LibOpenR2.  http://www.libopenr2.org/
  * The UK option waitfordialtone has been added for use with BT analog
    lines.
  * Added a 'faxbuffers' configuration option to chan_dahdi.conf.  This option
@@ -301,12 +312,8 @@ SIP Changes
    as well as periodically updating the IP address. These properties allow for
    better performance as well as recovery in the event of an IP change.
  * Performance improvements via using hash tables (astobj2) and doubly-linked lists to improve 
-   load/reload of large numbers of peers/users by ~40x (for large lists of peers.
-   Initially, we saw 4x improvement in call setup/destruction, but at the time
-   of merging, this gain has disappeared; further research will be done to try
-   and restore this performance improvement. Astobj2 refcounting is now used
-   for users, peers, and dialogs.  Users are encouraged to assist in regression
-   testing and problem reporting!
+   load/reload of large numbers of peers/users by ~40x (for large lists of peers).
+   These changes also provide performance improvements for call setup and tear down.
  * Added ability to specify registration expiry time on a per registration basis in
    the register line.
  * Added support for T140 RED - redundancy in T.140 to prevent text loss due to
@@ -942,11 +949,11 @@ Logger changes
 --------------
   * Added rotatestrategy option to logger.conf, along with two new options:
      "timestamp" which will use the time to name the logger files instead of
-     sequence number; and "rotate", which rotates the names of the logfiles,
+     sequence number; and "rotate", which rotates the names of the log files,
      similar to the way syslog rotates files.
   * Added exec_after_rotate option to logger.conf, which allows a system
      command to be run after rotation.  This is primarily useful with
-     rotatestrategry=rotate, to allow a limit on the number of logfiles kept
+     rotatestrategry=rotate, to allow a limit on the number of log files kept
      and to ensure that the oldest log file gets deleted.
   * Added realtime support for the queue log
 

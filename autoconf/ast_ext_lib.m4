@@ -29,10 +29,34 @@ AC_DEFUN([AST_EXT_LIB_SETUP],
 	;;
 	esac
     ])
+    AH_TEMPLATE(m4_bpatsubst([[HAVE_$1]], [(.*)]), [Define to 1 if you have the $2 library.])
+    AH_TEMPLATE(m4_bpatsubst([[HAVE_$1_VERSION]], [(.*)]), [Define to the version of the $2 library.])
     AC_SUBST([$1_LIB])
     AC_SUBST([$1_INCLUDE])
     AC_SUBST([$1_DIR])
     AC_SUBST([PBX_$1])
+])
+
+# AST_EXT_LIB_SETUP_DEPENDENT([package symbol name], [package friendly name], [master package symbol name], [master package option name])
+
+AC_DEFUN([AST_EXT_LIB_SETUP_DEPENDENT],
+[
+$1_DESCRIP="$2"
+m4_ifval([$4], [$1_OPTION=$4])
+m4_ifval([$3], [
+for i in ${ac_mandatory_list}; do
+   if test "x$3" = "x$i"; then
+      ac_mandatory_list="${ac_mandatory_list} $1"
+      break
+   fi
+done
+])
+PBX_$1=0
+AH_TEMPLATE(m4_bpatsubst([[HAVE_$1]], [(.*)]), [Define to 1 if you have the $2 library.])
+AC_SUBST([$1_LIB])
+AC_SUBST([$1_INCLUDE])
+AC_SUBST([$1_DIR])
+AC_SUBST([PBX_$1])
 ])
 
 # Check for existence of a given package ($1), either looking up a function
@@ -65,7 +89,7 @@ if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
       $1_LIB="${pbxlibdir} -l$2 $5"
       # if --with-$1=DIR has been specified, use it.
       if test "x${$1_DIR}" != "x"; then
-	 $1_INCLUDE="-I${$1_DIR}/include"
+         $1_INCLUDE="-I${$1_DIR}/include"
       fi
       $1_INCLUDE="${$1_INCLUDE} $6"
       if test "x$4" = "x" ; then	# no header, assume found
@@ -73,7 +97,7 @@ if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
       else				# check for the header
          saved_cppflags="${CPPFLAGS}"
          CPPFLAGS="${CPPFLAGS} ${$1_INCLUDE}"
-	 AC_CHECK_HEADER([$4], [$1_HEADER_FOUND=1], [$1_HEADER_FOUND=0])
+         AC_CHECK_HEADER([$4], [$1_HEADER_FOUND=1], [$1_HEADER_FOUND=0])
          CPPFLAGS="${saved_cppflags}"
       fi
       if test "x${$1_HEADER_FOUND}" = "x0" ; then
@@ -81,12 +105,13 @@ if test "x${PBX_$1}" != "x1" -a "${USE_$1}" != "no"; then
          $1_INCLUDE=""
       else
          if test "x${pbxfuncname}" = "x" ; then		# only checking headers -> no library
-	    $1_LIB=""
-	 fi
+            $1_LIB=""
+         fi
          PBX_$1=1
-         # XXX don't know how to evaluate the description (third argument) in AC_DEFINE_UNQUOTED
-         AC_DEFINE_UNQUOTED([HAVE_$1], 1, [Define this to indicate the ${$1_DESCRIP} library])
-	 AC_DEFINE_UNQUOTED([HAVE_$1_VERSION], [$7], [Define to indicate the ${$1_DESCRIP} library version])
+         cat >>confdefs.h <<_ACEOF
+[@%:@define] HAVE_$1 1
+[@%:@define] HAVE_$1_VERSION $7
+_ACEOF
       fi
    fi
 fi

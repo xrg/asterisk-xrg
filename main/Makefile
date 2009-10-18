@@ -22,14 +22,14 @@ OBJS= tcptls.o io.o sched.o logger.o frame.o loader.o config.o channel.o \
 	ulaw.o alaw.o callerid.o fskmodem.o image.o app.o \
 	cdr.o tdd.o acl.o rtp.o udptl.o manager.o asterisk.o \
 	dsp.o chanvars.o indications.o autoservice.o db.o privacy.o \
-	astmm.o enum.o srv.o dns.o aescrypt.o aestab.o aeskey.o \
+	astmm.o astfd.o enum.o srv.o dns.o aescrypt.o aestab.o aeskey.o \
 	utils.o plc.o jitterbuf.o dnsmgr.o devicestate.o \
 	netsock.o slinfactory.o ast_expr2.o ast_expr2f.o \
 	cryptostub.o sha1.o http.o fixedjitterbuf.o abstract_jb.o \
 	strcompat.o threadstorage.o dial.o event.o adsistub.o audiohook.o \
 	astobj2.o hashtab.o global_datastores.o version.o \
 	features.o taskprocessor.o timing.o datastore.o xml.o xmldoc.o \
-	strings.o bridging.o
+	strings.o bridging.o poll.o ssl.o
 
 # we need to link in the objects statically, not as a library, because
 # otherwise modules will not have them available if none of the static
@@ -43,14 +43,6 @@ OBJS+=say.o
 AST_LIBS += $(OPENSSL_LIB)
 AST_LIBS += $(BKTR_LIB)
 AST_LIBS += $(LIBXML2_LIB) 
-
-ifeq ($(POLL_AVAILABLE),)
-  OBJS+=poll.o
-else
-  ifneq ($(findstring darwin,$(OSARCH)),)
-    OBJS+=poll.o
-  endif
-endif
 
 ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi ),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
@@ -69,6 +61,7 @@ ifneq ($(findstring darwin,$(OSARCH)),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
     ASTLINK=-Wl,-dynamic
   endif
+  ASTLINK+=-Xlinker -macosx_version_min -Xlinker 10.4 -Xlinker -undefined -Xlinker dynamic_lookup -force_flat_namespace
 else
 # These are used for all but Darwin
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
@@ -114,11 +107,11 @@ endif
 CHECK_SUBDIR:	# do nothing, just make sure that we recurse in the subdir/
 
 editline/libedit.a: CHECK_SUBDIR
-	cd editline && test -f config.h || CFLAGS="$(PTHREAD_CFLAGS) $(subst $(ASTTOPDIR),../../,$(ASTCFLAGS:-Werror=))" LDFLAGS="$(ASTLDFLAGS)" ./configure --build=$(BUILD_PLATFORM) --host=$(HOST_PLATFORM) --with-ncurses=$(NCURSES_DIR) --with-curses=$(CURSES_DIR) --with-termcap=$(TERMCAP_DIR) --with-tinfo=$(TINFO_DIR)
+	cd editline && test -f config.h || CFLAGS="$(PTHREAD_CFLAGS) $(subst $(ASTTOPDIR),../../,$(_ASTCFLAGS:-Werror=) $(ASTCFLAGS))" LDFLAGS="$(ASTLDFLAGS)" ./configure --build=$(BUILD_PLATFORM) --host=$(HOST_PLATFORM) --with-ncurses=$(NCURSES_DIR) --with-curses=$(CURSES_DIR) --with-termcap=$(TERMCAP_DIR) --with-tinfo=$(TINFO_DIR)
 	$(MAKE) -C editline libedit.a
 
 db1-ast/libdb1.a: CHECK_SUBDIR
-	CFLAGS="$(subst $(ASTTOPDIR),../../,$(ASTCFLAGS))" LDFLAGS="$(ASTLDFLAGS)" $(MAKE) -C db1-ast libdb1.a
+	_ASTCFLAGS="$(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS) -Wno-strict-aliasing" $(MAKE) -C db1-ast libdb1.a
 
 ast_expr2.c ast_expr2.h:
 	bison -o $@ -d --name-prefix=ast_yy ast_expr2.y
@@ -131,7 +124,7 @@ ast_expr2f.c:
 	cat $@.fix >> $@
 	rm $@.fix
 
-ast_expr2f.o: ASTCFLAGS+=-Wno-unused
+ast_expr2f.o: _ASTCFLAGS+=-Wno-unused
 
 testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
 	$(CC) -g -c -Iinclude -DSTANDALONE ast_expr2f.c
@@ -140,10 +133,10 @@ testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
 	rm ast_expr2.o ast_expr2f.o 
 
 ifneq ($(findstring ENABLE_UPLOADS,$(MENUSELECT_CFLAGS)),)
-http.o: ASTCFLAGS+=$(GMIME_INCLUDE)
+http.o: _ASTCFLAGS+=$(GMIME_INCLUDE)
 endif
 
-stdtime/localtime.o: ASTCFLAGS+=$(AST_NO_STRICT_OVERFLOW) -Wno-format-nonliteral
+stdtime/localtime.o: _ASTCFLAGS+=$(AST_NO_STRICT_OVERFLOW) -Wno-format-nonliteral
 
 AST_EMBED_LDSCRIPTS:=$(sort $(EMBED_LDSCRIPTS))
 AST_EMBED_LDFLAGS:=$(foreach dep,$(EMBED_LDFLAGS),$(value $(dep)))
@@ -172,7 +165,7 @@ GMIMELDFLAGS+=$(GMIME_LIB)
 endif
 
 $(MAIN_TGT): $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS)
-	@$(CC) -c -o buildinfo.o $(ASTCFLAGS) buildinfo.c
+	@$(CC) -c -o buildinfo.o $(_ASTCFLAGS) buildinfo.c $(ASTCFLAGS)
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
 ifneq ($(findstring chan_h323,$(MENUSELECT_CHANNELS)),)
 	$(CMD_PREFIX) $(CC) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(ASTLDFLAGS) $^ buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(GMIMELDFLAGS)

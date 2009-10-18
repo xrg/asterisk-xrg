@@ -137,6 +137,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/dsp.h"
 #include "asterisk/buildinfo.h"
 #include "asterisk/xmldoc.h"
+#include "asterisk/poll-compat.h"
 
 #include "asterisk/doxyref.h"		/* Doxygen documentation */
 
@@ -152,7 +153,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 
 /*! \brief Welcome message when starting a CLI interface */
 #define WELCOME_MESSAGE \
-    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2008 Digium, Inc. and others.\n" \
+    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2009 Digium, Inc. and others.\n" \
                 "Created by Mark Spencer <markster@digium.com>\n" \
                 "Asterisk comes with ABSOLUTELY NO WARRANTY; type 'core show warranty' for details.\n" \
                 "This is free software, with components licensed under the GNU General Public\n" \
@@ -181,7 +182,7 @@ long option_minmemfree;				/*!< Minimum amount of free system memory - stop acce
 
 /*! @} */
 
-struct ast_eid g_eid;
+struct ast_eid ast_eid_default;
 
 /* XXX tmpdir is a subdir of the spool directory, and no way to remap it */
 char record_cache_dir[AST_CACHE_DIR_LEN] = DEFAULT_TMP_DIR;
@@ -426,7 +427,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 		return NULL;
 	}
 
-	ast_eid_to_str(eid_str, sizeof(eid_str), &g_eid);
+	ast_eid_to_str(eid_str, sizeof(eid_str), &ast_eid_default);
 
 	ast_cli(a->fd, "\nPBX Core settings\n");
 	ast_cli(a->fd, "-----------------\n");
@@ -463,7 +464,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 	ast_cli(a->fd, "  Executable includes:         %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_EXEC_INCLUDES) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Transcode via SLIN:          %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSCODE_VIA_SLIN) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Internal timing:             %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING) ? "Enabled" : "Disabled");
-	ast_cli(a->fd, "  Transmit silence during rec: %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING) ? "Enabled" : "Disabled");
+	ast_cli(a->fd, "  Transmit silence during rec: %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSMIT_SILENCE) ? "Enabled" : "Disabled");
 
 	ast_cli(a->fd, "\n* Subsystems\n");
 	ast_cli(a->fd, "  -------------\n");
@@ -943,8 +944,7 @@ void ast_unregister_atexit(void (*func)(void))
 	AST_RWLIST_TRAVERSE_SAFE_END;
 	AST_RWLIST_UNLOCK(&atexits);
 
-	if (ae)
-		free(ae);
+	free(ae);
 }
 
 /* Sending commands from consoles back to the daemon requires a terminating NULL */
@@ -1213,14 +1213,14 @@ static void *netconsole(void *vconsole)
 		fds[1].events = POLLIN;
 		fds[1].revents = 0;
 
-		res = poll(fds, 2, -1);
+		res = ast_poll(fds, 2, -1);
 		if (res < 0) {
 			if (errno != EINTR)
 				ast_log(LOG_WARNING, "poll returned < 0: %s\n", strerror(errno));
 			continue;
 		}
 		if (fds[0].revents) {
-			res = read_credentials(con->fd, tmp, sizeof(tmp), con);
+			res = read_credentials(con->fd, tmp, sizeof(tmp) - 1, con);
 			if (res < 1) {
 				break;
 			}
@@ -1266,7 +1266,7 @@ static void *listener(void *unused)
 			return NULL;
 		fds[0].fd = ast_socket;
 		fds[0].events = POLLIN;
-		s = poll(fds, 1, -1);
+		s = ast_poll(fds, 1, -1);
 		pthread_testcancel();
 		if (s < 0) {
 			if (errno != EINTR)
@@ -1391,7 +1391,7 @@ static int ast_makesocket(void)
 	if (!ast_strlen_zero(ast_config_AST_CTL_PERMISSIONS)) {
 		int p1;
 		mode_t p;
-		sscanf(ast_config_AST_CTL_PERMISSIONS, "%o", &p1);
+		sscanf(ast_config_AST_CTL_PERMISSIONS, "%30o", &p1);
 		p = p1;
 		if ((chmod(ast_config_AST_SOCKET, p)) < 0)
 			ast_log(LOG_WARNING, "Unable to change file permissions of %s: %s\n", ast_config_AST_SOCKET, strerror(errno));
@@ -2081,7 +2081,7 @@ static int ast_el_read_char(EditLine *editline, char *cp)
 			fds[1].events = POLLIN;
 			max++;
 		}
-		res = poll(fds, max, -1);
+		res = ast_poll(fds, max, -1);
 		if (res < 0) {
 			if (sig_flags.need_quit)
 				break;
@@ -2194,10 +2194,10 @@ static char *cli_prompt(EditLine *editline)
 				switch (*t) {
 				case 'C': /* color */
 					t++;
-					if (sscanf(t, "%d;%d%n", &fgcolor, &bgcolor, &i) == 2) {
+					if (sscanf(t, "%30d;%30d%n", &fgcolor, &bgcolor, &i) == 2) {
 						ast_str_append(&prompt, 0, "%s", term_color_code(term_code, fgcolor, bgcolor, sizeof(term_code)));
 						t += i - 1;
-					} else if (sscanf(t, "%d%n", &fgcolor, &i) == 1) {
+					} else if (sscanf(t, "%30d%n", &fgcolor, &i) == 1) {
 						ast_str_append(&prompt, 0, "%s", term_color_code(term_code, fgcolor, 0, sizeof(term_code)));
 						t += i - 1;
 					}
@@ -2238,7 +2238,7 @@ static char *cli_prompt(EditLine *editline)
 #ifdef HAVE_GETLOADAVG
 				case 'l': /* load avg */
 					t++;
-					if (sscanf(t, "%d", &which) == 1 && which > 0 && which <= 3) {
+					if (sscanf(t, "%30d", &which) == 1 && which > 0 && which <= 3) {
 						double list[3];
 						getloadavg(list, 3);
 						ast_str_append(&prompt, 0, "%.2f", list[which - 1]);
@@ -2397,11 +2397,12 @@ static char *cli_complete(EditLine *editline, int ch)
 	int nummatches = 0;
 	char **matches;
 	int retval = CC_ERROR;
-	char buf[2048];
+	char buf[2048], savechr;
 	int res;
 
 	LineInfo *lf = (LineInfo *)el_line(editline);
 
+	savechr = *(char *)lf->cursor;
 	*(char *)lf->cursor = '\0';
 	ptr = (char *)lf->cursor;
 	if (ptr) {
@@ -2419,7 +2420,7 @@ static char *cli_complete(EditLine *editline, int ch)
 	if (ast_opt_remote) {
 		snprintf(buf, sizeof(buf), "_COMMAND NUMMATCHES \"%s\" \"%s\"", lf->buffer, ptr); 
 		fdsend(ast_consock, buf);
-		res = read(ast_consock, buf, sizeof(buf));
+		res = read(ast_consock, buf, sizeof(buf) - 1);
 		buf[res] = '\0';
 		nummatches = atoi(buf);
 
@@ -2427,8 +2428,10 @@ static char *cli_complete(EditLine *editline, int ch)
 			char *mbuf;
 			int mlen = 0, maxmbuf = 2048;
 			/* Start with a 2048 byte buffer */			
-			if (!(mbuf = ast_malloc(maxmbuf)))
+			if (!(mbuf = ast_malloc(maxmbuf))) {
+				lf->cursor[0] = savechr;
 				return (char *)(CC_ERROR);
+			}
 			snprintf(buf, sizeof(buf), "_COMMAND MATCHESARRAY \"%s\" \"%s\"", lf->buffer, ptr); 
 			fdsend(ast_consock, buf);
 			res = 0;
@@ -2437,8 +2440,10 @@ static char *cli_complete(EditLine *editline, int ch)
 				if (mlen + 1024 > maxmbuf) {
 					/* Every step increment buffer 1024 bytes */
 					maxmbuf += 1024;					
-					if (!(mbuf = ast_realloc(mbuf, maxmbuf)))
+					if (!(mbuf = ast_realloc(mbuf, maxmbuf))) {
+						lf->cursor[0] = savechr;
 						return (char *)(CC_ERROR);
+					}
 				}
 				/* Only read 1024 bytes at a time */
 				res = read(ast_consock, mbuf + mlen, 1024);
@@ -2497,6 +2502,8 @@ static char *cli_complete(EditLine *editline, int ch)
 			ast_free(matches[i]);
 		ast_free(matches);
 	}
+
+	lf->cursor[0] = savechr;
 
 	return (char *)(long)retval;
 }
@@ -2649,7 +2656,7 @@ static void ast_remotecontrol(char *data)
 		fds.fd = ast_consock;
 		fds.events = POLLIN;
 		fds.revents = 0;
-		while (poll(&fds, 1, 500) > 0) {
+		while (ast_poll(&fds, 1, 500) > 0) {
 			char buffer[512] = "", *curline = buffer, *nextline;
 			int not_written = 1;
 
@@ -2738,7 +2745,7 @@ static int show_version(void)
 }
 
 static int show_cli_help(void) {
-	printf("Asterisk %s, Copyright (C) 1999 - 2008, Digium, Inc. and others.\n", ast_get_version());
+	printf("Asterisk %s, Copyright (C) 1999 - 2009, Digium, Inc. and others.\n", ast_get_version());
 	printf("Usage: asterisk [OPTIONS]\n");
 	printf("Valid Options:\n");
 	printf("   -V              Display version number and exit\n");
@@ -2809,7 +2816,7 @@ static void ast_readconfig(void)
 	ast_copy_string(cfg_paths.socket_path, DEFAULT_SOCKET, sizeof(cfg_paths.socket_path));
 	ast_copy_string(cfg_paths.run_dir, DEFAULT_RUN_DIR, sizeof(cfg_paths.run_dir));
 
-	ast_set_default_eid(&g_eid);
+	ast_set_default_eid(&ast_eid_default);
 
 	/* no asterisk.conf? no problem, use buildtime config! */
 	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
@@ -2873,7 +2880,7 @@ static void ast_readconfig(void)
 		/* debug level (-d at startup) */
 		} else if (!strcasecmp(v->name, "debug")) {
 			option_debug = 0;
-			if (sscanf(v->value, "%d", &option_debug) != 1) {
+			if (sscanf(v->value, "%30d", &option_debug) != 1) {
 				option_debug = ast_true(v->value);
 			}
 #if HAVE_WORKING_FORK
@@ -2921,7 +2928,7 @@ static void ast_readconfig(void)
 		} else if (!strcasecmp(v->name, "internal_timing")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_INTERNAL_TIMING);
 		} else if (!strcasecmp(v->name, "maxcalls")) {
-			if ((sscanf(v->value, "%d", &option_maxcalls) != 1) || (option_maxcalls < 0)) {
+			if ((sscanf(v->value, "%30d", &option_maxcalls) != 1) || (option_maxcalls < 0)) {
 				option_maxcalls = 0;
 			}
 		} else if (!strcasecmp(v->name, "maxload")) {
@@ -2930,7 +2937,7 @@ static void ast_readconfig(void)
 			if (getloadavg(test, 1) == -1) {
 				ast_log(LOG_ERROR, "Cannot obtain load average on this system. 'maxload' option disabled.\n");
 				option_maxload = 0.0;
-			} else if ((sscanf(v->value, "%lf", &option_maxload) != 1) || (option_maxload < 0.0)) {
+			} else if ((sscanf(v->value, "%30lf", &option_maxload) != 1) || (option_maxload < 0.0)) {
 				option_maxload = 0.0;
 			}
 		/* Set the maximum amount of open files */
@@ -2972,7 +2979,7 @@ static void ast_readconfig(void)
 		} else if (!strcasecmp(v->name, "minmemfree")) {
 			/* specify the minimum amount of free memory to retain.  Asterisk should stop accepting new calls
 			 * if the amount of free memory falls below this watermark */
-			if ((sscanf(v->value, "%ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
+			if ((sscanf(v->value, "%30ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
 				option_minmemfree = 0;
 			}
 #endif
@@ -2980,7 +2987,7 @@ static void ast_readconfig(void)
 			struct ast_eid tmp_eid;
 			if (!ast_str_to_eid(&tmp_eid, v->value)) {
 				ast_verbose("Successfully set global EID to '%s'\n", v->value);
-				g_eid = tmp_eid;
+				ast_eid_default = tmp_eid;
 			} else
 				ast_verbose("Invalid Entity ID '%s' provided\n", v->value);
 		} else if (!strcasecmp(v->name, "lightbackground")) {
@@ -2993,7 +3000,7 @@ static void ast_readconfig(void)
 	}
 	for (v = ast_variable_browse(cfg, "compat"); v; v = v->next) {
 		float version;
-		if (sscanf(v->value, "%f", &version) != 1) {
+		if (sscanf(v->value, "%30f", &version) != 1) {
 			ast_log(LOG_WARNING, "Compatibility version for option '%s' is not a number: '%s'\n", v->name, v->value);
 			continue;
 		}
@@ -3013,7 +3020,7 @@ static void *monitor_sig_flags(void *unused)
 	for (;;) {
 		struct pollfd p = { sig_alert_pipe[0], POLLIN, 0 };
 		int a;
-		poll(&p, 1, -1);
+		ast_poll(&p, 1, -1);
 		if (sig_flags.need_reload) {
 			sig_flags.need_reload = 0;
 			ast_module_reload(NULL);
@@ -3128,6 +3135,7 @@ int main(int argc, char *argv[])
 	ast_utils_init();
 	tdd_init();
 	ast_tps_init();
+	ast_fd_init();
 
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
@@ -3136,7 +3144,7 @@ int main(int argc, char *argv[])
 		switch (c) {
 #if defined(HAVE_SYSINFO)
 		case 'e':
-			if ((sscanf(&optarg[1], "%ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
+			if ((sscanf(&optarg[1], "%30ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
 				option_minmemfree = 0;
 			}
 			break;
@@ -3176,11 +3184,11 @@ int main(int argc, char *argv[])
 			ast_set_flag(&ast_options, AST_OPT_FLAG_MUTE);
 			break;
 		case 'M':
-			if ((sscanf(optarg, "%d", &option_maxcalls) != 1) || (option_maxcalls < 0))
+			if ((sscanf(optarg, "%30d", &option_maxcalls) != 1) || (option_maxcalls < 0))
 				option_maxcalls = 0;
 			break;
 		case 'L':
-			if ((sscanf(optarg, "%lf", &option_maxload) != 1) || (option_maxload < 0.0))
+			if ((sscanf(optarg, "%30lf", &option_maxload) != 1) || (option_maxload < 0.0))
 				option_maxload = 0.0;
 			break;
 		case 'q':
@@ -3298,57 +3306,6 @@ int main(int argc, char *argv[])
 
 	if (isroot) {
 		ast_set_priority(ast_opt_high_priority);
-		if (ast_opt_high_priority) {
-			int cpipe[2];
-
-			/* PIPE signal ensures that astcanary dies when Asterisk dies */
-			if (pipe(cpipe)) {
-				fprintf(stderr, "Unable to open pipe for canary process: %s\n", strerror(errno));
-				exit(1);
-			}
-			canary_pipe = cpipe[0];
-
-			snprintf(canary_filename, sizeof(canary_filename), "%s/alt.asterisk.canary.tweet.tweet.tweet", ast_config_AST_RUN_DIR);
-
-			/* Don't let the canary child kill Asterisk, if it dies immediately */
-			signal(SIGPIPE, SIG_IGN);
-
-			canary_pid = fork();
-			if (canary_pid == 0) {
-				char canary_binary[128], *lastslash;
-				int fd;
-
-				/* Reset signal handler */
-				signal(SIGCHLD, SIG_DFL);
-				signal(SIGPIPE, SIG_DFL);
-
-				dup2(cpipe[1], 100);
-				close(cpipe[1]);
-
-				for (fd = 0; fd < 100; fd++) {
-					close(fd);
-				}
-
-				execlp("astcanary", "astcanary", canary_filename, (char *)NULL);
-
-				/* If not found, try the same path as used to execute asterisk */
-				ast_copy_string(canary_binary, argv[0], sizeof(canary_binary));
-				if ((lastslash = strrchr(canary_binary, '/'))) {
-					ast_copy_string(lastslash + 1, "astcanary", sizeof(canary_binary) + canary_binary - (lastslash + 1));
-					execl(canary_binary, "astcanary", canary_filename, (char *)NULL);
-				}
-
-				/* Should never happen */
-				_exit(1);
-			} else if (canary_pid > 0) {
-				pthread_t dont_care;
-				close(cpipe[1]);
-				ast_pthread_create_detached(&dont_care, NULL, canary_thread, NULL);
-			}
-
-			/* Kill the canary when we exit */
-			atexit(canary_exit);
-		}
 	}
 
 	if (isroot && rungroup) {
@@ -3427,9 +3384,33 @@ int main(int argc, char *argv[])
 	if (geteuid() && ast_opt_dump_core) {
 		if (prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) < 0) {
 			ast_log(LOG_WARNING, "Unable to set the process for core dumps after changing to a non-root user. %s\n", strerror(errno));
-		}	
+		}
 	}
 #endif
+
+	{
+#if defined(HAVE_EACCESS) || defined(HAVE_EUIDACCESS)
+#if defined(HAVE_EUIDACCESS) && !defined(HAVE_EACCESS)
+#define eaccess euidaccess
+#endif
+		char dir[PATH_MAX];
+		if (!getcwd(dir, sizeof(dir)) || eaccess(dir, R_OK | X_OK | F_OK)) {
+			ast_log(LOG_ERROR, "Unable to access the running directory (%s).  Changing to '/' for compatibility.\n", strerror(errno));
+			/* If we cannot access the CWD, then we couldn't dump core anyway,
+			 * so chdir("/") won't break anything. */
+			if (chdir("/")) {
+				/* chdir(/) should never fail, so this ends up being a no-op */
+				ast_log(LOG_ERROR, "chdir(\"/\") failed?!! %s\n", strerror(errno));
+			}
+		} else
+#endif /* defined(HAVE_EACCESS) || defined(HAVE_EUIDACCESS) */
+		if (!ast_opt_no_fork && !ast_opt_dump_core) {
+			/* Backgrounding, but no cores, so chdir won't break anything. */
+			if (chdir("/")) {
+				ast_log(LOG_ERROR, "Unable to chdir(\"/\") ?!! %s\n", strerror(errno));
+			}
+		}
+	}
 
 	ast_term_init();
 	printf("%s", term_end());
@@ -3501,7 +3482,60 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-	ast_event_init();
+	/* Spawning of astcanary must happen AFTER the call to daemon(3) */
+	if (isroot && ast_opt_high_priority) {
+		int cpipe[2];
+
+		/* PIPE signal ensures that astcanary dies when Asterisk dies */
+		if (pipe(cpipe)) {
+			fprintf(stderr, "Unable to open pipe for canary process: %s\n", strerror(errno));
+			exit(1);
+		}
+		canary_pipe = cpipe[0];
+
+		snprintf(canary_filename, sizeof(canary_filename), "%s/alt.asterisk.canary.tweet.tweet.tweet", ast_config_AST_RUN_DIR);
+
+		/* Don't let the canary child kill Asterisk, if it dies immediately */
+		signal(SIGPIPE, SIG_IGN);
+
+		canary_pid = fork();
+		if (canary_pid == 0) {
+			char canary_binary[128], *lastslash;
+
+			/* Reset signal handler */
+			signal(SIGCHLD, SIG_DFL);
+			signal(SIGPIPE, SIG_DFL);
+
+			dup2(cpipe[1], 0);
+			close(cpipe[1]);
+			ast_close_fds_above_n(0);
+			ast_set_priority(0);
+
+			execlp("astcanary", "astcanary", canary_filename, (char *)NULL);
+
+			/* If not found, try the same path as used to execute asterisk */
+			ast_copy_string(canary_binary, argv[0], sizeof(canary_binary));
+			if ((lastslash = strrchr(canary_binary, '/'))) {
+				ast_copy_string(lastslash + 1, "astcanary", sizeof(canary_binary) + canary_binary - (lastslash + 1));
+				execl(canary_binary, "astcanary", canary_filename, (char *)NULL);
+			}
+
+			/* Should never happen */
+			_exit(1);
+		} else if (canary_pid > 0) {
+			pthread_t dont_care;
+			close(cpipe[1]);
+			ast_pthread_create_detached(&dont_care, NULL, canary_thread, NULL);
+		}
+
+		/* Kill the canary when we exit */
+		atexit(canary_exit);
+	}
+
+	if (ast_event_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
 
 	ast_makesocket();
 	sigemptyset(&sigs);
@@ -3539,6 +3573,11 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+	if (ast_ssl_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+
 #ifdef AST_XML_DOCS
 	/* Load XML documentation. */
 	ast_xmldoc_load_documentation();
@@ -3557,6 +3596,11 @@ int main(int argc, char *argv[])
 	ast_http_init();		/* Start the HTTP server, if needed */
 
 	ast_channels_init();
+
+	if (init_manager()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
 
 	if (ast_cdr_engine_init()) {
 		printf("%s", term_quit());
@@ -3617,15 +3661,6 @@ int main(int argc, char *argv[])
 	/* loads the cli_permissoins.conf file needed to implement cli restrictions. */
 	ast_cli_perms_init(0);
 
-	/* AMI is initialized after loading modules because of a potential
-	 * conflict between issuing a module reload from manager and
-	 * registering manager actions.  This will cause reversed locking
-	 * order between the module list and manager actions list. */
-	if (init_manager()) {
-		printf("%s", term_quit());
-		exit(1);
-	}
-
 	dnsmgr_start_refresh();
 
 	/* We might have the option of showing a console, but for now just
@@ -3641,6 +3676,9 @@ int main(int argc, char *argv[])
 		sig_alert_pipe[0] = sig_alert_pipe[1] = -1;
 
 	ast_set_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED);
+
+	ast_process_pending_reloads();
+
 	pthread_sigmask(SIG_UNBLOCK, &sigs, NULL);
 
 #ifdef __AST_DEBUG_MALLOC

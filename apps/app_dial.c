@@ -248,6 +248,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						with this option. Also, pbx services are not run on the peer (called) channel,
 						so you will not be able to set timeouts via the TIMEOUT() function in this macro.</para>
 					</note>
+					<warning><para>Be aware of the limitations that macros have, specifically with regards to use of
+					the <literal>WaitExten</literal> application. For more information, see the documentation for
+					Macro()</para></warning>
 				</option>
 				<option name="n">
 					<para>This option is a modifier for the call screening/privacy mode. (See the 
@@ -616,6 +619,11 @@ static void handle_cause(int cause, struct cause_args *num)
 		num->nochan++;
 		break;
 
+	case AST_CAUSE_NO_ANSWER:
+		if (cdr) {
+			ast_cdr_noanswer(cdr);
+		}
+		break;
 	case AST_CAUSE_NORMAL_CLEARING:
 		break;
 
@@ -711,6 +719,9 @@ static void do_forward(struct chanlist *o,
 		const char *forward_context;
 		ast_channel_lock(c);
 		forward_context = pbx_builtin_getvar_helper(c, "FORWARD_CONTEXT");
+		if (ast_strlen_zero(forward_context)) {
+			forward_context = NULL;
+		}
 		snprintf(tmpchan, sizeof(tmpchan), "%s@%s", c->call_forward, forward_context ? forward_context : c->context);
 		ast_channel_unlock(c);
 		stuff = tmpchan;
@@ -1960,7 +1971,6 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			}
 
 			if (ast_autoservice_stop(chan) < 0) {
-				ast_log(LOG_ERROR, "Could not stop autoservice on calling channel\n");
 				res = -1;
 			}
 

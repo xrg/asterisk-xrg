@@ -873,7 +873,7 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
 		int i;
 		if (lock_info->num_locks) {
-			ast_str_append(&str, 0, "=== Thread ID: %d (%s)\n", (int) lock_info->thread_id,
+			ast_str_append(&str, 0, "=== Thread ID: %ld (%s)\n", (long) lock_info->thread_id,
 				lock_info->thread_name);
 			pthread_mutex_lock(&lock_info->lock);
 			for (i = 0; str && i < lock_info->num_locks; i++) {
@@ -1054,7 +1054,7 @@ int ast_wait_for_input(int fd, int ms)
 	memset(pfd, 0, sizeof(pfd));
 	pfd[0].fd = fd;
 	pfd[0].events = POLLIN|POLLPRI;
-	return poll(pfd, 1, ms);
+	return ast_poll(pfd, 1, ms);
 }
 
 static int ast_wait_for_output(int fd, int timeoutms)
@@ -1068,7 +1068,7 @@ static int ast_wait_for_output(int fd, int timeoutms)
 	int elapsed = 0;
 
 	/* poll() until the fd is writable without blocking */
-	while ((res = poll(&pfd, 1, timeoutms - elapsed)) <= 0) {
+	while ((res = ast_poll(&pfd, 1, timeoutms - elapsed)) <= 0) {
 		if (res == 0) {
 			/* timed out. */
 			ast_log(LOG_NOTICE, "Timed out trying to write\n");
@@ -1475,15 +1475,21 @@ const char __ast_string_field_empty[] = ""; /*!< the empty string */
  * We can only allocate from the topmost pool, so the
  * fields in *mgr reflect the size of that only.
  */
-static int add_string_pool(struct ast_string_field_mgr *mgr,
-			   struct ast_string_field_pool **pool_head,
-			   size_t size)
+static int add_string_pool(struct ast_string_field_mgr *mgr, struct ast_string_field_pool **pool_head,
+			   size_t size, const char *file, int lineno, const char *func)
 {
 	struct ast_string_field_pool *pool;
 
-	if (!(pool = ast_calloc(1, sizeof(*pool) + size)))
+#if defined(__AST_DEBUG_MALLOC)
+	if (!(pool = __ast_calloc(1, sizeof(*pool) + size, file, lineno, func))) {
 		return -1;
-	
+	}
+#else
+	if (!(pool = ast_calloc(1, sizeof(*pool) + size))) {
+		return -1;
+	}
+#endif
+
 	pool->prev = *pool_head;
 	*pool_head = pool;
 	mgr->size = size;
@@ -1503,39 +1509,56 @@ static int add_string_pool(struct ast_string_field_mgr *mgr,
  * size < 0 means release all pools.
  *	This must be done before destroying the object.
  */
-int __ast_string_field_init(struct ast_string_field_mgr *mgr,
-			    struct ast_string_field_pool **pool_head,
-			    int size)
+int __ast_string_field_init(struct ast_string_field_mgr *mgr, struct ast_string_field_pool **pool_head,
+			    int needed, const char *file, int lineno, const char *func)
 {
 	const char **p = (const char **) pool_head + 1;
-	struct ast_string_field_pool *cur = *pool_head;
+	struct ast_string_field_pool *cur = NULL;
+	struct ast_string_field_pool *preserve = NULL;
 
 	/* clear fields - this is always necessary */
 	while ((struct ast_string_field_mgr *) p != mgr)
 		*p++ = __ast_string_field_empty;
 	mgr->last_alloc = NULL;
-	if (size > 0) {			/* allocate the initial pool */
+#if defined(__AST_DEBUG_MALLOC)
+	mgr->owner_file = file;
+	mgr->owner_func = func;
+	mgr->owner_line = lineno;
+#endif
+	if (needed > 0) {		/* allocate the initial pool */
 		*pool_head = NULL;
-		return add_string_pool(mgr, pool_head, size);
+		return add_string_pool(mgr, pool_head, needed, file, lineno, func);
 	}
-	if (size < 0) {			/* reset all pools */
-		*pool_head = NULL;
-	} else {			/* preserve the first pool */
-		if (cur == NULL) {
+	if (needed < 0) {		/* reset all pools */
+		if (*pool_head == NULL) {
 			ast_log(LOG_WARNING, "trying to reset empty pool\n");
 			return -1;
 		}
-		cur = cur->prev;
-		(*pool_head)->prev = NULL;
+		cur = *pool_head;
+	} else {			/* preserve the last pool */
+		if (*pool_head == NULL) {
+			ast_log(LOG_WARNING, "trying to reset empty pool\n");
+			return -1;
+		}
 		mgr->used = 0;
+		preserve = *pool_head;
+		cur = preserve->prev;
+	}
+
+	if (preserve) {
+		preserve->prev = NULL;
 	}
 
 	while (cur) {
 		struct ast_string_field_pool *prev = cur->prev;
 
-		ast_free(cur);
+		if (cur != preserve) {
+			ast_free(cur);
+		}
 		cur = prev;
 	}
+
+	*pool_head = preserve;
 
 	return 0;
 }
@@ -1552,8 +1575,13 @@ ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr
 		while (new_size < needed)
 			new_size *= 2;
 
-		if (add_string_pool(mgr, pool_head, new_size))
+#if defined(__AST_DEBUG_MALLOC)
+		if (add_string_pool(mgr, pool_head, new_size, mgr->owner_file, mgr->owner_line, mgr->owner_func))
 			return NULL;
+#else
+		if (add_string_pool(mgr, pool_head, new_size, __FILE__, __LINE__, __FUNCTION__))
+			return NULL;
+#endif
 	}
 
 	result = (*pool_head)->base + mgr->used;
@@ -1622,8 +1650,13 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 			while (new_size < needed)
 				new_size *= 2;
 			
-			if (add_string_pool(mgr, pool_head, new_size))
+#if defined(__AST_DEBUG_MALLOC)
+			if (add_string_pool(mgr, pool_head, new_size, mgr->owner_file, mgr->owner_line, mgr->owner_func))
 				return;
+#else
+			if (add_string_pool(mgr, pool_head, new_size, NULL, 0, NULL))
+				return;
+#endif
 		}
 
 		target = (*pool_head)->base + mgr->used;
@@ -1681,7 +1714,7 @@ int ast_get_timeval(const char *src, struct timeval *dst, struct timeval _defaul
 		return -1;
 
 	/* only integer at the moment, but one day we could accept more formats */
-	if (sscanf(src, "%Lf%n", &dtv, &scanned) > 0) {
+	if (sscanf(src, "%30Lf%n", &dtv, &scanned) > 0) {
 		dst->tv_sec = dtv;
 		dst->tv_usec = (dtv - dst->tv_sec) * 1000000.0;
 		if (consumed)
@@ -1708,7 +1741,7 @@ int ast_get_time_t(const char *src, time_t *dst, time_t _default, int *consumed)
 		return -1;
 
 	/* only integer at the moment, but one day we could accept more formats */
-	if (sscanf(src, "%ld%n", &t, &scanned) == 1) {
+	if (sscanf(src, "%30ld%n", &t, &scanned) == 1) {
 		*dst = t;
 		if (consumed)
 			*consumed = scanned;

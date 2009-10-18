@@ -415,11 +415,12 @@ static void destroy_table_cache(struct odbc_cache_tables *table) {
 
 /*!
  * \brief Find or create an entry describing the table specified.
- * \param obj An active ODBC handle on which to query the table
- * \param table Tablename to describe
+ * \param database Name of an ODBC class on which to query the table
+ * \param tablename Tablename to describe
  * \retval A structure describing the table layout, or NULL, if the table is not found or another error occurs.
  * When a structure is returned, the contained columns list will be
  * rdlock'ed, to ensure that it will be retained in memory.
+ * \since 1.6.1
  */
 struct odbc_cache_tables *ast_odbc_find_table(const char *database, const char *tablename)
 {
@@ -770,7 +771,7 @@ static int load_odbc_config(void)
 					if (ast_false(v->value))
 						pooling = 1;
 				} else if (!strcasecmp(v->name, "limit")) {
-					sscanf(v->value, "%d", &limit);
+					sscanf(v->value, "%30d", &limit);
 					if (ast_true(v->value) && !limit) {
 						ast_log(LOG_WARNING, "Limit should be a number, not a boolean: '%s'.  Setting limit to 1023 for ODBC class '%s'.\n", v->value, cat);
 						limit = 1023;
@@ -780,7 +781,7 @@ static int load_odbc_config(void)
 						break;
 					}
 				} else if (!strcasecmp(v->name, "idlecheck")) {
-					sscanf(v->value, "%d", &idlecheck);
+					sscanf(v->value, "%30u", &idlecheck);
 				} else if (!strcasecmp(v->name, "enabled")) {
 					enabled = ast_true(v->value);
 				} else if (!strcasecmp(v->name, "pre-connect")) {
@@ -897,6 +898,7 @@ static char *handle_cli_odbc_show(struct ast_cli_entry *e, int cmd, struct ast_c
 				break;
 			}
 		}
+		ao2_iterator_destroy(&aoi);
 		if (!ret && !strncasecmp(a->word, "all", length) && ++which > a->n) {
 			ret = ast_strdup("all");
 		}
@@ -931,6 +933,7 @@ static char *handle_cli_odbc_show(struct ast_cli_entry *e, int cmd, struct ast_c
 					ast_mutex_unlock(&current->lock);
 					ao2_ref(current, -1);
 				}
+				ao2_iterator_destroy(&aoi2);
 			} else {
 				/* Should only ever be one of these (unless there are transactions) */
 				struct ao2_iterator aoi2 = ao2_iterator_init(class->obj_container, 0);
@@ -939,11 +942,13 @@ static char *handle_cli_odbc_show(struct ast_cli_entry *e, int cmd, struct ast_c
 						current->up && ast_odbc_sanity_check(current) ? "Yes" : "No");
 					ao2_ref(current, -1);
 				}
+				ao2_iterator_destroy(&aoi2);
 			}
 			ast_cli(a->fd, "\n");
 		}
 		ao2_ref(class, -1);
 	}
+	ao2_iterator_destroy(&aoi);
 
 	return CLI_SUCCESS;
 }
@@ -1608,6 +1613,7 @@ static int reload(void)
 		class->delme = 1;
 		ao2_ref(class, -1);
 	}
+	ao2_iterator_destroy(&aoi);
 
 	load_odbc_config();
 
@@ -1647,6 +1653,7 @@ static int reload(void)
 				 * b) the object has already been destroyed.
 				 */
 			}
+			ao2_iterator_destroy(&aoi2);
 			ao2_unlink(class_container, class); /* unlink C-ref from container (reference handled implicitly) */
 			/* At this point, either
 			 * a) there's an outstanding O-ref, which holds an outstanding C-ref, or
@@ -1656,6 +1663,7 @@ static int reload(void)
 		}
 		ao2_ref(class, -1); /* C-ref-- (by iterator) */
 	}
+	ao2_iterator_destroy(&aoi);
 
 	/* Empty the cache; it will get rebuilt the next time the tables are needed. */
 	AST_RWLIST_WRLOCK(&odbc_tables);

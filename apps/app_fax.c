@@ -191,7 +191,7 @@ typedef struct {
 	int direction;			/* Fax direction: 0 - receiving, 1 - sending */
 	int caller_mode;
 	char *file_name;
-	
+	struct ast_control_t38_parameters t38parameters;
 	volatile int finished;
 } fax_session;
 
@@ -396,15 +396,84 @@ static int transmit_audio(fax_session *s)
 	int original_write_fmt = AST_FORMAT_SLINEAR;
 	fax_state_t fax;
 	t30_state_t *t30state;
-	struct ast_dsp *dsp = NULL;
-	int detect_tone = 0;
 	struct ast_frame *inf = NULL;
-	struct ast_frame *fr;
 	int last_state = 0;
 	struct timeval now, start, state_change;
-	enum ast_control_t38 t38control;
+	enum ast_t38_state t38_state;
+	struct ast_control_t38_parameters t38_parameters = { .version = 0,
+							     .max_ifp = 800,
+							     .rate = AST_T38_RATE_9600,
+							     .rate_management = AST_T38_RATE_MANAGEMENT_TRANSFERRED_TCF,
+							     .fill_bit_removal = 1,
+							     .transcoding_mmr = 1,
+							     .transcoding_jbig = 1,
+	};
 
-#if SPANDSP_RELEASE_DATE >= 20081012
+	/* if in receive mode, try to use T.38 */
+	if (!s->direction) {
+		/* check if we are already in T.38 mode (unlikely), or if we can request
+		 * a switch... if so, request it now and wait for the result, rather
+		 * than starting an audio FAX session that will have to be cancelled
+		 */
+		if ((t38_state = ast_channel_get_t38_state(s->chan)) == T38_STATE_NEGOTIATED) {
+			return 1;
+		} else if ((t38_state != T38_STATE_UNAVAILABLE) &&
+			   (t38_parameters.request_response = AST_T38_REQUEST_NEGOTIATE,
+			    (ast_indicate_data(s->chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters)) == 0))) {
+			/* wait up to five seconds for negotiation to complete */
+			unsigned int timeout = 5000;
+			int ms;
+			
+			ast_debug(1, "Negotiating T.38 for receive on %s\n", s->chan->name);
+			while (timeout > 0) {
+				ms = ast_waitfor(s->chan, 1000);
+				if (ms < 0) {
+					ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", s->chan->name);
+					return -1;
+				}
+				if (!ms) {
+					/* nothing happened */
+					if (timeout > 0) {
+						timeout -= 1000;
+						continue;
+					} else {
+						ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 negotiation.\n", s->chan->name);
+						break;
+					}
+				}
+				if (!(inf = ast_read(s->chan))) {
+					return -1;
+				}
+				if ((inf->frametype == AST_FRAME_CONTROL) &&
+				    (inf->subclass == AST_CONTROL_T38_PARAMETERS) &&
+				    (inf->datalen == sizeof(t38_parameters))) {
+					struct ast_control_t38_parameters *parameters = inf->data.ptr;
+					
+					switch (parameters->request_response) {
+					case AST_T38_NEGOTIATED:
+						ast_debug(1, "Negotiated T.38 for receive on %s\n", s->chan->name);
+						res = 1;
+						break;
+					case AST_T38_REFUSED:
+						ast_log(LOG_WARNING, "channel '%s' refused to negotiate T.38\n", s->chan->name);
+						break;
+					default:
+						ast_log(LOG_ERROR, "channel '%s' failed to negotiate T.38\n", s->chan->name);
+						break;
+					}
+					ast_frfree(inf);
+					if (res == 1) {
+						return 1;
+					} else {
+						break;
+					}
+				}
+				ast_frfree(inf);
+			}
+		}
+	}
+
+#if SPANDSP_RELEASE_DATE >= 20080725
         /* for spandsp shaphots 0.0.6 and higher */
         t30state = &fax.t30;
 #else
@@ -446,31 +515,33 @@ static int transmit_audio(fax_session *s)
 
 	t30_set_phase_e_handler(t30state, phase_e_handler, s);
 
-	if (s->t38state == T38_STATE_UNAVAILABLE) {
-		ast_debug(1, "T38 is unavailable on %s\n", s->chan->name);
-	} else if (!s->direction) {
-		/* We are receiving side and this means we are the side which should
-		   request T38 when the fax is detected. Use DSP to detect fax tone */
-		ast_debug(1, "Setting up CNG detection on %s\n", s->chan->name);
-		dsp = ast_dsp_new();
-		ast_dsp_set_features(dsp, DSP_FEATURE_FAX_DETECT);
-		ast_dsp_set_faxmode(dsp, DSP_FAXMODE_DETECT_CNG);
-		detect_tone = 1;
-	}
-
 	start = state_change = ast_tvnow();
 
 	ast_activate_generator(s->chan, &generator, &fax);
 
 	while (!s->finished) {
-		res = ast_waitfor(s->chan, 20);
-		if (res < 0)
-			break;
-		else if (res > 0)
-			res = 0;
+		inf = NULL;
 
-		inf = ast_read(s->chan);
-		if (inf == NULL) {
+		if ((res = ast_waitfor(s->chan, 20)) < 0) {
+			break;
+		}
+
+		/* if nothing arrived, check the watchdog timers */
+		if (res == 0) {
+			now = ast_tvnow();
+			if (ast_tvdiff_sec(now, start) > WATCHDOG_TOTAL_TIMEOUT || ast_tvdiff_sec(now, state_change) > WATCHDOG_STATE_TIMEOUT) {
+				ast_log(LOG_WARNING, "It looks like we hung. Aborting.\n");
+				res = -1;
+				break;
+			} else {
+				/* timers have not triggered, loop around to wait
+				 * again
+				 */
+				continue;
+			}
+		}
+
+		if (!(inf = ast_read(s->chan))) {
 			ast_debug(1, "Channel hangup\n");
 			res = -1;
 			break;
@@ -478,71 +549,48 @@ static int transmit_audio(fax_session *s)
 
 		ast_debug(10, "frame %d/%d, len=%d\n", inf->frametype, inf->subclass, inf->datalen);
 
-		/* Detect fax tone */
-		if (detect_tone && inf->frametype == AST_FRAME_VOICE) {
-			/* Duplicate frame because ast_dsp_process may free the frame passed */
-			fr = ast_frdup(inf);
-
-			/* Do not pass channel to ast_dsp_process otherwise it may queue modified audio frame back */
-			fr = ast_dsp_process(NULL, dsp, fr);
-			if (fr && fr->frametype == AST_FRAME_DTMF && fr->subclass == 'f') {
-				ast_debug(1, "Fax tone detected. Requesting T38\n");
-				t38control = AST_T38_REQUEST_NEGOTIATE;
-				ast_indicate_data(s->chan, AST_CONTROL_T38, &t38control, sizeof(t38control));
-				detect_tone = 0;
-			}
-
-			ast_frfree(fr);
-		}
-
-
 		/* Check the frame type. Format also must be checked because there is a chance
-		   that a frame in old format was already queued before we set chanel format
+		   that a frame in old format was already queued before we set channel format
 		   to slinear so it will still be received by ast_read */
 		if (inf->frametype == AST_FRAME_VOICE && inf->subclass == AST_FORMAT_SLINEAR) {
-
 			if (fax_rx(&fax, inf->data.ptr, inf->samples) < 0) {
 				/* I know fax_rx never returns errors. The check here is for good style only */
 				ast_log(LOG_WARNING, "fax_rx returned error\n");
 				res = -1;
 				break;
 			}
-
-			/* Watchdog */
 			if (last_state != t30state->state) {
 				state_change = ast_tvnow();
 				last_state = t30state->state;
 			}
-		} else if (inf->frametype == AST_FRAME_CONTROL && inf->subclass == AST_CONTROL_T38 &&
-				inf->datalen == sizeof(enum ast_control_t38)) {
-			t38control =*((enum ast_control_t38 *) inf->data.ptr);
-			if (t38control == AST_T38_NEGOTIATED) {
+		} else if ((inf->frametype == AST_FRAME_CONTROL) &&
+			   (inf->subclass == AST_CONTROL_T38_PARAMETERS)) {
+			struct ast_control_t38_parameters *parameters = inf->data.ptr;
+
+			if (parameters->request_response == AST_T38_NEGOTIATED) {
 				/* T38 switchover completed */
+				s->t38parameters = *parameters;
 				ast_debug(1, "T38 negotiated, finishing audio loop\n");
 				res = 1;
 				break;
+			} else if (parameters->request_response == AST_T38_REQUEST_NEGOTIATE) {
+				t38_parameters.request_response = AST_T38_NEGOTIATED;
+				ast_debug(1, "T38 request received, accepting\n");
+				/* Complete T38 switchover */
+				ast_indicate_data(s->chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
+				/* Do not break audio loop, wait until channel driver finally acks switchover
+				 * with AST_T38_NEGOTIATED
+				 */
 			}
 		}
 
 		ast_frfree(inf);
-		inf = NULL;
-
-		/* Watchdog */
-		now = ast_tvnow();
-		if (ast_tvdiff_sec(now, start) > WATCHDOG_TOTAL_TIMEOUT || ast_tvdiff_sec(now, state_change) > WATCHDOG_STATE_TIMEOUT) {
-			ast_log(LOG_WARNING, "It looks like we hung. Aborting.\n");
-			res = -1;
-			break;
-		}
 	}
 
 	ast_debug(1, "Loop finished, res=%d\n", res);
 
 	if (inf)
 		ast_frfree(inf);
-
-	if (dsp)
-		ast_dsp_free(dsp);
 
 	ast_deactivate_generator(s->chan);
 
@@ -578,12 +626,10 @@ static int transmit_t38(fax_session *s)
 	struct ast_frame *inf = NULL;
 	int last_state = 0;
 	struct timeval now, start, state_change, last_frame;
-	enum ast_control_t38 t38control;
-
 	t30_state_t *t30state;
 	t38_core_state_t *t38state;
 
-#if SPANDSP_RELEASE_DATE >= 20081012
+#if SPANDSP_RELEASE_DATE >= 20080725
 	/* for spandsp shaphots 0.0.6 and higher */
 	t30state = &t38.t30;
 	t38state = &t38.t38_fe.t38;
@@ -598,6 +644,18 @@ static int transmit_t38(fax_session *s)
 	if (t38_terminal_init(&t38, s->caller_mode, t38_tx_packet_handler, s->chan) == NULL) {
 		ast_log(LOG_WARNING, "Unable to start T.38 termination.\n");
 		return -1;
+	}
+
+	t38_set_max_datagram_size(t38state, s->t38parameters.max_ifp);
+
+	if (s->t38parameters.fill_bit_removal) {
+		t38_set_fill_bit_removal(t38state, TRUE);
+	}
+	if (s->t38parameters.transcoding_mmr) {
+		t38_set_mmr_transcoding(t38state, TRUE);
+	}
+	if (s->t38parameters.transcoding_jbig) {
+		t38_set_jbig_transcoding(t38state, TRUE);
 	}
 
 	/* Setup logging */
@@ -615,19 +673,31 @@ static int transmit_t38(fax_session *s)
 	now = start = state_change = ast_tvnow();
 
 	while (!s->finished) {
-
-		res = ast_waitfor(s->chan, 20);
-		if (res < 0)
+		inf = NULL;
+		if ((res = ast_waitfor(s->chan, 20)) < 0) {
 			break;
-		else if (res > 0)
-			res = 0;
+		}
 
 		last_frame = now;
 		now = ast_tvnow();
+		/* if nothing arrived, check the watchdog timers */
+		if (res == 0) {
+			if (ast_tvdiff_sec(now, start) > WATCHDOG_TOTAL_TIMEOUT || ast_tvdiff_sec(now, state_change) > WATCHDOG_STATE_TIMEOUT) {
+				ast_log(LOG_WARNING, "It looks like we hung. Aborting.\n");
+				res = -1;
+				break;
+			} else {
+				/* timers have not triggered, loop around to wait
+				 * again
+				 */
+				t38_terminal_send_timeout(&t38, ast_tvdiff_us(now, last_frame) / (1000000 / 8000));
+				continue;
+			}
+		}
+
 		t38_terminal_send_timeout(&t38, ast_tvdiff_us(now, last_frame) / (1000000 / 8000));
 
-		inf = ast_read(s->chan);
-		if (inf == NULL) {
+		if (!(inf = ast_read(s->chan))) {
 			ast_debug(1, "Channel hangup\n");
 			res = -1;
 			break;
@@ -637,33 +707,19 @@ static int transmit_t38(fax_session *s)
 
 		if (inf->frametype == AST_FRAME_MODEM && inf->subclass == AST_MODEM_T38) {
 			t38_core_rx_ifp_packet(t38state, inf->data.ptr, inf->datalen, inf->seqno);
-
-			/* Watchdog */
 			if (last_state != t30state->state) {
 				state_change = ast_tvnow();
 				last_state = t30state->state;
 			}
-		} else if (inf->frametype == AST_FRAME_CONTROL && inf->subclass == AST_CONTROL_T38 &&
-				inf->datalen == sizeof(enum ast_control_t38)) {
-
-			t38control = *((enum ast_control_t38 *) inf->data.ptr);
-
-			if (t38control == AST_T38_TERMINATED || t38control == AST_T38_REFUSED) {
-				ast_debug(1, "T38 down, terminating\n");
-				res = -1;
+		} else if (inf->frametype == AST_FRAME_CONTROL && inf->subclass == AST_CONTROL_T38_PARAMETERS) {
+			struct ast_control_t38_parameters *parameters = inf->data.ptr;
+			if (parameters->request_response == AST_T38_TERMINATED) {
+				ast_debug(1, "T38 down, finishing\n");
 				break;
 			}
 		}
 
 		ast_frfree(inf);
-		inf = NULL;
-
-		/* Watchdog */
-		if (ast_tvdiff_sec(now, start) > WATCHDOG_TOTAL_TIMEOUT || ast_tvdiff_sec(now, state_change) > WATCHDOG_STATE_TIMEOUT) {
-			ast_log(LOG_WARNING, "It looks like we hung. Aborting.\n");
-			res = -1;
-			break;
-		}
 	}
 
 	ast_debug(1, "Loop finished, res=%d\n", res);
@@ -739,7 +795,7 @@ static int sndfax_exec(struct ast_channel *chan, void *data)
 {
 	int res = 0;
 	char *parse;
-	fax_session session;
+	fax_session session = { 0, };
 
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(file_name);

@@ -149,7 +149,7 @@ struct logmsg {
 static AST_LIST_HEAD_STATIC(logmsgs, logmsg);
 static pthread_t logthread = AST_PTHREADT_NULL;
 static ast_cond_t logcond;
-static int close_logger_thread;
+static int close_logger_thread = 0;
 
 static FILE *eventlog;
 static FILE *qlog;
@@ -299,18 +299,12 @@ static struct logchannel *make_logchannel(const char *channel, const char *compo
 		snprintf(chan->filename, sizeof(chan->filename), "%s", channel);
 		openlog("asterisk", LOG_PID, chan->facility);
 	} else {
-		if (channel[0] == '/') {
-			if (!ast_strlen_zero(hostname)) { 
-				snprintf(chan->filename, sizeof(chan->filename), "%s.%s", channel, hostname);
-			} else {
-				ast_copy_string(chan->filename, channel, sizeof(chan->filename));
-			}
-		}		  
-		
 		if (!ast_strlen_zero(hostname)) {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s.%s", ast_config_AST_LOG_DIR, channel, hostname);
+			snprintf(chan->filename, sizeof(chan->filename), "%s/%s.%s",
+				 channel[0] != '/' ? ast_config_AST_LOG_DIR : "", channel, hostname);
 		} else {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s", ast_config_AST_LOG_DIR, channel);
+			snprintf(chan->filename, sizeof(chan->filename), "%s/%s",
+				 channel[0] != '/' ? ast_config_AST_LOG_DIR : "", channel);
 		}
 		chan->fileptr = fopen(chan->filename, "a");
 		if (!chan->fileptr) {
@@ -581,7 +575,7 @@ static int rotate_file(const char *filename)
 		char buf[512];
 		pbx_builtin_setvar_helper(c, "filename", filename);
 		pbx_substitute_variables_helper(c, exec_after_rotate, buf, sizeof(buf));
-		if (ast_safe_system(buf) != -1) {
+		if (ast_safe_system(buf) == -1) {
 			ast_log(LOG_WARNING, "error executing '%s'\n", buf);
 		}
 		ast_channel_free(c);
@@ -623,14 +617,13 @@ static int reload_logger(int rotate)
 				fclose(qlog);
 				qlog = NULL;
 			} else
-				event_rotate = 0;
+				queue_rotate = 0;
 		} else {
 			fclose(qlog);
 			qlog = NULL;
 		}
 	} else 
 		queue_rotate = 0;
-	qlog = NULL;
 
 	ast_mkdir(ast_config_AST_LOG_DIR, 0777);
 

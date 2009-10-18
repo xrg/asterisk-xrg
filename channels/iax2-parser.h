@@ -77,6 +77,8 @@ struct iax_ies {
 	struct ast_variable *vars;
 	char *osptokenblock[IAX_MAX_OSPBLOCK_NUM];
 	unsigned int ospblocklength[IAX_MAX_OSPBLOCK_NUM];
+	unsigned char calltoken;
+	unsigned char *calltokendata;
 };
 
 #define DIRECTION_INGRESS 1
@@ -150,6 +152,7 @@ void iax_set_output(void (*output)(const char *data));
 /* Choose a different function for errors */
 void iax_set_error(void (*output)(const char *data));
 void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, struct sockaddr_in *sin, int datalen);
+void iax_frame_subclass2str(enum iax_frame_subclass subclass, char *str, size_t len);
 
 const char *iax_ie2str(int ie);
 

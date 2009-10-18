@@ -80,7 +80,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MGCPDUMPER
 #define DEFAULT_EXPIRY	120
 #define MAX_EXPIRY	3600
-#define CANREINVITE	1
+#define DIRECTMEDIA	1
 
 #ifndef INADDR_NONE
 #define INADDR_NONE (in_addr_t)(-1)
@@ -177,7 +177,7 @@ static int cancallforward = 0;
 
 static int singlepath = 0;
 
-static int canreinvite = CANREINVITE;
+static int directmedia = DIRECTMEDIA;
 
 static char accountcode[AST_MAX_ACCOUNT_CODE] = "";
 
@@ -330,7 +330,7 @@ struct mgcp_endpoint {
 	int threewaycalling;
 	int singlepath;
 	int cancallforward;
-	int canreinvite;
+	int directmedia;
 	int callreturn;
 	int dnd; /* How does this affect callwait? Do we just deny a mgcp_request if we're dnd? */
 	int hascallerid;
@@ -472,7 +472,6 @@ static int has_voicemail(struct mgcp_endpoint *p)
 	event = ast_event_get_cached(AST_EVENT_MWI,
 		AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mbox,
 		AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, cntx,
-		AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_EXISTS,
 		AST_EVENT_IE_END);
 
 	if (event) {
@@ -1868,7 +1867,7 @@ static int process_sdp(struct mgcp_subchannel *sub, struct mgcp_request *req)
 		ast_log(LOG_WARNING, "Unable to lookup host in c= line, '%s'\n", c);
 		return -1;
 	}
-	if (sscanf(m, "audio %d RTP/AVP %n", &portno, &len) != 1) {
+	if (sscanf(m, "audio %30d RTP/AVP %n", &portno, &len) != 1) {
 		ast_log(LOG_WARNING, "Unable to determine port number for RTP in '%s'\n", m); 
 		return -1;
 	}
@@ -1883,7 +1882,7 @@ static int process_sdp(struct mgcp_subchannel *sub, struct mgcp_request *req)
 	ast_rtp_pt_clear(sub->rtp);
 	codecs = ast_strdupa(m + len);
 	while (!ast_strlen_zero(codecs)) {
-		if (sscanf(codecs, "%d%n", &codec, &len) != 1) {
+		if (sscanf(codecs, "%30d%n", &codec, &len) != 1) {
 			if (codec_count)
 				break;
 			ast_log(LOG_WARNING, "Error in codec string '%s' at '%s'\n", m, codecs);
@@ -1899,7 +1898,7 @@ static int process_sdp(struct mgcp_subchannel *sub, struct mgcp_request *req)
 	sdpLineNum_iterator_init(&iterator);
 	while ((a = get_sdp_iterate(&iterator, req, "a"))[0] != '\0') {
 		char* mimeSubtype = ast_strdupa(a); /* ensures we have enough space */
-		if (sscanf(a, "rtpmap: %u %[^/]/", &codec, mimeSubtype) != 2)
+		if (sscanf(a, "rtpmap: %30u %127[^/]/", &codec, mimeSubtype) != 2)
 			continue;
 		/* Note: should really look at the 'freq' and '#chans' params too */
 		ast_rtp_set_rtpmap_type(sub->rtp, codec, "audio", mimeSubtype, 0);
@@ -2032,7 +2031,7 @@ static int transmit_response(struct mgcp_subchannel *sub, char *msg, struct mgcp
 	mgr = ast_calloc(1, sizeof(*mgr) + resp.len + 1);
 	if (mgr) {
 		/* Store MGCP response in case we have to retransmit */
-		sscanf(req->identifier, "%d", &mgr->seqno);
+		sscanf(req->identifier, "%30d", &mgr->seqno);
 		time(&mgr->whensent);
 		mgr->len = resp.len;
 		memcpy(mgr->buf, resp.data, resp.len);
@@ -3265,7 +3264,7 @@ static int find_and_retrans(struct mgcp_subchannel *sub, struct mgcp_request *re
 	time_t now;
 	struct mgcp_response *prev = NULL, *cur, *next, *answer=NULL;
 	time(&now);
-	if (sscanf(req->identifier, "%d", &seqno) != 1) 
+	if (sscanf(req->identifier, "%30d", &seqno) != 1) 
 		seqno = 0;
 	cur = sub->parent->parent->responses;
 	while(cur) {
@@ -3323,7 +3322,7 @@ static int mgcpsock_read(int *id, int fd, short events, void *ignore)
 		return 1;
 	}
 
-	if (sscanf(req.verb, "%d", &result) && sscanf(req.identifier, "%d", &ident)) {
+	if (sscanf(req.verb, "%30d", &result) && sscanf(req.identifier, "%30d", &ident)) {
 		/* Try to find who this message is for, if it's important */
 		sub = find_subchannel_and_lock(NULL, ident, &sin);
 		if (sub) {
@@ -3558,7 +3557,7 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 	int i=0, y=0;
 	int gw_reload = 0;
 	int ep_reload = 0;
-	canreinvite = CANREINVITE;
+	directmedia = DIRECTMEDIA;
 
 	/* locate existing gateway */
 	gw = gateways;
@@ -3668,8 +3667,8 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 				cancallforward = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "singlepath")) {
 				singlepath = ast_true(v->value);
-			} else if (!strcasecmp(v->name, "canreinvite")) {
-				canreinvite = ast_true(v->value);
+			} else if (!strcasecmp(v->name, "directmedia") || !strcasecmp(v->name, "canreinvite")) {
+				directmedia = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "mailbox")) {
 				ast_copy_string(mailbox, v->value, sizeof(mailbox));
 			} else if (!strcasecmp(v->name, "hasvoicemail")) {
@@ -3754,7 +3753,7 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 					e->callreturn = callreturn;
 					e->cancallforward = cancallforward;
 					e->singlepath = singlepath;
-					e->canreinvite = canreinvite;
+					e->directmedia = directmedia;
 					e->callwaiting = callwaiting;
 					e->hascallwaiting = callwaiting;
 					e->slowsequence = slowsequence;
@@ -3857,7 +3856,7 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 					e->pickupgroup=cur_pickupgroup;
 					e->callreturn = callreturn;
 					e->cancallforward = cancallforward;
-					e->canreinvite = canreinvite;
+					e->directmedia = directmedia;
 					e->singlepath = singlepath;
 					e->callwaiting = callwaiting;
 					e->hascallwaiting = callwaiting;
@@ -3950,7 +3949,7 @@ static enum ast_rtp_get_result mgcp_get_rtp_peer(struct ast_channel *chan, struc
 
 	*rtp = sub->rtp;
 
-	if (sub->parent->canreinvite)
+	if (sub->parent->directmedia)
 		return AST_RTP_TRY_NATIVE;
 	else
 		return AST_RTP_TRY_PARTIAL;
@@ -4148,7 +4147,7 @@ static int reload_config(int reload)
 			if (ast_str2cos(v->value, &qos.cos_audio))
 			    ast_log(LOG_WARNING, "Invalid cos_audio value at line %d, refer to QoS documentation\n", v->lineno);
 		} else if (!strcasecmp(v->name, "port")) {
-			if (sscanf(v->value, "%d", &ourport) == 1) {
+			if (sscanf(v->value, "%5d", &ourport) == 1) {
 				bindaddr.sin_port = htons(ourport);
 			} else {
 				ast_log(LOG_WARNING, "Invalid port number '%s' at line %d of %s\n", v->value, v->lineno, config);

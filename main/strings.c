@@ -66,7 +66,7 @@ int __ast_str_helper(struct ast_str **buf, size_t max_len,
 		}
 		/*
 		 * Ask vsnprintf how much space we need. Remember that vsnprintf
-		 * does not count the final '\0' so we must add 1.
+		 * does not count the final <code>'\0'</code> so we must add 1.
 		 */
 		va_copy(aq, ap);
 		res = vsnprintf((*buf)->__AST_STR_STR + offset, (*buf)->__AST_STR_LEN - offset, fmt, aq);
@@ -143,7 +143,8 @@ char *__ast_str_helper2(struct ast_str **buf, size_t maxlen, const char *src, si
 		maxlen--;
 		(*buf)->__AST_STR_USED++;
 
-		if (dynamic && (!maxlen || (escapecommas && !(maxlen - 1)))) {
+		if ((ptr >= (*buf)->__AST_STR_STR + (*buf)->__AST_STR_LEN - 3) ||
+			(dynamic && (!maxlen || (escapecommas && !(maxlen - 1))))) {
 			char *oldbase = (*buf)->__AST_STR_STR;
 			size_t old = (*buf)->__AST_STR_LEN;
 			if (ast_str_make_space(buf, (*buf)->__AST_STR_LEN * 2)) {
@@ -156,11 +157,10 @@ char *__ast_str_helper2(struct ast_str **buf, size_t maxlen, const char *src, si
 			ptr += (*buf)->__AST_STR_STR - oldbase;
 		}
 	}
-	if (__builtin_expect(!(maxsrc && maxlen), 0)) {
+	if (__builtin_expect(!maxlen, 0)) {
 		ptr--;
 	}
 	*ptr = '\0';
-	(*buf)->__AST_STR_USED--;
 	return (*buf)->__AST_STR_STR;
 }
 
