@@ -632,7 +632,6 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-SDL_image=%{_prefix} \
     --with-openais=%{_prefix} \
     --with-speexdsp=%{_prefix} \
-    --without-sqlite \
     --with-sqlite3=%{_prefix} \
     --with-ssl=%{_prefix} \
     --with-tds=%{_prefix} \
@@ -946,7 +945,6 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren14.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren7.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_aes.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_connectedline.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav_gsm.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_vox.so
@@ -1008,10 +1006,8 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_pthread.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/test_dlinklists.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/test_heap.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_redirecting.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_sprintf.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_clialiases.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_rtp_asterisk.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_originate.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_playtones.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_bridge.so
@@ -1026,7 +1022,7 @@ fi
 %ghost							%{astvardir}/astdb
 %attr(0755,root,root)		%dir			%{astvardir}/firmware
 %attr(0755,root,root)		%dir			%{astvardir}/firmware/iax
-%attr(0755,root,root)					%{astvardir}/firmware/iax/*.bin
+#attr(0755,root,root)					%{astvardir}/firmware/iax/*.bin
 %attr(0755,root,root)		%dir			%{astvardir}/images
 %attr(0644,root,root)					%{astvardir}/images/*.jpg
 %attr(0755,root,root)		%dir			%{astvardir}/keys
@@ -1098,7 +1094,7 @@ fi
 %dir %{_includedir}/asterisk
 %{_includedir}/asterisk.h
 %{_includedir}/asterisk/*.h
-%{_includedir}/asterisk/doxygen/*.h
+#{_includedir}/asterisk/doxygen/*.h
 %{_libdir}/pkgconfig/asterisk.pc
 
 %files firmware
@@ -1135,7 +1131,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_page.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdibarge.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiras.so
-#attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiscan.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiscan.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_dahdi.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/codec_dahdi.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_dahdi.so
@@ -1323,8 +1319,8 @@ fi
 %files tests
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_dlinklists.so
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_sched.so
-%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_logger.so
-%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
+#attr(0755,root,root)  %{_libdir}/asterisk/modules/test_logger.so
+#attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
 %attr(0755,root,root)  %{_sbindir}/refcounter
 
 %changelog -f %{_sourcedir}/%{name}-changelog.gitrpm.txt
