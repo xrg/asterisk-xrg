@@ -47,8 +47,9 @@ endif
 # per-target settings will be applied
 CC_CFLAGS=$(PTHREAD_CFLAGS) $(_ASTCFLAGS) $(ASTCFLAGS)
 CXX_CFLAGS=$(PTHREAD_CFLAGS) $(filter-out -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(AST_DECLARATION_AFTER_STATEMENT),$(_ASTCFLAGS) $(ASTCFLAGS))
-CC_LDFLAGS_SO=$(PTHREAD_CFLAGS) $(_ASTLDFLAGS) $(SOLINK) $(ASTLDFLAGS)
-CXX_LDFLAGS_SO=$(PTHREAD_CFLAGS) $(_ASTLDFLAGS) $(SOLINK) $(ASTLDFLAGS)
+BAD_SO_WORDS := -Wl,--no-undefined --no-undefined
+CC_LDFLAGS_SO=$(filter-out $(BAD_SO_WORDS),$(PTHREAD_CFLAGS) $(_ASTLDFLAGS) $(SOLINK) $(ASTLDFLAGS))
+CXX_LDFLAGS_SO=$(filter-out $(BAD_SO_WORDS),$(PTHREAD_CFLAGS) $(_ASTLDFLAGS) $(SOLINK) $(ASTLDFLAGS))
 CC_LIBS=$(PTHREAD_LIBS) $(LIBS)
 CXX_LIBS=$(PTHREAD_LIBS) $(LIBS)
 
@@ -109,6 +110,7 @@ endif
 %.so: %.oo
 	$(ECHO_PREFIX) echo "   [LDXX] $^ -> $@"
 	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(CXX_LDFLAGS_SO) $^ $(CXX_LIBS)
+
 
 %.eo: %.o
 	$(ECHO_PREFIX) echo "   [EMBED] $< -> $@"
