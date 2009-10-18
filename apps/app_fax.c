@@ -975,7 +975,7 @@ static void ast_bridge_frames(fax_session *s)
 								case 'e':ftone=2;
 							}
 							/* tickle the channel as we have fax tone */
-							ast_indicate_data(inactive, AST_CONTROL_T38, &t38control, sizeof(t38control));
+							ast_indicate_data(inactive, AST_CONTROL_T38_PARAMETERS, &t38control, sizeof(t38control));
 							t38control = AST_T38_REQUEST_NEGOTIATE;
 							ast_debug(1, "Fax %s Tone Detected On %s\n", (ftone == 1) ? "CNG" : "CED", active->name);
 						} else {
