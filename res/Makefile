@@ -21,6 +21,8 @@ all: _all
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
 
+NEON_LIB+=-Wl,--warn-unresolved-symbols
+
 ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
   # cygwin has some dependencies among res_ things.
   # We use order-only dependencies, and then add the libraries as required.
