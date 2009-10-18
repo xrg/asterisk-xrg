@@ -1,12 +1,6 @@
 #define git_repodir /home/panosl/panos/build
 %define git_repo asterisk
-%define git_head 16xrg
-
-%define version %git_get_ver
-%define distsuffix xrg
-%define release %git_get_rel
-
-# %git_get_version TODO
+%define git_head stable
 
 %define _requires_exceptions perl(Carp::Heavy)
 
@@ -62,16 +56,18 @@
 
 Summary:	Asterisk PBX
 Name:		asterisk16
-Version:	%{version}
-Release:	%{release}
+Version:	%git_get_ver
+Release:	%git_get_rel
 License:	GPL
 Group:		System/Servers
 URL:		http://www.asterisk.org/
 #Source0:	http://www.asterisk.org/html/downloads/%{name}-%{version}.tar.bz2
-Source0:	%{name}-%{version}.tar.gz
+Source0:	%git_bs_source %{name}-%{version}.tar.gz
 Source1:	asterisk.init
 Source2:	asterisk.sysconfig
 Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
+Source4:	%{name}-gitrpm.version
+Source5:	%{name}-changelog.gitrpm.txt
 Provides:	asterisk
 Obsoletes:	asterisk
 Requires(pre): rpm-helper
@@ -523,7 +519,6 @@ This package contains a couple of testing utilities:
 %prep
 %git_get_source
 %setup -q -a3
-%git_gen_changelog -n 100
 
 find . -type d -perm 0700 -exec chmod 755 {} \;
 find . -type d -perm 0555 -exec chmod 755 {} \;
@@ -1332,5 +1327,5 @@ fi
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
 %attr(0755,root,root)  %{_sbindir}/refcounter
 
-%changelog -f Changelog.git.txt
+%changelog -f %{_sourcedir}/%{name}-changelog.gitrpm.txt
 
