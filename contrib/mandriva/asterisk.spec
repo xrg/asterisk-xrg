@@ -523,7 +523,6 @@ This package contains a couple of testing utilities:
 %prep
 %git_get_source
 %setup -q -a3
-%git_gen_changelog -n 100
 
 find . -type d -perm 0700 -exec chmod 755 {} \;
 find . -type d -perm 0555 -exec chmod 755 {} \;
