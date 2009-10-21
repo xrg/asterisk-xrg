@@ -1080,9 +1080,7 @@ fi
 %exclude %{_libdir}/asterisk/modules/app_flash.so
 %exclude %{_libdir}/asterisk/modules/app_meetme.so
 %exclude %{_libdir}/asterisk/modules/app_page.so
-%exclude %{_libdir}/asterisk/modules/app_dahdibarge.so
-%exclude %{_libdir}/asterisk/modules/app_dahdiras.so
-# exclude %{_libdir}/asterisk/modules/app_dahdiscan.so
+%exclude %{_libdir}/asterisk/modules/app_dahdi*.so
 %exclude %{_libdir}/asterisk/modules/chan_dahdi.so
 %exclude %{_libdir}/asterisk/modules/codec_dahdi.so
 %exclude %{_libdir}/asterisk/modules/res_timing_dahdi.so
