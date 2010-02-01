@@ -41,7 +41,7 @@
 
 %define build_dahdi	1
 %define build_osp	0
-%define build_pri	1
+%define build_pri	0
 
 %define build_ffmpeg	1
 %{?_without_ffmpeg:	%global build_ffmpeg 0}
@@ -52,7 +52,9 @@
 %define build_osp	0
 %define build_pri	0
 %endif
-%define	astvardir	/var/lib/asterisk
+
+%define astvardir	/var/lib/asterisk
+%define modulesdir	%{_libdir}/asterisk/modules
 
 Summary:	Asterisk PBX
 Name:		asterisk16
@@ -130,6 +132,7 @@ BuildRequires:	libzap-devel >= 1.0.1
 BuildRequires:	lm_sensors-devel
 BuildRequires:	lpc10-devel
 BuildRequires:	lua-devel
+BuildRequires:  mysql-devel
 BuildRequires:	newt-devel
 BuildRequires:	openais-devel
 BuildRequires:	openldap-devel
@@ -632,7 +635,7 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-SDL_image=%{_prefix} \
     --with-openais=%{_prefix} \
     --with-speexdsp=%{_prefix} \
-    --without-sqlite \
+    --with-sqlite=%{_prefix} \
     --with-sqlite3=%{_prefix} \
     --with-ssl=%{_prefix} \
     --with-tds=%{_prefix} \
@@ -1007,7 +1010,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_speech.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_pthread.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/test_dlinklists.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/test_heap.so
+# %attr(0755,root,root) %{_libdir}/asterisk/modules/test_heap.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_redirecting.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_sprintf.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_clialiases.so
@@ -1015,6 +1018,25 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_originate.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_playtones.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_bridge.so
+
+# Do these really belong here? :
+%attr(0755,root,root) %{modulesdir}/app_celgenuserevent.so
+%attr(0755,root,root) %{modulesdir}/app_saycountpl.so
+%attr(0755,root,root) %{modulesdir}/cdr_syslog.so
+%attr(0755,root,root) %{modulesdir}/cel_custom.so
+%attr(0755,root,root) %{modulesdir}/cel_manager.so
+%attr(0755,root,root) %{modulesdir}/chan_mobile.so
+%attr(0755,root,root) %{modulesdir}/chan_multicast_rtp.so
+%attr(0755,root,root) %{modulesdir}/chan_ooh323.so
+%attr(0755,root,root) %{modulesdir}/format_mp3.so
+%attr(0755,root,root) %{modulesdir}/res_calendar.so
+%attr(0755,root,root) %{modulesdir}/res_calendar_caldav.so
+%attr(0755,root,root) %{modulesdir}/res_calendar_exchange.so
+%attr(0755,root,root) %{modulesdir}/res_calendar_icalendar.so
+%attr(0755,root,root) %{modulesdir}/res_mutestream.so
+%attr(0755,root,root) %{modulesdir}/res_pktccops.so
+%attr(0755,root,root) %{modulesdir}/res_rtp_multicast.so
+%attr(0755,root,root) %{modulesdir}/res_security_log.so
 
 %if 0
 %attr(0755,root,root) %{_libdir}/asterisk/modules/test_skel.so
@@ -1026,7 +1048,7 @@ fi
 %ghost							%{astvardir}/astdb
 %attr(0755,root,root)		%dir			%{astvardir}/firmware
 %attr(0755,root,root)		%dir			%{astvardir}/firmware/iax
-%attr(0755,root,root)					%{astvardir}/firmware/iax/*.bin
+# %attr(0755,root,root)					%{astvardir}/firmware/iax/*.bin
 %attr(0755,root,root)		%dir			%{astvardir}/images
 %attr(0644,root,root)					%{astvardir}/images/*.jpg
 %attr(0755,root,root)		%dir			%{astvardir}/keys
@@ -1207,6 +1229,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_odbc.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_odbc.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_odbc.so
+%attr(0755,root,root) %{modulesdir}/cel_adaptive_odbc.so
 %endif
 
 %files plugins-oss
@@ -1233,10 +1256,13 @@ fi
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_pgsql.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_pgsql.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_pgsql.so
+%attr(0755,root,root) %{modulesdir}/cel_pgsql.so
 
 %files plugins-radius
 %defattr(-,root,root,-)
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_radius.so
+%attr(0755,root,root) %{modulesdir}/cel_radius.so
+
 
 %files plugins-skinny
 %defattr(-,root,root,-)
@@ -1257,6 +1283,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_sqlite.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_sqlite3_custom.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_sqlite.so
+%attr(0755,root,root) %{modulesdir}/cel_sqlite3_custom.so
 
 %files plugins-speex
 %defattr(-,root,root,-)
@@ -1268,6 +1295,7 @@ fi
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_tds.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_tds.so
+%attr(0755,root,root) %{modulesdir}/cel_tds.so
 %endif
 
 %files plugins-unistim
@@ -1322,10 +1350,13 @@ fi
 
 %files tests
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_dlinklists.so
-%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_sched.so
+# %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_sched.so
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_logger.so
-%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
-%attr(0755,root,root)  %{_sbindir}/refcounter
+# %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
+# %attr(0755,root,root)  %{_sbindir}/refcounter
+%attr(0755,root,root)  %{modulesdir}/test_amihooks.so
+%attr(0755,root,root)  %{modulesdir}/test_security_events.so
 
 %changelog -f %{_sourcedir}/%{name}-changelog.gitrpm.txt
+
 

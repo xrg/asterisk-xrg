@@ -1,17 +1,31 @@
-MENUSELECT_APPS=app_skel app_osplookup app_ivrdemo
+MENUSELECT_ADDONS=
+MENUSELECT_APPS=app_ivrdemo app_osplookup app_skel 
+MENUSELECT_BRIDGES=
 MENUSELECT_CDR=
-MENUSELECT_CHANNELS=chan_features chan_h323 chan_misdn chan_usbradio chan_vpb 
+MENUSELECT_CEL=
+MENUSELECT_CHANNELS=chan_h323 chan_misdn chan_usbradio chan_vpb 
 MENUSELECT_CODECS=
 MENUSELECT_FORMATS=
 MENUSELECT_FUNCS=
 MENUSELECT_PBX=pbx_gtkconsole 
 MENUSELECT_RES=
-MENUSELECT_TEST=test_skel 
+MENUSELECT_TEST=test_ast_format_str_reduce test_heap test_sched test_skel test_substitution test_utils 
 MENUSELECT_CFLAGS=LOADABLE_MODULES 
 MENUSELECT_OPTS_app_voicemail=
+MENUSELECT_UTILS=aelparse astcanary astman check_expr check_expr2 conf2ael hashtest hashtest2 muted refcounter smsq stereorize streamplayer 
+MENUSELECT_AGIS=agi-test.agi eagi-test eagi-sphinx-test jukebox.agi 
 MENUSELECT_EMBED=
 MENUSELECT_CORE_SOUNDS=
 MENUSELECT_MOH=
 MENUSELECT_EXTRA_SOUNDS=
-MENUSELECT_BUILD_DEPS=res_adsi chan_local res_odbc res_ael_share G711_NEW_ALGORITHM chan_usbradio 
+MENUSELECT_BUILD_DEPS=res_adsi chan_local app_voicemail app_meetme res_monitor res_agi res_smdi res_jabber res_pktccops res_odbc res_ael_share G711_NEW_ALGORITHM chan_usbradio 
+MENUSELECT_DEPSFAILED=MENUSELECT_APPS=app_osplookup
+MENUSELECT_DEPSFAILED=MENUSELECT_CHANNELS=chan_h323
+MENUSELECT_DEPSFAILED=MENUSELECT_CHANNELS=chan_misdn
 MENUSELECT_DEPSFAILED=MENUSELECT_CHANNELS=chan_vpb
+MENUSELECT_DEPSFAILED=MENUSELECT_TEST=test_ast_format_str_reduce
+MENUSELECT_DEPSFAILED=MENUSELECT_TEST=test_heap
+MENUSELECT_DEPSFAILED=MENUSELECT_TEST=test_sched
+MENUSELECT_DEPSFAILED=MENUSELECT_TEST=test_skel
+MENUSELECT_DEPSFAILED=MENUSELECT_TEST=test_substitution
+MENUSELECT_DEPSFAILED=MENUSELECT_TEST=test_utils
