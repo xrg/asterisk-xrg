@@ -132,7 +132,6 @@ BuildRequires:	libzap-devel >= 1.0.1
 BuildRequires:	lm_sensors-devel
 BuildRequires:	lpc10-devel
 BuildRequires:	lua-devel
-BuildRequires:  mysql-devel
 BuildRequires:	newt-devel
 BuildRequires:	openais-devel
 BuildRequires:	openldap-devel
@@ -330,6 +329,17 @@ This module adds mISDN support to the Asterisk PBX. mISDN is the
 driving cards in NT mode and thus connecting an ISDN phone to your
 computer.
 %endif
+
+%package	plugins-mysql
+Summary:	MySQL plugins for Asterisk
+Group:		System/Servers
+BuildRequires:	mysql-devel
+Requires(post): %{name} = %{version}
+Requires(preun): %{name} = %{version}
+
+%description	plugins-mysql
+This package contains MySQL (Oracle) plugins for Asterisk
+
 
 %if %{build_odbc}
 %package	plugins-odbc
@@ -841,10 +851,7 @@ fi
 %attr(0755,root,root)					%{_sbindir}/stereorize
 %attr(0755,root,root)					%{_sbindir}/streamplayer
 %attr(0755,root,root)					%{_sbindir}/astcanary
-# %attr(0755,root,root)					%{_sbindir}/check_expr
 %attr(0755,root,root)					%{_sbindir}/conf2ael
-%attr(0755,root,root)					%{_sbindir}/hashtest
-%attr(0755,root,root)					%{_sbindir}/hashtest2
 %exclude						%{_sbindir}/refcounter
 
 %attr(0755,root,root)		%dir			%{_libdir}/asterisk
@@ -1217,6 +1224,14 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_misdn.so
 %endif
 
+%files plugins-mysql
+%defattr(-,root,root,-)
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_mysql.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_config_mysql.conf
+%attr(0755,root,root) %{modulesdir}/app_mysql.so
+%attr(0755,root,root) %{modulesdir}/cdr_mysql.so
+%attr(0755,root,root) %{modulesdir}/res_config_mysql.so
+
 %if %{build_odbc}
 %files plugins-odbc
 %defattr(-,root,root,-)
@@ -1353,7 +1368,11 @@ fi
 # %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_sched.so
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_logger.so
 # %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
-# %attr(0755,root,root)  %{_sbindir}/refcounter
+%attr(0755,root,root)					%{_sbindir}/check_expr
+%attr(0755,root,root)					%{_sbindir}/check_expr2
+%attr(0755,root,root)					%{_sbindir}/hashtest
+%attr(0755,root,root)					%{_sbindir}/hashtest2
+%attr(0755,root,root)  %{_sbindir}/refcounter
 %attr(0755,root,root)  %{modulesdir}/test_amihooks.so
 %attr(0755,root,root)  %{modulesdir}/test_security_events.so
 
