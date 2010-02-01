@@ -79,6 +79,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>Playback the unreachable status message if we've run out
 						of steps to reach the or the callee has elected not to be reachable.</para>
 					</option>
+					<option name="d">
+						<para>Disable the 'Please hold while we try to connect your call' announcement.</para>
+					</option>
 				</optionlist>
 			</parameter>
 		</syntax>
@@ -159,13 +162,15 @@ struct findme_user {
 enum {
 	FOLLOWMEFLAG_STATUSMSG = (1 << 0),
 	FOLLOWMEFLAG_RECORDNAME = (1 << 1),
-	FOLLOWMEFLAG_UNREACHABLEMSG = (1 << 2)
+	FOLLOWMEFLAG_UNREACHABLEMSG = (1 << 2),
+	FOLLOWMEFLAG_DISABLEHOLDPROMPT = (1 << 3)
 };
 
 AST_APP_OPTIONS(followme_opts, {
 	AST_APP_OPTION('s', FOLLOWMEFLAG_STATUSMSG ),
 	AST_APP_OPTION('a', FOLLOWMEFLAG_RECORDNAME ),
 	AST_APP_OPTION('n', FOLLOWMEFLAG_UNREACHABLEMSG ),
+	AST_APP_OPTION('d', FOLLOWMEFLAG_DISABLEHOLDPROMPT ),
 });
 
 static int ynlongest = 0;
@@ -643,7 +648,7 @@ static struct ast_channel *wait_for_winner(struct findme_user_listptr *findme_us
 			f = ast_read(winner);
 			if (f) {
 				if (f->frametype == AST_FRAME_CONTROL) {
-					switch(f->subclass) {
+					switch (f->subclass.integer) {
 					case AST_CONTROL_HANGUP:
 						ast_verb(3, "%s received a hangup frame.\n", winner->name);
 						if (f->data.uint32) {
@@ -718,7 +723,7 @@ static struct ast_channel *wait_for_winner(struct findme_user_listptr *findme_us
 						ast_verb(3, "%s stopped sounds\n", winner->name);
 						break;
 					default:
-						ast_debug(1, "Dunno what to do with control type %d\n", f->subclass);
+						ast_debug(1, "Dunno what to do with control type %d\n", f->subclass.integer);
 						break;
 					}
 				} 
@@ -726,8 +731,8 @@ static struct ast_channel *wait_for_winner(struct findme_user_listptr *findme_us
 					if (winner->stream)
 						ast_stopstream(winner);
 					tmpuser->digts = 0;
-					ast_debug(1, "DTMF received: %c\n",(char) f->subclass);
-					tmpuser->yn[tmpuser->ynidx] = (char) f->subclass;
+					ast_debug(1, "DTMF received: %c\n", (char) f->subclass.integer);
+					tmpuser->yn[tmpuser->ynidx] = (char) f->subclass.integer;
 					tmpuser->ynidx++;
 					ast_debug(1, "DTMF string: %s\n", tmpuser->yn);
 					if (tmpuser->ynidx >= ynlongest) {
@@ -1095,11 +1100,12 @@ static int app_exec(struct ast_channel *chan, const char *data)
 
 	if (!ast_fileexists(namerecloc, NULL, chan->language))
 		ast_copy_string(namerecloc, "", sizeof(namerecloc));
-
-	if (ast_streamfile(chan, targs.plsholdprompt, chan->language))
-		goto outrun;
-	if (ast_waitstream(chan, "") < 0)
-		goto outrun;
+	if (!ast_test_flag(&targs.followmeflags, FOLLOWMEFLAG_DISABLEHOLDPROMPT)) {
+		if (ast_streamfile(chan, targs.plsholdprompt, chan->language))
+			goto outrun;
+		if (ast_waitstream(chan, "") < 0)
+			goto outrun;
+	}
 	ast_moh_start(chan, S_OR(targs.mohclass, NULL), NULL);
 
 	targs.status = 0;

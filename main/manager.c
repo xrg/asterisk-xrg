@@ -353,11 +353,20 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="Exten" required="true">
 				<para>Extension to transfer to.</para>
 			</parameter>
+			<parameter name="ExtraExten">
+				<para>Extension to transfer extrachannel to (optional).</para>
+			</parameter>
 			<parameter name="Context" required="true">
 				<para>Context to transfer to.</para>
 			</parameter>
+			<parameter name="ExtraContext">
+				<para>Context to transfer extrachannel to (optional).</para>
+			</parameter>
 			<parameter name="Priority" required="true">
 				<para>Priority to transfer to.</para>
+			</parameter>
+			<parameter name="ExtraPriority">
+				<para>Priority to transfer extrachannel to (optional).</para>
 			</parameter>
 		</syntax>
 		<description>
@@ -838,10 +847,19 @@ struct mansession {
 	struct ast_tcptls_session_instance *tcptls_session;
 	FILE *f;
 	int fd;
+	struct manager_custom_hook *hook;
 	ast_mutex_t lock;
 };
 
 static struct ao2_container *sessions = NULL;
+
+struct manager_channel_variable {
+	AST_LIST_ENTRY(manager_channel_variable) entry;
+	unsigned int isfunc:1;
+	char name[0]; /* allocate off the end the real size. */
+};
+
+static AST_RWLIST_HEAD_STATIC(channelvars, manager_channel_variable);
 
 #define NEW_EVENT(m)	(AST_LIST_NEXT(m->session->last_ev, eq_next))
 
@@ -875,6 +893,7 @@ static AST_RWLIST_HEAD_STATIC(manager_hooks, manager_custom_hook);
 
 static struct eventqent *unref_event(struct eventqent *e);
 static void ref_event(struct eventqent *e);
+static void free_channelvars(void);
 
 /*! \brief Add a custom hook to be called when an event is fired */
 void ast_manager_register_hook(struct manager_custom_hook *hook)
@@ -961,7 +980,7 @@ static const struct permalias {
 	{ EVENT_FLAG_DIALPLAN, "dialplan" },
 	{ EVENT_FLAG_ORIGINATE, "originate" },
 	{ EVENT_FLAG_AGI, "agi" },
-	{ -1, "all" },
+	{ INT_MAX, "all" },
 	{ 0, "none" },
 };
 
@@ -1043,7 +1062,7 @@ static int strings_to_mask(const char *string)
 			break;
 		}
 	}
-	if (!p)	{ /* all digits */
+	if (!*p) { /* all digits */
 		return atoi(string);
 	}
 	if (ast_false(string)) {
@@ -1142,10 +1161,12 @@ static struct ast_manager_user *get_manager_by_name_locked(const char *name)
 {
 	struct ast_manager_user *user = NULL;
 
-	AST_RWLIST_TRAVERSE(&users, user, list)
+	AST_RWLIST_TRAVERSE(&users, user, list) {
 		if (!strcasecmp(user->username, name)) {
 			break;
 		}
+	}
+
 	return user;
 }
 
@@ -1438,7 +1459,7 @@ static char *handle_showmanconn(struct ast_cli_entry *e, int cmd, struct ast_cli
 		ao2_unlock(session);
 		unref_mansession(session);
 	}
-
+	ao2_iterator_destroy(&i);
 	ast_cli(a->fd, "%d users connected.\n", count);
 
 	return CLI_SUCCESS;
@@ -1597,13 +1618,84 @@ struct ast_variable *astman_get_variables(const struct message *m)
 	return head;
 }
 
+/* access for hooks to send action messages to ami */
+
+int ast_hook_send_action(struct manager_custom_hook *hook, const char *msg)
+{
+	const char *action;
+	int ret = 0;
+	struct manager_action *tmp;
+	struct mansession s = {.session = NULL, };
+	struct message m = { 0 };
+	char header_buf[1025] = { '\0' };
+	const char *src = msg;
+	int x = 0;
+	int curlen;
+
+	if (hook == NULL) {
+		return -1;
+	}
+
+	/* convert msg string to message struct */
+	curlen = strlen(msg);
+	for (x = 0; x < curlen; x++) {
+		int cr;	/* set if we have \r */
+		if (src[x] == '\r' && x+1 < curlen && src[x+1] == '\n')
+			cr = 2;	/* Found. Update length to include \r\n */
+		else if (src[x] == '\n')
+			cr = 1;	/* also accept \n only */
+		else
+			continue;
+		/* don't copy empty lines */
+		if (x) {
+			memmove(header_buf, src, x);	/*... but trim \r\n */
+			header_buf[x] = '\0';		/* terminate the string */
+			m.headers[m.hdrcount++] = ast_strdupa(header_buf);
+		}
+		x += cr;
+		curlen -= x;		/* remaining size */
+		src += x;		/* update pointer */
+		x = -1;			/* reset loop */
+	}
+
+	action = astman_get_header(&m,"Action");
+	if (action && strcasecmp(action,"login")) {
+
+		AST_RWLIST_RDLOCK(&actions);
+		AST_RWLIST_TRAVERSE(&actions, tmp, list) {
+			if (strcasecmp(action, tmp->action))
+				continue;
+			/*
+			* we have to simulate a session for this action request
+			* to be able to pass it down for processing
+			* This is necessary to meet the previous design of manager.c
+			*/
+			s.hook = hook;
+			s.f = (void*)1; /* set this to something so our request will make it through all functions that test it*/
+			ret = tmp->func(&s, &m);
+			break;
+		}
+		AST_RWLIST_UNLOCK(&actions);
+	}
+	return ret;
+}
+
+
 /*!
  * helper function to send a string to the socket.
  * Return -1 on error (e.g. buffer full).
  */
 static int send_string(struct mansession *s, char *string)
 {
-	if (s->f) {
+	/* It's a result from one of the hook's action invocation */
+	if (s->hook) {
+		/*
+		 * to send responses, we're using the same function
+		 * as for receiving events. We call the event "HookResponse"
+		 */
+		s->hook->helper(EVENT_FLAG_HOOKRESPONSE, "HookResponse", string);
+		return 0;
+	} else if (s->f) {
 		return ast_careful_fwrite(s->f, s->fd, string, strlen(string), s->session->writetimeout);
 	} else {
 		return ast_careful_fwrite(s->session->f, s->session->fd, string, strlen(string), s->session->writetimeout);
@@ -2606,10 +2698,10 @@ static int action_events(struct mansession *s, const struct message *m)
 	res = set_eventmask(s, mask);
 	if (res > 0)
 		astman_append(s, "Response: Success\r\n"
-				 "Events: On\r\n");
+				 "Events: On\r\n\r\n");
 	else if (res == 0)
 		astman_append(s, "Response: Success\r\n"
-				 "Events: Off\r\n");
+				 "Events: Off\r\n\r\n");
 	return 0;
 }
 
@@ -2708,7 +2800,8 @@ static int action_setvar(struct mansession *s, const struct message *m)
 	const char *name = astman_get_header(m, "Channel");
 	const char *varname = astman_get_header(m, "Variable");
 	const char *varval = astman_get_header(m, "Value");
-
+	int res = 0;
+	
 	if (ast_strlen_zero(varname)) {
 		astman_send_error(s, m, "No variable specified");
 		return 0;
@@ -2721,14 +2814,16 @@ static int action_setvar(struct mansession *s, const struct message *m)
 		}
 	}
 
-	pbx_builtin_setvar_helper(c, varname, S_OR(varval, ""));
+	res = pbx_builtin_setvar_helper(c, varname, S_OR(varval, ""));
 
 	if (c) {
 		c = ast_channel_unref(c);
 	}
-
-	astman_send_ack(s, m, "Variable Set");
-
+	if (res == 0) {
+		astman_send_ack(s, m, "Variable Set");	
+	} else {
+		astman_send_error(s, m, "Variable not set");
+	}
 	return 0;
 }
 
@@ -2806,7 +2901,7 @@ static int action_status(struct mansession *s, const struct message *m)
 	}
 
 	if (all) {
-		if (!(iter = ast_channel_iterator_all_new(0))) {
+		if (!(iter = ast_channel_iterator_all_new())) {
 			ast_free(str);
 			astman_send_error(s, m, "Memory Allocation Failure");
 			return 1;
@@ -2914,6 +3009,10 @@ static int action_status(struct mansession *s, const struct message *m)
 		}
 	}
 
+	if (iter) {
+		ast_channel_iterator_destroy(iter);
+	}
+
 	astman_append(s,
 		"Event: StatusComplete\r\n"
 		"%s"
@@ -2967,10 +3066,13 @@ static int action_redirect(struct mansession *s, const struct message *m)
 	const char *name = astman_get_header(m, "Channel");
 	const char *name2 = astman_get_header(m, "ExtraChannel");
 	const char *exten = astman_get_header(m, "Exten");
+	const char *exten2 = astman_get_header(m, "ExtraExten");
 	const char *context = astman_get_header(m, "Context");
+	const char *context2 = astman_get_header(m, "ExtraContext");
 	const char *priority = astman_get_header(m, "Priority");
+	const char *priority2 = astman_get_header(m, "ExtraPriority");
 	struct ast_channel *chan, *chan2 = NULL;
-	int pi = 0;
+	int pi, pi2 = 0;
 	int res;
 
 	if (ast_strlen_zero(name)) {
@@ -2981,6 +3083,13 @@ static int action_redirect(struct mansession *s, const struct message *m)
 	if (!ast_strlen_zero(priority) && (sscanf(priority, "%30d", &pi) != 1)) {
 		if ((pi = ast_findlabel_extension(NULL, context, exten, priority, NULL)) < 1) {
 			astman_send_error(s, m, "Invalid priority");
+			return 0;
+		}
+	}
+
+	if (!ast_strlen_zero(priority2) && (sscanf(priority2, "%30d", &pi2) != 1)) {
+		if ((pi2 = ast_findlabel_extension(NULL, context2, exten2, priority2, NULL)) < 1) {
+			astman_send_error(s, m, "Invalid ExtraPriority");
 			return 0;
 		}
 	}
@@ -3024,7 +3133,11 @@ static int action_redirect(struct mansession *s, const struct message *m)
 					ast_set_flag(chan2, AST_FLAG_BRIDGE_HANGUP_DONT); /* don't let the after-bridge code run the h-exten */
 					ast_channel_unlock(chan2);
 				}
-				res = ast_async_goto(chan2, context, exten, pi);
+				if (context2) {
+					res = ast_async_goto(chan2, context2, exten2, pi2);
+				} else {
+					res = ast_async_goto(chan2, context, exten, pi);
+				}
 			} else {
 				res = -1;
 			}
@@ -3084,12 +3197,12 @@ static int action_atxfer(struct mansession *s, const struct message *m)
 	}
 
 	for (feature_code = atxfer_feature->exten; feature_code && *feature_code; ++feature_code) {
-		struct ast_frame f = { AST_FRAME_DTMF, *feature_code };
+		struct ast_frame f = { AST_FRAME_DTMF, .subclass.integer = *feature_code };
 		ast_queue_frame(chan, &f);
 	}
 
 	for (feature_code = (char *)exten; feature_code && *feature_code; ++feature_code) {
-		struct ast_frame f = { AST_FRAME_DTMF, *feature_code };
+		struct ast_frame f = { AST_FRAME_DTMF, .subclass.integer = *feature_code };
 		ast_queue_frame(chan, &f);
 	}
 
@@ -3196,7 +3309,7 @@ struct fast_originate_helper {
 	/*! data can contain a channel name, extension number, username, password, etc. */
 	char data[512];
 	int timeout;
-	int format;				/*!< Codecs used for a call */
+	format_t format;				/*!< Codecs used for a call */
 	char app[AST_MAX_APP];
 	char appdata[AST_MAX_EXTENSION];
 	char cid_name[AST_MAX_EXTENSION];
@@ -3214,7 +3327,7 @@ static void *fast_originate(void *data)
 	struct fast_originate_helper *in = data;
 	int res;
 	int reason = 0;
-	struct ast_channel *chan = NULL;
+	struct ast_channel *chan = NULL, *chans[1];
 	char requested_channel[AST_CHANNEL_NAME];
 
 	if (!ast_strlen_zero(in->app)) {
@@ -3233,7 +3346,8 @@ static void *fast_originate(void *data)
 		snprintf(requested_channel, AST_CHANNEL_NAME, "%s/%s", in->tech, in->data);
 	}
 	/* Tell the manager what happened with the channel */
-	manager_event(EVENT_FLAG_CALL, "OriginateResponse",
+	chans[0] = chan;
+	ast_manager_event_multichan(EVENT_FLAG_CALL, "OriginateResponse", chan ? 1 : 0, chans,
 		"%s%s"
 		"Response: %s\r\n"
 		"Channel: %s\r\n"
@@ -3281,7 +3395,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 	int reason = 0;
 	char tmp[256];
 	char tmp2[256];
-	int format = AST_FORMAT_SLINEAR;
+	format_t format = AST_FORMAT_SLINEAR;
 
 	pthread_t th;
 	if (ast_strlen_zero(name)) {
@@ -3526,6 +3640,7 @@ static int action_userevent(struct mansession *s, const struct message *m)
 		}
 	}
 
+	astman_send_ack(s, m, "Event Sent");	
 	manager_event(EVENT_FLAG_USER, "UserEvent", "UserEvent: %s\r\n%s", event, ast_str_buffer(body));
 	return 0;
 }
@@ -3643,7 +3758,7 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 		idText[0] = '\0';
 	}
 
-	if (!(iter = ast_channel_iterator_all_new(0))) {
+	if (!(iter = ast_channel_iterator_all_new())) {
 		astman_send_error(s, m, "Memory Allocation Failure");
 		return 1;
 	}
@@ -4103,6 +4218,7 @@ static void purge_sessions(int n_max)
 			unref_mansession(session);
 		}
 	}
+	ao2_iterator_destroy(&i);
 }
 
 /*
@@ -4132,13 +4248,34 @@ static int append_event(const char *str, int category)
 	return 0;
 }
 
+AST_THREADSTORAGE(manager_event_funcbuf);
+
+static void append_channel_vars(struct ast_str **pbuf, struct ast_channel *chan)
+{
+	struct manager_channel_variable *var;
+	AST_RWLIST_RDLOCK(&channelvars);
+	AST_LIST_TRAVERSE(&channelvars, var, entry) {
+		const char *val = "";
+		if (var->isfunc) {
+			struct ast_str *res = ast_str_thread_get(&manager_event_funcbuf, 16);
+			int ret;
+			if (res && (ret = ast_func_read2(chan, var->name, &res, 0)) == 0) {
+				val = ast_str_buffer(res);
+			}
+		} else {
+			val = pbx_builtin_getvar_helper(chan, var->name);
+		}
+		ast_str_append(pbuf, 0, "ChanVariable(%s): %s=%s\r\n", chan->name, var->name, val ? val : "");
+	}
+	AST_RWLIST_UNLOCK(&channelvars);
+}
+
 /* XXX see if can be moved inside the function */
 AST_THREADSTORAGE(manager_event_buf);
 #define MANAGER_EVENT_BUF_INITSIZE   256
 
-/*! \brief  manager_event: Send AMI event to client */
-int __manager_event(int category, const char *event,
-	const char *file, int line, const char *func, const char *fmt, ...)
+int __ast_manager_event_multichan(int category, const char *event, int chancount, struct
+	ast_channel **chans, const char *file, int line, const char *func, const char *fmt, ...)
 {
 	struct mansession_session *session;
 	struct manager_custom_hook *hook;
@@ -4147,6 +4284,7 @@ int __manager_event(int category, const char *event,
 	va_list ap;
 	struct timeval now;
 	struct ast_str *buf;
+	int i;
 
 	if (!(buf = ast_str_thread_get(&manager_event_buf, MANAGER_EVENT_BUF_INITSIZE))) {
 		return -1;
@@ -4175,6 +4313,9 @@ int __manager_event(int category, const char *event,
 	va_start(ap, fmt);
 	ast_str_append_va(&buf, 0, fmt, ap);
 	va_end(ap);
+	for (i = 0; i < chancount; i++) {
+		append_channel_vars(&buf, chans[i]);
+	}
 
 	ast_str_append(&buf, 0, "\r\n");
 
@@ -4199,6 +4340,7 @@ int __manager_event(int category, const char *event,
 			ao2_unlock(session);
 			unref_mansession(session);
 		}
+		ao2_iterator_destroy(&i);
 	}
 
 	AST_RWLIST_RDLOCK(&manager_hooks);
@@ -4291,12 +4433,7 @@ int ast_manager_register2(const char *action, int auth, int (*func)(struct manse
 	char *tmpxml;
 #endif
 
-	if (!(cur = ast_calloc(1, sizeof(*cur)))) {
-		return -1;
-	}
-
-	if (ast_string_field_init(cur, 128)) {
-		ast_free(cur);
+	if (!(cur = ast_calloc_with_stringfields(1, struct manager_action, 128))) {
 		return -1;
 	}
 
@@ -4392,6 +4529,7 @@ static struct mansession_session *find_session(uint32_t ident, int incinuse)
 		ao2_unlock(session);
 		unref_mansession(session);
 	}
+	ao2_iterator_destroy(&i);
 
 	return session;
 }
@@ -4427,6 +4565,7 @@ static struct mansession_session *find_session_by_nonce(const char *username, un
 		ao2_unlock(session);
 		unref_mansession(session);
 	}
+	ao2_iterator_destroy(&i);
 	return session;
 }
 
@@ -4468,6 +4607,7 @@ int astman_verify_session_readpermissions(uint32_t ident, int perm)
 		ao2_unlock(session);
 		unref_mansession(session);
 	}
+	ao2_iterator_destroy(&i);
 	return result;
 }
 
@@ -4493,6 +4633,7 @@ int astman_verify_session_writepermissions(uint32_t ident, int perm)
 		ao2_unlock(session);
 		unref_mansession(session);
 	}
+	ao2_iterator_destroy(&i);
 	return result;
 }
 
@@ -4874,9 +5015,12 @@ static int generic_http_callback(struct ast_tcptls_session_instance *ser,
 
 	if (s.f != NULL) {	/* have temporary output */
 		char *buf;
-		size_t l = ftell(s.f);
+		size_t l;
 
-		if (l) {
+		/* Ensure buffer is NULL-terminated */
+		fprintf(s.f, "%c", 0);
+
+		if ((l = ftell(s.f))) {
 			if (MAP_FAILED == (buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_PRIVATE, s.fd, 0))) {
 				ast_log(LOG_WARNING, "mmap failed.  Manager output was not processed\n");
 			} else {
@@ -5472,6 +5616,8 @@ static int __init_manager(int reload)
 	}
 	ami_tls_cfg.cipher = ast_strdup("");
 
+	free_channelvars();
+
 	for (var = ast_variable_browse(cfg, "general"); var; var = var->next) {
 		val = var->value;
 
@@ -5502,6 +5648,21 @@ static int __init_manager(int reload)
 			manager_debug = ast_true(val);
 		} else if (!strcasecmp(var->name, "httptimeout")) {
 			newhttptimeout = atoi(val);
+		} else if (!strcasecmp(var->name, "channelvars")) {
+			struct manager_channel_variable *mcv;
+			char *remaining = ast_strdupa(val), *next;
+			AST_RWLIST_WRLOCK(&channelvars);
+			while ((next = strsep(&remaining, ",|"))) {
+				if (!(mcv = ast_calloc(1, sizeof(*mcv) + strlen(next) + 1))) {
+					break;
+				}
+				strcpy(mcv->name, next); /* SAFE */
+				if (strchr(next, '(')) {
+					mcv->isfunc = 1;
+				}
+				AST_RWLIST_INSERT_TAIL(&channelvars, mcv, entry);
+			}
+			AST_RWLIST_UNLOCK(&channelvars);
 		} else {
 			ast_log(LOG_NOTICE, "Invalid keyword <%s> = <%s> in manager.conf [general]\n",
 				var->name, val);
@@ -5741,6 +5902,17 @@ static int __init_manager(int reload)
 		ast_tcptls_server_start(&amis_desc);
 	}
 	return 0;
+}
+
+/* clear out every entry in the channelvar list */
+static void free_channelvars(void)
+{
+	struct manager_channel_variable *var;
+	AST_RWLIST_WRLOCK(&channelvars);
+	while ((var = AST_RWLIST_REMOVE_HEAD(&channelvars, entry))) {
+		ast_free(var);
+	}
+	AST_RWLIST_UNLOCK(&channelvars);
 }
 
 int init_manager(void)

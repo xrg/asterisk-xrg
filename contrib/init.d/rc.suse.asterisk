@@ -21,12 +21,15 @@
 # - Modified "reload" to call asterisk -rx 'reload' 
 
 ### BEGIN INIT INFO
-# Provides:                    asterisk
-# Required-Start:      +dahdi $network $named
-# Required-Stop:
-# Default-Start:     3 5
-# Default-Stop:      0 1 2 4 6
-# Description: dahdi - dahdi modules for Asterisk
+# Provides:		asterisk
+# Required-Start:    $network $syslog $named $local_fs $remote_fs
+# Required-Stop:     $network $syslog $named $local_fs $remote_fs
+# Should-Start:      dahdi misdn lcr wanrouter mysql postgresql
+# Should-Stop:       dahdi misdn lcr wanrouter mysql postgresql
+# Default-Start:	2 3 4 5
+# Default-Stop:		0 1 6
+# Short-Description:	Asterisk PBX
+# Description:		the Asterisk Open Source PBX
 ### END INIT INFO
 
 # Source function library.
@@ -59,6 +62,15 @@ SAFE_ASTERISK=/usr/sbin/safe_asterisk
 #AST_USER="asterisk"
 #AST_GROUP="asterisk"
 
+# Allow configuration overrides in /etc/sysconfig/asterisk
+CONFIG0=`readlink $0`
+if [ "$CONFIG0" = "" ]; then
+	CONFIGFILE=/etc/sysconfig/`basename $0`
+else
+	CONFIGFILE=/etc/sysconfig/`basename $CONFIG0`
+fi
+[ -r $CONFIGFILE ] && . $CONFIGFILE
+
 RETVAL=0
 
 start() {
@@ -82,7 +94,35 @@ start() {
 	if [ $AST_GROUP ] ; then
 		ASTARGS="`echo $ASTARGS` -G $AST_GROUP"
 	fi
-	$DAEMON $ASTARGS
+	if [ $ALTCONF ]; then
+		ASTARGS="$ASTARGS -C $ALTCONF"
+	fi
+	if [ "x$COREDUMP" = "xyes" ]; then
+		ASTARGS="$ASTARGS -g"
+	fi
+	if [ "0$MAXLOAD" -gt "0" ]; then
+		ASTARGS="$ASTARGS -L $MAXLOAD"
+	fi
+	if [ "0$MAXCALLS" -gt "0" ]; then
+		ASTARGS="$ASTARGS -M $MAXCALLS"
+	fi
+	if [ "$VERBOSITY" -gt "0" ]; then
+		for i in `seq 1 $VERBOSITY`; do
+			ASTARGS="$ASTARGS -v"
+		done
+	fi
+	if [ "x$INTERNALTIMING" = "xyes" ]; then
+		ASTARGS="$ASTARGS -I"
+	fi
+	if [ "x$TEMPRECORDINGLOCATION" = "xyes" -o "x$TMPRECORDINGLOCATION" = "xyes" ]; then
+		ASTARGS="$ASTARGS -t"
+	fi
+	if [ "x$COLOR" = "xyes" ]; then
+		export TERM=linux
+		sh -c "$DAEMON $ASTARGS -c" >/dev/null </dev/null 2>&1 &
+	else
+		$DAEMON $ASTARGS
+	fi
 	RETVAL=$?
 	[ $RETVAL -eq 0 ] && touch /var/lock/subsys/asterisk
 	echo

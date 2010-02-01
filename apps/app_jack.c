@@ -604,7 +604,7 @@ static void handle_jack_audio(struct ast_channel *chan, struct jack_data *jack_d
 	short buf[160];
 	struct ast_frame f = {
 		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_SLINEAR,
+		.subclass.codec = AST_FORMAT_SLINEAR,
 		.src = "JACK",
 		.data.ptr = buf,
 		.datalen = sizeof(buf),
@@ -676,11 +676,7 @@ static struct jack_data *jack_data_alloc(void)
 {
 	struct jack_data *jack_data;
 
-	if (!(jack_data = ast_calloc(1, sizeof(*jack_data))))
-		return NULL;
-
-	if (ast_string_field_init(jack_data, 32)) {
-		ast_free(jack_data);
+	if (!(jack_data = ast_calloc_with_stringfields(1, struct jack_data, 32))) {
 		return NULL;
 	}
 
@@ -781,7 +777,7 @@ static int jack_exec(struct ast_channel *chan, const char *data)
 
 		switch (f->frametype) {
 		case AST_FRAME_CONTROL:
-			if (f->subclass == AST_CONTROL_HANGUP)
+			if (f->subclass.integer == AST_CONTROL_HANGUP)
 				jack_data->stop = 1;
 			break;
 		case AST_FRAME_VOICE:
@@ -827,9 +823,9 @@ static int jack_hook_callback(struct ast_audiohook *audiohook, struct ast_channe
 	if (frame->frametype != AST_FRAME_VOICE)
 		return 0;
 
-	if (frame->subclass != AST_FORMAT_SLINEAR) {
-		ast_log(LOG_WARNING, "Expected frame in SLINEAR for the audiohook, but got format %d\n",
-			frame->subclass);
+	if (frame->subclass.codec != AST_FORMAT_SLINEAR) {
+		ast_log(LOG_WARNING, "Expected frame in SLINEAR for the audiohook, but got format %s\n",
+			ast_getformatname(frame->subclass.codec));
 		return 0;
 	}
 

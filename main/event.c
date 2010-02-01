@@ -1067,6 +1067,7 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 	struct ast_event *event;
 	enum ast_event_ie_type ie_type;
 	struct ast_event_ie_val *ie_val;
+	int has_ie = 0;
 	AST_LIST_HEAD_NOLOCK_STATIC(ie_vals, ast_event_ie_val);
 
 	/* Invalid type */
@@ -1114,6 +1115,7 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 
 		if (insert) {
 			AST_LIST_INSERT_TAIL(&ie_vals, ie_value, entry);
+			has_ie = 1;
 		}
 	}
 	va_end(ap);
@@ -1154,7 +1156,7 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 		}
 	}
 
-	if (!ast_event_get_ie_raw(event, AST_EVENT_IE_EID)) {
+	if (has_ie && !ast_event_get_ie_raw(event, AST_EVENT_IE_EID)) {
 		/* If the event is originating on this server, add the server's
 		 * entity ID to the event. */
 		ast_event_append_ie_raw(&event, AST_EVENT_IE_EID, &ast_eid_default, sizeof(ast_eid_default));
@@ -1480,6 +1482,7 @@ static int ast_event_cmp(void *obj, void *arg, int flags)
 
 	for (i = 0; i < ARRAY_LEN(ast_event_cache[0].cache_args) && cache_args[i]; i++) {
 		struct ast_event_ie_val ie_val = {
+			.ie_pltype = ast_event_get_ie_pltype(cache_args[i]),
 			.ie_type = cache_args[i],
 		};
 

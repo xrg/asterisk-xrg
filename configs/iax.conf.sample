@@ -339,12 +339,13 @@ autokill=yes
 ;
 ;calltokenoptional=209.16.236.73/255.255.255.0
 ;
-; In a peer/user/friend definition, the 'requirecalltoken' option may be used.
 ; By setting 'requirecalltoken=no', call token validation becomes optional for
 ; that peer/user.  By setting 'requirecalltoken=auto', call token validation 
 ; is optional until a call token supporting peer registers successfully using
 ; call token validation.  This is used as an indication that from now on, we
 ; can require it from this peer.  So, requirecalltoken is internally set to yes.
+; requirecalltoken may only be used in peer/user/friend definitions,
+; not in the global scope.
 ; By default, 'requirecalltoken=yes'.
 ;
 ;requirecalltoken=no
@@ -384,6 +385,15 @@ autokill=yes
 ;10.1.1.0/255.255.255.0 = 24
 ;10.1.2.0/255.255.255.0 = 32
 ;
+
+; The shrinkcallerid function removes '(', ' ', ')', non-trailing '.', and '-' not
+; in square brackets.  For example, the caller id value 555.5555 becomes 5555555
+; when this option is enabled.  Disabling this option results in no modification
+; of the caller id value, which is necessary when the caller id represents something
+; that must be preserved.  This option can only be used in the [general] section.
+; By default this option is on.
+;
+;shrinkcallerid=yes     ; on by default
 
 ; Guest sections for unauthenticated connection attempts.  Just specify an
 ; empty secret, or provide no secret section.

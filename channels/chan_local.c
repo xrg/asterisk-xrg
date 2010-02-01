@@ -60,7 +60,7 @@ static struct ast_jb_conf g_jb_conf = {
 	.impl = "",
 };
 
-static struct ast_channel *local_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause);
+static struct ast_channel *local_request(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause);
 static int local_digit_begin(struct ast_channel *ast, char digit);
 static int local_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
 static int local_call(struct ast_channel *ast, char *dest, int timeout);
@@ -98,18 +98,25 @@ static const struct ast_channel_tech local_tech = {
 	.bridged_channel = local_bridgedchannel,
 };
 
+/*! \brief the local pvt structure for all channels
+
+	The local channel pvt has two ast_chan objects - the "owner" and the "next channel", the outbound channel
+
+	ast_chan owner -> local_pvt -> ast_chan chan -> yet-another-pvt-depending-on-channel-type
+
+*/
 struct local_pvt {
-	ast_mutex_t lock;			/* Channel private lock */
-	unsigned int flags;                     /* Private flags */
-	char context[AST_MAX_CONTEXT];		/* Context to call */
-	char exten[AST_MAX_EXTENSION];		/* Extension to call */
-	int reqformat;				/* Requested format */
+	ast_mutex_t lock;			/*!< Channel private lock */
+	unsigned int flags;                     /*!< Private flags */
+	char context[AST_MAX_CONTEXT];		/*!< Context to call */
+	char exten[AST_MAX_EXTENSION];		/*!< Extension to call */
+	int reqformat;				/*!< Requested format */
 	struct ast_jb_conf jb_conf;		/*!< jitterbuffer configuration for this local channel */
-	struct ast_channel *owner;		/* Master Channel - Bridging happens here */
-	struct ast_channel *chan;		/* Outbound channel - PBX is run here */
-	struct ast_module_user *u_owner;	/*! reference to keep the module loaded while in use */
-	struct ast_module_user *u_chan;		/*! reference to keep the module loaded while in use */
-	AST_LIST_ENTRY(local_pvt) list;		/* Next entity */
+	struct ast_channel *owner;		/*!< Master Channel - Bridging happens here */
+	struct ast_channel *chan;		/*!< Outbound channel - PBX is run here */
+	struct ast_module_user *u_owner;	/*!< reference to keep the module loaded while in use */
+	struct ast_module_user *u_chan;		/*!< reference to keep the module loaded while in use */
+	AST_LIST_ENTRY(local_pvt) list;		/*!< Next entity */
 };
 
 #define LOCAL_GLARE_DETECT    (1 << 0) /*!< Detect glare on hangup */
@@ -118,6 +125,7 @@ struct local_pvt {
 #define LOCAL_LAUNCHED_PBX    (1 << 3) /*!< PBX was launched */
 #define LOCAL_NO_OPTIMIZATION (1 << 4) /*!< Do not optimize using masquerading */
 #define LOCAL_BRIDGE          (1 << 5) /*!< Report back the "true" channel as being bridged to */
+#define LOCAL_MOH_PASSTHRU    (1 << 6) /*!< Pass through music on hold start/stop frames */
 
 static AST_LIST_HEAD_STATIC(locals, local_pvt);
 
@@ -174,6 +182,12 @@ static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct
 {
 	struct local_pvt *p = bridge->tech_pvt;
 	struct ast_channel *bridged = bridge;
+
+	if (!p) {
+		ast_debug(1, "Asked for bridged channel on '%s'/'%s', returning <none>\n",
+			chan->name, bridge->name);
+		return NULL;
+	}
 
 	ast_mutex_lock(&p->lock);
 
@@ -243,7 +257,9 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 	}
 
 	if (other) {
-		ast_queue_frame(other, f);
+		if (other->pbx || other->_bridge || !ast_strlen_zero(other->appl)) {
+			ast_queue_frame(other, f);
+		} /* else the frame won't go anywhere */
 		ast_channel_unlock(other);
 	}
 
@@ -265,7 +281,7 @@ static int local_answer(struct ast_channel *ast)
 	isoutbound = IS_OUTBOUND(ast, p);
 	if (isoutbound) {
 		/* Pass along answer since somebody answered us */
-		struct ast_frame answer = { AST_FRAME_CONTROL, AST_CONTROL_ANSWER };
+		struct ast_frame answer = { AST_FRAME_CONTROL, { AST_CONTROL_ANSWER } };
 		res = local_queue_frame(p, isoutbound, &answer, ast, 1);
 	} else
 		ast_log(LOG_WARNING, "Huh?  Local is being asked to answer?\n");
@@ -405,9 +421,9 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 		return -1;
 
 	/* If this is an MOH hold or unhold, do it on the Local channel versus real channel */
-	if (condition == AST_CONTROL_HOLD) {
+	if (!ast_test_flag(p, LOCAL_MOH_PASSTHRU) && condition == AST_CONTROL_HOLD) {
 		ast_moh_start(ast, data, NULL);
-	} else if (condition == AST_CONTROL_UNHOLD) {
+	} else if (!ast_test_flag(p, LOCAL_MOH_PASSTHRU) && condition == AST_CONTROL_UNHOLD) {
 		ast_moh_stop(ast);
 	} else if (condition == AST_CONTROL_CONNECTED_LINE || condition == AST_CONTROL_REDIRECTING) {
 		struct ast_channel *this_channel;
@@ -435,7 +451,7 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 			} else {
 				f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data), &this_channel->redirecting);
 			}
-			f.subclass = condition;
+			f.subclass.integer = condition;
 			f.data.ptr = frame_data;
 			if (!(res = local_queue_frame(p, isoutbound, &f, ast, 1))) {
 				ast_mutex_unlock(&p->lock);
@@ -447,7 +463,7 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 		/* Queue up a frame representing the indication as a control frame */
 		ast_mutex_lock(&p->lock);
 		isoutbound = IS_OUTBOUND(ast, p);
-		f.subclass = condition;
+		f.subclass.integer = condition;
 		f.data.ptr = (void*)data;
 		f.datalen = datalen;
 		if (!(res = local_queue_frame(p, isoutbound, &f, ast, 1)))
@@ -469,7 +485,7 @@ static int local_digit_begin(struct ast_channel *ast, char digit)
 
 	ast_mutex_lock(&p->lock);
 	isoutbound = IS_OUTBOUND(ast, p);
-	f.subclass = digit;
+	f.subclass.integer = digit;
 	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
 		ast_mutex_unlock(&p->lock);
 
@@ -488,7 +504,7 @@ static int local_digit_end(struct ast_channel *ast, char digit, unsigned int dur
 
 	ast_mutex_lock(&p->lock);
 	isoutbound = IS_OUTBOUND(ast, p);
-	f.subclass = digit;
+	f.subclass.integer = digit;
 	f.len = duration;
 	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
 		ast_mutex_unlock(&p->lock);
@@ -527,7 +543,7 @@ static int local_sendhtml(struct ast_channel *ast, int subclass, const char *dat
 	
 	ast_mutex_lock(&p->lock);
 	isoutbound = IS_OUTBOUND(ast, p);
-	f.subclass = subclass;
+	f.subclass.integer = subclass;
 	f.data.ptr = (char *)data;
 	f.datalen = datalen;
 	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
@@ -638,7 +654,7 @@ static int local_hangup(struct ast_channel *ast)
 {
 	struct local_pvt *p = ast->tech_pvt;
 	int isoutbound;
-	struct ast_frame f = { AST_FRAME_CONTROL, AST_CONTROL_HANGUP, .data.uint32 = ast->hangupcause };
+	struct ast_frame f = { AST_FRAME_CONTROL, { AST_CONTROL_HANGUP }, .data.uint32 = ast->hangupcause };
 	struct ast_channel *ochan = NULL;
 	int glaredetect = 0, res = 0;
 
@@ -678,11 +694,11 @@ static int local_hangup(struct ast_channel *ast)
 		ast_clear_flag(p, LOCAL_LAUNCHED_PBX);
 		ast_module_user_remove(p->u_chan);
 	} else {
-		p->owner = NULL;
 		ast_module_user_remove(p->u_owner);
 		while (p->chan && ast_channel_trylock(p->chan)) {
 			DEADLOCK_AVOIDANCE(&p->lock);
 		}
+		p->owner = NULL;
 		if (p->chan) {
 			ast_queue_hangup(p->chan);
 			ast_channel_unlock(p->chan);
@@ -751,6 +767,9 @@ static struct local_pvt *local_alloc(const char *data, int format)
 		}
 		if (strchr(opts, 'b')) {
 			ast_set_flag(tmp, LOCAL_BRIDGE);
+		}
+		if (strchr(opts, 'm')) {
+			ast_set_flag(tmp, LOCAL_MOH_PASSTHRU);
 		}
 	}
 
@@ -846,7 +865,7 @@ static struct ast_channel *local_new(struct local_pvt *p, int state, const char 
 }
 
 /*! \brief Part of PBX interface */
-static struct ast_channel *local_request(const char *type, int format, const struct ast_channel *requestor, void *data, int *cause)
+static struct ast_channel *local_request(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause)
 {
 	struct local_pvt *p = NULL;
 	struct ast_channel *chan = NULL;

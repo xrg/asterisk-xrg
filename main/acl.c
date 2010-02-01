@@ -237,7 +237,7 @@ static struct ast_ha *ast_duplicate_ha(struct ast_ha *original)
 {
 	struct ast_ha *new_ha;
 
-	if ((new_ha = ast_malloc(sizeof(*new_ha)))) {
+	if ((new_ha = ast_calloc(1, sizeof(*new_ha)))) {
 		/* Copy from original to new object */
 		ast_copy_ha(original, new_ha);
 	}
@@ -284,7 +284,7 @@ struct ast_ha *ast_append_ha(const char *sense, const char *stuff, struct ast_ha
 		path = path->next;
 	}
 
-	if (!(ha = ast_malloc(sizeof(*ha)))) {
+	if (!(ha = ast_calloc(1, sizeof(*ha)))) {
 		return ret;
 	}
 
@@ -482,7 +482,7 @@ int ast_ouraddrfor(struct in_addr *them, struct in_addr *us)
 		return -1;
 	}
 	sin.sin_family = AF_INET;
-	sin.sin_port = 5060;
+	sin.sin_port = htons(5060);
 	sin.sin_addr = *them;
 	if (connect(s, (struct sockaddr *)&sin, sizeof(sin))) {
 		ast_log(LOG_WARNING, "Cannot connect\n");

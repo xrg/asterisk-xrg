@@ -29,6 +29,7 @@
 #include "asterisk/hashtab.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/xmldoc.h"
+#include "asterisk/frame_defs.h"
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -144,6 +145,14 @@ int ast_build_timing(struct ast_timing *i, const char *info);
  * \retval Returns 1, if the time matches or 0, if the current time falls outside of the specified range.
  */
 int ast_check_timing(const struct ast_timing *i);
+
+/*!
+ * \brief Evaluate a pre-constructed bitmap as to whether a particular time falls within the range specified.
+ * \param i Pointer to an ast_timing structure.
+ * \param tv Specified time
+ * \retval Returns 1, if the time matches or 0, if the time falls outside of the specified range.
+ */
+int ast_check_timing2(const struct ast_timing *i, const struct timeval tv);
 
 /*!
  * \brief Deallocates memory structures associated with a timing bitmap.
@@ -879,11 +888,11 @@ int ast_async_goto_by_name(const char *chan, const char *context, const char *ex
 
 /*! Synchronously or asynchronously make an outbound call and send it to a
    particular extension */
-int ast_pbx_outgoing_exten(const char *type, int format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel);
+int ast_pbx_outgoing_exten(const char *type, format_t format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel);
 
 /*! Synchronously or asynchronously make an outbound call and send it to a
    particular application with given extension */
-int ast_pbx_outgoing_app(const char *type, int format, void *data, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel);
+int ast_pbx_outgoing_app(const char *type, format_t format, void *data, int timeout, const char *app, const char *appdata, int *reason, int sync, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel);
 
 /*!
  * \brief Evaluate a condition
@@ -981,8 +990,10 @@ void pbx_builtin_pushvar_helper(struct ast_channel *chan, const char *name, cons
  * \brief Add a variable to the channel variable stack, removing the most recently set value for the same name.
  * \note Will lock the channel.  May also be used to set a channel dialplan function to a particular value.
  * \see ast_func_write
+ * \return -1 if the dialplan function fails to be set
+ * \version 1.8 changed the function to return an error code
  */
-void pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const char *value);
+int pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const char *value);
 
 /*!
  * \brief Retrieve the value of a builtin variable or variable from the channel variable stack.

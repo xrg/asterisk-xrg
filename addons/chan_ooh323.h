@@ -50,7 +50,7 @@
 #include <asterisk/sched.h>
 #include <asterisk/io.h>
 #include <asterisk/causes.h>
-#include <asterisk/rtp.h>
+#include <asterisk/rtp_engine.h>
 #include <asterisk/acl.h>
 #include <asterisk/callerid.h>
 #include <asterisk/file.h>
@@ -60,8 +60,11 @@
 #include <asterisk/manager.h>
 #include <asterisk/dsp.h>
 #include <asterisk/stringfields.h>
+#include <asterisk/frame_defs.h>
+#include <asterisk/udptl.h>
 
 #include "ootypes.h"
+#include "ooUtils.h"
 #include "ooCapability.h"
 #include "oochannels.h"
 #include "ooh323ep.h"
@@ -95,13 +98,13 @@ void close_rtp_connection(ooCallData *call);
 struct ast_frame *ooh323_rtp_read
          (struct ast_channel *ast, struct ooh323_pvt *p);
 
-void ooh323_set_write_format(ooCallData *call, int fmt);
+void ooh323_set_write_format(ooCallData *call, int fmt, int txframes);
 void ooh323_set_read_format(ooCallData *call, int fmt);
 
 int ooh323_update_capPrefsOrderForCall
    (ooCallData *call, struct ast_codec_pref *prefs);
 
-int ooh323_convertAsteriskCapToH323Cap(int cap);
+int ooh323_convertAsteriskCapToH323Cap(format_t cap);
 
 int ooh323_convert_hangupcause_asteriskToH323(int cause);
 int ooh323_convert_hangupcause_h323ToAsterisk(int cause);
@@ -110,4 +113,10 @@ int update_our_aliases(ooCallData *call, struct ooh323_pvt *p);
 /* h323 msg callbacks */
 int ooh323_onReceivedSetup(ooCallData *call, Q931Message *pmsg);
 int ooh323_onReceivedDigit(OOH323CallData *call, const char* digit);
+
+void setup_udptl_connection(ooCallData *call, const char *remoteIp, int remotePort);
+void close_udptl_connection(ooCallData *call);
+
+EXTERN char *handle_cli_ooh323_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
+
 #endif

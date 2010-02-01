@@ -216,7 +216,7 @@ static char *timing_test(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 	case CLI_INIT:
 		e->command = "timing test";
 		e->usage = "Usage: timing test <rate>\n"
-		           "   Test a timer with a specified rate, 100/sec by default.\n"
+		           "   Test a timer with a specified rate, 50/sec by default.\n"
 		           "";
 		return NULL;
 	case CLI_GENERATE:
@@ -270,7 +270,7 @@ static char *timing_test(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 
 	ast_timer_close(timer);
 
-	ast_cli(a->fd, "It has been %d milliseconds, and we got %d timer ticks\n", 
+	ast_cli(a->fd, "It has been %" PRIi64 " milliseconds, and we got %d timer ticks\n", 
 		ast_tvdiff_ms(end, start), count);
 
 	return CLI_SUCCESS;

@@ -386,7 +386,7 @@ static void jb_get_and_deliver(struct ast_channel *chan)
 	struct ast_jb *jb = &chan->jb;
 	const struct ast_jb_impl *jbimpl = jb->impl;
 	void *jbobj = jb->jbobj;
-	struct ast_frame *f, finterp;
+	struct ast_frame *f, finterp = { .frametype = AST_FRAME_VOICE, };
 	long now;
 	int interpolation_len, res;
 
@@ -409,19 +409,15 @@ static void jb_get_and_deliver(struct ast_channel *chan)
 		case JB_IMPL_DROP:
 			jb_framelog("\tJB_GET {now=%ld}: %s frame with ts=%ld and len=%ld\n",
 				now, jb_get_actions[res], f->ts, f->len);
-			jb->last_format = f->subclass;
+			jb->last_format = f->subclass.codec;
 			ast_frfree(f);
 			break;
 		case JB_IMPL_INTERP:
 			/* interpolate a frame */
 			f = &finterp;
-			f->frametype = AST_FRAME_VOICE;
-			f->subclass = jb->last_format;
-			f->datalen  = 0;
+			f->subclass.codec = jb->last_format;
 			f->samples  = interpolation_len * 8;
-			f->mallocd  = 0;
 			f->src  = "JB interpolation";
-			f->data.ptr  = NULL;
 			f->delivery = ast_tvadd(jb->timebase, ast_samp2tv(jb->next, 1000));
 			f->offset = AST_FRIENDLY_OFFSET;
 			/* deliver the interpolated frame */
@@ -480,7 +476,7 @@ static int create_jb(struct ast_channel *chan, struct ast_frame *frr)
 	jb->next = jbimpl->next(jbobj);
 
 	/* Init last format for a first time. */
-	jb->last_format = frr->subclass;
+	jb->last_format = frr->subclass.codec;
 
 	/* Create a frame log file */
 	if (ast_test_flag(jbconf, AST_JB_LOG)) {

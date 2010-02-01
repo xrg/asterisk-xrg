@@ -435,7 +435,7 @@ static int spy_generate(struct ast_channel *chan, void *data, int len, int sampl
 		return -1;
 	}
 
-	if (ast_test_flag(chan, OPTION_READONLY)) {
+	if (ast_test_flag(&csth->spy_audiohook, OPTION_READONLY)) {
 		/* Option 'o' was set, so don't mix channel audio */
 		f = ast_audiohook_read_frame(&csth->spy_audiohook, samples, AST_AUDIOHOOK_DIRECTION_READ, AST_FORMAT_SLINEAR);
 	} else {
@@ -513,6 +513,7 @@ static int channel_spy(struct ast_channel *chan, struct ast_autochan *spyee_auto
 	struct ast_silence_generator *silgen = NULL;
 	struct ast_autochan *spyee_bridge_autochan = NULL;
 	const char *spyer_name;
+	struct ast_channel *chans[] = { chan, spyee_autochan->chan };
 
 	ast_channel_lock(chan);
 	spyer_name = ast_strdupa(chan->name);
@@ -529,12 +530,13 @@ static int channel_spy(struct ast_channel *chan, struct ast_autochan *spyee_auto
 	ast_channel_unlock(spyee_autochan->chan);
 
 	ast_verb(2, "Spying on channel %s\n", name);
-	manager_event(EVENT_FLAG_CALL, "ChanSpyStart",
+	ast_manager_event_multichan(EVENT_FLAG_CALL, "ChanSpyStart", 2, chans,
 			"SpyerChannel: %s\r\n"
 			"SpyeeChannel: %s\r\n",
 			spyer_name, name);
 
 	memset(&csth, 0, sizeof(csth));
+	ast_copy_flags(&csth.spy_audiohook, flags, AST_FLAGS_ALL);
 
 	ast_audiohook_init(&csth.spy_audiohook, AST_AUDIOHOOK_TYPE_SPY, "ChanSpy");
 
@@ -611,7 +613,7 @@ static int channel_spy(struct ast_channel *chan, struct ast_autochan *spyee_auto
 			continue;
 		}
 		
-		res = (f->frametype == AST_FRAME_DTMF) ? f->subclass : 0;
+		res = (f->frametype == AST_FRAME_DTMF) ? f->subclass.integer : 0;
 		ast_frfree(f);
 		if (!res)
 			continue;
@@ -696,7 +698,7 @@ static int channel_spy(struct ast_channel *chan, struct ast_autochan *spyee_auto
 	}
 
 	ast_verb(2, "Done Spying on channel %s\n", name);
-	manager_event(EVENT_FLAG_CALL, "ChanSpyStop", "SpyeeChannel: %s\r\n", name);
+	ast_manager_event(chan, EVENT_FLAG_CALL, "ChanSpyStop", "SpyeeChannel: %s\r\n", name);
 
 	return running;
 }
@@ -786,11 +788,11 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 
 		/* Set up the iterator we'll be using during this call */
 		if (!ast_strlen_zero(spec)) {
-			iter = ast_channel_iterator_by_name_new(0, spec, strlen(spec));
+			iter = ast_channel_iterator_by_name_new(spec, strlen(spec));
 		} else if (!ast_strlen_zero(exten)) {
-			iter = ast_channel_iterator_by_exten_new(0, exten, context);
+			iter = ast_channel_iterator_by_exten_new(exten, context);
 		} else {
-			iter = ast_channel_iterator_all_new(0);
+			iter = ast_channel_iterator_all_new();
 		}
 
 		if (!iter) {

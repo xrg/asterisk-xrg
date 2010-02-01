@@ -696,10 +696,10 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan,
 			ast_log(LOG_DEBUG, "Found chanvar Parkinglot: %s\n", parkinglotname);
 		parkinglot = find_parkinglot(parkinglotname);	
 	}
-	if (!parkinglot)
-		parkinglot = default_parkinglot;
+	if (!parkinglot) {
+		parkinglot = parkinglot_addref(default_parkinglot);
+	}
 
-	parkinglot_addref(parkinglot);
 	if (option_debug)
 		ast_log(LOG_DEBUG, "Parkinglot: %s\n", parkinglot->name);
 
@@ -713,7 +713,7 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan,
 	AST_LIST_LOCK(&parkinglot->parkings);
 	/* Check for channel variable PARKINGEXTEN */
 	ast_channel_lock(chan);
-	parkingexten = pbx_builtin_getvar_helper(chan, "PARKINGEXTEN");
+	parkingexten = ast_strdupa(S_OR(pbx_builtin_getvar_helper(chan, "PARKINGEXTEN"), ""));
 	ast_channel_unlock(chan);
 	if (!ast_strlen_zero(parkingexten)) {
 		/*!\note The API forces us to specify a numeric parking slot, even
@@ -732,10 +732,10 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan,
         snprintf(pu->parkingexten, sizeof(pu->parkingexten), "%d", parking_space);
 
 		if (ast_exists_extension(NULL, parkinglot->parking_con, pu->parkingexten, 1, NULL)) {
+			ast_log(LOG_WARNING, "Requested parking extension already exists: %s@%s\n", parkingexten, parkinglot->parking_con);
 			AST_LIST_UNLOCK(&parkinglot->parkings);
 			parkinglot_unref(parkinglot);
 			ast_free(pu);
-			ast_log(LOG_WARNING, "Requested parking extension already exists: %s@%s\n", parkingexten, parkinglot->parking_con);
 			return NULL;
 		}
 	} else {
@@ -754,7 +754,7 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan,
 		for (i = start; 1; i++) {
 			if (i == parkinglot->parking_stop + 1) {
 				i = parkinglot->parking_start - 1;
-				continue;
+				break;
 			}
 
 			AST_LIST_TRAVERSE(&parkinglot->parkings, cur, list) {
@@ -762,8 +762,7 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan,
 					break;
 				}
 			}
-
-			if (!cur || i == start - 1) {
+			if (!cur) {
 				parking_space = i;
 				break;
 			}
@@ -784,7 +783,7 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan,
 
 	pu->notquiteyet = 1;
 	pu->parkingnum = parking_space;
-	pu->parkinglot = parkinglot;
+	pu->parkinglot = parkinglot_addref(parkinglot);
 	AST_LIST_INSERT_TAIL(&parkinglot->parkings, pu, list);
 	parkinglot_unref(parkinglot);
 
@@ -890,7 +889,7 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 		event_from = pbx_builtin_getvar_helper(chan, "BLINDTRANSFER");
 	}
 
-	manager_event(EVENT_FLAG_CALL, "ParkedCall",
+	ast_manager_event(pu->chan, EVENT_FLAG_CALL, "ParkedCall",
 		"Exten: %s\r\n"
 		"Channel: %s\r\n"
 		"Parkinglot: %s\r\n"
@@ -984,6 +983,11 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 	/* Setup the extensions and such */
 	set_c_e_p(chan, rchan->context, rchan->exten, rchan->priority);
 
+	/* Setup the macro extension and such */
+	ast_copy_string(chan->macrocontext,rchan->macrocontext,sizeof(chan->macrocontext));
+	ast_copy_string(chan->macroexten,rchan->macroexten,sizeof(chan->macroexten));
+	chan->macropriority = rchan->macropriority;
+
 	/* Make the masq execute */
 	if ((f = ast_read(chan)))
 		ast_frfree(f);
@@ -992,8 +996,8 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 		peer = chan;
 	}
 
-	if (!play_announcement && args == &park_args) {
-		args->orig_chan_name = ast_strdupa(chan->name);
+	if (peer && (!play_announcement && args == &park_args)) {
+		args->orig_chan_name = ast_strdupa(peer->name);
 	}
 
 	park_status = park_call_full(chan, peer, args);
@@ -1936,13 +1940,8 @@ static struct feature_group* register_group(const char *fgname)
 		return NULL;
 	}
 
-	if (!(fg = ast_calloc(1, sizeof(*fg))))
+	if (!(fg = ast_calloc_with_stringfields(1, struct feature_group, 128)))
 		return NULL;
-
-	if (ast_string_field_init(fg, 128)) {
-		ast_free(fg);
-		return NULL;
-	}
 
 	ast_string_field_set(fg, gname, fgname);
 
@@ -1976,13 +1975,8 @@ static void register_group_feature(struct feature_group *fg, const char *exten, 
 		return;
 	}
 
-	if (!(fge = ast_calloc(1, sizeof(*fge))))
+	if (!(fge = ast_calloc_with_stringfields(1, struct feature_group_exten, 128)))
 		return;
-
-	if (ast_string_field_init(fge, 128)) {
-		ast_free(fge);
-		return;
-	}
 
 	ast_string_field_set(fge, exten, S_OR(exten, feature->exten));
 
@@ -2483,32 +2477,34 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller, 
 			}
 			
 			if (f->frametype == AST_FRAME_CONTROL || f->frametype == AST_FRAME_DTMF || f->frametype == AST_FRAME_TEXT) {
-				if (f->subclass == AST_CONTROL_RINGING) {
-					state = f->subclass;
+				if (f->subclass.integer == AST_CONTROL_RINGING) {
+					state = f->subclass.integer;
 					ast_verb(3, "%s is ringing\n", chan->name);
 					ast_indicate(caller, AST_CONTROL_RINGING);
-				} else if ((f->subclass == AST_CONTROL_BUSY) || (f->subclass == AST_CONTROL_CONGESTION)) {
-					state = f->subclass;
+				} else if ((f->subclass.integer == AST_CONTROL_BUSY) || (f->subclass.integer == AST_CONTROL_CONGESTION)) {
+					state = f->subclass.integer;
 					ast_verb(3, "%s is busy\n", chan->name);
 					ast_indicate(caller, AST_CONTROL_BUSY);
 					ast_frfree(f);
 					f = NULL;
 					break;
-				} else if (f->subclass == AST_CONTROL_ANSWER) {
+				} else if (f->subclass.integer == AST_CONTROL_ANSWER) {
 					/* This is what we are hoping for */
-					state = f->subclass;
+					state = f->subclass.integer;
 					ast_frfree(f);
 					f = NULL;
 					ready=1;
 					break;
-				} else if (f->subclass == AST_CONTROL_CONNECTED_LINE) {
+				} else if (f->subclass.integer == AST_CONTROL_CONNECTED_LINE) {
 					if (ast_channel_connected_line_macro(chan, caller, f, 1, 1)) {
 						ast_indicate_data(caller, AST_CONTROL_CONNECTED_LINE, f->data.ptr, f->datalen);
 					}
-				} else if (f->subclass != -1) {
-					ast_log(LOG_NOTICE, "Don't know what to do about control frame: %d\n", f->subclass);
+				} else if (f->subclass.integer != -1 && f->subclass.integer != AST_CONTROL_PROGRESS) {
+					ast_log(LOG_NOTICE, "Don't know what to do about control frame: %d\n", f->subclass.integer);
 				}
 				/* else who cares */
+			} else if (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO) {
+				ast_write(caller, f);
 			}
 
 		} else if (caller && (active_channel == caller)) {
@@ -2527,7 +2523,7 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller, 
 			} else {
 			
 				if (f->frametype == AST_FRAME_DTMF) {
-					dialed_code[x++] = f->subclass;
+					dialed_code[x++] = f->subclass.integer;
 					dialed_code[x] = '\0';
 					if (strlen(dialed_code) == len) {
 						x = 0;
@@ -2542,6 +2538,8 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller, 
 						f = NULL;
 						break;
 					}
+				} else if (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO) {
+					ast_write(chan, f);
 				}
 			}
 		}
@@ -2800,9 +2798,13 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		if (chan_cdr) {
 			ast_set_flag(chan_cdr, AST_CDR_FLAG_MAIN);
 			ast_cdr_update(chan);
-			bridge_cdr = ast_cdr_dup(chan_cdr);
+			bridge_cdr = ast_cdr_dup_unique_swap(chan_cdr);
 			ast_copy_string(bridge_cdr->lastapp, S_OR(chan->appl, ""), sizeof(bridge_cdr->lastapp));
 			ast_copy_string(bridge_cdr->lastdata, S_OR(chan->data, ""), sizeof(bridge_cdr->lastdata));
+			if (peer_cdr && !ast_strlen_zero(peer_cdr->userfield)) {
+				ast_copy_string(bridge_cdr->userfield, peer_cdr->userfield, sizeof(bridge_cdr->userfield));
+			}
+
 		} else {
 			/* better yet, in a xfer situation, find out why the chan cdr got zapped (pun unintentional) */
 			bridge_cdr = ast_cdr_alloc(); /* this should be really, really rare/impossible? */
@@ -2937,19 +2939,19 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		}
 		
 		if (!f || (f->frametype == AST_FRAME_CONTROL &&
-				(f->subclass == AST_CONTROL_HANGUP || f->subclass == AST_CONTROL_BUSY ||
-					f->subclass == AST_CONTROL_CONGESTION))) {
+				(f->subclass.integer == AST_CONTROL_HANGUP || f->subclass.integer == AST_CONTROL_BUSY ||
+					f->subclass.integer == AST_CONTROL_CONGESTION))) {
 			res = -1;
 			break;
 		}
 		/* many things should be sent to the 'other' channel */
 		other = (who == chan) ? peer : chan;
 		if (f->frametype == AST_FRAME_CONTROL) {
-			switch (f->subclass) {
+			switch (f->subclass.integer) {
 			case AST_CONTROL_RINGING:
 			case AST_CONTROL_FLASH:
 			case -1:
-				ast_indicate(other, f->subclass);
+				ast_indicate(other, f->subclass.integer);
 				break;
 			case AST_CONTROL_CONNECTED_LINE:
 				if (!ast_channel_connected_line_macro(who, other, f, who != chan, 1)) {
@@ -2958,7 +2960,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				/* The implied "else" falls through purposely */
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
-				ast_indicate_data(other, f->subclass, f->data.ptr, f->datalen);
+				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
 				break;
 			case AST_CONTROL_OPTION:
 				aoh = f->data.ptr;
@@ -2988,7 +2990,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			 * not overflowing it. 
 			 * \todo XXX how do we guarantee the latter ?
 			 */
-			featurecode[strlen(featurecode)] = f->subclass;
+			featurecode[strlen(featurecode)] = f->subclass.integer;
 			/* Get rid of the frame before we start doing "stuff" with the channels */
 			ast_frfree(f);
 			f = NULL;
@@ -3077,6 +3079,10 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		while ((spawn_error = ast_spawn_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num, &found, 1)) == 0) {
 			chan->priority++;
 		}
+		if (spawn_error && (!ast_exists_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num) || ast_check_hangup(chan))) {
+			/* if the extension doesn't exist or a hangup occurred, this isn't really a spawn error */
+			spawn_error = 0;
+		}
 		if (found && spawn_error) {
 			/* Something bad happened, or a hangup has been requested. */
 			ast_debug(1, "Spawn extension (%s,%s,%d) exited non-zero on '%s'\n", chan->context, chan->exten, chan->priority, chan->name);
@@ -3093,7 +3099,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				bridge_cdr = NULL;
 			}
 		}
-		if (chan->priority != 1 || !spawn_error) {
+		if (!spawn_error) {
 			ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_RUN);
 		}
 		ast_channel_unlock(chan);
@@ -3387,7 +3393,7 @@ int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds,
 				/* See if they need servicing */
 				f = ast_read(pu->chan);
 				/* Hangup? */
-				if (!f || ((f->frametype == AST_FRAME_CONTROL) && (f->subclass ==  AST_CONTROL_HANGUP))) {
+				if (!f || ((f->frametype == AST_FRAME_CONTROL) && (f->subclass.integer ==  AST_CONTROL_HANGUP))) {
 					if (f)
 						ast_frfree(f);
 					post_manager_event("ParkedCallGiveUp", pu);
@@ -3637,7 +3643,7 @@ static int park_exec_full(struct ast_channel *chan, const char *data, struct ast
 			ast_log(LOG_WARNING, "Whoa, no parking context?\n");
 
 		ast_cel_report_event(pu->chan, AST_CEL_PARK_END, NULL, "UnParkedCall", chan);
-		manager_event(EVENT_FLAG_CALL, "UnParkedCall",
+		ast_manager_event(pu->chan, EVENT_FLAG_CALL, "UnParkedCall",
 			"Exten: %s\r\n"
 			"Channel: %s\r\n"
 			"From: %s\r\n"
@@ -3711,8 +3717,12 @@ static int park_exec_full(struct ast_channel *chan, const char *data, struct ast
 		}
 		ast_channel_unlock(peer);
 
+		/* When the datastores for both caller and callee are created, both the callee and caller channels
+		 * use the features_caller flag variable to represent themselves. With that said, the config.features_callee
+		 * flags should be copied from the datastore's caller feature flags regardless if peer was a callee
+		 * or caller. */
 		if (dialfeatures) {
-			ast_copy_flags(&(config.features_callee), dialfeatures->is_caller ? &(dialfeatures->features_caller) : &(dialfeatures->features_callee), AST_FLAGS_ALL);
+			ast_copy_flags(&(config.features_callee), &(dialfeatures->features_caller), AST_FLAGS_ALL);
 		}
 
 		if ((parkinglot->parkedcalltransfers == AST_FEATURE_FLAG_BYCALLEE) || (parkinglot->parkedcalltransfers == AST_FEATURE_FLAG_BYBOTH)) {
@@ -4728,7 +4738,7 @@ static int find_channel_by_group(void *obj, void *arg, void *data, int flags)
 */
 int ast_pickup_call(struct ast_channel *chan)
 {
-	struct ast_channel *cur;
+	struct ast_channel *cur, *chans[2] = { chan, };
 	struct ast_party_connected_line connected_caller;
 	int res;
 	const char *chan_name;
@@ -4741,6 +4751,8 @@ int ast_pickup_call(struct ast_channel *chan)
 		}
 		return -1;
 	}
+
+	chans[1] = cur;
 
 	ast_channel_lock_both(cur, chan);
 
@@ -4777,6 +4789,10 @@ int ast_pickup_call(struct ast_channel *chan)
 	if (!ast_strlen_zero(pickupsound)) {
 		ast_stream_and_wait(cur, pickupsound, "");
 	}
+
+	/* If you want UniqueIDs, set channelvars in manager.conf to CHANNEL(uniqueid) */
+	ast_manager_event_multichan(EVENT_FLAG_CALL, "Pickup", 2, chans,
+		"Channel: %s\r\nTargetChannel: %s\r\n", chan->name, cur->name);
 
 	cur = ast_channel_unref(cur);
 
@@ -4911,12 +4927,12 @@ int ast_bridge_timelimit(struct ast_channel *chan, struct ast_bridge_config *con
 		config->timelimit = play_to_caller = play_to_callee =
 		config->play_warning = config->warning_freq = 0;
 	} else {
-		ast_verb(3, "Limit Data for this call:\n");
-		ast_verb(4, "timelimit      = %ld\n", config->timelimit);
-		ast_verb(4, "play_warning   = %ld\n", config->play_warning);
+		ast_verb(4, "Limit Data for this call:\n");
+		ast_verb(4, "timelimit      = %ld ms (%.3lf s)\n", config->timelimit, config->timelimit / 1000.0);
+		ast_verb(4, "play_warning   = %ld ms (%.3lf s)\n", config->play_warning, config->play_warning / 1000.0);
 		ast_verb(4, "play_to_caller = %s\n", play_to_caller ? "yes" : "no");
 		ast_verb(4, "play_to_callee = %s\n", play_to_callee ? "yes" : "no");
-		ast_verb(4, "warning_freq   = %ld\n", config->warning_freq);
+		ast_verb(4, "warning_freq   = %ld ms (%.3lf s)\n", config->warning_freq, config->warning_freq / 1000.0);
 		ast_verb(4, "start_sound    = %s\n", S_OR(config->start_sound, ""));
 		ast_verb(4, "warning_sound  = %s\n", config->warning_sound);
 		ast_verb(4, "end_sound      = %s\n", S_OR(config->end_sound, ""));
@@ -4940,7 +4956,7 @@ int ast_bridge_timelimit(struct ast_channel *chan, struct ast_bridge_config *con
 */
 static int bridge_exec(struct ast_channel *chan, const char *data)
 {
-	struct ast_channel *current_dest_chan, *final_dest_chan;
+	struct ast_channel *current_dest_chan, *final_dest_chan, *chans[2];
 	char *tmp_data  = NULL;
 	struct ast_flags opts = { 0, };
 	struct ast_bridge_config bconfig = { { 0, }, };
@@ -4963,11 +4979,9 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 		ast_app_parse_options(bridge_exec_options, &opts, opt_args, args.options);
 
 	/* avoid bridge with ourselves */
-	if (!strncmp(chan->name, args.dest_chan, 
-		strlen(chan->name) < strlen(args.dest_chan) ? 
-		strlen(chan->name) : strlen(args.dest_chan))) {
+	if (!strcmp(chan->name, args.dest_chan)) {
 		ast_log(LOG_WARNING, "Unable to bridge channel %s with itself\n", chan->name);
-		manager_event(EVENT_FLAG_CALL, "BridgeExec",
+		ast_manager_event(chan, EVENT_FLAG_CALL, "BridgeExec",
 					"Response: Failed\r\n"
 					"Reason: Unable to bridge channel to itself\r\n"
 					"Channel1: %s\r\n"
@@ -4982,7 +4996,7 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 			strlen(args.dest_chan)))) {
 		ast_log(LOG_WARNING, "Bridge failed because channel %s does not exists or we "
 			"cannot get its lock\n", args.dest_chan);
-		manager_event(EVENT_FLAG_CALL, "BridgeExec",
+		ast_manager_event(chan, EVENT_FLAG_CALL, "BridgeExec",
 					"Response: Failed\r\n"
 					"Reason: Cannot grab end point\r\n"
 					"Channel1: %s\r\n"
@@ -5000,7 +5014,7 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 	if (!(final_dest_chan = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, NULL, 
 		NULL, NULL, current_dest_chan->linkedid, 0, "Bridge/%s", current_dest_chan->name))) {
 		ast_log(LOG_WARNING, "Cannot create placeholder channel for chan %s\n", args.dest_chan);
-		manager_event(EVENT_FLAG_CALL, "BridgeExec",
+		ast_manager_event(chan, EVENT_FLAG_CALL, "BridgeExec",
 					"Response: Failed\r\n"
 					"Reason: cannot create placeholder\r\n"
 					"Channel1: %s\r\n"
@@ -5011,11 +5025,14 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 
 	do_bridge_masquerade(current_dest_chan, final_dest_chan);
 
+	chans[0] = current_dest_chan;
+	chans[1] = final_dest_chan;
+
 	/* now current_dest_chan is a ZOMBIE and with softhangup set to 1 and final_dest_chan is our end point */
 	/* try to make compatible, send error if we fail */
 	if (ast_channel_make_compatible(chan, final_dest_chan) < 0) {
 		ast_log(LOG_WARNING, "Could not make channels %s and %s compatible for bridge\n", chan->name, final_dest_chan->name);
-		manager_event(EVENT_FLAG_CALL, "BridgeExec",
+		ast_manager_event_multichan(EVENT_FLAG_CALL, "BridgeExec", 2, chans,
 					"Response: Failed\r\n"
 					"Reason: Could not make channels compatible for bridge\r\n"
 					"Channel1: %s\r\n"
@@ -5027,7 +5044,7 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 	}
 
 	/* Report that the bridge will be successfull */
-	manager_event(EVENT_FLAG_CALL, "BridgeExec",
+	ast_manager_event_multichan(EVENT_FLAG_CALL, "BridgeExec", 2, chans,
 				"Response: Success\r\n"
 				"Channel1: %s\r\n"
 				"Channel2: %s\r\n", chan->name, final_dest_chan->name);

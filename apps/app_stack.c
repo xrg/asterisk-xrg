@@ -199,6 +199,7 @@ struct gosub_stack_frame {
 	unsigned char arguments;
 	struct varshead varshead;
 	int priority;
+	unsigned int is_agi:1;
 	char *context;
 	char extension[0];
 };
@@ -311,6 +312,7 @@ static int return_exec(struct ast_channel *chan, const char *data)
 	struct gosub_stack_frame *oldframe;
 	AST_LIST_HEAD(, gosub_stack_frame) *oldlist;
 	const char *retval = data;
+	int res = 0;
 
 	if (!stack_store) {
 		ast_log(LOG_ERROR, "Return without Gosub: stack is unallocated\n");
@@ -325,6 +327,9 @@ static int return_exec(struct ast_channel *chan, const char *data)
 	if (!oldframe) {
 		ast_log(LOG_ERROR, "Return without Gosub: stack is empty\n");
 		return -1;
+	} else if (oldframe->is_agi) {
+		/* Exit from AGI */
+		res = -1;
 	}
 
 	ast_explicit_goto(chan, oldframe->context, oldframe->extension, oldframe->priority);
@@ -332,7 +337,7 @@ static int return_exec(struct ast_channel *chan, const char *data)
 
 	/* Set a return value, if any */
 	pbx_builtin_setvar_helper(chan, "GOSUB_RETVAL", S_OR(retval, ""));
-	return 0;
+	return res;
 }
 
 static int gosub_exec(struct ast_channel *chan, const char *data)
@@ -600,12 +605,12 @@ static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, const char
 	 * call a Gosub for the CALLEE channel in Dial or Queue.
 	 */
 	if (argc == 5) {
-		if (asprintf(&gosub_args, "%s,%s,%d(%s)", argv[1], argv[2], priority + 1, argv[4]) < 0) {
+		if (asprintf(&gosub_args, "%s,%s,%d(%s)", argv[1], argv[2], priority + (chan->pbx ? 1 : 0), argv[4]) < 0) {
 			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
 			gosub_args = NULL;
 		}
 	} else {
-		if (asprintf(&gosub_args, "%s,%s,%d", argv[1], argv[2], priority + 1) < 0) {
+		if (asprintf(&gosub_args, "%s,%s,%d", argv[1], argv[2], priority + (chan->pbx ? 1 : 0)) < 0) {
 			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
 			gosub_args = NULL;
 		}
@@ -619,6 +624,11 @@ static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, const char
 		if ((res = pbx_exec(chan, theapp, gosub_args)) == 0) {
 			struct ast_pbx *pbx = chan->pbx;
 			struct ast_pbx_args args;
+			struct ast_datastore *stack_store = ast_channel_datastore_find(chan, &stack_info, NULL);
+			AST_LIST_HEAD(, gosub_stack_frame) *oldlist = stack_store->data;
+			struct gosub_stack_frame *cur = AST_LIST_FIRST(oldlist);
+			cur->is_agi = 1;
+
 			memset(&args, 0, sizeof(args));
 			args.no_hangup_chan = 1;
 			/* Suppress warning about PBX already existing */

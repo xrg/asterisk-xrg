@@ -66,7 +66,7 @@ static const char desc[] = "MySQL CDR Backend";
 static const char name[] = "mysql";
 static const char config[] = "cdr_mysql.conf";
 
-static struct ast_str *hostname = NULL, *dbname = NULL, *dbuser = NULL, *password = NULL, *dbsock = NULL, *dbtable = NULL, *dbcharset = NULL;
+static struct ast_str *hostname = NULL, *dbname = NULL, *dbuser = NULL, *password = NULL, *dbsock = NULL, *dbtable = NULL, *dbcharset = NULL, *cdrzone = NULL;
 
 static struct ast_str *ssl_ca = NULL, *ssl_cert = NULL, *ssl_key = NULL;
 
@@ -247,7 +247,7 @@ db_reconnect:
 					struct timeval tv = ast_tvnow();
 					struct ast_tm tm;
 					char timestr[128];
-					ast_localtime(&tv, &tm, NULL);
+					ast_localtime(&tv, &tm, ast_str_strlen(cdrzone) ? ast_str_buffer(cdrzone) : NULL);
 					ast_strftime(timestr, sizeof(timestr), "%Y-%m-%d %T", &tm);
 					ast_cdr_setvar(cdr, "calldate", timestr, 0);
 					cdrname = "calldate";
@@ -364,15 +364,15 @@ static int my_load_config_string(struct ast_config *cfg, const char *category, c
 		return -1;
 	}
 
+	tmp = ast_variable_retrieve(cfg, category, variable);
+
+	ast_str_set(field, 0, "%s", tmp ? tmp : def);
+
 	us->str = *field;
 
 	AST_LIST_LOCK(&unload_strings);
 	AST_LIST_INSERT_HEAD(&unload_strings, us, entry);
 	AST_LIST_UNLOCK(&unload_strings);
-
-	tmp = ast_variable_retrieve(cfg, category, variable);
-
-	ast_str_set(field, 0, "%s", tmp ? tmp : def);
 
 	return 0;
 }
@@ -444,6 +444,15 @@ static int my_load_module(int reload)
 	res |= my_load_config_number(cfg, "global", "port", &dbport, 0);
 	res |= my_load_config_number(cfg, "global", "timeout", &timeout, 0);
 	res |= my_load_config_string(cfg, "global", "compat", &compat, "no");
+	res |= my_load_config_string(cfg, "global", "cdrzone", &cdrzone, "");
+	if (ast_str_strlen(cdrzone) == 0) {
+		for (; var; var = var->next) {
+			if (!strcasecmp(var->name, "usegmtime") && ast_true(var->value)) {
+				ast_str_set(&cdrzone, 0, "UTC");
+			}
+		}
+	}
+
 	if (ast_true(ast_str_buffer(compat))) {
 		calldate_compat = 1;
 	} else {
@@ -475,6 +484,7 @@ static int my_load_module(int reload)
 	ast_debug(1, "Got dbname of %s\n", ast_str_buffer(dbname));
 	ast_debug(1, "Got password of %s\n", ast_str_buffer(password));
 	ast_debug(1, "%sunning in calldate compatibility mode\n", calldate_compat ? "R" : "Not r");
+	ast_debug(1, "Dates and times are localized to %s\n", S_OR(ast_str_buffer(cdrzone), "local timezone"));
 
 	if (dbcharset) {
 		ast_debug(1, "Got DB charset of %s\n", ast_str_buffer(dbcharset));
@@ -524,7 +534,7 @@ static int my_load_module(int reload)
 			connected = 0;
 			AST_RWLIST_UNLOCK(&columns);
 			ast_config_destroy(cfg);
-			return AST_MODULE_LOAD_SUCCESS;
+			return AST_MODULE_LOAD_FAILURE;
 		}
 
 		if (!(result = mysql_store_result(&mysql))) {
@@ -533,7 +543,7 @@ static int my_load_module(int reload)
 			connected = 0;
 			AST_RWLIST_UNLOCK(&columns);
 			ast_config_destroy(cfg);
-			return AST_MODULE_LOAD_SUCCESS;
+			return AST_MODULE_LOAD_FAILURE;
 		}
 
 		while ((row = mysql_fetch_row(result))) {

@@ -112,6 +112,12 @@ shared_lastcall=no
 ;
 ;context = qoutcon
 ;
+; A limit can be set to disregard penalty settings when the queue has
+; too few members.  No penalty will be weighed in if there are only X
+; or fewer queue members. (default 0)
+;
+;penaltymemberslimit = 5
+;
 ;----------------------QUEUE TIMING OPTIONS------------------------------------
 ; A Queue has two different "timeout" values associated with it. One is the
 ; timeout parameter configured in queues.conf. This timeout specifies the
@@ -253,6 +259,12 @@ shared_lastcall=no
 ; Should the periodic announcements be played in a random order? Default is no.
 ;
 ;random-periodic-announce=no
+;
+; If set to yes, the periodic announcment frequency will be timed from the end
+; of each announcment rather than from the start of each announcment.  This
+; defaults to off.
+;
+;relative-periodic-announce=yes
 ;
 ; Should we include estimated hold time in position announcements?
 ; Either yes, no, or only once.
@@ -473,6 +485,10 @@ shared_lastcall=no
 ; comma. This interface will be the one for which app_queue receives device
 ; state notifications, even though the first interface specified is the one
 ; that is actually called.
+;
+; A hint can also be used in place of the state interface using the format
+; hint:<extension>@<context>. If no context is specified then 'default' will
+; be used.
 ;
 ; It is important to ensure that channel drivers used for members are loaded
 ; before app_queue.so itself or they may be marked invalid until reload. This

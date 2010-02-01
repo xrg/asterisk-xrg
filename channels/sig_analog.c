@@ -402,6 +402,7 @@ static struct ast_channel * analog_new_ast_channel(struct analog_pvt *p, int sta
 	}
 
 	c = p->calls->new_ast_channel(p->chan_pvt, state, startpbx, sub, requestor);
+	ast_string_field_set(c, call_forward, p->call_forward);
 	p->subs[sub].owner = c;
 	if (!p->owner) {
 		p->owner = c;
@@ -648,7 +649,7 @@ struct ast_channel * analog_request(struct analog_pvt *p, int *callwait, const s
 	return analog_new_ast_channel(p, AST_STATE_RESERVED, 0, p->owner ? ANALOG_SUB_CALLWAIT : ANALOG_SUB_REAL, requestor);
 }
 
-int analog_available(struct analog_pvt *p, int channelmatch, ast_group_t groupmatch, int *busy, int *channelmatched, int *groupmatched)
+int analog_available(struct analog_pvt *p, int *busy)
 {
 	int offhook;
 
@@ -1331,7 +1332,7 @@ int analog_answer(struct analog_pvt *p, struct ast_channel *ast)
 
 static int analog_handles_digit(struct ast_frame *f)
 {
-	char subclass = toupper(f->subclass);
+	char subclass = toupper(f->subclass.integer);
 
 	switch (subclass) {
 	case '1':
@@ -1363,13 +1364,13 @@ void analog_handle_dtmfup(struct analog_pvt *p, struct ast_channel *ast, enum an
 		/* Upon receiving a DTMF digit, consider this an answer confirmation instead
 		of a DTMF digit */
 		p->subs[index].f.frametype = AST_FRAME_CONTROL;
-		p->subs[index].f.subclass = AST_CONTROL_ANSWER;
+		p->subs[index].f.subclass.integer = AST_CONTROL_ANSWER;
 		*dest = &p->subs[index].f;
 		/* Reset confirmanswer so DTMF's will behave properly for the duration of the call */
 		analog_set_confirmanswer(p, 0);
 	}
 	if (p->callwaitcas) {
-		if ((f->subclass == 'A') || (f->subclass == 'D')) {
+		if ((f->subclass.integer == 'A') || (f->subclass.integer == 'D')) {
 			ast_log(LOG_ERROR, "Got some DTMF, but it's for the CAS\n");
 			p->cid.cid_name = p->callwait_name;
 			p->cid.cid_num = p->callwait_num;
@@ -1378,7 +1379,7 @@ void analog_handle_dtmfup(struct analog_pvt *p, struct ast_channel *ast, enum an
 		if (analog_handles_digit(f))
 			p->callwaitcas = 0;
 		p->subs[index].f.frametype = AST_FRAME_NULL;
-		p->subs[index].f.subclass = 0;
+		p->subs[index].f.subclass.integer = 0;
 		*dest = &p->subs[index].f;
 	} else {
 		analog_cb_handle_dtmfup(p, ast, index, dest);
@@ -2117,8 +2118,8 @@ static void *__analog_ss_thread(void *data)
 						break;
 					}
 					if (f->frametype == AST_FRAME_DTMF) {
-						dtmfbuf[i++] = f->subclass;
-						ast_debug(1, "CID got digit '%c'\n", f->subclass);
+						dtmfbuf[i++] = f->subclass.integer;
+						ast_debug(1, "CID got digit '%c'\n", f->subclass.integer);
 						res = 2000;
 					}
 					ast_frfree(f);
@@ -2354,7 +2355,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		mysig = p->outsigmod;
 	}
 	p->subs[index].f.frametype = AST_FRAME_NULL;
-	p->subs[index].f.subclass = 0;
+	p->subs[index].f.subclass.integer = 0;
 	p->subs[index].f.datalen = 0;
 	p->subs[index].f.samples = 0;
 	p->subs[index].f.mallocd = 0;
@@ -2380,7 +2381,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		ast_debug(1, "Detected %sdigit '%c'\n", (res & ANALOG_EVENT_PULSEDIGIT) ? "pulse ": "", res & 0xff);
 		analog_confmute(p, 0);
 		p->subs[index].f.frametype = AST_FRAME_DTMF_END;
-		p->subs[index].f.subclass = res & 0xff;
+		p->subs[index].f.subclass.integer = res & 0xff;
 		analog_handle_dtmfup(p, ast, index, &f);
 		return f;
 	}
@@ -2390,7 +2391,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		/* Mute conference */
 		analog_confmute(p, 1);
 		p->subs[index].f.frametype = AST_FRAME_DTMF_BEGIN;
-		p->subs[index].f.subclass = res & 0xff;
+		p->subs[index].f.subclass.integer = res & 0xff;
 		return f;
 	}
 
@@ -2438,7 +2439,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 					if (ast->_state == AST_STATE_DIALING_OFFHOOK) {
 						ast_setstate(ast, AST_STATE_UP);
 						p->subs[index].f.frametype = AST_FRAME_CONTROL;
-						p->subs[index].f.subclass = AST_CONTROL_ANSWER;
+						p->subs[index].f.subclass.integer = AST_CONTROL_ANSWER;
 						break;
 					} else { /* if to state wait for offhook to dial rest */
 						/* we now wait for off hook */
@@ -2451,7 +2452,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 					} else if (!p->answeronpolarityswitch) {
 						ast_setstate(ast, AST_STATE_UP);
 						p->subs[index].f.frametype = AST_FRAME_CONTROL;
-						p->subs[index].f.subclass = AST_CONTROL_ANSWER;
+						p->subs[index].f.subclass.integer = AST_CONTROL_ANSWER;
 						/* If aops=0 and hops=1, this is necessary */
 						p->polarity = POLARITY_REV;
 					} else {
@@ -2623,7 +2624,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				analog_set_echocanceller(p, 1);
 				analog_train_echocanceller(p);
 				p->subs[index].f.frametype = AST_FRAME_CONTROL;
-				p->subs[index].f.subclass = AST_CONTROL_ANSWER;
+				p->subs[index].f.subclass.integer = AST_CONTROL_ANSWER;
 				/* Make sure it stops ringing */
 				analog_off_hook(p);
 				ast_debug(1, "channel %d answered\n", p->channel);
@@ -2633,7 +2634,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				if (analog_check_confirmanswer(p)) {
 					/* Ignore answer if "confirm answer" is enabled */
 					p->subs[index].f.frametype = AST_FRAME_NULL;
-					p->subs[index].f.subclass = 0;
+					p->subs[index].f.subclass.integer = 0;
 				} else if (!ast_strlen_zero(p->dop.dialstr)) {
 					/* nick@dccinc.com 4/3/03 - fxo should be able to do deferred dialing */
 					res = analog_dial_digits(p, ANALOG_SUB_REAL, &p->dop);
@@ -2644,7 +2645,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 					} else {
 						ast_debug(1, "Sent FXO deferred digit string: %s\n", p->dop.dialstr);
 						p->subs[index].f.frametype = AST_FRAME_NULL;
-						p->subs[index].f.subclass = 0;
+						p->subs[index].f.subclass.integer = 0;
 						analog_set_dialing(p, 1);
 					}
 					p->dop.dialstr[0] = '\0';
@@ -2657,7 +2658,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				ast_setstate(ast, AST_STATE_RING);
 				ast->rings = 1;
 				p->subs[index].f.frametype = AST_FRAME_CONTROL;
-				p->subs[index].f.subclass = AST_CONTROL_OFFHOOK;
+				p->subs[index].f.subclass.integer = AST_CONTROL_OFFHOOK;
 				ast_debug(1, "channel %d picked up\n", p->channel);
 				return &p->subs[index].f;
 			case AST_STATE_UP:
@@ -2709,15 +2710,15 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 			if ((ast->_state == AST_STATE_DOWN) || (ast->_state == AST_STATE_RING)) {
 				ast_debug(1, "Ring detected\n");
 				p->subs[index].f.frametype = AST_FRAME_CONTROL;
-				p->subs[index].f.subclass = AST_CONTROL_RING;
+				p->subs[index].f.subclass.integer = AST_CONTROL_RING;
 			} else if (p->outgoing && ((ast->_state == AST_STATE_RINGING) || (ast->_state == AST_STATE_DIALING))) {
 				ast_debug(1, "Line answered\n");
 				if (analog_check_confirmanswer(p)) {
 					p->subs[index].f.frametype = AST_FRAME_NULL;
-					p->subs[index].f.subclass = 0;
+					p->subs[index].f.subclass.integer = 0;
 				} else {
 					p->subs[index].f.frametype = AST_FRAME_CONTROL;
-					p->subs[index].f.subclass = AST_CONTROL_ANSWER;
+					p->subs[index].f.subclass.integer = AST_CONTROL_ANSWER;
 					ast_setstate(ast, AST_STATE_UP);
 				}
 			} else if (ast->_state != AST_STATE_RING) {
@@ -2753,7 +2754,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 			p->callwaitcas = 0;
 		}
 		p->subs[index].f.frametype = AST_FRAME_CONTROL;
-		p->subs[index].f.subclass = AST_CONTROL_RINGING;
+		p->subs[index].f.subclass.integer = AST_CONTROL_RINGING;
 		break;
 	case ANALOG_EVENT_RINGERON:
 		break;
@@ -3136,7 +3137,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		}
 
 		/* Added more log_debug information below to provide a better indication of what is going on */
-		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %d\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
+		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %" PRIi64 "\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
 		break;
 	default:
 		ast_debug(1, "Dunno what to do with event %d on channel %d\n", res, p->channel);
@@ -3160,7 +3161,7 @@ struct ast_frame *analog_exception(struct analog_pvt *p, struct ast_channel *ast
 	p->subs[index].f.samples = 0;
 	p->subs[index].f.mallocd = 0;
 	p->subs[index].f.offset = 0;
-	p->subs[index].f.subclass = 0;
+	p->subs[index].f.subclass.integer = 0;
 	p->subs[index].f.delivery = ast_tv(0,0);
 	p->subs[index].f.src = "dahdi_exception";
 	p->subs[index].f.data.ptr = NULL;
@@ -3511,7 +3512,7 @@ struct analog_pvt *analog_new(enum analog_sigtype signallingtype, struct analog_
 
 /*!
  * \brief Delete the analog private structure.
- * \since 1.6.3
+ * \since 1.8
  *
  * \param doomed Analog private structure to delete.
  *

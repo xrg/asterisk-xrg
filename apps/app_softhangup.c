@@ -74,7 +74,7 @@ static int softhangup_exec(struct ast_channel *chan, const char *data)
 	struct ast_channel *c = NULL;
 	char *cut, *opts[0];
 	char name[AST_CHANNEL_NAME] = "", *parse;
-	struct ast_flags flags;
+	struct ast_flags flags = {0};
 	int lenmatch;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(channel);
@@ -94,7 +94,7 @@ static int softhangup_exec(struct ast_channel *chan, const char *data)
 		ast_app_parse_options(app_opts, &flags, opts, args.options);
 	lenmatch = strlen(args.channel);
 
-	if (!(iter = ast_channel_iterator_by_name_new(0, args.channel, lenmatch))) {
+	if (!(iter = ast_channel_iterator_by_name_new(args.channel, lenmatch))) {
 		return -1;
 	}
 

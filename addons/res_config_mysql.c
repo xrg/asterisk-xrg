@@ -367,12 +367,13 @@ static struct ast_variable *realtime_mysql(const char *database, const char *tab
 
 		while ((row = mysql_fetch_row(result))) {
 			for (i = 0; i < numFields; i++) {
-				if (ast_strlen_zero(row[i]))
-					continue;
+				/* Encode NULL values separately from blank values, for the Realtime API */
+				if (row[i] == NULL) {
+					row[i] = "";
+				} else if (ast_strlen_zero(row[i])) {
+					row[i] = " ";
+				}
 				for (stringp = ast_strdupa(row[i]), chunk = strsep(&stringp, ";"); chunk; chunk = strsep(&stringp, ";")) {
-					if (!chunk || ast_strlen_zero(ast_strip(chunk))) {
-						continue;
-					}
 					if (prev) {
 						if ((prev->next = ast_variable_new(fields[i].name, chunk, ""))) {
 							prev = prev->next;
@@ -1226,7 +1227,7 @@ static int require_mysql(const char *database, const char *tablename, va_list ap
 					} else {
 						res = -1;
 					}
-				} else if ((strncmp(column->type, "datetime", 8) == 0 || strncmp(column->type, "timestamp", 9)) && type != RQ_DATETIME) {
+				} else if ((strncmp(column->type, "datetime", 8) == 0 || strncmp(column->type, "timestamp", 9) == 0) && type != RQ_DATETIME) {
 					if (table->database->requirements == RQ_WARN) {
 						ast_log(LOG_WARNING, "Realtime table %s@%s: Column %s cannot be a %s\n", tablename, database, column->name, column->type);
 						res = -1;

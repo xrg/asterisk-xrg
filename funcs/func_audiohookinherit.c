@@ -142,6 +142,8 @@ static void audiohook_inheritance_destroy(void *data)
 	while ((inheritable_audiohook = AST_LIST_REMOVE_HEAD(&audiohook_inheritance_datastore->allowed_list, list))) {
 		ast_free(inheritable_audiohook);
 	}
+
+	ast_free(audiohook_inheritance_datastore);
 }
 
 /*! \brief create an audiohook_inheritance_datastore and attach it to a channel

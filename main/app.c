@@ -33,8 +33,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <regex.h>
 #include <sys/file.h> /* added this to allow to compile, sorry! */
 #include <signal.h>
-#include <sys/time.h>       /* for getrlimit(2) */
-#include <sys/resource.h>   /* for getrlimit(2) */
 #include <stdlib.h>         /* for closefrom(3) */
 #ifdef HAVE_CAP
 #include <sys/capability.h>
@@ -55,7 +53,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 AST_THREADSTORAGE_PUBLIC(ast_str_thread_global_buf);
 
 
-#define MAX_OTHER_FORMATS 10
+#define AST_MAX_FORMATS 10
 
 static AST_RWLIST_HEAD_STATIC(groups, ast_group_info);
 
@@ -429,7 +427,7 @@ static int linear_generator(struct ast_channel *chan, void *data, int len, int s
 	struct linear_state *ls = data;
 	struct ast_frame f = {
 		.frametype = AST_FRAME_VOICE,
-		.subclass = AST_FORMAT_SLINEAR,
+		.subclass.codec = AST_FORMAT_SLINEAR,
 		.data.ptr = buf + AST_FRIENDLY_OFFSET / 2,
 		.offset = AST_FRIENDLY_OFFSET,
 	};
@@ -693,8 +691,8 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 	char *fmts;
 	char comment[256];
 	int x, fmtcnt = 1, res = -1, outmsg = 0;
-	struct ast_filestream *others[MAX_OTHER_FORMATS];
-	char *sfmt[MAX_OTHER_FORMATS];
+	struct ast_filestream *others[AST_MAX_FORMATS];
+	char *sfmt[AST_MAX_FORMATS];
 	char *stringp = NULL;
 	time_t start, end;
 	struct ast_dsp *sildet = NULL;   /* silence detector dsp */
@@ -747,8 +745,8 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 	sfmt[0] = ast_strdupa(fmts);
 
 	while ((fmt = strsep(&stringp, "|"))) {
-		if (fmtcnt > MAX_OTHER_FORMATS - 1) {
-			ast_log(LOG_WARNING, "Please increase MAX_OTHER_FORMATS in app.c\n");
+		if (fmtcnt > AST_MAX_FORMATS - 1) {
+			ast_log(LOG_WARNING, "Please increase AST_MAX_FORMATS in file.h\n");
 			break;
 		}
 		sfmt[fmtcnt++] = ast_strdupa(fmt);
@@ -851,20 +849,20 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 			} else if (f->frametype == AST_FRAME_DTMF) {
 				if (prepend) {
 				/* stop recording with any digit */
-					ast_verb(3, "User ended message by pressing %c\n", f->subclass);
+					ast_verb(3, "User ended message by pressing %c\n", f->subclass.integer);
 					res = 't';
 					outmsg = 2;
 					break;
 				}
-				if (strchr(acceptdtmf, f->subclass)) {
-					ast_verb(3, "User ended message by pressing %c\n", f->subclass);
-					res = f->subclass;
+				if (strchr(acceptdtmf, f->subclass.integer)) {
+					ast_verb(3, "User ended message by pressing %c\n", f->subclass.integer);
+					res = f->subclass.integer;
 					outmsg = 2;
 					break;
 				}
-				if (strchr(canceldtmf, f->subclass)) {
-					ast_verb(3, "User cancelled message by pressing %c\n", f->subclass);
-					res = f->subclass;
+				if (strchr(canceldtmf, f->subclass.integer)) {
+					ast_verb(3, "User cancelled message by pressing %c\n", f->subclass.integer);
+					res = f->subclass.integer;
 					outmsg = 0;
 					break;
 				}
@@ -938,7 +936,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 	}
 
 	if (prepend && outmsg) {
-		struct ast_filestream *realfiles[MAX_OTHER_FORMATS];
+		struct ast_filestream *realfiles[AST_MAX_FORMATS];
 		struct ast_frame *fr;
 
 		for (x = 0; x < fmtcnt; x++) {
@@ -1838,10 +1836,6 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
 	return res;
 }
 
-/* the following function will probably only be used in app_dial, until app_dial is reorganized to
-   better handle the large number of options it provides. After it is, you need to get rid of this variant 
-   -- unless, of course, someone else digs up some use for large flag fields. */
-
 int ast_app_parse_options64(const struct ast_app_option *options, struct ast_flags64 *flags, char **args, char *optstr)
 {
 	char *s, *arg;
@@ -2008,24 +2002,7 @@ int ast_str_get_encoded_str(struct ast_str **str, int maxlen, const char *stream
 
 void ast_close_fds_above_n(int n)
 {
-#ifdef HAVE_CLOSEFROM
 	closefrom(n + 1);
-#else
-	int x, null;
-	struct rlimit rl;
-	getrlimit(RLIMIT_NOFILE, &rl);
-	null = open("/dev/null", O_RDONLY);
-	for (x = n + 1; x < rl.rlim_cur; x++) {
-		if (x != null) {
-			/* Side effect of dup2 is that it closes any existing fd without error.
-			 * This prevents valgrind and other debugging tools from sending up
-			 * false error reports. */
-			while (dup2(null, x) < 0 && errno == EINTR);
-			close(x);
-		}
-	}
-	close(null);
-#endif
 }
 
 int ast_safe_fork(int stop_reaper)

@@ -11,13 +11,14 @@
 # the GNU General Public License
 #
 
--include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps $(ASTTOPDIR)/makeopts.embed_rules
+-include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps $(ASTTOPDIR)/makeopts.embed_rules $(ASTTOPDIR)/makeopts
 
 all: asterisk
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
 
-SRC=$(wildcard *.c)
+# Must include the extra ast_expr2.c, ast_expr2f.c, in case they need to be regenerated (because to force regeneration, we delete them)
+SRC=$(wildcard *.c) ast_expr2.c ast_expr2f.c
 OBJSFILTER=fskmodem_int.o fskmodem_float.o cygload.o buildinfo.o
 OBJS=$(filter-out $(OBJSFILTER),$(SRC:.c=.o))
 
@@ -77,7 +78,7 @@ ifeq ($(OSARCH),OpenBSD)
 endif
 
 ifeq ($(OSARCH),SunOS)
-  AST_LIBS+=-lpthread -ldl -lnsl -lsocket -lresolv -L/opt/ssl/lib -L/usr/local/ssl/lib
+  AST_LIBS+=-lpthread -ldl -lrt -lnsl -lsocket -lresolv -L/opt/ssl/lib -L/usr/local/ssl/lib
   ASTLINK=
 endif
 
@@ -100,16 +101,26 @@ editline/libedit.a: CHECK_SUBDIR
 db1-ast/libdb1.a: CHECK_SUBDIR
 	_ASTCFLAGS="$(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS) -Wno-strict-aliasing" $(MAKE) -C db1-ast libdb1.a
 
+ifneq ($(findstring REBUILD_PARSERS,$(MENUSELECT_CFLAGS)),)
+ast_expr2.c ast_expr2.h: ast_expr2.y
+else
 ast_expr2.c ast_expr2.h:
-	bison -o $@ -d --name-prefix=ast_yy ast_expr2.y
+endif
+	$(ECHO_PREFIX) echo "   [BISON] $< -> $@"
+	$(CMD_PREFIX) $(BISON) -o $@ -d --name-prefix=ast_yy ast_expr2.y
 
+ifneq ($(findstring REBUILD_PARSERS,$(MENUSELECT_CFLAGS)),)
+ast_expr2f.c: ast_expr2.fl
+else
 ast_expr2f.c:
-	flex -o $@ ast_expr2.fl
-	sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' $@ > $@.fix
-	echo "#include \"asterisk.h\"" > $@
-	echo >> $@
-	cat $@.fix >> $@
-	rm $@.fix
+endif
+	$(ECHO_PREFIX) echo "   [FLEX] $< -> $@"
+	$(CMD_PREFIX) $(FLEX) -o $@ ast_expr2.fl
+	$(CMD_PREFIX) sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' $@ > $@.fix
+	$(CMD_PREFIX) echo "#include \"asterisk.h\"" > $@
+	$(CMD_PREFIX) echo >> $@
+	$(CMD_PREFIX) cat $@.fix >> $@
+	$(CMD_PREFIX) rm $@.fix
 
 ast_expr2f.o: _ASTCFLAGS+=-Wno-unused
 

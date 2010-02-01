@@ -34,7 +34,8 @@ serveremail=asterisk
 ; Should the email contain the voicemail as an attachment
 attach=yes
 ; Maximum number of messages per folder.  If not specified, a default value
-; (100) is used.  Maximum value for this option is 9999.
+; (100) is used.  Maximum value for this option is 9999.  If set to 0, a
+; mailbox will be greetings-only.
 ;maxmsg=100
 ; Maximum length of a voicemail message in seconds
 ;maxsecs=180
@@ -146,6 +147,11 @@ maxlogins=3
 emaildateformat=%A, %B %d, %Y at %r
 ; 24h date format
 ;emaildateformat=%A, %d %B %Y at %H:%M:%S
+;
+; Default for pager use
+pagerdateformat=%A, %B %d, %Y at %r
+; Short 24h date format for pager use
+;pagerdateformat=%T %D
 ;
 ; You can override the default program to send e-mail if you wish, too
 ;
@@ -274,9 +280,28 @@ sendvoicemail=yes ; Allow the user to compose and send a voicemail while inside
 			;     The default is "no".
 ; tempgreetwarn=yes	; Remind the user that their temporary greeting is set
 
-;messagewrap=no	; Enable next/last message to wrap around to
-			; first (from last) and last (from first) message
-			; The default is "no".
+; passwordlocation=spooldir
+                    ; Usually the voicemail password (vmsecret) is stored in
+                    ; this configuration file.  By setting this option you can
+                    ; specify where Asterisk should read/write the vmsecret.
+                    ; Supported options:
+                    ;   voicemail.conf:
+                    ;     This is the default option.  The secret is read from
+                    ;     and written to voicemail.conf (or users.conf).
+                    ;   spooldir:
+                    ;     The secret is stored in a separate file in the user's
+                    ;     voicemail spool directory in a file named secret.conf.
+                    ;     Please ensure that normal Linux users are not
+                    ;     permitted to access Asterisk's spool directory as the
+                    ;     secret is stored in plain text.  If a secret is not
+                    ;     found in this directory, the password in
+                    ;     voicemail.conf (or users.conf) will be used.
+                    ; Note that this option does not affect password storage for
+                    ; realtime users, which are still stored in the realtime
+                    ; backend.
+; messagewrap=no    ; Enable next/last message to wrap around to
+                    ; first (from last) and last (from first) message
+                    ; The default is "no".
 ; minpassword=0 ; Enforce minimum password length
 
 ; vm-password=custom_sound
@@ -358,9 +383,9 @@ european=Europe/Copenhagen|'vm-received' a d b 'digits/at' HM
 ;
 
 ;
-; When using IMAP storage, imapuser and imappassword can be used to specify the
+; When using IMAP storage, imapuser, imappassword, and imapfolder can be used to specify the
 ; user's credentials.
 ;
 ;[imapvm]
-;4324 => 7764,Ellis Redding,red@buxton.us,,imapuser=eredding|imappassword=g3tbusy
+;4324 => 7764,Ellis Redding,red@buxton.us,,imapuser=eredding|imappassword=g3tbusy|imapfolder=notinbox
 ;4325 => 2392,Andrew Dufresne,andy@dufresne.info,,imapuser=adufresne|imappassword=rockh@mmer

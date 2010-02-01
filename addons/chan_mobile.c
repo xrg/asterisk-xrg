@@ -71,7 +71,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define DEVICE_FRAME_FORMAT AST_FORMAT_SLINEAR
 #define CHANNEL_FRAME_SIZE 320
 
-static int prefformat = DEVICE_FRAME_FORMAT;
+static format_t prefformat = DEVICE_FRAME_FORMAT;
 
 static int discovery_interval = 60;			/* The device discovery interval, default 60 seconds. */
 static pthread_t discovery_thread = AST_PTHREADT_NULL;	/* The discovery thread */
@@ -196,7 +196,7 @@ static char *mblsendsms_desc =
 
 static struct ast_channel *mbl_new(int state, struct mbl_pvt *pvt, char *cid_num,
 		const struct ast_channel *requestor);
-static struct ast_channel *mbl_request(const char *type, int format,
+static struct ast_channel *mbl_request(const char *type, format_t format,
 		const struct ast_channel *requestor, void *data, int *cause);
 static int mbl_call(struct ast_channel *ast, char *dest, int timeout);
 static int mbl_hangup(struct ast_channel *ast);
@@ -212,6 +212,7 @@ static void do_alignment_detection(struct mbl_pvt *pvt, char *buf, int buflen);
 static int mbl_queue_control(struct mbl_pvt *pvt, enum ast_control_frame_type control);
 static int mbl_queue_hangup(struct mbl_pvt *pvt);
 static int mbl_ast_hangup(struct mbl_pvt *pvt);
+static int mbl_has_service(struct mbl_pvt *pvt);
 
 static int rfcomm_connect(bdaddr_t src, bdaddr_t dst, int remote_channel);
 static int rfcomm_write(int rsock, char *buf);
@@ -270,6 +271,10 @@ static int headset_send_ring(const void *data);
 #define HFP_CIND_CALLSETUP_INCOMING	1
 #define HFP_CIND_CALLSETUP_OUTGOING	2
 #define HFP_CIND_CALLSETUP_ALERTING	3
+
+/* service indicator values */
+#define HFP_CIND_SERVICE_NONE		0
+#define HFP_CIND_SERVICE_AVAILABLE	1
 
 /*!
  * \brief This struct holds HFP features that we support.
@@ -468,7 +473,7 @@ static char *handle_cli_mobile_show_devices(struct ast_cli_entry *e, int cmd, st
 	char bdaddr[18];
 	char group[6];
 
-#define FORMAT1 "%-15.15s %-17.17s %-5.5s %-15.15s %-9.9s %-5.5s %-3.3s\n"
+#define FORMAT1 "%-15.15s %-17.17s %-5.5s %-15.15s %-9.9s %-10.10s %-3.3s\n"
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -496,7 +501,7 @@ static char *handle_cli_mobile_show_devices(struct ast_cli_entry *e, int cmd, st
 				group,
 				pvt->adapter->id,
 				pvt->connected ? "Yes" : "No",
-				(!pvt->connected) ? "None" : (pvt->owner) ? "Busy" : (pvt->outgoing_sms || pvt->incoming_sms) ? "SMS" : "Free",
+				(!pvt->connected) ? "None" : (pvt->owner) ? "Busy" : (pvt->outgoing_sms || pvt->incoming_sms) ? "SMS" : (mbl_has_service(pvt)) ? "Free" : "No Service",
 				(pvt->has_sms) ? "Yes" : "No"
 		       );
 		ast_mutex_unlock(&pvt->lock);
@@ -862,7 +867,7 @@ e_return:
 	return NULL;
 }
 
-static struct ast_channel *mbl_request(const char *type, int format,
+static struct ast_channel *mbl_request(const char *type, format_t format,
 		const struct ast_channel *requestor, void *data, int *cause)
 {
 
@@ -870,7 +875,8 @@ static struct ast_channel *mbl_request(const char *type, int format,
 	struct mbl_pvt *pvt;
 	char *dest_dev = NULL;
 	char *dest_num = NULL;
-	int oldformat, group = -1;
+	format_t oldformat;
+	int group = -1;
 
 	if (!data) {
 		ast_log(LOG_WARNING, "Channel requested with no data\n");
@@ -881,7 +887,7 @@ static struct ast_channel *mbl_request(const char *type, int format,
 	oldformat = format;
 	format &= (AST_FORMAT_SLINEAR);
 	if (!format) {
-		ast_log(LOG_WARNING, "Asked to get a channel of unsupported format '%d'\n", oldformat);
+		ast_log(LOG_WARNING, "Asked to get a channel of unsupported format '%s'\n", ast_getformatname(oldformat));
 		*cause = AST_CAUSE_FACILITY_NOT_IMPLEMENTED;
 		return NULL;
 	}
@@ -900,6 +906,10 @@ static struct ast_channel *mbl_request(const char *type, int format,
 	AST_RWLIST_RDLOCK(&devices);
 	AST_RWLIST_TRAVERSE(&devices, pvt, entry) {
 		if (group > -1 && pvt->group == group && pvt->connected && !pvt->owner) {
+			if (!mbl_has_service(pvt)) {
+				continue;
+			}
+
 			break;
 		} else if (!strcmp(pvt->id, dest_dev)) {
 			break;
@@ -1089,7 +1099,7 @@ static struct ast_frame *mbl_read(struct ast_channel *ast)
 
 	memset(&pvt->fr, 0x00, sizeof(struct ast_frame));
 	pvt->fr.frametype = AST_FRAME_VOICE;
-	pvt->fr.subclass = DEVICE_FRAME_FORMAT;
+	pvt->fr.subclass.codec = DEVICE_FRAME_FORMAT;
 	pvt->fr.src = "Mobile";
 	pvt->fr.offset = AST_FRIENDLY_OFFSET;
 	pvt->fr.mallocd = 0;
@@ -1199,6 +1209,9 @@ static int mbl_devicestate(void *data)
 			res = AST_DEVICE_INUSE;
 		else
 			res = AST_DEVICE_NOT_INUSE;
+
+		if (!mbl_has_service(pvt))
+			res = AST_DEVICE_UNAVAILABLE;
 	}
 	ast_mutex_unlock(&pvt->lock);
 
@@ -1323,6 +1336,30 @@ static int mbl_ast_hangup(struct mbl_pvt *pvt)
 			break;
 	}
 	return res;
+}
+
+/*!
+ * \brief Check if a mobile device has service.
+ * \param pvt a mbl_pvt struct
+ * \retval 1 this device has service
+ * \retval 0 no service
+ *
+ * \note This function will always indicate that service is available if the
+ * given device does not support service indication.
+ */
+static int mbl_has_service(struct mbl_pvt *pvt)
+{
+
+	if (pvt->type != MBL_TYPE_PHONE)
+		return 1;
+
+	if (!pvt->hfp->cind_map.service)
+		return 1;
+
+	if (pvt->hfp->cind_state[pvt->hfp->cind_map.service] == HFP_CIND_SERVICE_AVAILABLE)
+		return 1;
+
+	return 0;
 }
 
 /*
@@ -1548,6 +1585,121 @@ e_return:
 }
 
 /*!
+ * \brief Read until a \r\nOK\r\n message.
+ */
+static int rfcomm_read_until_ok(int rsock, char **buf, size_t count, size_t *in_count)
+{
+	int res;
+	char c;
+
+	/* here, we read until finding a \r\n, then we read one character at a
+	 * time looking for the string '\r\nOK\r\n'.  If we only find a partial
+	 * match, we place that in the buffer and try again. */
+
+	for (;;) {
+		if ((res = rfcomm_read_until_crlf(rsock, buf, count, in_count)) != 1) {
+			break;
+		}
+
+		rfcomm_append_buf(buf, count, in_count, '\r');
+		rfcomm_append_buf(buf, count, in_count, '\n');
+
+		if ((res = rfcomm_read_and_expect_char(rsock, &c, '\r')) != 1) {
+			if (res != -2) {
+				break;
+			}
+
+			rfcomm_append_buf(buf, count, in_count, c);
+			continue;
+		}
+
+		if ((res = rfcomm_read_and_expect_char(rsock, &c, '\n')) != 1) {
+			if (res != -2) {
+				break;
+			}
+
+			rfcomm_append_buf(buf, count, in_count, '\r');
+			rfcomm_append_buf(buf, count, in_count, c);
+			continue;
+		}
+		if ((res = rfcomm_read_and_expect_char(rsock, &c, 'O')) != 1) {
+			if (res != -2) {
+				break;
+			}
+
+			rfcomm_append_buf(buf, count, in_count, '\r');
+			rfcomm_append_buf(buf, count, in_count, '\n');
+			rfcomm_append_buf(buf, count, in_count, c);
+			continue;
+		}
+
+		if ((res = rfcomm_read_and_expect_char(rsock, &c, 'K')) != 1) {
+			if (res != -2) {
+				break;
+			}
+
+			rfcomm_append_buf(buf, count, in_count, '\r');
+			rfcomm_append_buf(buf, count, in_count, '\n');
+			rfcomm_append_buf(buf, count, in_count, 'O');
+			rfcomm_append_buf(buf, count, in_count, c);
+			continue;
+		}
+
+		if ((res = rfcomm_read_and_expect_char(rsock, &c, '\r')) != 1) {
+			if (res != -2) {
+				break;
+			}
+
+			rfcomm_append_buf(buf, count, in_count, '\r');
+			rfcomm_append_buf(buf, count, in_count, '\n');
+			rfcomm_append_buf(buf, count, in_count, 'O');
+			rfcomm_append_buf(buf, count, in_count, 'K');
+			rfcomm_append_buf(buf, count, in_count, c);
+			continue;
+		}
+
+		if ((res = rfcomm_read_and_expect_char(rsock, &c, '\n')) != 1) {
+			if (res != -2) {
+				break;
+			}
+
+			rfcomm_append_buf(buf, count, in_count, '\r');
+			rfcomm_append_buf(buf, count, in_count, '\n');
+			rfcomm_append_buf(buf, count, in_count, 'O');
+			rfcomm_append_buf(buf, count, in_count, 'K');
+			rfcomm_append_buf(buf, count, in_count, '\r');
+			rfcomm_append_buf(buf, count, in_count, c);
+			continue;
+		}
+
+		/* we have successfully parsed a '\r\nOK\r\n' string */
+		return 1;
+	}
+
+	return res;
+}
+
+
+/*!
+ * \brief Read the remainder of a +CMGR message.
+ * \note the entire parsed string is '+CMGR: ...\r\n...\r\n...\r\n...\r\nOK\r\n'
+ */
+static int rfcomm_read_cmgr(int rsock, char **buf, size_t count, size_t *in_count)
+{
+	int res;
+
+	/* append the \r\n that was stripped by the calling function */
+	rfcomm_append_buf(buf, count, in_count, '\r');
+	rfcomm_append_buf(buf, count, in_count, '\n');
+
+	if ((res = rfcomm_read_until_ok(rsock, buf, count, in_count)) != 1) {
+		ast_log(LOG_ERROR, "error reading +CMGR message on rfcomm socket\n");
+	}
+
+	return res;
+}
+
+/*!
  * \brief Read and AT result code.
  * \note the entire parsed string is '\r\n<result code>\r\n'
  */
@@ -1572,11 +1724,10 @@ static int rfcomm_read_result(int rsock, char **buf, size_t count, size_t *in_co
 	if (res != 1)
 		return res;
 
-	/* check for CMGR, which contains an embedded \r\n */
+	/* check for CMGR, which contains an embedded \r\n pairs terminated by
+	 * an \r\nOK\r\n message */
 	if (*in_count >= 5 && !strncmp(*buf - *in_count, "+CMGR", 5)) {
-		rfcomm_append_buf(buf, count, in_count, '\r');
-		rfcomm_append_buf(buf, count, in_count, '\n');
-		return rfcomm_read_until_crlf(rsock, buf, count, in_count);
+		return rfcomm_read_cmgr(rsock, buf, count, in_count);
 	}
 
 	return 1;
@@ -3020,6 +3171,7 @@ static int handle_response_ok(struct mbl_pvt *pvt, char *buf)
 
 			ast_debug(2, "[%s] call: %d\n", pvt->id, pvt->hfp->cind_map.call);
 			ast_debug(2, "[%s] callsetup: %d\n", pvt->id, pvt->hfp->cind_map.callsetup);
+			ast_debug(2, "[%s] service: %d\n", pvt->id, pvt->hfp->cind_map.service);
 
 			if (hfp_send_cind(pvt->hfp) || msg_queue_push(pvt, AT_CIND, AT_CIND)) {
 				ast_debug(1, "[%s] error requesting CIND state\n", pvt->id);
@@ -3115,10 +3267,6 @@ static int handle_response_ok(struct mbl_pvt *pvt, char *buf)
 			break;
 		case AT_CHUP:
 			ast_debug(1, "[%s] successful hangup\n", pvt->id);
-			break;
-		case AT_CMGR:
-			ast_debug(1, "[%s] successfully read sms message\n", pvt->id);
-			pvt->incoming_sms = 0;
 			break;
 		case AT_CMGS:
 			ast_debug(1, "[%s] successfully sent sms message\n", pvt->id);
@@ -3439,12 +3587,13 @@ static int handle_response_cmgr(struct mbl_pvt *pvt, char *buf)
 	if ((msg = msg_queue_head(pvt)) && msg->expected == AT_CMGR) {
 		msg_queue_free_and_pop(pvt);
 
-		if (hfp_parse_cmgr(pvt->hfp, buf, &from_number, &text)
-				|| msg_queue_push(pvt, AT_OK, AT_CMGR)) {
-
+		if (hfp_parse_cmgr(pvt->hfp, buf, &from_number, &text)) {
 			ast_debug(1, "[%s] error parsing sms message, disconnecting\n", pvt->id);
 			return -1;
 		}
+
+		ast_debug(1, "[%s] successfully read sms message\n", pvt->id);
+		pvt->incoming_sms = 0;
 
 		/* XXX this channel probably does not need to be associated with this pvt */
 		if (!(chan = mbl_new(AST_STATE_DOWN, pvt, NULL, NULL))) {

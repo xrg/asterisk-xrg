@@ -19,7 +19,7 @@
 
 /* Doxygenified Copyright Header */
 /*!
- * \mainpage Asterisk -- An Open Source Telephony Toolkit
+ * \mainpage Asterisk -- The Open Source Telephony Project
  *
  * \par Developer Documentation for Asterisk
  *
@@ -29,6 +29,8 @@
  * In addition to the information available on the Asterisk source code, 
  * please see the appendices for information on coding guidelines, 
  * release management, commit policies, and more.
+ *
+ * \arg \ref AsteriskArchitecture
  *
  * \par Additional documentation
  * \arg \ref Licensing
@@ -138,6 +140,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/buildinfo.h"
 #include "asterisk/xmldoc.h"
 #include "asterisk/poll-compat.h"
+#include "asterisk/test.h"
 
 #include "../defaults.h"
 
@@ -273,7 +276,6 @@ static int restartnow;
 static pthread_t consolethread = AST_PTHREADT_NULL;
 static int canary_pid = 0;
 static char canary_filename[128];
-static int canary_pipe = -1;
 
 static char randompool[256];
 
@@ -2775,6 +2777,7 @@ static int show_cli_help(void) {
 	printf("                   of output to the CLI\n");
 	printf("   -v              Increase verbosity (multiple v's = more verbose)\n");
 	printf("   -x <cmd>        Execute command <cmd> (only valid with -r)\n");
+	printf("   -X              Execute includes by default (allows #exec in asterisk.conf)\n");
 	printf("   -W              Adjust terminal colors to compensate for a light background\n");
 	printf("\n");
 	return 0;
@@ -3106,6 +3109,7 @@ int main(int argc, char *argv[])
 	char *buf;
 	const char *runuser = NULL, *rungroup = NULL;
 	char *remotesock = NULL;
+	int moduleresult; 		/*!< Result from the module load subsystem */
 
 	/* Remember original args for restart */
 	if (argc > ARRAY_LEN(_argv) - 1) {
@@ -3138,8 +3142,29 @@ int main(int argc, char *argv[])
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
 	/* Check for options */
-	while ((c = getopt(argc, argv, "mtThfFdvVqprRgciInx:U:G:C:L:M:e:s:WB")) != -1) {
+	while ((c = getopt(argc, argv, "BC:cde:FfG:ghIiL:M:mnpqRrs:TtU:VvWXx:")) != -1) {
+		/*!\note Please keep the ordering here to alphabetical, capital letters
+		 * first.  This will make it easier in the future to select unused
+		 * option flags for new features. */
 		switch (c) {
+		case 'B': /* Force black background */
+			ast_set_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
+			ast_clear_flag(&ast_options, AST_OPT_FLAG_LIGHT_BACKGROUND);
+			break;
+		case 'X':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_EXEC_INCLUDES);
+			break;
+		case 'C':
+			ast_copy_string(cfg_paths.config_file, optarg, sizeof(cfg_paths.config_file));
+			ast_set_flag(&ast_options, AST_OPT_FLAG_OVERRIDE_CONFIG);
+			break;
+		case 'c':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK | AST_OPT_FLAG_CONSOLE);
+			break;
+		case 'd':
+			option_debug++;
+			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
+			break;
 #if defined(HAVE_SYSINFO)
 		case 'e':
 			if ((sscanf(&optarg[1], "%30ld", &option_minmemfree) != 1) || (option_minmemfree < 0)) {
@@ -3155,62 +3180,8 @@ int main(int argc, char *argv[])
 			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
 			break;
 #endif
-		case 'd':
-			option_debug++;
-			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
-			break;
-		case 'c':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK | AST_OPT_FLAG_CONSOLE);
-			break;
-		case 'n':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_COLOR);
-			break;
-		case 'r':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK | AST_OPT_FLAG_REMOTE);
-			break;
-		case 'R':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK | AST_OPT_FLAG_REMOTE | AST_OPT_FLAG_RECONNECT);
-			break;
-		case 'p':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_HIGH_PRIORITY);
-			break;
-		case 'v':
-			option_verbose++;
-			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
-			break;
-		case 'm':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_MUTE);
-			break;
-		case 'M':
-			if ((sscanf(optarg, "%30d", &option_maxcalls) != 1) || (option_maxcalls < 0))
-				option_maxcalls = 0;
-			break;
-		case 'L':
-			if ((sscanf(optarg, "%30lf", &option_maxload) != 1) || (option_maxload < 0.0))
-				option_maxload = 0.0;
-			break;
-		case 'q':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_QUIET);
-			break;
-		case 't':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_CACHE_RECORD_FILES);
-			break;
-		case 'T':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_TIMESTAMP);
-			break;
-		case 'x':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_EXEC);
-			xarg = ast_strdupa(optarg);
-			break;
-		case 'C':
-			ast_copy_string(cfg_paths.config_file, optarg, sizeof(cfg_paths.config_file));
-			ast_set_flag(&ast_options, AST_OPT_FLAG_OVERRIDE_CONFIG);
-			break;
-		case 'I':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING);
-			break;
-		case 'i':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_INIT_KEYS);
+		case 'G':
+			rungroup = ast_strdupa(optarg);
 			break;
 		case 'g':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_DUMP_CORE);
@@ -3218,25 +3189,66 @@ int main(int argc, char *argv[])
 		case 'h':
 			show_cli_help();
 			exit(0);
-		case 'V':
-			show_version();
-			exit(0);
-		case 'U':
-			runuser = ast_strdupa(optarg);
+		case 'I':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING);
 			break;
-		case 'G':
-			rungroup = ast_strdupa(optarg);
+		case 'i':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_INIT_KEYS);
+			break;
+		case 'L':
+			if ((sscanf(optarg, "%30lf", &option_maxload) != 1) || (option_maxload < 0.0)) {
+				option_maxload = 0.0;
+			}
+			break;
+		case 'M':
+			if ((sscanf(optarg, "%30d", &option_maxcalls) != 1) || (option_maxcalls < 0)) {
+				option_maxcalls = 0;
+			}
+			break;
+		case 'm':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_MUTE);
+			break;
+		case 'n':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_COLOR);
+			break;
+		case 'p':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_HIGH_PRIORITY);
+			break;
+		case 'q':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_QUIET);
+			break;
+		case 'R':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK | AST_OPT_FLAG_REMOTE | AST_OPT_FLAG_RECONNECT);
+			break;
+		case 'r':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK | AST_OPT_FLAG_REMOTE);
 			break;
 		case 's':
 			remotesock = ast_strdupa(optarg);
+			break;
+		case 'T':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_TIMESTAMP);
+			break;
+		case 't':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_CACHE_RECORD_FILES);
+			break;
+		case 'U':
+			runuser = ast_strdupa(optarg);
+			break;
+		case 'V':
+			show_version();
+			exit(0);
+		case 'v':
+			option_verbose++;
+			ast_set_flag(&ast_options, AST_OPT_FLAG_NO_FORK);
 			break;
 		case 'W': /* White background */
 			ast_set_flag(&ast_options, AST_OPT_FLAG_LIGHT_BACKGROUND);
 			ast_clear_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
 			break;
-		case 'B': /* Force black background */
-			ast_set_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
-			ast_clear_flag(&ast_options, AST_OPT_FLAG_LIGHT_BACKGROUND);
+		case 'x':
+			ast_set_flag(&ast_options, AST_OPT_FLAG_EXEC);
+			xarg = ast_strdupa(optarg);
 			break;
 		case '?':
 			exit(1);
@@ -3482,15 +3494,6 @@ int main(int argc, char *argv[])
 
 	/* Spawning of astcanary must happen AFTER the call to daemon(3) */
 	if (isroot && ast_opt_high_priority) {
-		int cpipe[2];
-
-		/* PIPE signal ensures that astcanary dies when Asterisk dies */
-		if (pipe(cpipe)) {
-			fprintf(stderr, "Unable to open pipe for canary process: %s\n", strerror(errno));
-			exit(1);
-		}
-		canary_pipe = cpipe[0];
-
 		snprintf(canary_filename, sizeof(canary_filename), "%s/alt.asterisk.canary.tweet.tweet.tweet", ast_config_AST_RUN_DIR);
 
 		/* Don't let the canary child kill Asterisk, if it dies immediately */
@@ -3498,18 +3501,17 @@ int main(int argc, char *argv[])
 
 		canary_pid = fork();
 		if (canary_pid == 0) {
-			char canary_binary[128], *lastslash;
+			char canary_binary[128], *lastslash, ppid[12];
 
 			/* Reset signal handler */
 			signal(SIGCHLD, SIG_DFL);
 			signal(SIGPIPE, SIG_DFL);
 
-			dup2(cpipe[1], 0);
-			close(cpipe[1]);
 			ast_close_fds_above_n(0);
 			ast_set_priority(0);
+			snprintf(ppid, sizeof(ppid), "%d", (int) getpid());
 
-			execlp("astcanary", "astcanary", canary_filename, (char *)NULL);
+			execlp("astcanary", "astcanary", canary_filename, ppid, (char *)NULL);
 
 			/* If not found, try the same path as used to execute asterisk */
 			ast_copy_string(canary_binary, argv[0], sizeof(canary_binary));
@@ -3522,18 +3524,24 @@ int main(int argc, char *argv[])
 			_exit(1);
 		} else if (canary_pid > 0) {
 			pthread_t dont_care;
-			close(cpipe[1]);
 			ast_pthread_create_detached(&dont_care, NULL, canary_thread, NULL);
 		}
 
 		/* Kill the canary when we exit */
-		atexit(canary_exit);
+		ast_register_atexit(canary_exit);
 	}
 
 	if (ast_event_init()) {
 		printf("%s", term_quit());
 		exit(1);
 	}
+
+#ifdef TEST_FRAMEWORK
+	if (ast_test_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+#endif
 
 	ast_makesocket();
 	sigemptyset(&sigs);
@@ -3581,9 +3589,9 @@ int main(int argc, char *argv[])
 	ast_xmldoc_load_documentation();
 #endif
 
-	if (load_modules(1)) {		/* Load modules, pre-load only */
+	if ((moduleresult = load_modules(1))) {		/* Load modules, pre-load only */
 		printf("%s", term_quit());
-		exit(1);
+		exit(moduleresult == -2 ? 2 : 1);
 	}
 
 	if (dnsmgr_init()) {		/* Initialize the DNS manager */
@@ -3655,9 +3663,9 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (load_modules(0)) {
+	if ((moduleresult = load_modules(0))) {		/* Load modules */
 		printf("%s", term_quit());
-		exit(1);
+		exit(moduleresult == -2 ? 2 : 1);
 	}
 
 	/* loads the cli_permissoins.conf file needed to implement cli restrictions. */

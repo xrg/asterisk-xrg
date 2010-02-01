@@ -38,6 +38,7 @@
  * \arg \ref ReleasePolicies : Asterisk Release and Commit Policies
  * \arg \ref Reviewboard : Reviewboard Usage and Guidelines
  * \arg \ref MantisWorkflow : Workflow Guidelines for Asterisk Open Source Issue Tracker
+ * \arg \ref AsteriskGitHowto : How to setup a local GIT mirror of the Asterisk SVN repository
  * \arg \ref AstCREDITS : A Thank You to contributors (unfortunately out of date)
  *
  * \section apisandinterfaces Asterisk APIs and Interfaces
@@ -126,7 +127,7 @@
  *
  * \section Changes162 Version 1.6.2
  *
- * \section Changes163 Version 1.6.3
+ * \section Changes18 Version 1.8
  * \li ast_channel_alloc()
  */
 
@@ -655,6 +656,11 @@
  * Formats are modules that read or write media files to disk.
  * \par See also
  * \arg \ref codecs 
+ */
+
+/*! 
+ * \addtogroup rtp_engines Module: RTP Engines
+ * \section rtp_engine_blah Asterisk RTP Engines
  */
 
 /*! 

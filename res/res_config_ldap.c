@@ -378,8 +378,10 @@ static struct ast_variable **realtime_ldap_result_to_vars(struct ldap_table_conf
 	ldap_entry = ldap_first_entry(ldapConn, ldap_result_msg);
 
 	for (tot_count = 0; ldap_entry; tot_count++) { 
-		tot_count += semicolon_count_var(realtime_ldap_entry_to_var(table_config, ldap_entry));
+		struct ast_variable *tmp = realtime_ldap_entry_to_var(table_config, ldap_entry);
+		tot_count += semicolon_count_var(tmp);
 		ldap_entry = ldap_next_entry(ldapConn, ldap_entry);
+		ast_variables_destroy(tmp);
 	}
 
 	if (entries_count_ptr) {
@@ -1214,12 +1216,10 @@ static int update_ldap(const char *basedn, const char *table_name, const char *a
 	ldap_mods[0] = ast_calloc(1, sizeof(LDAPMod));
 
 	ldap_mods[0]->mod_op = LDAP_MOD_REPLACE;
-	ldap_mods[0]->mod_type = ast_calloc(sizeof(char), strlen(newparam) + 1);
-	strcpy(ldap_mods[0]->mod_type, newparam);
+	ldap_mods[0]->mod_type = ast_strdup(newparam);
 
-	ldap_mods[0]->mod_values = ast_calloc(sizeof(char), 2);
-	ldap_mods[0]->mod_values[0] = ast_calloc(sizeof(char), strlen(newval) + 1);
-	strcpy(ldap_mods[0]->mod_values[0], newval);
+	ldap_mods[0]->mod_values = ast_calloc(sizeof(char *), 2);
+	ldap_mods[0]->mod_values[0] = ast_strdup(newval);
 
 	while ((newparam = va_arg(ap, const char *))) {
 		newparam = convert_attribute_name_to_ldap(table_config, newparam);

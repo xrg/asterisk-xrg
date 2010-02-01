@@ -514,6 +514,7 @@ static int phoneprov_callback(struct ast_tcptls_session_instance *ser, const str
 			ast_free(file);
 		}
 
+		http_header = ast_str_create(80);
 		ast_str_set(&http_header, 0, "Content-type: %s\r\n",
 			route->file->mime_type);
 
@@ -522,6 +523,7 @@ static int phoneprov_callback(struct ast_tcptls_session_instance *ser, const str
 			if (tmp) {
 				ast_free(tmp);
 			}
+			ast_free(http_header);
 			goto out500;
 		}
 		ast_str_append(&result, 0, "%s", ast_str_buffer(tmp)); 
@@ -636,12 +638,7 @@ static void build_profile(const char *name, struct ast_variable *v)
 				AST_APP_ARG(mimetype);
 			);
 
-			if (!(pp_file = ast_calloc(1, sizeof(*pp_file)))) {
-				profile = unref_profile(profile);
-				return;
-			}
-			if (ast_string_field_init(pp_file, 32)) {
-				ast_free(pp_file);
+			if (!(pp_file = ast_calloc_with_stringfields(1, struct phoneprov_file, 32))) {
 				profile = unref_profile(profile);
 				return;
 			}
@@ -712,13 +709,7 @@ static struct extension *build_extension(struct ast_config *cfg, const char *nam
 	const char *tmp;
 	int i;
 
-	if (!(exten = ast_calloc(1, sizeof(*exten)))) {
-		return NULL;
-	}
-
-	if (ast_string_field_init(exten, 32)) {
-		ast_free(exten);
-		exten = NULL;
+	if (!(exten = ast_calloc_with_stringfields(1, struct extension, 32))) {
 		return NULL;
 	}
 

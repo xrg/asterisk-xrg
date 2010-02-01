@@ -30,7 +30,7 @@ extern "C" {
 /* these two are used in struct ast_audiohook */
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
-
+#include "asterisk/frame_defs.h"
 #include "asterisk/slinfactory.h"
 
 enum ast_audiohook_type {
@@ -133,7 +133,7 @@ int ast_audiohook_write_frame(struct ast_audiohook *audiohook, enum ast_audiohoo
  * \param format Format of frame remote side wants back
  * \return Returns frame on success, NULL on failure
  */
-struct ast_frame *ast_audiohook_read_frame(struct ast_audiohook *audiohook, size_t samples, enum ast_audiohook_direction direction, int format);
+struct ast_frame *ast_audiohook_read_frame(struct ast_audiohook *audiohook, size_t samples, enum ast_audiohook_direction direction, format_t format);
 
 /*! \brief Attach audiohook to channel
  * \param chan Channel
@@ -201,6 +201,15 @@ int ast_audiohook_remove(struct ast_channel *chan, struct ast_audiohook *audioho
  * \return Return frame on success, NULL on failure
  */
 struct ast_frame *ast_audiohook_write_list(struct ast_channel *chan, struct ast_audiohook_list *audiohook_list, enum ast_audiohook_direction direction, struct ast_frame *frame);
+
+/*! \brief Update audiohook's status
+ * \param audiohook Audiohook structure
+ * \param audiohook status enum
+ *
+ * \note once status is updated to DONE, this function can not be used to set the
+ * status back to any other setting.  Setting DONE effectively locks the status as such.
+ */
+void ast_audiohook_update_status(struct ast_audiohook *audiohook, enum ast_audiohook_status status);
 
 /*! \brief Wait for audiohook trigger to be triggered
  * \param audiohook Audiohook to wait on

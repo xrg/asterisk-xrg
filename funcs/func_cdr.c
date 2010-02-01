@@ -52,7 +52,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>Last application arguments.</para>
 					</enum>
 					<enum name="disposition">
-						<para>ANSWERED, NO ANSWER, BUSY.</para>
+						<para>ANSWERED, NO ANSWER, BUSY, FAILED.</para>
 					</enum>
 					<enum name="src">
 						<para>Source.</para>
@@ -99,6 +99,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="channel">
 						<para>Channel name.</para>
 					</enum>
+					<enum name="sequence">
+						<para>CDR sequence number.</para>
+					</enum>
 				</enumlist>
 			</parameter>
 			<parameter name="options" required="false">
@@ -133,16 +136,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<literal>amaflags</literal>.</para></note>
 			<para>Raw values for <literal>disposition</literal>:</para>
 			<enumlist>
-				<enum name="1">
+				<enum name="0">
 					<para>NO ANSWER</para>
 				</enum>
-				<enum name="2">
-					<para>BUSY</para>
+				<enum name="1">
+					<para>NO ANSWER (NULL record)</para>
 				</enum>
-				<enum name="3">
+				<enum name="2">
 					<para>FAILED</para>
 				</enum>
 				<enum name="4">
+					<para>BUSY</para>
+				</enum>
+				<enum name="8">
 					<para>ANSWERED</para>
 				</enum>
 			</enumlist>

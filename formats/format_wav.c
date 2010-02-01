@@ -361,7 +361,7 @@ static struct ast_frame *wav_read(struct ast_filestream *s, int *whennext)
 		bytes = 0;
 /* 	ast_debug(1, "here: %d, maxlen: %d, bytes: %d\n", here, s->maxlen, bytes); */
 	s->fr.frametype = AST_FRAME_VOICE;
-	s->fr.subclass = AST_FORMAT_SLINEAR;
+	s->fr.subclass.codec = AST_FORMAT_SLINEAR;
 	s->fr.mallocd = 0;
 	AST_FRAME_SET_BUFFER(&s->fr, s->buf, AST_FRIENDLY_OFFSET, bytes);
 	
@@ -397,8 +397,8 @@ static int wav_write(struct ast_filestream *fs, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Asked to write non-voice frame!\n");
 		return -1;
 	}
-	if (f->subclass != AST_FORMAT_SLINEAR) {
-		ast_log(LOG_WARNING, "Asked to write non-SLINEAR frame (%d)!\n", f->subclass);
+	if (f->subclass.codec != AST_FORMAT_SLINEAR) {
+		ast_log(LOG_WARNING, "Asked to write non-SLINEAR frame (%s)!\n", ast_getformatname(f->subclass.codec));
 		return -1;
 	}
 	if (!f->datalen)
@@ -495,4 +495,8 @@ static int unload_module(void)
 	return ast_format_unregister(wav_f.name);
 }	
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Microsoft WAV format (8000Hz Signed Linear)");
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Microsoft WAV format (8000Hz Signed Linear)",
+	.load = load_module,
+	.unload = unload_module,
+	.load_pri = 10,
+);

@@ -65,7 +65,10 @@ typedef enum OOStackCmdID {
    OO_CMD_HANGCALL,          /*!< Terminate call */
    OO_CMD_SENDDIGIT,         /*!< Send dtmf */
    OO_CMD_MANUALRINGBACK,    /*!< Send Alerting - ringback */
-   OO_CMD_STOPMONITOR        /*!< Stop the event monitor */
+   OO_CMD_MANUALPROGRESS,    /*!< Send progress */
+   OO_CMD_STOPMONITOR,       /*!< Stop the event monitor */
+   OO_CMD_REQMODE,	     /*!< Request new mode */
+   OO_CMD_SETANI	     /*! <Set conncted info */
    
 } OOStackCmdID;
 
@@ -76,8 +79,11 @@ typedef enum OOStackCmdID {
 typedef struct OOStackCommand {
    OOStackCmdID type;
    void* param1;
+   int plen1;
    void* param2;
+   int plen2;
    void* param3;
+   int plen3;
 } OOStackCommand;
 
 #define ooCommand OOStackCommand;
@@ -105,6 +111,7 @@ EXTERN OOStkCmdStat ooMakeCall
  * @return            Returns OOStkCmdStat value indication success or failure.
  */
 EXTERN OOStkCmdStat ooManualRingback(const char *callToken);
+EXTERN OOStkCmdStat ooManualProgress(const char *callToken);
 
 /**
  * This function is used to answer a call
@@ -131,7 +138,7 @@ EXTERN OOStkCmdStat ooForwardCall(const char* callToken, char *dest);
  *
  * @return            Returns OOStkCmdStat value indication success or failure.
  */
-EXTERN OOStkCmdStat ooHangCall(const char* callToken, OOCallClearReason reason);
+EXTERN OOStkCmdStat ooHangCall(const char* callToken, OOCallClearReason reason, int q931cause);
 
 /**
  * This command function can be used by an user application to send a DTMF 
@@ -163,6 +170,14 @@ EXTERN const char* ooGetStkCmdStatusCodeTxt(OOStkCmdStat stat);
 /** 
  * @} 
  */
+
+EXTERN OOStkCmdStat ooRequestChangeMode(const char *callToken, int isT38Mode);
+
+EXTERN OOStkCmdStat ooRunCall(const char* dest, char* callToken, size_t bufsiz, ooCallOptions *opts);
+
+int ooGenerateOutgoingCallToken (char *callToken, size_t size);
+
+EXTERN OOStkCmdStat ooSetANI(const char *callToken, const char* ani);
 
 #ifdef __cplusplus
 }

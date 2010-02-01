@@ -48,7 +48,7 @@ static struct ast_frame *jpeg_read_image(int fd, int len)
 	}
 	memset(&fr, 0, sizeof(fr));
 	fr.frametype = AST_FRAME_IMAGE;
-	fr.subclass = AST_FORMAT_JPEG;
+	fr.subclass.codec = AST_FORMAT_JPEG;
 	fr.data.ptr = buf;
 	fr.src = "JPEG Read";
 	fr.datalen = len;
@@ -74,7 +74,7 @@ static int jpeg_write_image(int fd, struct ast_frame *fr)
 		ast_log(LOG_WARNING, "Not an image\n");
 		return -1;
 	}
-	if (fr->subclass != AST_FORMAT_JPEG) {
+	if (fr->subclass.codec != AST_FORMAT_JPEG) {
 		ast_log(LOG_WARNING, "Not a jpeg image\n");
 		return -1;
 	}
@@ -112,4 +112,8 @@ static int unload_module(void)
 	return 0;
 }	
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "JPEG (Joint Picture Experts Group) Image Format");
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "jpeg (joint picture experts group) image format",
+	.load = load_module,
+	.unload = unload_module,
+	.load_pri = 10,
+);
