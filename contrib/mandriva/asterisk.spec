@@ -2,12 +2,6 @@
 %define git_repo asterisk
 %define git_head 16xrg
 
-%define version 1.6.0beta7
-%define distsuffix xrg
-%define release %git_get_rel
-
-# %git_get_version TODO
-
 %define _requires_exceptions perl(Carp::Heavy)
 
 %define build_h323	0
@@ -62,18 +56,18 @@
 
 Summary:	Asterisk PBX
 Name:		asterisk16
-Version:	%{version}
-Release:	%{release}
+Version:	%git_get_ver
+Release:	%git_get_rel
 License:	GPL
 Group:		System/Servers
 URL:		http://www.asterisk.org/
 #Source0:	http://www.asterisk.org/html/downloads/%{name}-%{version}.tar.bz2
-Source0:	%{name}-%{version}.tar.gz
+Source0:	%git_bs_source %{name}-%{version}.tar.gz
 Source1:	asterisk.init
 Source2:	asterisk.sysconfig
 Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
-Source4:	asterisk.menuselect.makeopts
-Source5:	http://www.ietf.org/rfc/rfc3951.txt
+Source4:	%{name}-gitrpm.version
+Source5:	%{name}-changelog.gitrpm.txt
 Source6:	http://www.ilbcfreeware.org/documentation/extract-cfile.awk
 Provides:	asterisk
 Obsoletes:	asterisk
@@ -1339,5 +1333,5 @@ fi
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
 %attr(0755,root,root)  %{_sbindir}/refcounter
 
-%changelog -f Changelog.git.txt
+%changelog -f %{_sourcedir}/%{name}-changelog.gitrpm.txt
 
