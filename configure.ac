@@ -1784,6 +1784,7 @@ AST_C_DEFINE_CHECK([SO_NOSIGPIPE], [SO_NOSIGPIPE], [sys/socket.h])
 AST_EXT_TOOL_CHECK([SDL], [sdl-config])
 AST_EXT_LIB_CHECK([SDL_IMAGE], [SDL_image], [IMG_Load], [SDL_image.h], [${SDL_LIB}], [${SDL_INCLUDE}])
 AST_EXT_LIB_CHECK([FFMPEG], [avcodec], [sws_getContext], [libavcodec/avcodec.h], [-lswscale -lpthread -lz -lm])
+AST_EXT_LIB_CHECK([FFMPEG], [avcodec], [sws_getContext], [ffmpeg/avcodec.h], [-lpthread -lz -lm -lswscale])
 
 # possible places for video4linux version 1
 AC_CHECK_HEADER([linux/videodev.h],
