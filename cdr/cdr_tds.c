@@ -14,8 +14,8 @@
  * at the top of the source tree.
  */
 
-/*! \file
- *
+/*!
+ * \file
  * \brief FreeTDS CDR logger
  *
  * See also
@@ -24,7 +24,8 @@
  * \ingroup cdr_drivers
  */
 
-/*! \verbatim
+/*!
+ * \verbatim
  *
  * Table Structure for `cdr`
  *
@@ -64,9 +65,6 @@ CREATE TABLE [dbo].[cdr] (
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <time.h>
-#include <math.h>
-
 #include "asterisk/config.h"
 #include "asterisk/channel.h"
 #include "asterisk/cdr.h"
@@ -77,8 +75,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define DATE_FORMAT "%Y/%m/%d %T"
 
-static char *name = "FreeTDS (MSSQL)";
-static char *config = "cdr_tds.conf";
+static const char name[] = "FreeTDS (MSSQL)";
+static const char config[] = "cdr_tds.conf";
 
 struct cdr_tds_config {
 	AST_DECLARE_STRING_FIELDS(

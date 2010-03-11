@@ -17,8 +17,8 @@
  * at the top of the source tree.
  */
 
-/*! \file
- *
+/*!
+ * \file
  * \brief Store CDR records in a SQLite database.
  *
  * \author Holger Schurig <hs4233@mail.mn-solutions.de>
@@ -55,7 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /* When you change the DATE_FORMAT, be sure to change the CHAR(19) below to something else */
 #define DATE_FORMAT "%Y-%m-%d %T"
 
-static char *name = "sqlite";
+static const char name[] = "sqlite";
 static sqlite* db = NULL;
 
 AST_MUTEX_DEFINE_STATIC(sqlite_lock);

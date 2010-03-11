@@ -58,6 +58,7 @@ static struct ast_jb_conf g_jb_conf = {
 	.max_size = -1,
 	.resync_threshold = -1,
 	.impl = "",
+	.target_extra = -1,
 };
 
 static struct ast_channel *local_request(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause);
@@ -257,9 +258,10 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 	}
 
 	if (other) {
-		if (other->pbx || other->_bridge || !ast_strlen_zero(other->appl)) {
-			ast_queue_frame(other, f);
-		} /* else the frame won't go anywhere */
+		if (f->frametype == AST_FRAME_CONTROL && f->subclass.integer == AST_CONTROL_RINGING) {
+			ast_setstate(other, AST_STATE_RINGING);
+		}
+		ast_queue_frame(other, f);
 		ast_channel_unlock(other);
 	}
 
@@ -613,7 +615,6 @@ start_over:
 	ast_string_field_set(p->chan, accountcode, p->owner->accountcode);
 	ast_string_field_set(p->chan, musicclass, p->owner->musicclass);
 	ast_cdr_update(p->chan);
-	p->chan->cdrflags = p->owner->cdrflags;
 
 	if (!ast_exists_extension(NULL, p->chan->context, p->chan->exten, 1, p->owner->cid.cid_num)) {
 		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n", p->chan->exten, p->chan->context);

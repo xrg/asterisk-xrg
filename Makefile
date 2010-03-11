@@ -87,6 +87,7 @@ export AWK
 export GREP
 export ID
 export MD5
+export WGET_EXTRA_ARGS
 
 # even though we could use '-include makeopts' here, use a wildcard
 # lookup anyway, so that make won't try to build makeopts if it doesn't
@@ -374,7 +375,9 @@ makeopts: configure
 	@exit 1
 
 menuselect.makeopts: menuselect-tree makeopts
+ifeq ($(filter %menuselect,$(MAKECMDGOALS)),)
 	ast_menuselect --check-deps menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
+endif
 
 $(MOD_SUBDIRS_EMBED_LDSCRIPT):
 	+@echo "EMBED_LDSCRIPTS+="`$(SILENTMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
@@ -740,6 +743,7 @@ samples:
 		echo ";lightbackground = yes ; If your terminal is set for a light-colored background" ; \
 		echo "documentation_language = en_US ; Set the Language you want Documentation displayed in. Value is in the same format as locale names" ; \
 		echo ";hideconnect = yes ; Hide messages displayed when a remote console connects and disconnects" ; \
+		echo ";lockconfdir = no ; Protect the directory containing the configuration files (/etc/asterisk) with a lock" ; \
 		echo "" ; \
 		echo "; Changing the following lines may compromise your security." ; \
 		echo ";[files]" ; \

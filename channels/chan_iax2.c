@@ -19,6 +19,7 @@
 /*! \file
  *
  * \brief Implementation of Inter-Asterisk eXchange Version 2
+ *        as specified in RFC 5456
  *
  * \author Mark Spencer <markster@digium.com>
  *
@@ -848,7 +849,7 @@ static const unsigned int CALLNO_POOL_BUCKETS = 2699;
  *
  * \note Contents protected by the iaxsl[] locks
  */
-static AST_LIST_HEAD_NOLOCK(, iax_frame) frame_queue[IAX_MAX_CALLS];
+static AST_LIST_HEAD_NOLOCK(, iax_frame) frame_queue[IAX_MAX_CALLS + 1];
 
 static struct ast_taskprocessor *transmit_processor;
 
@@ -1049,7 +1050,7 @@ static void signal_condition(ast_mutex_t *lock, ast_cond_t *cond)
  * based on the local call number.  The local call number is used as the
  * index into the array where the associated pvt structure is stored.
  */
-static struct chan_iax2_pvt *iaxs[IAX_MAX_CALLS];
+static struct chan_iax2_pvt *iaxs[IAX_MAX_CALLS + 1];
 
 /*!
  * \brief Another container of iax2_pvt structures
@@ -1080,7 +1081,7 @@ static struct ao2_container *iax_transfercallno_pvts;
 
 /* Flag to use with trunk calls, keeping these calls high up.  It halves our effective use
    but keeps the division between trunked and non-trunked better. */
-#define TRUNK_CALL_START	ARRAY_LEN(iaxs) / 2
+#define TRUNK_CALL_START	IAX_MAX_CALLS / 2
 
 /* Debug routines... */
 static struct sockaddr_in debugaddr;
@@ -1189,7 +1190,6 @@ static void prune_users(void);
 static void iax2_free_variable_datastore(void *);
 
 static int acf_channel_read(struct ast_channel *chan, const char *funcname, char *preparse, char *buf, size_t buflen);
-static int acf_channel_write(struct ast_channel *chan, const char *function, char *data, const char *value);
 static int decode_frame(ast_aes_decrypt_key *dcx, struct ast_iax2_full_hdr *fh, struct ast_frame *f, int *datalen);
 static int encrypt_frame(ast_aes_encrypt_key *ecx, struct ast_iax2_full_hdr *fh, unsigned char *poo, int *datalen);
 static void build_ecx_key(const unsigned char *digest, struct chan_iax2_pvt *pvt);
@@ -1222,7 +1222,6 @@ static const struct ast_channel_tech iax2_tech = {
 	.transfer = iax2_transfer,
 	.fixup = iax2_fixup,
 	.func_channel_read = acf_channel_read,
-	.func_channel_write = acf_channel_write,
 };
 
 static void mwi_event_cb(const struct ast_event *event, void *userdata)
@@ -2451,10 +2450,21 @@ static char *handle_cli_iax2_show_callno_limits(struct ast_cli_entry *e, int cmd
 		ao2_iterator_destroy(&i);
 
 		if (a->argc == 4) {
-			ast_cli(a->fd, "\nNon-CallToken Validation Limit: %d\nNon-CallToken Validated: %d\n", global_maxcallno_nonval, total_nonval_callno_used);
+			ast_cli(a->fd, "\nNon-CallToken Validation Callno Limit: %d\n"
+			                 "Non-CallToken Validated Callno Used:   %d\n",
+				global_maxcallno_nonval,
+				total_nonval_callno_used);
+
+			ast_cli(a->fd,   "Total Available Callno:                %d\n"
+			                 "Regular Callno Available:              %d\n"
+			                 "Trunk Callno Available:                %d\n",
+				ao2_container_count(callno_pool) + ao2_container_count(callno_pool_trunk),
+				ao2_container_count(callno_pool),
+				ao2_container_count(callno_pool_trunk));
 		} else if (a->argc == 5 && !found) {
 			ast_cli(a->fd, "No callnumber table entries for %s found\n", a->argv[4] );
 		}
+
 
 		return CLI_SUCCESS;
 	default:
@@ -4990,8 +5000,8 @@ static int iax2_call(struct ast_channel *c, char *dest, int timeout)
 		iaxs[callno]->initid = iax2_sched_add(sched, autokill * 2, auto_congest, CALLNO_TO_PTR(callno));
 	}
 
-	/* Check if there is an OSP token set by IAXCHANINFO function */
-	osp_token_ptr = iaxs[callno]->osptoken;
+	/* Check if there is an OSP token */
+	osp_token_ptr = pbx_builtin_getvar_helper(c, "IAX2OSPTOKEN");
 	if (!ast_strlen_zero(osp_token_ptr)) {
 		if ((osp_token_length = strlen(osp_token_ptr)) <= IAX_MAX_OSPTOKEN_SIZE) {
 			osp_block_index = 0;
@@ -8060,9 +8070,14 @@ static int try_transfer(struct chan_iax2_pvt *pvt, struct iax_ies *ies)
 	memcpy(&pvt->transfer, &new, sizeof(pvt->transfer));
 	inet_aton(newip, &pvt->transfer.sin_addr);
 	pvt->transfer.sin_family = AF_INET;
-	pvt->transferring = TRANSFER_BEGIN;
 	pvt->transferid = ies->transferid;
-	store_by_transfercallno(pvt);
+	/* only store by transfercallno if this is a new transfer,
+	 * just in case we get a duplicate TXREQ */
+	if (pvt->transferring == TRANSFER_NONE) {
+		store_by_transfercallno(pvt);
+	}
+	pvt->transferring = TRANSFER_BEGIN;
+
 	if (ies->transferid)
 		iax_ie_append_int(&ied, IAX_IE_TRANSFERID, ies->transferid);
 	send_command_transfer(pvt, AST_FRAME_IAX, IAX_COMMAND_TXCNT, 0, ied.buf, ied.pos);
@@ -8156,7 +8171,7 @@ static int complete_transfer(int callno, struct iax_ies *ies)
 	pvt->voiceformat = 0;
 	pvt->svideoformat = -1;
 	pvt->videoformat = 0;
-	pvt->transfercallno = -1;
+	pvt->transfercallno = 0;
 	memset(&pvt->rxcore, 0, sizeof(pvt->rxcore));
 	memset(&pvt->offset, 0, sizeof(pvt->offset));
 	/* reset jitterbuffer */
@@ -13556,34 +13571,6 @@ static struct ast_custom_function iaxpeer_function = {
 	.name = "IAXPEER",
 	.read = function_iaxpeer,
 };
-
-static int acf_channel_write(struct ast_channel *chan, const char *function, char *args, const char *value)
-{
-	struct chan_iax2_pvt *pvt;
-	unsigned int callno;
-	int res = 0;
-
-	if (!chan || chan->tech != &iax2_tech) {
-		ast_log(LOG_ERROR, "This function requires a valid IAX2 channel\n");
-		return -1;
-	}
-
-	callno = PTR_TO_CALLNO(chan->tech_pvt);
-	ast_mutex_lock(&iaxsl[callno]);
-	if (!(pvt = iaxs[callno])) {
-		ast_mutex_unlock(&iaxsl[callno]);
-		return -1;
-	}
-
-	if (!strcasecmp(args, "osptoken"))
-		ast_string_field_set(pvt, osptoken, value);
-	else
-		res = -1;
-
-	ast_mutex_unlock(&iaxsl[callno]);
-
-	return res;
-}
 
 static int acf_channel_read(struct ast_channel *chan, const char *funcname, char *args, char *buf, size_t buflen)
 {

@@ -306,7 +306,6 @@ AST_EXT_LIB_SETUP([CRYPTO], [OpenSSL Cryptography support], [crypto])
 AST_EXT_LIB_SETUP([DAHDI], [DAHDI], [dahdi])
 AST_EXT_LIB_SETUP([FFMPEG], [Ffmpeg and avcodec library], [avcodec])
 AST_EXT_LIB_SETUP([GSM], [External GSM library], [gsm], [, use 'internal' GSM otherwise])
-AST_EXT_LIB_SETUP([GTK], [gtk libraries], [gtk])
 AST_EXT_LIB_SETUP([GTK2], [gtk2 libraries], [gtk2])
 AST_EXT_LIB_SETUP([GMIME], [GMime library], [gmime])
 AST_EXT_LIB_SETUP([HOARD], [Hoard Memory Allocator], [hoard])
@@ -617,6 +616,18 @@ AC_LANG_PROGRAM([], [int foo1; int foo2 = __sync_fetch_and_add(&foo1, 1);]),
 AC_MSG_RESULT(yes)
 AC_DEFINE([HAVE_GCC_ATOMICS], 1, [Define to 1 if your GCC C compiler provides atomic operations.]),
 AC_MSG_RESULT(no)
+)
+
+# glibc, AFAIK, is the only C library that makes printing a NULL to a string safe.
+AC_MSG_CHECKING([if your system printf is NULL-safe.])
+AC_RUN_IFELSE(
+	AC_LANG_PROGRAM([#include <stdio.h>],
+		[printf("%s", NULL)]),
+	AC_DEFINE([HAVE_NULLSAFE_PRINTF], 1, [Define to 1 if your C library can safely print NULL to string formats.])
+	AC_MSG_RESULT(yes),
+	AC_MSG_RESULT(no),
+	# It's unlikely an embedded system will have this.
+	AC_MSG_RESULT(unknown)
 )
 
 AST_GCC_ATTRIBUTE(pure)
@@ -1798,9 +1809,6 @@ if test "${cross_compiling}" = "no";
 then
   AC_CHECK_FILE(/sbin/launchd, AC_DEFINE([HAVE_SBIN_LAUNCHD], 1, [Define to 1 if your system has /sbin/launchd.]))
 fi
-
-PBX_GTK=0
-AST_EXT_TOOL_CHECK([GTK], [gtk-config], [--cflags gthread], [--libs gthread])
 
 PBX_GTK2=0
 AC_CHECK_TOOL(PKGCONFIG, pkg-config, No)

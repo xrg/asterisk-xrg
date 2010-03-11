@@ -200,13 +200,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>    Argument 1:</para>
 						<para>     <literal>audio</literal>             Get audio destination</para>
 						<para>     <literal>video</literal>             Get video destination</para>
+						<para>     <literal>text</literal>              Get text destination</para>
 					</enum>
 				</enumlist>
 				<para><emphasis>chan_iax2</emphasis> provides the following additional options:</para>
 				<enumlist>
-					<enum name="osptoken">
-						<para>R/W Get or set the OSP token information for a call.</para>
-					</enum>
 					<enum name="peerip">
 						<para>R/O Get the peer's ip address.</para>
 					</enum>

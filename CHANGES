@@ -72,6 +72,8 @@ MGCP Changes
 
 Applications
 ------------
+ * Added 'p' option to PickupChan() to allow for picking up channel by the first
+   match to a partial channel name.
  * Added "ready" option to QUEUE_MEMBER counting to count free agents who's wrap-up
    timeout has expired.
  * Added 'R' option to app_queue.  This option stops moh and indicates ringing
@@ -131,9 +133,18 @@ Applications
    argument is provided, the 'f' option works as it always has. If an argument is
    provided, then the connected party information of all outgoing channels created
    during the Dial will be set to the argument passed to the 'f' option.
+ * Dial now inherits the GOSUB_RETVAL from the peer, when the U() option runs a
+   Gosub on the peer.
+ * The OSP lookup application adds in/outbound network ID, optional security,
+   number portability, QoS reporting, destination IP port, custom info and service
+   type features.
+ * Added new application VMSayName that will play the recorded name of the voicemail
+   user if it exists, otherwise will play the mailbox number.
 
 Dialplan Functions
 ------------------
+ * PITCH_SHIFT dialplan function added. This function can be used to modify the
+   pitch of a channel's tx and rx audio streams.
  * Added new dialplan functions CONNECTEDLINE and REDIRECTING which permits
    setting various connected line and redirecting party information.
  * CALLERID and CONNECTEDLINE dialplan functions have been extended to
@@ -186,12 +197,22 @@ Dialplan Functions
  * HASH-associated variables now can be inherited across channel creation, by
    prefixing the name of the hash at assignment with the appropriate number of
    underscores, just like variables.
+ * GROUP_MATCH_COUNT has been improved to allow regex matching on category
 
 Dialplan Variables
 ------------------
  * Added DYNAMIC_FEATURENAME which holds the last triggered dynamic feature.
  * Added DYNAMIC_PEERNAME which holds the unique channel name on the other side
    and is set when a dynamic feature is triggered.
+ * Added PARKINGLOT which can be used with parkeddynamic feature.conf option
+   to dynamically create a new parking lot matching the value this varible is
+   set to.
+ * Added PARKINGDYNAMIC which represents the template parkinglot defined in
+   features.conf that should be the base for dynamic parkinglots.
+ * Added PARKINGDYNCONTEXT which tells what context a newly created dynamic
+   parkinglot should have.
+ * Added PARKINGDYNPOS which holds what parking positions a dynamic parkinglot
+   should have.
 
 Queue changes
 -------------
@@ -324,6 +345,8 @@ Asterisk Manager Interface
  * The redirect command now has new parameters ExtraContext, ExtraExtension, 
    and ExtraPriority to allow redirecting the second channel to a different
    location than the first.
+ * Added new event "JabberStatus" in the Jabber module to monitor buddies
+   status.
 
 Channel Event Logging
 ---------------------
@@ -372,6 +395,13 @@ Security Events Framework
    coming soon.  For more information on the security events framework, see the
    "Security Events" chapter of the included documentation - doc/tex/asterisk.pdf.
 
+Fax
+---
+ * A technology independent fax frontend (res_fax) has been added to Asterisk.
+ * A spandsp based fax backend (res_fax_spandsp) has been added.
+ * The app_fax module has been deprecated in favor of the res_fax module and
+   the new res_fax_spandsp backend.
+
 Miscellaneous
 -------------
  * The transmit_silence_during_record option in asterisk.conf.sample has been removed.
@@ -389,6 +419,12 @@ Miscellaneous
  * An 'X' option has been added to the asterisk application which enables #exec support.
    This allows #exec to be used in asterisk.conf.
  * jabber.conf supports a new option auth_policy that toggles auto user registration.
+ * A new lockconfdir option has been added to asterisk.conf to protect the
+   configuration directory (/etc/asterisk by default) during reloads.
+ * The parkeddynamic option has been added to features.conf to enable the creation
+   of dynamic parkinglots.
+ * chan_dahdi now supports reporting alarms over AMI either by channel or span via
+   the reportalarms config option.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------
@@ -1296,6 +1332,8 @@ Call Features (res_features) Changes
     pickup
   * Added parkedcallrecording option to control one-touch record w/ parking
     pickup
+  * Added parkedcallparking, parkedcallhangup, parkedcallrecording, and
+    parkedcalltransfers option support for multiple parking lots.
   * Added BRIDGE_FEATURES variable to set available features for a channel
   * The built-in method for doing attended transfers has been updated to
      include some new options that allow you to have the transferee sent

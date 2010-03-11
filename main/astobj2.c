@@ -593,8 +593,6 @@ static int cb_true_data(void *user_data, void *arg, void *data, int flags)
 	return CMP_MATCH;
 }
 
-#define USE_CONTAINER(x) (((x) & (OBJ_MULTIPLE | OBJ_NODATA)) == OBJ_MULTIPLE)
-
 /*!
  * Browse the container using different stategies accoding the flags.
  * \return Is a pointer to an object or to a list of object if OBJ_MULTIPLE is 
@@ -617,7 +615,12 @@ static void *internal_ao2_callback(struct ao2_container *c,
 	if (INTERNAL_OBJ(c) == NULL)	/* safety check on the argument */
 		return NULL;
 
-	if (USE_CONTAINER(flags)) {
+	/*
+	 * This logic is used so we can support OBJ_MULTIPLE with OBJ_NODATA
+	 * turned off.  This if statement checks for the special condition
+	 * where multiple items may need to be returned.
+	 */
+	if ((flags & (OBJ_MULTIPLE | OBJ_NODATA)) == OBJ_MULTIPLE) {
 		/* we need to return an ao2_iterator with the results,
 		 * as there could be more than one. the iterator will
 		 * hold the only reference to a container that has all the
@@ -707,10 +710,10 @@ static void *internal_ao2_callback(struct ao2_container *c,
 				}
 			}
 
-			/* if we are in OBJ_MULTIPLE mode, link the object into the
-			 * container that will hold the results
+			/* If we are in OBJ_MULTIPLE mode and OBJ_NODATE is off, 
+			 * link the object into the container that will hold the results.
 			 */
-			if (ret && USE_CONTAINER(flags)) {
+			if (ret && (multi_container != NULL)) {
 				__ao2_link(multi_container, ret);
 				ret = NULL;
 			}
@@ -721,10 +724,14 @@ static void *internal_ao2_callback(struct ao2_container *c,
 				AST_LIST_REMOVE_CURRENT(entry);
 				/* update number of elements */
 				ast_atomic_fetchadd_int(&c->elements, -1);
-				/* if the object is not going to be returned, we must decrement the reference count
-				 * to account for the reference the container was holding
-				 */
-				if (flags & OBJ_NODATA) {
+
+				/* - When unlinking and not returning the result, (OBJ_NODATA), the ref from the container
+				 * must be decremented.
+				 * - When unlinking with OBJ_MULTIPLE the ref from the original container
+				 * must be decremented regardless if OBJ_NODATA is used. This is because the result is
+				 * returned in a new container that already holds its own ref for the object. If the ref
+				 * from the original container is not accounted for here a memory leak occurs. */
+				if (flags & (OBJ_NODATA | OBJ_MULTIPLE)) {
 					if (tag)
 						__ao2_ref_debug(EXTERNAL_OBJ(cur->astobj), -1, tag, file, line, funcname);
 					else
@@ -733,7 +740,7 @@ static void *internal_ao2_callback(struct ao2_container *c,
 				ast_free(cur);	/* free the link record */
 			}
 
-			if ((match & CMP_STOP) || USE_CONTAINER(flags)) {
+			if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {
 				/* We found our only (or last) match, so force an exit from
 				   the outside loop. */
 				i = last;
@@ -753,7 +760,9 @@ static void *internal_ao2_callback(struct ao2_container *c,
 		}
 	}
 	ao2_unlock(c);
-	if (USE_CONTAINER(flags)) {
+
+	/* if multi_container was created, we are returning multiple objects */
+	if (multi_container != NULL) {
 		*multi_iterator = ao2_iterator_init(multi_container,
 						    AO2_ITERATOR_DONTLOCK | AO2_ITERATOR_UNLINK | AO2_ITERATOR_MALLOCD);
 		ao2_ref(multi_container, -1);
@@ -1099,12 +1108,14 @@ static char *handle_astobj2_test(struct ast_cli_entry *e, int cmd, struct ast_cl
 				ao2_t_unlink(c1, obj,"test");
 			ao2_t_ref(obj, -1,"test");
 		}
+		ao2_iterator_destroy(&ai);
 		ast_cli(a->fd, "testing iterators again\n");
 		ai = ao2_iterator_init(c1, 0);
 		while ( (obj = ao2_t_iterator_next(&ai,"test")) ) {
 			ast_cli(a->fd, "iterator on <%s>\n", obj);
 			ao2_t_ref(obj, -1,"test");
 		}
+		ao2_iterator_destroy(&ai);
 	}
 	ast_cli(a->fd, "testing callbacks again\n");
 	ao2_t_callback(c1, 0, print_cb, a, "test callback");

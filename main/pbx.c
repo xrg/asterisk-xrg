@@ -2927,7 +2927,7 @@ static const char *ast_str_substring(struct ast_str *value, int offset, int leng
 
 	if (offset > 0) {
 		/* Go ahead and chop off the beginning */
-		memcpy(ast_str_buffer(value), ast_str_buffer(value) + offset, ast_str_strlen(value) - offset + 1);
+		memmove(ast_str_buffer(value), ast_str_buffer(value) + offset, ast_str_strlen(value) - offset + 1);
 		lr -= offset;
 	}
 
@@ -9434,14 +9434,15 @@ int pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const 
 			nametail++;
 	}
 
-	AST_LIST_TRAVERSE (headp, newvariable, entries) {
+	AST_LIST_TRAVERSE_SAFE_BEGIN(headp, newvariable, entries) {
 		if (strcasecmp(ast_var_name(newvariable), nametail) == 0) {
 			/* there is already such a variable, delete it */
-			AST_LIST_REMOVE(headp, newvariable, entries);
+			AST_LIST_REMOVE_CURRENT(entries);
 			ast_var_delete(newvariable);
 			break;
 		}
 	}
+	AST_LIST_TRAVERSE_SAFE_END;
 
 	if (value) {
 		if (headp == &globals)

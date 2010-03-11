@@ -37,6 +37,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/pbx.h"
 #include "asterisk/frame.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/sched.h"
 #include "asterisk/channel.h"
 #include "asterisk/musiconhold.h"
@@ -1104,22 +1105,22 @@ static int __ast_queue_frame(struct ast_channel *chan, struct ast_frame *fin, in
 		}
 	}
 
-	if ((queued_frames + new_frames) > 128) {
-		ast_log(LOG_WARNING, "Exceptionally long queue length queuing to %s\n", chan->name);
-		while ((f = AST_LIST_REMOVE_HEAD(&frames, frame_list))) {
-			ast_frfree(f);
+	if ((queued_frames + new_frames > 128 || queued_voice_frames + new_voice_frames > 96)) {
+		int count = 0;
+		ast_log(LOG_WARNING, "Exceptionally long %squeue length queuing to %s\n", queued_frames + new_frames > 128 ? "" : "voice ", chan->name);
+		AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->readq, cur, frame_list) {
+			/* Save the most recent frame */
+			if (!AST_LIST_NEXT(cur, frame_list)) {
+				break;
+			} else if (cur->frametype == AST_FRAME_VOICE || cur->frametype == AST_FRAME_VIDEO || cur->frametype == AST_FRAME_NULL) {
+				if (++count > 64) {
+					break;
+				}
+				AST_LIST_REMOVE_CURRENT(frame_list);
+				ast_frfree(cur);
+			}
 		}
-		ast_channel_unlock(chan);
-		return 0;
-	}
-
-	if ((queued_voice_frames + new_voice_frames) > 96) {
-		ast_log(LOG_WARNING, "Exceptionally long voice queue length queuing to %s\n", chan->name);
-		while ((f = AST_LIST_REMOVE_HEAD(&frames, frame_list))) {
-			ast_frfree(f);
-		}
-		ast_channel_unlock(chan);
-		return 0;
+		AST_LIST_TRAVERSE_SAFE_END;
 	}
 
 	if (after) {
@@ -1844,9 +1845,11 @@ static void ast_channel_destructor(void *obj)
 	ast_cel_check_retire_linkedid(chan);
 
 	/* Get rid of each of the data stores on the channel */
+	ast_channel_lock(chan);
 	while ((datastore = AST_LIST_REMOVE_HEAD(&chan->datastores, entry)))
 		/* Free the data store */
 		ast_datastore_free(datastore);
+	ast_channel_unlock(chan);
 
 	/* Lock and unlock the channel just to be sure nobody has it locked still
 	   due to a reference that was stored in a datastore. (i.e. app_chanspy) */
@@ -3087,6 +3090,28 @@ static inline int should_skip_dtmf(struct ast_channel *chan)
 	return 0;
 }
 
+/*!
+ * \brief calculates the number of samples to jump forward with in a monitor stream.
+ 
+ * \note When using ast_seekstream() with the read and write streams of a monitor,
+ * the number of samples to seek forward must be of the same sample rate as the stream
+ * or else the jump will not be calculated correctly.
+ *
+ * \retval number of samples to seek forward after rate conversion.
+ */
+static inline int calc_monitor_jump(int samples, int sample_rate, int seek_rate)
+{
+	int diff = sample_rate - seek_rate;
+
+	if (diff > 0) {
+		samples = samples / (float) (sample_rate / seek_rate);
+	} else if (diff < 0) {
+		samples = samples * (float) (seek_rate / sample_rate);
+	}
+
+	return samples;
+}
+
 static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 {
 	struct ast_frame *f = NULL;	/* the return value */
@@ -3469,18 +3494,18 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 #ifndef MONITOR_CONSTANT_DELAY
 					int jump = chan->outsmpl - chan->insmpl - 4 * f->samples;
 					if (jump >= 0) {
-						jump = chan->outsmpl - chan->insmpl;
+						jump = calc_monitor_jump((chan->outsmpl - chan->insmpl), ast_format_rate(f->subclass.codec), ast_format_rate(chan->monitor->read_stream->fmt->format));
 						if (ast_seekstream(chan->monitor->read_stream, jump, SEEK_FORCECUR) == -1)
 							ast_log(LOG_WARNING, "Failed to perform seek in monitoring read stream, synchronization between the files may be broken\n");
-						chan->insmpl += jump + f->samples;
+						chan->insmpl += (chan->outsmpl - chan->insmpl) + f->samples;
 					} else
 						chan->insmpl+= f->samples;
 #else
-					int jump = chan->outsmpl - chan->insmpl;
+					int jump = calc_monitor_jump((chan->outsmpl - chan->insmpl), ast_format_rate(f->subclass.codec), ast_format_rate(chan->monitor->read_stream->fmt->format));
 					if (jump - MONITOR_DELAY >= 0) {
 						if (ast_seekstream(chan->monitor->read_stream, jump - f->samples, SEEK_FORCECUR) == -1)
 							ast_log(LOG_WARNING, "Failed to perform seek in monitoring read stream, synchronization between the files may be broken\n");
-						chan->insmpl += jump;
+						chan->insmpl += chan->outsmpl - chan->insmpl;
 					} else
 						chan->insmpl += f->samples;
 #endif
@@ -4082,19 +4107,19 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 #ifndef MONITOR_CONSTANT_DELAY
 				int jump = chan->insmpl - chan->outsmpl - 4 * cur->samples;
 				if (jump >= 0) {
-					jump = chan->insmpl - chan->outsmpl;
+					jump = calc_monitor_jump((chan->insmpl - chan->outsmpl), ast_format_rate(f->subclass.codec), ast_format_rate(chan->monitor->read_stream->fmt->format));
 					if (ast_seekstream(chan->monitor->write_stream, jump, SEEK_FORCECUR) == -1)
 						ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
-					chan->outsmpl += jump + cur->samples;
+					chan->outsmpl += (chan->insmpl - chan->outsmpl) + cur->samples;
 				} else {
 					chan->outsmpl += cur->samples;
 				}
 #else
-				int jump = chan->insmpl - chan->outsmpl;
+				int jump = calc_monitor_jump((chan->insmpl - chan->outsmpl), ast_format_rate(f->subclass.codec), ast_format_rate(chan->monitor->read_stream->fmt->format));
 				if (jump - MONITOR_DELAY >= 0) {
 					if (ast_seekstream(chan->monitor->write_stream, jump - cur->samples, SEEK_FORCECUR) == -1)
 						ast_log(LOG_WARNING, "Failed to perform seek in monitoring write stream, synchronization between the files may be broken\n");
-					chan->outsmpl += jump;
+					chan->outsmpl += chan->insmpl - chan->outsmpl;
 				} else {
 					chan->outsmpl += cur->samples;
 				}
@@ -5865,7 +5890,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 {
 	struct ast_channel *who = NULL, *chans[2] = { c0, c1 };
 	enum ast_bridge_result res = AST_BRIDGE_COMPLETE;
-	int nativefailed=0;
 	format_t o0nativeformats;
 	format_t o1nativeformats;
 	long time_left_ms=0;
@@ -6030,7 +6054,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 
 		if (c0->tech->bridge &&
 		    (c0->tech->bridge == c1->tech->bridge) &&
-		    !nativefailed && !c0->monitor && !c1->monitor &&
+		    !c0->monitor && !c1->monitor &&
 		    !c0->audiohooks && !c1->audiohooks && 
 		    !c0->masq && !c0->masqr && !c1->masq && !c1->masqr) {
 			/* Looks like they share a bridge method and nothing else is in the way */
@@ -6071,7 +6095,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 				ast_verb(3, "Native bridging %s and %s ended\n", c0->name, c1->name);
 				/* fallthrough */
 			case AST_BRIDGE_FAILED_NOWARN:
-				nativefailed++;
 				break;
 			}
 		}

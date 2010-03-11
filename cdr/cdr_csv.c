@@ -18,8 +18,8 @@
  * at the top of the source tree.
  */
 
-/*! \file
- *
+/*!
+ * \file
  * \brief Comma Separated Value CDR records.
  *
  * \author Mark Spencer <markster@digium.com>
@@ -31,8 +31,6 @@
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-
-#include <time.h>
 
 #include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */
 #include "asterisk/config.h"
@@ -51,7 +49,7 @@ static int usegmtime = 0;
 static int loguniqueid = 0;
 static int loguserfield = 0;
 static int loaded = 0;
-static char *config = "cdr.conf";
+static const char config[] = "cdr.conf";
 
 /* #define CSV_LOGUNIQUEID 1 */
 /* #define CSV_LOGUSERFIELD 1 */
@@ -133,7 +131,7 @@ static int load_config(int reload)
 	return 1;
 }
 
-static int append_string(char *buf, char *s, size_t bufsize)
+static int append_string(char *buf, const char *s, size_t bufsize)
 {
 	int pos = strlen(buf), spos = 0, error = -1;
 

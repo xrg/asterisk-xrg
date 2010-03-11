@@ -154,7 +154,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 
 /*! \brief Welcome message when starting a CLI interface */
 #define WELCOME_MESSAGE \
-    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2009 Digium, Inc. and others.\n" \
+    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2010 Digium, Inc. and others.\n" \
                 "Created by Mark Spencer <markster@digium.com>\n" \
                 "Asterisk comes with ABSOLUTELY NO WARRANTY; type 'core show warranty' for details.\n" \
                 "This is free software, with components licensed under the GNU General Public\n" \
@@ -2745,7 +2745,7 @@ static int show_version(void)
 }
 
 static int show_cli_help(void) {
-	printf("Asterisk %s, Copyright (C) 1999 - 2009, Digium, Inc. and others.\n", ast_get_version());
+	printf("Asterisk %s, Copyright (C) 1999 - 2010, Digium, Inc. and others.\n", ast_get_version());
 	printf("Usage: asterisk [OPTIONS]\n");
 	printf("Valid Options:\n");
 	printf("   -V              Display version number and exit\n");
@@ -2997,6 +2997,8 @@ static void ast_readconfig(void)
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
 		} else if (!strcasecmp(v->name, "hideconnect")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_HIDE_CONSOLE_CONNECT);
+		} else if (!strcasecmp(v->name, "lockconfdir")) {
+			ast_set2_flag(&ast_options, ast_true(v->value),	AST_OPT_FLAG_LOCK_CONFIG_DIR);
 		}
 	}
 	for (v = ast_variable_browse(cfg, "compat"); v; v = v->next) {
@@ -3312,6 +3314,12 @@ int main(int argc, char *argv[])
 	 */
 	signal(SIGCHLD, child_handler);
 
+	/* It's common on some platforms to clear /var/run at boot.  Create the
+	 * socket file directory before we drop privileges. */
+	if (mkdir(ast_config_AST_RUN_DIR, 0755) && errno != EEXIST) {
+		ast_log(LOG_WARNING, "Unable to create socket file directory.  Remote consoles will not be able to connect! (%s)\n", strerror(x));
+	}
+
 #ifndef __CYGWIN__
 
 	if (isroot) {
@@ -3324,6 +3332,9 @@ int main(int argc, char *argv[])
 		if (!gr) {
 			ast_log(LOG_WARNING, "No such group '%s'!\n", rungroup);
 			exit(1);
+		}
+		if (chown(ast_config_AST_RUN_DIR, -1, gr->gr_gid)) {
+			ast_log(LOG_WARNING, "Unable to chgrp run directory to %d (%s)\n", (int) gr->gr_gid, rungroup);
 		}
 		if (setgid(gr->gr_gid)) {
 			ast_log(LOG_WARNING, "Unable to setgid to %d (%s)\n", (int)gr->gr_gid, rungroup);
@@ -3346,6 +3357,9 @@ int main(int argc, char *argv[])
 		if (!pw) {
 			ast_log(LOG_WARNING, "No such user '%s'!\n", runuser);
 			exit(1);
+		}
+		if (chown(ast_config_AST_RUN_DIR, pw->pw_uid, -1)) {
+			ast_log(LOG_WARNING, "Unable to chown run directory to %d (%s)\n", (int) pw->pw_uid, runuser);
 		}
 #ifdef HAVE_CAP
 		if (prctl(PR_SET_KEEPCAPS, 1, 0, 0, 0)) {

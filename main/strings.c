@@ -24,8 +24,8 @@
  */
 
 /*** MAKEOPTS
-<category name="MENUSELECT_CFLAGS" displayname="Compiler Flags" positive_output="yes" remove_on_change=".lastclean">
-	<member name="DEBUG_OPAQUE" displayname="Change ast_str internals to detect improper usage">
+<category name="MENUSELECT_CFLAGS" displayname="Compiler Flags" positive_output="yes">
+	<member name="DEBUG_OPAQUE" displayname="Change ast_str internals to detect improper usage" touch_on_change="include/asterisk/strings.h">
 		<defaultenabled>yes</defaultenabled>
 	</member>
 </category>
@@ -49,10 +49,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  */
 
 #if (defined(MALLOC_DEBUG) && !defined(STANDALONE))
-int __ast_debug_str_helper(struct ast_str **buf, size_t max_len,
+int __ast_debug_str_helper(struct ast_str **buf, ssize_t max_len,
 	int append, const char *fmt, va_list ap, const char *file, int lineno, const char *function)
 #else
-int __ast_str_helper(struct ast_str **buf, size_t max_len,
+int __ast_str_helper(struct ast_str **buf, ssize_t max_len,
 	int append, const char *fmt, va_list ap)
 #endif
 {
@@ -93,6 +93,7 @@ int __ast_str_helper(struct ast_str **buf, size_t max_len,
 #endif
 				) {
 				ast_verbose("failed to extend from %d to %d\n", (int)(*buf)->__AST_STR_LEN, need);
+				va_end(aq);
 				return AST_DYNSTR_BUILD_FAILED;
 			}
 			(*buf)->__AST_STR_STR[offset] = '\0';	/* Truncate the partial write. */
@@ -101,15 +102,16 @@ int __ast_str_helper(struct ast_str **buf, size_t max_len,
 			va_end(aq);
 			continue;
 		}
+		va_end(aq);
 		break;
 	} while (1);
 	/* update space used, keep in mind the truncation */
-	(*buf)->__AST_STR_USED = (res + offset > (*buf)->__AST_STR_LEN) ? (*buf)->__AST_STR_LEN : res + offset;
+	(*buf)->__AST_STR_USED = (res + offset > (*buf)->__AST_STR_LEN) ? (*buf)->__AST_STR_LEN - 1: res + offset;
 
 	return res;
 }
 
-char *__ast_str_helper2(struct ast_str **buf, size_t maxlen, const char *src, size_t maxsrc, int append, int escapecommas)
+char *__ast_str_helper2(struct ast_str **buf, ssize_t maxlen, const char *src, size_t maxsrc, int append, int escapecommas)
 {
 	int dynamic = 0;
 	char *ptr = append ? &((*buf)->__AST_STR_STR[(*buf)->__AST_STR_USED]) : (*buf)->__AST_STR_STR;

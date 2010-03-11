@@ -16,8 +16,8 @@
  * at the top of the source tree.
  */
 
-/*! \file
- *
+/*!
+ * \file
  * \brief Custom SQLite3 CDR records.
  *
  * \author Adapted by Alejandro Rios <alejandro.rios@avatar.com.co> and
@@ -40,7 +40,6 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <time.h>
 #include <sqlite3.h>
 
 #include "asterisk/paths.h"	/* use ast_config_AST_LOG_DIR */

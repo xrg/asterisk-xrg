@@ -498,12 +498,14 @@ static int create_jb(struct ast_channel *chan, struct ast_frame *frr)
 
 		snprintf(logfile_pathname, sizeof(logfile_pathname),
 			"/tmp/ast_%s_jb_%s--%s.log", jbimpl->name, name1, name2);
-		if (!(safe_fd = mkstemp(safe_logfile)) > -1 || unlink(logfile_pathname) || link(safe_logfile, logfile_pathname) || unlink(safe_logfile) || !(jb->logfile = fdopen(safe_fd, "w+b"))) {
+		unlink(logfile_pathname);
+		safe_fd = mkstemp(safe_logfile);
+		if (safe_fd < 0 || link(safe_logfile, logfile_pathname) || unlink(safe_logfile) || !(jb->logfile = fdopen(safe_fd, "w+b"))) {
+			ast_log(LOG_ERROR, "Failed to create frame log file with pathname '%s': %s\n", logfile_pathname, strerror(errno));
 			jb->logfile = NULL;
 			if (safe_fd > -1) {
 				close(safe_fd);
 			}
-			ast_log(LOG_ERROR, "Failed to create frame log file with pathname '%s': %s\n", logfile_pathname, strerror(errno));
 		}
 
 		if (res == JB_IMPL_OK) {
@@ -592,6 +594,10 @@ int ast_jb_read_conf(struct ast_jb_conf *conf, const char *varname, const char *
 	} else if (!strcasecmp(name, AST_JB_CONF_IMPL)) {
 		if (!ast_strlen_zero(value))
 			snprintf(conf->impl, sizeof(conf->impl), "%s", value);
+	} else if (!strcasecmp(name, AST_JB_CONF_TARGET_EXTRA)) {
+		if (sscanf(value, "%30d", &tmp) == 1) {
+			conf->target_extra = tmp;
+		}
 	} else if (!strcasecmp(name, AST_JB_CONF_LOG)) {
 		ast_set2_flag(conf, ast_true(value), AST_JB_LOG);
 	} else {
@@ -738,6 +744,7 @@ static void *jb_create_adaptive(struct ast_jb_conf *general_config, long resynch
 		jbconf.max_jitterbuf = general_config->max_size;
 		jbconf.resync_threshold = general_config->resync_threshold;
 		jbconf.max_contig_interp = 10;
+		jbconf.target_extra = general_config->target_extra;
 		jb_setconf(adaptivejb, &jbconf);
 	}
 
