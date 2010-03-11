@@ -153,6 +153,9 @@ BuildRequires:	tiff-devel
 BuildRequires:	sqlite-devel
 #BuildRequires:	swig-devel
 BuildRequires:	wget
+BuildRequires: neon-devel
+BuildRequires: libical-devel
+BuildRequires: libxml2-devel
 %if %{build_imap}
 %if %mdkversion < 200900
 BuildRequires: imap-devel
@@ -994,6 +997,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_sha1.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_shell.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_strings.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_pitchshift.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_sysinfo.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_timeout.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_uri.so
@@ -1012,7 +1016,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_clioriginate.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_convert.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_crypto.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_http_post.so
+# attr(0755,root,root) %{_libdir}/asterisk/modules/res_http_post.so
 # attr(0755,root,root) %{_libdir}/asterisk/modules/res_indications.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_limit.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_monitor.so
@@ -1179,7 +1183,9 @@ fi
 %if %mdkversion >= 200900
 %files plugins-fax
 %defattr(-,root,root,-)
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_fax.so
+# attr(0755,root,root) %{_libdir}/asterisk/modules/app_fax.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_fax.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_fax_spandsp.so
 %endif
 
 %files plugins-festival
