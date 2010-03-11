@@ -731,7 +731,6 @@ static unsigned int default_transports;            /*!< Default Transports (enum
 static unsigned int default_primary_transport;     /*!< Default primary Transport (enum sip_transport) for outbound connections to devices */
 /*@}*/
 
-	int rtsave_useragent;	/*!< G: Save user agent at registration? */
 static struct sip_settings sip_cfg;		/*!< SIP configuration data.
 					\note in the future we could have multiple of these (per domain, per device group etc) */
 
@@ -3305,7 +3304,7 @@ static void realtime_update_peer(const char *peername, struct sockaddr_in *sin, 
 	
 	ast_update_realtime(tablename, "name", peername, "ipaddr", ipaddr,
 		"port", port, "regseconds", regseconds,
-		"useragent", useragent, "lastms", str_lastms,
+		"lastms", str_lastms,
 		deprecated_username ? "username" : "defaultuser", defaultuser,
 		argname[0], argval[0],argname[1], argval[1], argname[2], argval[2], SENTINEL); /* note fc and syslabel _can_ be NULL */
 }
