@@ -14,8 +14,9 @@
  *
  *****************************************************************************/
 
-#include <asterisk.h>
-#include <asterisk/lock.h>
+#include "asterisk.h"
+#include "asterisk/lock.h"
+#include "asterisk/time.h"
 #include <time.h>
 
 #include "ootypes.h"
@@ -750,9 +751,18 @@ int ooOnReceivedCallProceeding(OOH323CallData *call, Q931Message *q931Msg)
       
    }
 
-   /* Retrieve the H.245 control channel address from the connect msg */
+   /* Retrieve tunneling info/H.245 control channel address from the connect msg */
+   if(q931Msg->userInfo->h323_uu_pdu.m.h245TunnelingPresent && 
+      !q931Msg->userInfo->h323_uu_pdu.h245Tunneling) {
+	if (OO_TESTFLAG (call->flags, OO_M_TUNNELING)) {
+		OO_CLRFLAG (call->flags, OO_M_TUNNELING);
+		OOTRACEINFO3("Tunneling is disabled for call due to remote reject tunneling"
+			      " (%s, %s)\n", call->callType, call->callToken);
+	}
+   }
    if(q931Msg->userInfo->h323_uu_pdu.m.h245TunnelingPresent &&
       q931Msg->userInfo->h323_uu_pdu.h245Tunneling &&
+      OO_TESTFLAG (call->flags, OO_M_TUNNELING) &&
       callProceeding->m.h245AddressPresent) {
       OOTRACEINFO3("Tunneling and h245address provided."
                    "Using Tunneling for H.245 messages (%s, %s)\n", 
@@ -800,6 +810,7 @@ int ooOnReceivedCallProceeding(OOH323CallData *call, Q931Message *q931Msg)
        }
       }
    }
+
    return OO_OK;
 }
 
@@ -969,16 +980,27 @@ int ooOnReceivedAlerting(OOH323CallData *call, Q931Message *q931Msg)
 
    }
 
-   /* Retrieve the H.245 control channel address from the connect msg */
+   /* Retrieve tunneling info/H.245 control channel address from the connect msg */
+   if(q931Msg->userInfo->h323_uu_pdu.m.h245TunnelingPresent && 
+      !q931Msg->userInfo->h323_uu_pdu.h245Tunneling) {
+	if (OO_TESTFLAG (call->flags, OO_M_TUNNELING)) {
+		OO_CLRFLAG (call->flags, OO_M_TUNNELING);
+		OOTRACEINFO3("Tunneling is disabled for call due to remote reject tunneling"
+			      " (%s, %s)\n", call->callType, call->callToken);
+	}
+   }
    if(q931Msg->userInfo->h323_uu_pdu.m.h245TunnelingPresent &&
       q931Msg->userInfo->h323_uu_pdu.h245Tunneling &&
-      alerting->m.h245AddressPresent) {
-      OOTRACEINFO3("Tunneling and h245address provided."
-                   "Giving preference to Tunneling (%s, %s)\n", 
-                   call->callType, call->callToken);
-   }
-   else if(alerting->m.h245AddressPresent)
-   {
+	 OO_TESTFLAG (call->flags, OO_M_TUNNELING)) {
+      if (alerting->m.h245AddressPresent) 
+      	OOTRACEINFO3("Tunneling and h245address provided."
+                     "Giving preference to Tunneling (%s, %s)\n", 
+                   	call->callType, call->callToken);
+	ret =ooSendTCSandMSD(call);
+	if (ret != OO_OK)
+		return ret;
+
+   } else if(alerting->m.h245AddressPresent) {
       if (OO_TESTFLAG (call->flags, OO_M_TUNNELING))
       {
          OO_CLRFLAG (call->flags, OO_M_TUNNELING);
@@ -1018,12 +1040,7 @@ int ooOnReceivedAlerting(OOH323CallData *call, Q931Message *q931Msg)
          return OO_FAILED;
        }
       }
-   } else if (OO_TESTFLAG (call->flags, OO_M_TUNNELING)) {
-	ret =ooSendTCSandMSD(call);
-	if (ret != OO_OK)
-		return ret;
    }
-
 
    return OO_OK;
 }
@@ -1194,15 +1211,26 @@ int ooOnReceivedProgress(OOH323CallData *call, Q931Message *q931Msg)
    }
 
    /* Retrieve the H.245 control channel address from the connect msg */
+   /* Retrieve tunneling info/H.245 control channel address from the connect msg */
+   if(q931Msg->userInfo->h323_uu_pdu.m.h245TunnelingPresent && 
+      !q931Msg->userInfo->h323_uu_pdu.h245Tunneling) {
+	if (OO_TESTFLAG (call->flags, OO_M_TUNNELING)) {
+		OO_CLRFLAG (call->flags, OO_M_TUNNELING);
+		OOTRACEINFO3("Tunneling is disabled for call due to remote reject tunneling"
+			      " (%s, %s)\n", call->callType, call->callToken);
+	}
+   }
    if(q931Msg->userInfo->h323_uu_pdu.m.h245TunnelingPresent &&
       q931Msg->userInfo->h323_uu_pdu.h245Tunneling &&
-      progress->m.h245AddressPresent) {
-      OOTRACEINFO3("Tunneling and h245address provided."
-                   "Giving preference to Tunneling (%s, %s)\n", 
-                   call->callType, call->callToken);
-   }
-   else if(progress->m.h245AddressPresent)
-   {
+      OO_TESTFLAG (call->flags, OO_M_TUNNELING)) {
+      if (progress->m.h245AddressPresent) 
+      	OOTRACEINFO3("Tunneling and h245address provided."
+                     "Giving preference to Tunneling (%s, %s)\n", 
+                     call->callType, call->callToken);
+	ret =ooSendTCSandMSD(call);
+	if (ret != OO_OK)
+		return ret;
+   } else if(progress->m.h245AddressPresent) {
       if (OO_TESTFLAG (call->flags, OO_M_TUNNELING))
       {
          OO_CLRFLAG (call->flags, OO_M_TUNNELING);
@@ -1242,10 +1270,6 @@ int ooOnReceivedProgress(OOH323CallData *call, Q931Message *q931Msg)
          return OO_FAILED;
        }
       }
-   } else if (OO_TESTFLAG (call->flags, OO_M_TUNNELING)) {
-	ret =ooSendTCSandMSD(call);
-	if (ret != OO_OK)
-		return ret;
    }
 
    return OO_OK;
@@ -1443,9 +1467,18 @@ int ooOnReceivedSignalConnect(OOH323CallData* call, Q931Message *q931Msg)
       OO_SETFLAG(call->flags, OO_M_FASTSTARTANSWERED);
    }
 
-   /* Retrieve the H.245 control channel address from the CONNECT msg */
+   /* Retrieve tunneling info/H.245 control channel address from the connect msg */
+   if(q931Msg->userInfo->h323_uu_pdu.m.h245TunnelingPresent && 
+      !q931Msg->userInfo->h323_uu_pdu.h245Tunneling) {
+	if (OO_TESTFLAG (call->flags, OO_M_TUNNELING)) {
+		OO_CLRFLAG (call->flags, OO_M_TUNNELING);
+		OOTRACEINFO3("Tunneling is disabled for call due to remote reject tunneling"
+			      " (%s, %s)\n", call->callType, call->callToken);
+	}
+   }
    if(q931Msg->userInfo->h323_uu_pdu.m.h245TunnelingPresent &&
       q931Msg->userInfo->h323_uu_pdu.h245Tunneling &&
+      OO_TESTFLAG (call->flags, OO_M_TUNNELING) &&
       connect->m.h245AddressPresent) {
       OOTRACEINFO3("Tunneling and h245address provided."
                    "Giving preference to Tunneling (%s, %s)\n", 
@@ -1531,17 +1564,11 @@ int ooOnReceivedSignalConnect(OOH323CallData* call, Q931Message *q931Msg)
             return ret;
          }
       }
-      if(call->masterSlaveState == OO_MasterSlave_Idle)
-      {
-         ret = ooSendMasterSlaveDetermination(call);
-         if(ret != OO_OK)
-         {
-            OOTRACEERR3("ERROR:Sending Master-slave determination message "
-                     "(%s, %s)\n", call->callType, call->callToken);
-            return ret;
-         }   
-      }
 
+   }
+   call->callState = OO_CALL_CONNECTED;
+   if (call->rtdrCount > 0 && call->rtdrInterval > 0) {
+        return ooSendRoundTripDelayRequest(call);
    }
    return OO_OK;  
 }
@@ -1553,6 +1580,7 @@ int ooHandleH2250Message(OOH323CallData *call, Q931Message *q931Msg)
    DListNode *pNode = NULL;
    OOTimer *pTimer=NULL;
    int type = q931Msg->messageType;
+   struct timeval tv;
    struct timespec ts;
 
 /* checking of message validity for first/next messages of calls */
@@ -1596,8 +1624,9 @@ int ooHandleH2250Message(OOH323CallData *call, Q931Message *q931Msg)
 	       ast_mutex_lock(&call->Lock);
                ret = ooGkClientSendAdmissionRequest(gH323ep.gkClient, call, 
                                                     FALSE);
-                clock_gettime(CLOCK_REALTIME, &ts);
-                ts.tv_sec += 24;
+				tv = ast_tvnow();
+                ts.tv_sec = tv.tv_sec + 24;
+				ts.tv_nsec = tv.tv_usec * 1000;
                 ast_cond_timedwait(&call->gkWait, &call->Lock, &ts);
                 if (call->callState == OO_CALL_WAITING_ADMISSION)
 			call->callState = OO_CALL_CLEAR;
@@ -1939,12 +1968,17 @@ int ooHandleStartH245FacilityMessage
    OO_CLRFLAG (call->flags, OO_M_TUNNELING);
 
    /*Establish an H.245 connection */
-   ret = ooCreateH245Connection(call);
-   if(ret != OO_OK)
-   {
+   if (!call->pH245Channel) {
+    ret = ooCreateH245Connection(call);
+    if(ret != OO_OK)
+    {
       OOTRACEERR3("ERROR: Failed to establish an H.245 connection with remote"
                   " endpoint (%s, %s)\n", call->callType, call->callToken);
       return ret;
+    }
+   } else {
+     OOTRACEINFO3("INFO: H.245 connection already established with remote"
+                  " endpoint (%s, %s)\n", call->callType, call->callToken);
    }
    return OO_OK;
 }
@@ -2213,7 +2247,7 @@ int ooPopulatePrefixList(OOCTXT *pctxt, OOAliases *pAliases,
    return OO_OK;
 }
 int ooPopulateAliasList(OOCTXT *pctxt, OOAliases *pAliases,
-                           H225_SeqOfH225AliasAddress *pAliasList )
+                           H225_SeqOfH225AliasAddress *pAliasList, int pAliasType)
 {
    H225AliasAddress *pAliasEntry=NULL;
    OOAliases * pAlias=NULL;
@@ -2237,21 +2271,26 @@ int ooPopulateAliasList(OOCTXT *pctxt, OOAliases *pAliases,
             OOTRACEERR1("ERROR:Memory - ooPopulateAliasList - pAliasEntry\n");
             return OO_FAILED;
          }
+
+	 if (pAliasType && pAlias->type != pAliasType) {
+		pAlias = pAlias->next;
+		continue;
+	 }
          switch(pAlias->type)
          {
-         case T_H225AliasAddress_dialedDigits:
-            pAliasEntry->t = T_H225AliasAddress_dialedDigits;
-            pAliasEntry->u.dialedDigits = (ASN1IA5String)memAlloc(pctxt,
+            case T_H225AliasAddress_dialedDigits:
+             pAliasEntry->t = T_H225AliasAddress_dialedDigits;
+             pAliasEntry->u.dialedDigits = (ASN1IA5String)memAlloc(pctxt,
                                                      strlen(pAlias->value)+1);
-            if(!pAliasEntry->u.dialedDigits)
-            {
+             if(!pAliasEntry->u.dialedDigits)
+             {
                OOTRACEERR1("ERROR:Memory - ooPopulateAliasList - "
                            "dialedDigits\n");
                memFreePtr(pctxt, pAliasEntry);
                return OO_FAILED;
-            }
-            strcpy(*(char**)&pAliasEntry->u.dialedDigits, pAlias->value);
-            bValid = TRUE;
+             }
+             strcpy(*(char**)&pAliasEntry->u.dialedDigits, pAlias->value);
+             bValid = TRUE;
             break;
          case T_H225AliasAddress_h323_ID:
             pAliasEntry->t = T_H225AliasAddress_h323_ID;

@@ -186,7 +186,7 @@ static void test_xml_entry(struct ast_test *test, FILE *f)
 			test->state == AST_TEST_PASS ? "/" : "");
 
 	if (test->state == AST_TEST_FAIL) {
-		fprintf(f, "\t\t<failure>%s</failure>\n",
+		fprintf(f, "\t\t<failure><![CDATA[\n%s\n\t\t]]></failure>\n",
 				S_OR(ast_str_buffer(test->status_str), "NA"));
 		fprintf(f, "\t</testcase>\n");
 	}
@@ -547,6 +547,11 @@ static struct ast_test *test_alloc(ast_test_cb_t *cb)
 		return test_free(test);
 	}
 
+	if (test->info.category[0] != '/' || test->info.category[strlen(test->info.category) - 1] != '/') {
+		ast_log(LOG_WARNING, "Test category is missing a leading or trailing backslash for test %s%s\n",
+				test->info.category, test->info.name);
+	}
+
 	if (ast_strlen_zero(test->info.summary)) {
 		ast_log(LOG_WARNING, "Test %s/%s has no summary, test registration refused.\n",
 				test->info.category, test->info.name);
@@ -708,7 +713,7 @@ static char *test_cli_execute_registered(struct ast_cli_entry *e, int cmd, struc
 			ast_cli(a->fd, "Running all available tests matching category %s\n\n", a->argv[3]);
 			test_execute_multiple(NULL, a->argv[3], a);
 		} else if (a->argc == 6) { /* run only a single test matching the category and name */
-			ast_cli(a->fd, "Running all available tests matching category %s and name %s\n\n", a->argv[5], a->argv[3]);
+			ast_cli(a->fd, "Running all available tests matching category %s and name %s\n\n", a->argv[3], a->argv[5]);
 			test_execute_multiple(a->argv[5], a->argv[3], a);
 		} else {
 			return CLI_SHOWUSAGE;
@@ -848,7 +853,7 @@ static char *test_cli_generate_results(struct ast_cli_entry *e, int cmd, struct 
 			if (!(buf = ast_str_create(256))) {
 				return NULL;
 			}
-			ast_str_set(&buf, 0, "%s/asterisk_test_results-%ld.%s", ast_config_AST_LOG_DIR, time.tv_sec, type);
+			ast_str_set(&buf, 0, "%s/asterisk_test_results-%ld.%s", ast_config_AST_LOG_DIR, (long) time.tv_sec, type);
 
 			file = ast_str_buffer(buf);
 		}

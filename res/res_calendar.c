@@ -65,6 +65,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="description"><para>The text description of the event</para></enum>
 					<enum name="organizer"><para>The organizer of the event</para></enum>
 					<enum name="location"><para>The location of the eventt</para></enum>
+					<enum name="categories"><para>The categories of the event</para></enum>
+					<enum name="priority"><para>The priority of the event</para></enum>
 					<enum name="calendar"><para>The name of the calendar associated with the event</para></enum>
 					<enum name="uid"><para>The unique identifier for this event</para></enum>
 					<enum name="start"><para>The start time of the event</para></enum>
@@ -112,6 +114,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="description"><para>The full event description</para></enum>
 					<enum name="organizer"><para>The event organizer</para></enum>
 					<enum name="location"><para>The event location</para></enum>
+					<enum name="categories"><para>The categories of the event</para></enum>
+					<enum name="priority"><para>The priority of the event</para></enum>
 					<enum name="calendar"><para>The name of the calendar associted with the event</para></enum>
 					<enum name="uid"><para>The unique identifier for the event</para></enum>
 					<enum name="start"><para>The start time of the event (in seconds since epoch)</para></enum>
@@ -142,6 +146,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="description"><para>The full event description</para></enum>
 					<enum name="organizer"><para>The event organizer</para></enum>
 					<enum name="location"><para>The event location</para></enum>
+					<enum name="categories"><para>The categories of the event</para></enum>
+					<enum name="priority"><para>The priority of the event</para></enum>
 					<enum name="uid"><para>The unique identifier for the event</para></enum>
 					<enum name="start"><para>The start time of the event (in seconds since epoch)</para></enum>
 					<enum name="end"><para>The end time of the event (in seconds since epoch)</para></enum>
@@ -159,7 +165,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define CALENDAR_BUCKETS 19
 
 static struct ao2_container *calendars;
-static struct sched_context *sched;
+static struct ast_sched_context *sched;
 static pthread_t refresh_thread = AST_PTHREADT_NULL;
 static ast_mutex_t refreshlock;
 static ast_cond_t refresh_condition;
@@ -363,6 +369,7 @@ static struct ast_calendar *build_calendar(struct ast_config *cfg, const char *c
 
 	cal->refresh = 3600;
 	cal->timeframe = 60;
+	cal->notify_waittime = 30000;
 
 	for (v = ast_variable_browse(cfg, cat); v; v = v->next) {
 		if (!strcasecmp(v->name, "autoreminder")) {
@@ -374,7 +381,10 @@ static struct ast_calendar *build_calendar(struct ast_config *cfg, const char *c
 		} else if (!strcasecmp(v->name, "extension")) {
 			ast_string_field_set(cal, notify_extension, v->value);
 		} else if (!strcasecmp(v->name, "waittime")) {
-			cal->notify_waittime = atoi(v->value);
+			int i = atoi(v->value);
+			if (i > 0) {
+				cal->notify_waittime = 1000 * i;
+			}
 		} else if (!strcasecmp(v->name, "app")) {
 			ast_string_field_set(cal, notify_app, v->value);
 		} else if (!strcasecmp(v->name, "appdata")) {
@@ -786,6 +796,8 @@ static void copy_event_data(struct ast_calendar_event *dst, struct ast_calendar_
 	ast_string_field_set(dst, organizer, src->organizer);
 	ast_string_field_set(dst, location, src->location);
 	ast_string_field_set(dst, uid, src->uid);
+	ast_string_field_set(dst, categories, src->categories);
+	dst->priority = src->priority;
 	dst->owner = src->owner;
 	dst->start = src->start;
 	dst->end = src->end;
@@ -1228,6 +1240,10 @@ static int calendar_query_result_exec(struct ast_channel *chan, const char *cmd,
 			ast_copy_string(buf, entry->event->organizer, len);
 		} else if (!strcasecmp(args.field, "location")) {
 			ast_copy_string(buf, entry->event->location, len);
+		} else if (!strcasecmp(args.field, "categories")) {
+			ast_copy_string(buf, entry->event->categories, len);
+		} else if (!strcasecmp(args.field, "priority")) {
+			snprintf(buf, len, "%d", entry->event->priority);
 		} else if (!strcasecmp(args.field, "calendar")) {
 			ast_copy_string(buf, entry->event->owner->name, len);
 		} else if (!strcasecmp(args.field, "uid")) {
@@ -1260,6 +1276,7 @@ static int calendar_write_exec(struct ast_channel *chan, const char *cmd, char *
 	char *val_dup = NULL;
 	struct ast_calendar *cal = NULL;
 	struct ast_calendar_event *event = NULL;
+	struct timeval tv = ast_tvnow();
 	AST_DECLARE_APP_ARGS(fields,
 		AST_APP_ARG(field)[10];
 	);
@@ -1312,6 +1329,10 @@ static int calendar_write_exec(struct ast_channel *chan, const char *cmd, char *
 			ast_string_field_set(event, organizer, values.value[j]);
 		} else if (!strcasecmp(fields.field[i], "location")) {
 			ast_string_field_set(event, location, values.value[j]);
+		} else if (!strcasecmp(fields.field[i], "categories")) {
+			ast_string_field_set(event, categories, values.value[j]);
+		} else if (!strcasecmp(fields.field[i], "priority")) {
+			event->priority = atoi(values.value[j]);
 		} else if (!strcasecmp(fields.field[i], "uid")) {
 			ast_string_field_set(event, uid, values.value[j]);
 		} else if (!strcasecmp(fields.field[i], "start")) {
@@ -1323,6 +1344,14 @@ static int calendar_write_exec(struct ast_channel *chan, const char *cmd, char *
 		} else {
 			ast_log(LOG_WARNING, "Unknown calendar event field '%s'\n", fields.field[i]);
 		}
+	}
+
+	if (!event->start) {
+		event->start = tv.tv_sec;
+	}
+
+	if (!event->end) {
+		event->end = tv.tv_sec;
 	}
 
 	if((ret = cal->tech->write_event(event))) {
@@ -1459,6 +1488,8 @@ static char *handle_show_calendar(struct ast_cli_entry *e, int cmd, struct ast_c
 		ast_cli(a->fd, FORMAT2, "Description", event->description);
 		ast_cli(a->fd, FORMAT2, "Organizer", event->organizer);
 		ast_cli(a->fd, FORMAT2, "Location", event->location);
+		ast_cli(a->fd, FORMAT2, "Cartegories", event->categories);
+		ast_cli(a->fd, "%-12.12s: %d\n", "Priority", event->priority);
 		ast_cli(a->fd, FORMAT2, "UID", event->uid);
 		ast_cli(a->fd, FORMAT2, "Start", epoch_to_string(buf, sizeof(buf), event->start));
 		ast_cli(a->fd, FORMAT2, "End", epoch_to_string(buf, sizeof(buf), event->end));
@@ -1530,6 +1561,10 @@ static int calendar_event_read(struct ast_channel *chan, const char *cmd, char *
 		ast_copy_string(buf, event->organizer, len);
 	} else if (!strcasecmp(data, "location")) {
 		ast_copy_string(buf, event->location, len);
+	} else if (!strcasecmp(data, "categories")) {
+		ast_copy_string(buf, event->categories, len);
+	} else if (!strcasecmp(data, "priority")) {
+		snprintf(buf, len, "%d", event->priority);
 	} else if (!strcasecmp(data, "calendar")) {
 		ast_copy_string(buf, event->owner->name, len);
 	} else if (!strcasecmp(data, "uid")) {
@@ -1661,7 +1696,7 @@ static int load_module(void)
 	ast_cond_init(&refresh_condition, NULL);
 	ast_mutex_init(&reloadlock);
 
-	if (!(sched = sched_context_create())) {
+	if (!(sched = ast_sched_context_create())) {
 		ast_log(LOG_ERROR, "Unable to create sched context\n");
 		return AST_MODULE_LOAD_FAILURE;
 	}
@@ -1684,8 +1719,9 @@ static int load_module(void)
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Asterisk Calendar integration",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS | AST_MODFLAG_LOAD_ORDER, "Asterisk Calendar integration",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,
+		.load_pri = AST_MODPRI_DEVSTATE_PROVIDER,
 	);

@@ -133,10 +133,10 @@ static int load_module(void)
 static int unload_module(void)
 {
 	return ast_format_unregister(siren7_f.name);
-}	
+}
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "ITU G.722.1 (Siren7, licensed from Polycom)",
 	.load = load_module,
 	.unload = unload_module,
-	.load_pri = 10,
+	.load_pri = AST_MODPRI_APP_DEPEND
 );

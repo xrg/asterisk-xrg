@@ -14,8 +14,8 @@
  *
  *****************************************************************************/
 
-#include <asterisk.h>
-#include <asterisk/lock.h>
+#include "asterisk.h"
+#include "asterisk/lock.h"
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -111,7 +111,7 @@ void ooTraceLogMessage(const char * logMessage)
       struct timeval systemTime;
       gettimeofday(&systemTime, NULL);
       fprintf(gH323ep.fptraceFile, "%s:%03ld  %s", timeString, 
-               systemTime.tv_usec/1000, logMessage);
+               (long) systemTime.tv_usec/1000, logMessage);
    }
    else
       fprintf(gH323ep.fptraceFile, "%s", logMessage);

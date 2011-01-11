@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2010, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -47,6 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/strings.h"	/* for the ast_str_*() API */
+#include "asterisk/netsock2.h"
 
 #define MAX_NESTED_COMMENTS 128
 #define COMMENT_START ";--"
@@ -162,6 +163,7 @@ static int hashtab_compare_strings(void *a, void *b, int flags)
 
 static struct ast_config_map {
 	struct ast_config_map *next;
+	int priority;
 	char *name;
 	char *driver;
 	char *database;
@@ -1031,12 +1033,13 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 		if (*c) {
 			*c = '\0';
 			/* Find real argument */
-			c = ast_skip_blanks(c + 1);
+			c = ast_strip(c + 1);
 			if (!(*c)) {
 				c = NULL;
 			}
-		} else 
+		} else {
 			c = NULL;
+		}
 		if (!strcasecmp(cur, "include")) {
 			do_include = 1;
 		} else if (!strcasecmp(cur, "exec")) {
@@ -1060,20 +1063,14 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 
 		cur = c;
 		/* Strip off leading and trailing "'s and <>'s */
-		if (*c == '"') {
-			/* Dequote */
-			while (*c) {
-				if (*c == '"') {
-					strcpy(c, c + 1); /* SAFE */
-					c--;
-				} else if (*c == '\\') {
-					strcpy(c, c + 1); /* SAFE */
-				}
-				c++;
+		/* Dequote */
+		if ((*c == '"') || (*c == '<')) {
+			char quote_char = *c;
+			if (quote_char == '<') {
+				quote_char = '>';
 			}
-		} else if (*c == '<') {
-			/* C-style include */
-			if (*(c + strlen(c) - 1) == '>') {
+
+			if (*(c + strlen(c) - 1) == quote_char) {
 				cur++;
 				*(c + strlen(c) - 1) = '\0';
 			}
@@ -1862,7 +1859,7 @@ static void clear_config_maps(void)
 	ast_mutex_unlock(&config_lock);
 }
 
-static int append_mapping(const char *name, const char *driver, const char *database, const char *table)
+static int append_mapping(const char *name, const char *driver, const char *database, const char *table, int priority)
 {
 	struct ast_config_map *map;
 	int length;
@@ -1887,6 +1884,7 @@ static int append_mapping(const char *name, const char *driver, const char *data
 		map->table = map->database + strlen(map->database) + 1;
 		strcpy(map->table, table);
 	}
+	map->priority = priority;
 	map->next = config_maps;
 
 	ast_verb(2, "Binding %s to %s/%s/%s\n", map->name, map->driver, map->database, map->table ? map->table : map->name);
@@ -1899,15 +1897,18 @@ int read_config_maps(void)
 {
 	struct ast_config *config, *configtmp;
 	struct ast_variable *v;
-	char *driver, *table, *database, *stringp, *tmp;
-	struct ast_flags flags = { 0 };
+	char *driver, *table, *database, *textpri, *stringp, *tmp;
+	struct ast_flags flags = { CONFIG_FLAG_NOREALTIME };
+	int pri;
 
 	clear_config_maps();
 
 	configtmp = ast_config_new();
 	configtmp->max_include_level = 1;
 	config = ast_config_internal_load(extconfig_conf, configtmp, flags, "", "extconfig");
-	if (!config) {
+	if (config == CONFIG_STATUS_FILEINVALID) {
+		return -1;
+	} else if (!config) {
 		ast_config_destroy(configtmp);
 		return 0;
 	}
@@ -1932,6 +1933,10 @@ int read_config_maps(void)
 		}
 
 		table = strsep(&stringp, ",");
+		textpri = strsep(&stringp, ",");
+		if (!textpri || !(pri = atoi(textpri))) {
+			pri = 1;
+		}
 
 		if (!strcmp(v->name, extconfig_conf)) {
 			ast_log(LOG_WARNING, "Cannot bind '%s'!\n", extconfig_conf);
@@ -1952,14 +1957,14 @@ int read_config_maps(void)
 			continue;
 		if (!strcasecmp(v->name, "sipfriends")) {
 			ast_log(LOG_WARNING, "The 'sipfriends' table is obsolete, update your config to use sipusers and sippeers, though they can point to the same table.\n");
-			append_mapping("sipusers", driver, database, table ? table : "sipfriends");
-			append_mapping("sippeers", driver, database, table ? table : "sipfriends");
+			append_mapping("sipusers", driver, database, table ? table : "sipfriends", pri);
+			append_mapping("sippeers", driver, database, table ? table : "sipfriends", pri);
 		} else if (!strcasecmp(v->name, "iaxfriends")) {
 			ast_log(LOG_WARNING, "The 'iaxfriends' table is obsolete, update your config to use iaxusers and iaxpeers, though they can point to the same table.\n");
-			append_mapping("iaxusers", driver, database, table ? table : "iaxfriends");
-			append_mapping("iaxpeers", driver, database, table ? table : "iaxfriends");
+			append_mapping("iaxusers", driver, database, table ? table : "iaxfriends", pri);
+			append_mapping("iaxpeers", driver, database, table ? table : "iaxfriends", pri);
 		} else 
-			append_mapping(v->name, driver, database, table);
+			append_mapping(v->name, driver, database, table, pri);
 	}
 		
 	ast_config_destroy(config);
@@ -2008,7 +2013,7 @@ int ast_config_engine_deregister(struct ast_config_engine *del)
 }
 
 /*! \brief Find realtime engine for realtime family */
-static struct ast_config_engine *find_engine(const char *family, char *database, int dbsiz, char *table, int tabsiz) 
+static struct ast_config_engine *find_engine(const char *family, int priority, char *database, int dbsiz, char *table, int tabsiz) 
 {
 	struct ast_config_engine *eng, *ret = NULL;
 	struct ast_config_map *map;
@@ -2016,7 +2021,7 @@ static struct ast_config_engine *find_engine(const char *family, char *database,
 	ast_mutex_lock(&config_lock);
 
 	for (map = config_maps; map; map = map->next) {
-		if (!strcasecmp(family, map->name)) {
+		if (!strcasecmp(family, map->name) && (priority == map->priority)) {
 			if (database)
 				ast_copy_string(database, map->database, dbsiz);
 			if (table)
@@ -2062,16 +2067,16 @@ struct ast_config *ast_config_internal_load(const char *filename, struct ast_con
 
 	cfg->include_level++;
 
-	if (strcmp(filename, extconfig_conf) && strcmp(filename, "asterisk.conf") && config_engine_list) {
+	if (!ast_test_flag(&flags, CONFIG_FLAG_NOREALTIME) && config_engine_list) {
 		struct ast_config_engine *eng;
 
-		eng = find_engine(filename, db, sizeof(db), table, sizeof(table));
+		eng = find_engine(filename, 1, db, sizeof(db), table, sizeof(table));
 
 
 		if (eng && eng->load_func) {
 			loader = eng;
 		} else {
-			eng = find_engine("global", db, sizeof(db), table, sizeof(table));
+			eng = find_engine("global", 1, db, sizeof(db), table, sizeof(table));
 			if (eng && eng->load_func)
 				loader = eng;
 		}
@@ -2109,10 +2114,17 @@ static struct ast_variable *ast_load_realtime_helper(const char *family, va_list
 	char db[256];
 	char table[256];
 	struct ast_variable *res=NULL;
+	int i;
 
-	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
-	if (eng && eng->realtime_func) 
-		res = eng->realtime_func(db, table, ap);
+	for (i = 1; ; i++) {
+		if ((eng = find_engine(family, i, db, sizeof(db), table, sizeof(table)))) {
+			if (eng->realtime_func && (res = eng->realtime_func(db, table, ap))) {
+				return res;
+			}
+		} else {
+			return NULL;
+		}
+	}
 
 	return res;
 }
@@ -2170,7 +2182,7 @@ int ast_check_realtime(const char *family)
 		return 0;	/* There are no engines at all so fail early */
 	}
 
-	eng = find_engine(family, NULL, 0, NULL, 0);
+	eng = find_engine(family, 1, NULL, 0, NULL, 0);
 	if (eng)
 		return 1;
 	return 0;
@@ -2188,12 +2200,18 @@ int ast_realtime_require_field(const char *family, ...)
 	char db[256];
 	char table[256];
 	va_list ap;
-	int res = -1;
+	int res = -1, i;
 
 	va_start(ap, family);
-	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
-	if (eng && eng->require_func) {
-		res = eng->require_func(db, table, ap);
+	for (i = 1; ; i++) {
+		if ((eng = find_engine(family, i, db, sizeof(db), table, sizeof(table)))) {
+			/* If the require succeeds, it returns 0. */
+			if (eng->require_func && !(res = eng->require_func(db, table, ap))) {
+				break;
+			}
+		} else {
+			break;
+		}
 	}
 	va_end(ap);
 
@@ -2205,11 +2223,17 @@ int ast_unload_realtime(const char *family)
 	struct ast_config_engine *eng;
 	char db[256];
 	char table[256];
-	int res = -1;
+	int res = -1, i;
 
-	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
-	if (eng && eng->unload_func) {
-		res = eng->unload_func(db, table);
+	for (i = 1; ; i++) {
+		if ((eng = find_engine(family, i, db, sizeof(db), table, sizeof(table)))) {
+			if (eng->unload_func) {
+				/* Do this for ALL engines */
+				res = eng->unload_func(db, table);
+			}
+		} else {
+			break;
+		}
 	}
 	return res;
 }
@@ -2221,11 +2245,18 @@ struct ast_config *ast_load_realtime_multientry(const char *family, ...)
 	char table[256];
 	struct ast_config *res = NULL;
 	va_list ap;
+	int i;
 
 	va_start(ap, family);
-	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
-	if (eng && eng->realtime_multi_func) 
-		res = eng->realtime_multi_func(db, table, ap);
+	for (i = 1; ; i++) {
+		if ((eng = find_engine(family, i, db, sizeof(db), table, sizeof(table)))) {
+			if (eng->realtime_multi_func && (res = eng->realtime_multi_func(db, table, ap))) {
+				break;
+			}
+		} else {
+			break;
+		}
+	}
 	va_end(ap);
 
 	return res;
@@ -2234,15 +2265,22 @@ struct ast_config *ast_load_realtime_multientry(const char *family, ...)
 int ast_update_realtime(const char *family, const char *keyfield, const char *lookup, ...)
 {
 	struct ast_config_engine *eng;
-	int res = -1;
+	int res = -1, i;
 	char db[256];
 	char table[256];
 	va_list ap;
 
 	va_start(ap, lookup);
-	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
-	if (eng && eng->update_func) 
-		res = eng->update_func(db, table, keyfield, lookup, ap);
+	for (i = 1; ; i++) {
+		if ((eng = find_engine(family, i, db, sizeof(db), table, sizeof(table)))) {
+			/* If the update succeeds, it returns 0. */
+			if (eng->update_func && !(res = eng->update_func(db, table, keyfield, lookup, ap))) {
+				break;
+			}
+		} else {
+			break;
+		}
+	}
 	va_end(ap);
 
 	return res;
@@ -2251,15 +2289,21 @@ int ast_update_realtime(const char *family, const char *keyfield, const char *lo
 int ast_update2_realtime(const char *family, ...)
 {
 	struct ast_config_engine *eng;
-	int res = -1;
+	int res = -1, i;
 	char db[256];
 	char table[256];
 	va_list ap;
 
 	va_start(ap, family);
-	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
-	if (eng && eng->update2_func) 
-		res = eng->update2_func(db, table, ap);
+	for (i = 1; ; i++) {
+		if ((eng = find_engine(family, i, db, sizeof(db), table, sizeof(table)))) {
+			if (eng->update2_func && !(res = eng->update2_func(db, table, ap))) {
+				break;
+			}
+		} else {
+			break;
+		}
+	}
 	va_end(ap);
 
 	return res;
@@ -2268,15 +2312,22 @@ int ast_update2_realtime(const char *family, ...)
 int ast_store_realtime(const char *family, ...)
 {
 	struct ast_config_engine *eng;
-	int res = -1;
+	int res = -1, i;
 	char db[256];
 	char table[256];
 	va_list ap;
 
 	va_start(ap, family);
-	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
-	if (eng && eng->store_func) 
-		res = eng->store_func(db, table, ap);
+	for (i = 1; ; i++) {
+		if ((eng = find_engine(family, i, db, sizeof(db), table, sizeof(table)))) {
+			/* If the store succeeds, it returns 0. */
+			if (eng->store_func && !(res = eng->store_func(db, table, ap))) {
+				break;
+			}
+		} else {
+			break;
+		}
+	}
 	va_end(ap);
 
 	return res;
@@ -2285,18 +2336,53 @@ int ast_store_realtime(const char *family, ...)
 int ast_destroy_realtime(const char *family, const char *keyfield, const char *lookup, ...)
 {
 	struct ast_config_engine *eng;
-	int res = -1;
+	int res = -1, i;
 	char db[256];
 	char table[256];
 	va_list ap;
 
 	va_start(ap, lookup);
-	eng = find_engine(family, db, sizeof(db), table, sizeof(table));
-	if (eng && eng->destroy_func) 
-		res = eng->destroy_func(db, table, keyfield, lookup, ap);
+	for (i = 1; ; i++) {
+		if ((eng = find_engine(family, i, db, sizeof(db), table, sizeof(table)))) {
+			if (eng->destroy_func && !(res = eng->destroy_func(db, table, keyfield, lookup, ap))) {
+				break;
+			}
+		} else {
+			break;
+		}
+	}
 	va_end(ap);
 
 	return res;
+}
+
+char *ast_realtime_decode_chunk(char *chunk)
+{
+	char *orig = chunk;
+	for (; *chunk; chunk++) {
+		if (*chunk == '^' && strchr("0123456789ABCDEFabcdef", chunk[1]) && strchr("0123456789ABCDEFabcdef", chunk[2])) {
+			sscanf(chunk + 1, "%02hhX", chunk);
+			memmove(chunk + 1, chunk + 3, strlen(chunk + 3) + 1);
+		}
+	}
+	return orig;
+}
+
+char *ast_realtime_encode_chunk(struct ast_str **dest, ssize_t maxlen, const char *chunk)
+{
+	if (!strchr(chunk, ';') && !strchr(chunk, '^')) {
+		ast_str_set(dest, maxlen, "%s", chunk);
+	} else {
+		ast_str_reset(*dest);
+		for (; *chunk; chunk++) {
+			if (strchr(";^", *chunk)) {
+				ast_str_append(dest, maxlen, "^%02hhX", *chunk);
+			} else {
+				ast_str_append(dest, maxlen, "%c", *chunk);
+			}
+		}
+	}
+	return ast_str_buffer(*dest);
 }
 
 /*! \brief Helper function to parse arguments
@@ -2389,7 +2475,20 @@ int ast_parse_arg(const char *arg, enum ast_parse_flags flags,
 			result ? *result : x, error);
 		break;
 	    }
-	case PARSE_INADDR:
+	case PARSE_ADDR:
+	    {
+		struct ast_sockaddr *addr = (struct ast_sockaddr *)p_result;
+
+		if (!ast_sockaddr_parse(addr, arg, flags & PARSE_PORT_MASK)) {
+			error = 1;
+		}
+
+		ast_debug(3, "extract addr from %s gives %s(%d)\n",
+			  arg, ast_sockaddr_stringify(addr), error);
+
+		break;
+	    }
+	case PARSE_INADDR:	/* TODO Remove this (use PARSE_ADDR instead). */
 	    {
 		char *port, *buf;
 		struct sockaddr_in _sa_buf;	/* buffer for the result */
@@ -2464,9 +2563,8 @@ static char *handle_cli_core_show_config_mappings(struct ast_cli_entry *e, int c
 	if (!config_engine_list) {
 		ast_cli(a->fd, "No config mappings found.\n");
 	} else {
-		ast_cli(a->fd, "\n\n");
 		for (eng = config_engine_list; eng; eng = eng->next) {
-			ast_cli(a->fd, "\nConfig Engine: %s\n", eng->name);
+			ast_cli(a->fd, "Config Engine: %s\n", eng->name);
 			for (map = config_maps; map; map = map->next) {
 				if (!strcasecmp(map->driver, eng->name)) {
 					ast_cli(a->fd, "===> %s (db=%s, table=%s)\n", map->name, map->database,
@@ -2474,7 +2572,6 @@ static char *handle_cli_core_show_config_mappings(struct ast_cli_entry *e, int c
 				}
 			}
 		}
-		ast_cli(a->fd,"\n\n");
 	}
 	
 	ast_mutex_unlock(&config_lock);

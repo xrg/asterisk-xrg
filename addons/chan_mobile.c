@@ -136,7 +136,7 @@ struct mbl_pvt {
 	int alignment_count;
 	int ring_sched_id;
 	struct ast_dsp *dsp;
-	struct sched_context *sched;
+	struct ast_sched_context *sched;
 
 	/* flags */
 	unsigned int outgoing:1;	/*!< outgoing call */
@@ -1154,7 +1154,6 @@ static int mbl_write(struct ast_channel *ast, struct ast_frame *frame)
 
 	while ((f = ast_smoother_read(pvt->smoother))) {
 		sco_write(pvt->sco_socket, f->data.ptr, f->datalen);
-		ast_frfree(f);
 	}
 
 	ast_mutex_unlock(&pvt->lock);
@@ -1243,7 +1242,7 @@ static int mbl_devicestate(void *data)
 	If the end result > 100, and it usually is if we have the problem, set a flag and compensate by shifting the bytes
 	for each subsequent frame during the call.
 
-	If the result is <= 100 then clear the flag so we dont come back in here...
+	If the result is <= 100 then clear the flag so we don't come back in here...
 
 	This seems to work OK....
 
@@ -2233,7 +2232,7 @@ static int hfp_parse_cmgr(struct hfp_pvt *hfp, char *buf, char **from_number, ch
 	 */
 	state = 0;
 	s = strlen(buf);
-	for (i = 0; i < s && s != 6; i++) {
+	for (i = 0; i < s && state != 6; i++) {
 		switch (state) {
 		case 0: /* search for start of the number section (,) */
 			if (buf[i] == ',') {
@@ -4325,7 +4324,7 @@ static struct mbl_pvt *mbl_load_device(struct ast_config *cfg, const char *cat)
 	}
 
 	/* setup the scheduler */
-	if (!(pvt->sched = sched_context_create())) {
+	if (!(pvt->sched = ast_sched_context_create())) {
 		ast_log(LOG_ERROR, "Unable to create scheduler context for headset device\n");
 		goto e_free_dsp;
 	}
@@ -4378,7 +4377,7 @@ static struct mbl_pvt *mbl_load_device(struct ast_config *cfg, const char *cat)
 	return pvt;
 
 e_free_sched:
-	sched_context_destroy(pvt->sched);
+	ast_sched_context_destroy(pvt->sched);
 e_free_dsp:
 	ast_dsp_free(pvt->dsp);
 e_free_smoother:
@@ -4516,7 +4515,7 @@ static int unload_module(void)
 
 		ast_smoother_free(pvt->smoother);
 		ast_dsp_free(pvt->dsp);
-		sched_context_destroy(pvt->sched);
+		ast_sched_context_destroy(pvt->sched);
 		ast_free(pvt);
 	}
 	AST_RWLIST_UNLOCK(&devices);
@@ -4585,7 +4584,8 @@ e_cleanup:
 	return AST_MODULE_LOAD_FAILURE;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Bluetooth Mobile Device Channel Driver",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Bluetooth Mobile Device Channel Driver",
 		.load = load_module,
 		.unload = unload_module,
+		.load_pri = AST_MODPRI_CHANNEL_DRIVER,
 );

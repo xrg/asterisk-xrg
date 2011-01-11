@@ -38,6 +38,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/indications.h"
 #include "asterisk/stringfields.h"
+#include "asterisk/global_datastores.h"
 
 /*** DOCUMENTATION
 	<function name="CHANNELS" language="en_US">
@@ -87,6 +88,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="channeltype">
 						<para>R/O technology used for channel.</para>
 					</enum>
+					<enum name="checkhangup">
+						<para>R/O Whether the channel is hanging up (1/0)</para>
+					</enum>
 					<enum name="language">
 						<para>R/W language for sounds played.</para>
 					</enum>
@@ -101,6 +105,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					</enum>
 					<enum name="rxgain">
 						<para>R/W set rxgain level on channel drivers that support it.</para>
+					</enum>
+					<enum name="secure_bridge_signaling">
+						<para>Whether or not channels bridged to this channel require secure signaling</para>
+					</enum>
+					<enum name="secure_bridge_media">
+						<para>Whether or not channels bridged to this channel require secure media</para>
 					</enum>
 					<enum name="state">
 						<para>R/O state for channel</para>
@@ -291,7 +301,11 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 		locked_copy_string(chan, buf, chan->tech->type, len);
 	else if (!strcasecmp(data, "accountcode"))
 		locked_copy_string(chan, buf, chan->accountcode, len);
-	else if (!strcasecmp(data, "peeraccount"))
+	else if (!strcasecmp(data, "checkhangup")) {
+		ast_channel_lock(chan);
+		ast_copy_string(buf, ast_check_hangup(chan) ? "1" : "0", len);
+		ast_channel_unlock(chan);
+	} else if (!strcasecmp(data, "peeraccount"))
 		locked_copy_string(chan, buf, chan->peeraccount, len);
 	else if (!strcasecmp(data, "hangupsource"))
 		locked_copy_string(chan, buf, chan->hangupsource, len);
@@ -344,6 +358,18 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 		char amabuf[256];
 		snprintf(amabuf,sizeof(amabuf), "%d", chan->amaflags);
 		locked_copy_string(chan, buf, amabuf, len);
+	} else if (!strncasecmp(data, "secure_bridge_", 14)) {
+		struct ast_datastore *ds;
+		ast_channel_lock(chan);
+		if ((ds = ast_channel_datastore_find(chan, &secure_call_info, NULL))) {
+			struct ast_secure_call_store *encrypt = ds->data;
+			if (!strcasecmp(data, "secure_bridge_signaling")) {
+				snprintf(buf, len, "%s", encrypt->signaling ? "1" : "");
+			} else if (!strcasecmp(data, "secure_bridge_media")) {
+				snprintf(buf, len, "%s", encrypt->media ? "1" : "");
+			}
+		}
+		ast_channel_unlock(chan);
 	} else if (!chan->tech || !chan->tech->func_channel_read || chan->tech->func_channel_read(chan, function, data, buf, len)) {
 		ast_log(LOG_WARNING, "Unknown or unavailable item requested: '%s'\n", data);
 		ret = -1;
@@ -352,7 +378,7 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 	return ret;
 }
 
-static int func_channel_write(struct ast_channel *chan, const char *function,
+static int func_channel_write_real(struct ast_channel *chan, const char *function,
 			      char *data, const char *value)
 {
 	int ret = 0;
@@ -429,6 +455,37 @@ static int func_channel_write(struct ast_channel *chan, const char *function,
 				break;
 			}
 		}
+	} else if (!strncasecmp(data, "secure_bridge_", 14)) {
+		struct ast_datastore *ds;
+		struct ast_secure_call_store *store;
+
+		if (!chan || !value) {
+			return -1;
+		}
+
+		ast_channel_lock(chan);
+		if (!(ds = ast_channel_datastore_find(chan, &secure_call_info, NULL))) {
+			if (!(ds = ast_datastore_alloc(&secure_call_info, NULL))) {
+				ast_channel_unlock(chan);
+				return -1;
+			}
+			if (!(store = ast_calloc(1, sizeof(*store)))) {
+				ast_channel_unlock(chan);
+				ast_free(ds);
+				return -1;
+			}
+			ds->data = store;
+			ast_channel_datastore_add(chan, ds);
+		} else {
+			store = ds->data;
+		}
+		ast_channel_unlock(chan);
+
+		if (!strcasecmp(data, "secure_bridge_signaling")) {
+			store->signaling = ast_true(value) ? 1 : 0;
+		} else if (!strcasecmp(data, "secure_bridge_media")) {
+			store->media = ast_true(value) ? 1 : 0;
+		}
 	} else if (!chan->tech->func_channel_write
 		 || chan->tech->func_channel_write(chan, function, data, value)) {
 		ast_log(LOG_WARNING, "Unknown or unavailable item requested: '%s'\n",
@@ -437,6 +494,24 @@ static int func_channel_write(struct ast_channel *chan, const char *function,
 	}
 
 	return ret;
+}
+
+static int func_channel_write(struct ast_channel *chan, const char *function, char *data, const char *value)
+{
+	int res;
+	ast_chan_write_info_t write_info = {
+		.version = AST_CHAN_WRITE_INFO_T_VERSION,
+		.write_fn = func_channel_write_real,
+		.chan = chan,
+		.function = function,
+		.data = data,
+		.value = value,
+	};
+
+	res = func_channel_write_real(chan, function, data, value);
+	ast_channel_setoption(chan, AST_OPTION_CHANNEL_WRITE, &write_info, sizeof(write_info), 0);
+
+	return res;
 }
 
 static struct ast_custom_function channel_function = {

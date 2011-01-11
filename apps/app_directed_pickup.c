@@ -111,15 +111,15 @@ static int pickup_do(struct ast_channel *chan, struct ast_channel *target)
 	ast_party_connected_line_copy(&connected_caller, &target->connected);
 	connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
 	if (ast_channel_connected_line_macro(NULL, chan, &connected_caller, 0, 0)) {
-		ast_channel_update_connected_line(chan, &connected_caller);
+		ast_channel_update_connected_line(chan, &connected_caller, NULL);
 	}
 	ast_party_connected_line_free(&connected_caller);
 
 	ast_channel_lock(chan);
-	ast_connected_line_copy_from_caller(&connected_caller, &chan->cid);
+	ast_connected_line_copy_from_caller(&connected_caller, &chan->caller);
 	ast_channel_unlock(chan);
 	connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-	ast_channel_queue_connected_line_update(chan, &connected_caller);
+	ast_channel_queue_connected_line_update(chan, &connected_caller, NULL);
 	ast_party_connected_line_free(&connected_caller);
 
 	if ((res = ast_answer(chan))) {
@@ -179,18 +179,24 @@ static struct ast_channel *my_ast_get_channel_by_name_locked(const char *channam
 	char *chkchan;
 	struct pickup_by_name_args pickup_args;
 
-	pickup_args.len = strlen(channame) + 2;
-
-	chkchan = alloca(pickup_args.len);
-
-	/* need to append a '-' for the comparison so we check full channel name,
-	 * i.e SIP/hgc- , use a temporary variable so original stays the same for
-	 * debugging.
+	/* Check if channel name contains a '-'.
+	 * In this case the channel name will be interpreted as full channel name.
 	 */
-	strcpy(chkchan, channame);
-	strcat(chkchan, "-");
-
-	pickup_args.name = chkchan;
+	if (strchr(channame, '-')) {
+		/* check full channel name */
+		pickup_args.len = strlen(channame);
+		pickup_args.name = channame;
+	} else {
+		/* need to append a '-' for the comparison so we check full channel name,
+		 * i.e SIP/hgc- , use a temporary variable so original stays the same for
+		 * debugging.
+		 */
+		pickup_args.len = strlen(channame) + 1;
+		chkchan = alloca(pickup_args.len + 1);
+		strcpy(chkchan, channame);
+		strcat(chkchan, "-");
+		pickup_args.name = chkchan;
+	}
 
 	return ast_channel_callback(pickup_by_name_cb, NULL, &pickup_args, 0);
 }

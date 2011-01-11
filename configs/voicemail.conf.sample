@@ -77,23 +77,39 @@ maxlogins=3
 ;smdiport=/dev/ttyS0
 
 ; If you need to have an external program, i.e. /usr/bin/myapp
-; called when a voicemail password is changed, uncomment this:
+; called when a voicemail password is changed, uncomment this. The
+; arguments passed to the application are: <context> <mailbox> <newpassword>
 ; Note: If this is set, the password will NOT be changed in voicemail.conf
 ; If you would like to also change the password in voicemail.conf, use
 ; the externpassnotify option below instead.
 ;externpass=/usr/bin/myapp
 ;externpassnotify=/usr/bin/myapp
 
-; If you need to have an external program, i.e. /usr/bin/myapp
-; called when a user changes her voicemail password, uncomment this:
-;externpasscheck=/usr/bin/myapp
-; Arguments for this script are:
-; mailbox context oldpass newpass
+; If you would like to have an external program called when a user changes the
+; voicemail password for the purpose of doing validation on the new password,
+; then use this option.  The script can decide whether or not the new password
+; meets minimum password strength requirements before the Voicemail application
+; accepts the password.  If the script decides that the password is not acceptable,
+; the user will be informed that the new password does not meet minimum password
+; requirements, and they will be asked to enter another password.
+;
+; The arguments passed to this script are <mailbox> <context> <old pw> <new pw>.
+;
+; The script should print "VALID" to stdout to indicate that the new password
+; is acceptable.  If the password is considered too weak, the script should print
+; "INVALID" to stdout.
+;
+; There is an example script in the contrib/scripts/ directory, voicemailpwcheck.py,
+; which implements some basic password checking, and can be used as a starting point
+; for use with this option.
+;
+;externpasscheck=/usr/local/bin/voicemailpwcheck.py
 
 ; For the directory, you can override the intro file if you want
 ;directoryintro=dir-intro
 ; The character set for voicemail messages can be specified here
-;charset=ISO-8859-1
+; default: ISO-8859-1
+;charset=UTF-8
 ; The ADSI feature descriptor number to download to
 ;adsifdn=0000000F
 ; The ADSI security lock code
@@ -181,38 +197,6 @@ pagerdateformat=%A, %B %d, %Y at %r
 ; NOT use INBOX as the parent. Default is to have no parent folder set.
 ;imapparentfolder=INBOX
 ;
-; Users may be located in different timezones, or may have different
-; message announcements for their introductory message when they enter
-; the voicemail system. Set the message and the timezone each user
-; hears here. Set the user into one of these zones with the tz= attribute
-; in the options field of the mailbox. Of course, language substitution
-; still applies here so you may have several directory trees that have
-; alternate language choices.
-;
-; Look in /usr/share/zoneinfo/ for names of timezones.
-; Look at the manual page for strftime for a quick tutorial on how the
-; variable substitution is done on the values below.
-;
-; Supported values:
-; 'filename'    filename of a soundfile (single ticks around the filename
-;               required)
-; ${VAR}        variable substitution
-; A or a        Day of week (Saturday, Sunday, ...)
-; B or b or h   Month name (January, February, ...)
-; d or e        numeric day of month (first, second, ..., thirty-first)
-; Y             Year
-; I or l        Hour, 12 hour clock
-; H             Hour, 24 hour clock (single digit hours preceded by "oh")
-; k             Hour, 24 hour clock (single digit hours NOT preceded by "oh")
-; M             Minute, with 00 pronounced as "o'clock"
-; N             Minute, with 00 pronounced as "hundred" (US military time)
-; P or p        AM or PM
-; Q             "today", "yesterday" or ABdY
-;               (*note: not standard strftime value)
-; q             "" (for today), "yesterday", weekday, or ABdY
-;               (*note: not standard strftime value)
-; R             24 hour time, including minute
-;
 ;
 ;
 ; Each mailbox is listed in the form <mailbox>=<password>,<name>,<email>,<pager_email>,<options>
@@ -226,6 +210,13 @@ pagerdateformat=%A, %B %d, %Y at %r
 ; overridden in the per-mailbox settings, unless listed otherwise.
 ;
 ; tz=central 		; Timezone from zonemessages below. Irrelevant if envelope=no.
+; locale=de_DE.UTF-8	; set the locale for generation of the date/time strings (make 
+			; sure the locales are installed in your operating system; e.g
+			; on Debian Linux you can use "dpkg-reconfigure locales").
+			; If you use UTF-8 locales, make sure to set the "charset" option
+			; to UTF-8 too. If you mix different locales for different users
+			; you should avoid words in the emaildateformat specification, e.g.:
+			; emaildateformat=%A, %d %B %Y, %H:%M:%S
 ; attach=yes 		; Attach the voicemail to the notification email *NOT* the pager email
 ; attachfmt=wav49	; Which format to attach to the email.  Normally this is the
 			; first format specified in the format parameter above, but this
@@ -270,7 +261,6 @@ sendvoicemail=yes ; Allow the user to compose and send a voicemail while inside
 			;     much gain to add to the message when sending a voicemail.
 			;     NOTE: sox must be installed for this option to work.
 ; nextaftercmd=yes	; Skips to the next message after hitting 7 or 9 to delete/save current message.
-			;     [global option only at this time]
 ; forcename=yes		; Forces a new user to record their name.  A new user is
 			;     determined by the password being the same as
 			;     the mailbox number.  The default is "no".
@@ -343,6 +333,38 @@ sendvoicemail=yes ; Allow the user to compose and send a voicemail while inside
 
 
 [zonemessages]
+; Users may be located in different timezones, or may have different
+; message announcements for their introductory message when they enter
+; the voicemail system. Set the message and the timezone each user
+; hears here. Set the user into one of these zones with the tz= attribute
+; in the options field of the mailbox. Of course, language substitution
+; still applies here so you may have several directory trees that have
+; alternate language choices.
+;
+; Look in /usr/share/zoneinfo/ for names of timezones.
+; Look at the manual page for strftime for a quick tutorial on how the
+; variable substitution is done on the values below.
+;
+; Supported values:
+; 'filename'    filename of a soundfile (single ticks around the filename
+;               required)
+; ${VAR}        variable substitution
+; A or a        Day of week (Saturday, Sunday, ...)
+; B or b or h   Month name (January, February, ...)
+; d or e        numeric day of month (first, second, ..., thirty-first)
+; Y             Year
+; I or l        Hour, 12 hour clock
+; H             Hour, 24 hour clock (single digit hours preceded by "oh")
+; k             Hour, 24 hour clock (single digit hours NOT preceded by "oh")
+; M             Minute, with 00 pronounced as "o'clock"
+; N             Minute, with 00 pronounced as "hundred" (US military time)
+; P or p        AM or PM
+; Q             "today", "yesterday" or ABdY
+;               (*note: not standard strftime value)
+; q             "" (for today), "yesterday", weekday, or ABdY
+;               (*note: not standard strftime value)
+; R             24 hour time, including minute
+;
 eastern=America/New_York|'vm-received' Q 'digits/at' IMp
 central=America/Chicago|'vm-received' Q 'digits/at' IMp
 central24=America/Chicago|'vm-received' q 'digits/at' H N 'hours'
@@ -358,7 +380,7 @@ european=Europe/Copenhagen|'vm-received' a d b 'digits/at' HM
 ;4300 => 3456,Ben Rigas,ben@american-computer.net
 ;4310 => -5432,Sales,sales@marko.net
 ;4069 => 6522,Matt Brooks,matt@marko.net,,|tz=central|attach=yes|saycid=yes|dialout=fromvm|callback=fromvm|review=yes|operator=yes|envelope=yes|moveheard=yes|sayduration=yes|saydurationm=1
-;4073 => 1099,Bianca Paige,bianca@biancapaige.com,,delete=1|emailsubject=You have a new voicemail.|emailbody=Click on the attachment to listen.
+;4073 => 1099,Bianca Paige,bianca@biancapaige.com,,delete=1|emailsubject=You have a new voicemail.|emailbody=Click on the attachment to listen.|rip=2010-06-04
 ;4110 => 3443,Rob Flynn,rflynn@blueridge.net
 ;4235 => 1234,Jim Holmes,jim@astricon.ips,,Tz=european
 

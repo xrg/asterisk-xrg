@@ -47,13 +47,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/test.h"
 
-/*
+/*! \brief
  * The following variable controls the layout of localized sound files.
  * If 0, use the historical layout with prefix just before the filename
  * (i.e. digits/en/1.gsm , digits/it/1.gsm or default to digits/1.gsm),
  * if 1 put the prefix at the beginning of the filename
  * (i.e. en/digits/1.gsm, it/digits/1.gsm or default to digits/1.gsm).
  * The latter permits a language to be entirely in one directory.
+ *
+ * This is settable in asterisk.conf.
  */
 int ast_language_is_prefix = 1;
 
@@ -313,7 +315,7 @@ static void filestream_destructor(void *arg)
 			size = strlen(f->filename) + strlen(f->realfilename) + 15;
 			cmd = alloca(size);
 			memset(cmd,0,size);
-			snprintf(cmd,size,"/bin/mv -f %s %s",f->filename,f->realfilename);
+			snprintf(cmd, size, "/bin/mv -f \"%s\" \"%s\"", f->filename, f->realfilename);
 			ast_safe_system(cmd);
 	}
 
@@ -406,10 +408,10 @@ enum file_action {
  * if fmt is NULL, OPEN will return the first matching entry,
  * whereas other functions will run on all matching entries.
  */
-static int ast_filehelper(const char *filename, const void *arg2, const char *fmt, const enum file_action action)
+static format_t ast_filehelper(const char *filename, const void *arg2, const char *fmt, const enum file_action action)
 {
 	struct ast_format *f;
-	int res = (action == ACTION_EXISTS) ? 0 : -1;
+	format_t res = (action == ACTION_EXISTS) ? 0 : -1;
 
 	AST_RWLIST_RDLOCK(&formats);
 	/* Check for a specific format */
@@ -529,7 +531,7 @@ static int is_absolute_path(const char *filename)
 	return filename[0] == '/';
 }
 
-static int fileexists_test(const char *filename, const char *fmt, const char *lang,
+static format_t fileexists_test(const char *filename, const char *fmt, const char *lang,
 			   char *buf, int buflen)
 {
 	if (buf == NULL) {
@@ -563,10 +565,10 @@ static int fileexists_test(const char *filename, const char *fmt, const char *la
  * The last parameter(s) point to a buffer of sufficient size,
  * which on success is filled with the matching filename.
  */
-static int fileexists_core(const char *filename, const char *fmt, const char *preflang,
+static format_t fileexists_core(const char *filename, const char *fmt, const char *preflang,
 			   char *buf, int buflen)
 {
-	int res = -1;
+	format_t res = -1;
 	char *lang;
 
 	if (buf == NULL) {
@@ -625,7 +627,8 @@ struct ast_filestream *ast_openstream_full(struct ast_channel *chan, const char 
 	 * language and format, set up a suitable translator,
 	 * and open the stream.
 	 */
-	int fmts, res, buflen;
+	format_t fmts, res;
+	int buflen;
 	char *buf;
 
 	if (!asis) {
@@ -650,7 +653,10 @@ struct ast_filestream *ast_openstream_full(struct ast_channel *chan, const char 
 	chan->oldwriteformat = chan->writeformat;
 	/* Set the channel to a format we can work with */
 	res = ast_set_write_format(chan, fmts);
- 	res = ast_filehelper(buf, chan, NULL, ACTION_OPEN);
+	if (res == -1) {	/* No format available that works with this channel */
+		return NULL;
+	}
+	res = ast_filehelper(buf, chan, NULL, ACTION_OPEN);
 	if (res >= 0)
 		return chan->stream;
 	return NULL;
@@ -955,10 +961,12 @@ int ast_streamfile(struct ast_channel *chan, const char *filename, const char *p
 	 * done this way because there is no where for ast_openstream_full to
 	 * return the file had no data. */
 	seekattempt = fseek(fs->f, -1, SEEK_END);
-	if (!seekattempt)
-		ast_seekstream(fs, 0, SEEK_SET);
-	else
+	if (seekattempt && errno == EINVAL) {
+		/* Zero-length file, as opposed to a pipe */
 		return 0;
+	} else {
+		ast_seekstream(fs, 0, SEEK_SET);
+	}
 
 	vfs = ast_openvstream(chan, filename, preflang);
 	if (vfs) {
@@ -1235,7 +1243,8 @@ static int waitstream_core(struct ast_channel *c, const char *breakon,
 			case AST_FRAME_DTMF_END:
 				if (context) {
 					const char exten[2] = { fr->subclass.integer, '\0' };
-					if (ast_exists_extension(c, context, exten, 1, c->cid.cid_num)) {
+					if (ast_exists_extension(c, context, exten, 1,
+						S_COR(c->caller.id.number.valid, c->caller.id.number.str, NULL))) {
 						res = fr->subclass.integer;
 						ast_frfree(fr);
 						ast_clear_flag(c, AST_FLAG_END_DTMF_ONLY);
@@ -1273,8 +1282,12 @@ static int waitstream_core(struct ast_channel *c, const char *breakon,
 				case AST_CONTROL_ANSWER:
 				case AST_CONTROL_VIDUPDATE:
 				case AST_CONTROL_SRCUPDATE:
+				case AST_CONTROL_SRCCHANGE:
 				case AST_CONTROL_HOLD:
 				case AST_CONTROL_UNHOLD:
+				case AST_CONTROL_CONNECTED_LINE:
+				case AST_CONTROL_REDIRECTING:
+				case AST_CONTROL_AOC:
 				case -1:
 					/* Unimportant */
 					break;

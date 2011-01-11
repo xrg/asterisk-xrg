@@ -50,11 +50,11 @@ if ! [ -d $ASTETCDIR ] ; then
         exit 0
 fi
 
-# Use the LSB standar functions for services management
+# Use the LSB standard functions for services management
 . /lib/lsb/init-functions
 
 # Allow configuration overrides in /etc/default/asterisk
-CONFIG0=`readlink $0`
+CONFIG0=`readlink $0 || :` # readlink returns 1 when something isn't a symlink
 if [ "$CONFIG0" = "" ]; then
 	CONFIGFILE=/etc/default/`basename $0`
 else
@@ -76,7 +76,6 @@ case "$1" in
 	if [ ! -d $ASTVARRUNDIR ]; then
 		mkdir -p $ASTVARRUNDIR
 	fi
-
 	if [ $AST_USER ] ; then
 		ASTARGS="-U $AST_USER"
 		chown $AST_USER $ASTVARRUNDIR
@@ -101,6 +100,8 @@ case "$1" in
 		for i in `seq 1 $VERBOSITY`; do
 			ASTARGS="$ASTARGS -v"
 		done
+		# -v implies -f, so we override that implicit specification here
+		ASTARGS="$ASTARGS -F"
 	fi
 	if [ "x$INTERNALTIMING" = "xyes" ]; then
 		ASTARGS="$ASTARGS -I"
@@ -108,13 +109,11 @@ case "$1" in
 	if [ "x$TEMPRECORDINGLOCATION" = "xyes" -o "x$TMPRECORDINGLOCATION" = "xyes" ]; then
 		ASTARGS="$ASTARGS -t"
 	fi
-	# "start-stop-daemon --oknodo" returns 0 even if Asterisk was already running (as LSB expects):
-	if test "x$COLOR" = "xyes" ; then
-		export TERM=linux
-		start-stop-daemon --start --oknodo --background --exec $DAEMON -- $ASTARGS
-	else
-		start-stop-daemon --start --oknodo --exec $DAEMON -- $ASTARGS
+	if test "x$COLOR" = "xno" ; then
+		ASTARGS="$ASTARGS -n"
 	fi
+	# "start-stop-daemon --oknodo" returns 0 even if Asterisk was already running (as LSB expects):
+	start-stop-daemon --start --oknodo --exec $DAEMON -- $ASTARGS
 	log_end_msg $?
 	;;
   stop)

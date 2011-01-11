@@ -92,13 +92,13 @@ int ast_heap_verify(struct ast_heap *h)
 		int r = right_node(i);
 
 		if (l <= h->cur_len) {
-			if (h->cmp_fn(heap_get(h, i), heap_get(h, l)) <= 0) {
+			if (h->cmp_fn(heap_get(h, i), heap_get(h, l)) < 0) {
 				return -1;
 			}
 		}
 
 		if (r <= h->cur_len) {
-			if (h->cmp_fn(heap_get(h, i), heap_get(h, r)) <= 0) {
+			if (h->cmp_fn(heap_get(h, i), heap_get(h, r)) < 0) {
 				return -1;
 			}
 		}
@@ -229,14 +229,22 @@ static inline void max_heapify(struct ast_heap *h, int i)
 	}
 }
 
+static int bubble_up(struct ast_heap *h, int i)
+{
+	while (i > 1 && h->cmp_fn(heap_get(h, parent_node(i)), heap_get(h, i)) < 0) {
+		heap_swap(h, i, parent_node(i));
+		i = parent_node(i);
+	}
+
+	return i;
+}
+
 #ifdef MALLOC_DEBUG
 int _ast_heap_push(struct ast_heap *h, void *elm, const char *file, int lineno, const char *func)
 #else
 int ast_heap_push(struct ast_heap *h, void *elm)
 #endif
 {
-	int i;
-
 	if (h->cur_len == h->avail_len && grow_heap(h
 #ifdef MALLOC_DEBUG
 		, file, lineno, func
@@ -247,11 +255,7 @@ int ast_heap_push(struct ast_heap *h, void *elm)
 
 	heap_set(h, ++(h->cur_len), elm);
 
-	for (i = h->cur_len;
-			i > 1 && h->cmp_fn(heap_get(h, parent_node(i)), heap_get(h, i)) < 0;
-			i = parent_node(i)) {
-		heap_swap(h, i, parent_node(i));
-	}
+	bubble_up(h, h->cur_len);
 
 	return 0;
 }
@@ -266,7 +270,7 @@ static void *_ast_heap_remove(struct ast_heap *h, unsigned int index)
 
 	ret = heap_get(h, index);
 	heap_set(h, index, heap_get(h, (h->cur_len)--));
-
+	index = bubble_up(h, index);
 	max_heapify(h, index);
 
 	return ret;
@@ -302,38 +306,17 @@ size_t ast_heap_size(struct ast_heap *h)
 	return h->cur_len;
 }
 
-#ifndef DEBUG_THREADS
-
-int ast_heap_wrlock(struct ast_heap *h)
-{
-	return ast_rwlock_wrlock(&h->lock);
-}
-
-int ast_heap_rdlock(struct ast_heap *h)
-{
-	return ast_rwlock_rdlock(&h->lock);
-}
-
-int ast_heap_unlock(struct ast_heap *h)
-{
-	return ast_rwlock_unlock(&h->lock);
-}
-
-#else /* DEBUG_THREADS */
-
 int __ast_heap_wrlock(struct ast_heap *h, const char *file, const char *func, int line)
 {
-	return _ast_rwlock_wrlock(&h->lock, "&h->lock", file, line, func);
+	return __ast_rwlock_wrlock(&h->lock, "&h->lock", file, line, func);
 }
 
 int __ast_heap_rdlock(struct ast_heap *h, const char *file, const char *func, int line)
 {
-	return _ast_rwlock_rdlock(&h->lock, "&h->lock", file, line, func);
+	return __ast_rwlock_rdlock(&h->lock, "&h->lock", file, line, func);
 }
 
 int __ast_heap_unlock(struct ast_heap *h, const char *file, const char *func, int line)
 {
-	return _ast_rwlock_unlock(&h->lock, "&h->lock", file, line, func);
+	return __ast_rwlock_unlock(&h->lock, "&h->lock", file, line, func);
 }
-
-#endif /* DEBUG_THREADS */

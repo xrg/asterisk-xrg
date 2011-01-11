@@ -134,7 +134,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</agi>
 	<agi name="control stream file" language="en_US">
 		<synopsis>
-			Sends audio file on channel and allows the listner to control the stream.
+			Sends audio file on channel and allows the listener to control the stream.
 		</synopsis>
 		<syntax>
 			<parameter name="filename" required="true">
@@ -151,7 +151,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="pausechr" />
 		</syntax>
 		<description>
-			<para>Send the given file, allowing playback to be controled by the given
+			<para>Send the given file, allowing playback to be controlled by the given
 			digits, if any. Use double quotes for the digits if you wish none to be
 			permitted. Returns <literal>0</literal> if playback completes without a digit
 			being pressed, or the ASCII numerical value of the digit if one was pressed,
@@ -245,7 +245,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="maxdigits" />
 		</syntax>
 		<description>
-			<para>Stream the given <replaceable>file</replaceable>, and recieve DTMF data.</para>
+			<para>Stream the given <replaceable>file</replaceable>, and receive DTMF data.</para>
 			<para>Returns the digits received from the channel at the other end.</para>
 		</description>
 	</agi>
@@ -371,7 +371,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			to the offset without exceeding the end of the file. <replaceable>silence</replaceable> is
 			the number of seconds of silence allowed before the function returns despite the
 			lack of dtmf digits or reaching <replaceable>timeout</replaceable>. <replaceable>silence</replaceable>
-			value must be preceeded by <literal>s=</literal> and is also optional.</para>
+			value must be preceded by <literal>s=</literal> and is also optional.</para>
 		</description>
 	</agi>
 	<agi name="say alpha" language="en_US">
@@ -473,7 +473,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</agi>
 	<agi name="say datetime" language="en_US">
 		<synopsis>
-			Says a given time as specfied by the format given.
+			Says a given time as specified by the format given.
 		</synopsis>
 		<syntax>
 			<parameter name="time" required="true">
@@ -678,7 +678,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Sends <replaceable>message</replaceable> to the console via verbose
-			message system. <replaceable>level</replaceable> is the the verbose level (1-4).
+			message system. <replaceable>level</replaceable> is the verbose level (1-4).
 			Always returns <literal>1</literal></para>
 		</description>
 	</agi>
@@ -814,9 +814,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			signals a desire to stop (either by exiting or, in the case of a net script, by
 			closing the connection). A locally executed AGI script will receive SIGHUP on
 			hangup from the channel except when using DeadAGI. A fast AGI server will
-			correspondingly receive a HANGUP in OOB data. Both of these signals may be disabled
-			by setting the <variable>AGISIGHUP</variable> channel variable to <literal>no</literal>
-			before executing the AGI application.</para>
+			correspondingly receive a HANGUP inline with the command dialog. Both of theses
+			signals may be disabled by setting the <variable>AGISIGHUP</variable> channel
+			variable to <literal>no</literal> before executing the AGI application.</para>
 			<para>Use the CLI command <literal>agi show commands</literal> to list available agi
 			commands.</para>
 			<para>This application sets the following channel variable upon completion:</para>
@@ -1626,14 +1626,18 @@ static void setup_env(struct ast_channel *chan, char *request, int fd, int enhan
 	ast_agi_send(fd, chan, "agi_version: %s\n", ast_get_version());
 
 	/* ANI/DNIS */
-	ast_agi_send(fd, chan, "agi_callerid: %s\n", S_OR(chan->cid.cid_num, "unknown"));
-	ast_agi_send(fd, chan, "agi_calleridname: %s\n", S_OR(chan->cid.cid_name, "unknown"));
-	ast_agi_send(fd, chan, "agi_callingpres: %d\n", chan->cid.cid_pres);
-	ast_agi_send(fd, chan, "agi_callingani2: %d\n", chan->cid.cid_ani2);
-	ast_agi_send(fd, chan, "agi_callington: %d\n", chan->cid.cid_ton);
-	ast_agi_send(fd, chan, "agi_callingtns: %d\n", chan->cid.cid_tns);
-	ast_agi_send(fd, chan, "agi_dnid: %s\n", S_OR(chan->cid.cid_dnid, "unknown"));
-	ast_agi_send(fd, chan, "agi_rdnis: %s\n", S_OR(chan->cid.cid_rdnis, "unknown"));
+	ast_agi_send(fd, chan, "agi_callerid: %s\n",
+		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "unknown"));
+	ast_agi_send(fd, chan, "agi_calleridname: %s\n",
+		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, "unknown"));
+	ast_agi_send(fd, chan, "agi_callingpres: %d\n",
+		ast_party_id_presentation(&chan->caller.id));
+	ast_agi_send(fd, chan, "agi_callingani2: %d\n", chan->caller.ani2);
+	ast_agi_send(fd, chan, "agi_callington: %d\n", chan->caller.id.number.plan);
+	ast_agi_send(fd, chan, "agi_callingtns: %d\n", chan->dialed.transit_network_select);
+	ast_agi_send(fd, chan, "agi_dnid: %s\n", S_OR(chan->dialed.number.str, "unknown"));
+	ast_agi_send(fd, chan, "agi_rdnis: %s\n",
+		S_COR(chan->redirecting.from.number.valid, chan->redirecting.from.number.str, "unknown"));
 
 	/* Context information */
 	ast_agi_send(fd, chan, "agi_context: %s\n", chan->context);
@@ -2116,7 +2120,9 @@ static int handle_setpriority(struct ast_channel *chan, AGI *agi, int argc, cons
 		return RESULT_SHOWUSAGE;
 
 	if (sscanf(argv[2], "%30d", &pri) != 1) {
-		if ((pri = ast_findlabel_extension(chan, chan->context, chan->exten, argv[2], chan->cid.cid_num)) < 1)
+		pri = ast_findlabel_extension(chan, chan->context, chan->exten, argv[2],
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL));
+		if (pri < 1)
 			return RESULT_SHOWUSAGE;
 	}
 
@@ -2661,7 +2667,7 @@ static int handle_speechcreate(struct ast_channel *chan, AGI *agi, int argc, con
 static int handle_speechset(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
 	/* Check for minimum arguments */
-        if (argc != 3)
+	if (argc != 4)
 		return RESULT_SHOWUSAGE;
 
 	/* Check to make sure speech structure exists */
@@ -3023,11 +3029,20 @@ int AST_OPTIONAL_API_NAME(ast_agi_register)(struct ast_module *mod, agi_command 
 			*((char **) &cmd->syntax) = ast_xmldoc_build_syntax("agi", fullcmd);
 			*((char **) &cmd->seealso) = ast_xmldoc_build_seealso("agi", fullcmd);
 			*((enum ast_doc_src *) &cmd->docsrc) = AST_XML_DOC;
-#elif (!defined(HAVE_NULLSAFE_PRINTF))
-			*((char **) &cmd->summary) = ast_strdup("");
-			*((char **) &cmd->usage) = ast_strdup("");
-			*((char **) &cmd->syntax) = ast_strdup("");
-			*((char **) &cmd->seealso) = ast_strdup("");
+#endif
+#ifndef HAVE_NULLSAFE_PRINTF
+			if (!cmd->summary) {
+				*((char **) &cmd->summary) = ast_strdup("");
+			}
+			if (!cmd->usage) {
+				*((char **) &cmd->usage) = ast_strdup("");
+			}
+			if (!cmd->syntax) {
+				*((char **) &cmd->syntax) = ast_strdup("");
+			}
+			if (!cmd->seealso) {
+				*((char **) &cmd->seealso) = ast_strdup("");
+			}
 #endif
 		}
 
@@ -3345,7 +3360,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				if (pid > -1) {
 					kill(pid, SIGHUP);
 				} else if (agi->fast) {
-					send(agi->ctrl, "HANGUP\n", 7, MSG_OOB);
+					send(agi->ctrl, "HANGUP\n", 7, 0);
 				}
 			}
 		}
@@ -3443,7 +3458,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 			}
 			waitpid(pid, status, WNOHANG);
 		} else if (agi->fast) {
-			send(agi->ctrl, "HANGUP\n", 7, MSG_OOB);
+			send(agi->ctrl, "HANGUP\n", 7, 0);
 		}
 	}
 	fclose(readf);
@@ -3787,7 +3802,7 @@ AST_TEST_DEFINE(test_agi_null_docs)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "null_agi_docs";
-		info->category = "res/agi/";
+		info->category = "/res/agi/";
 		info->summary = "AGI command with no documentation";
 		info->description = "Test whether an AGI command with no documentation will crash Asterisk";
 		return AST_TEST_NOT_RUN;
@@ -3796,15 +3811,18 @@ AST_TEST_DEFINE(test_agi_null_docs)
 	}
 
 	if (ast_agi_register(ast_module_info->self, &noop_command) == 0) {
+		ast_test_status_update(test, "Unable to register testnoop command, because res_agi is not loaded.\n");
 		return AST_TEST_NOT_RUN;
 	}
 
 #ifndef HAVE_NULLSAFE_PRINTF
 	/* Test for condition without actually crashing Asterisk */
 	if (noop_command.usage == NULL) {
+		ast_test_status_update(test, "AGI testnoop usage was not updated properly.\n");
 		res = AST_TEST_FAIL;
 	}
-	if (noop_command.description == NULL) {
+	if (noop_command.syntax == NULL) {
+		ast_test_status_update(test, "AGI testnoop syntax was not updated properly.\n");
 		res = AST_TEST_FAIL;
 	}
 #endif
@@ -3842,7 +3860,8 @@ static int load_module(void)
 	return ast_register_application_xml(app, agi_exec);
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Asterisk Gateway Interface (AGI)",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS | AST_MODFLAG_LOAD_ORDER, "Asterisk Gateway Interface (AGI)",
 		.load = load_module,
 		.unload = unload_module,
+		.load_pri = AST_MODPRI_APP_DEPEND,
 		);

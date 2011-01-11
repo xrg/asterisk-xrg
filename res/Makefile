@@ -42,13 +42,14 @@ ael/ael_lex.o: _ASTCFLAGS+=-I. -Iael -Wno-unused
 ael/ael.tab.o: ael/ael.tab.c ael/ael.tab.h ../include/asterisk/ael_structs.h
 ael/ael.tab.o: _ASTCFLAGS+=-I. -Iael -DYYENABLE_NLS=0
 
-ais/clm.o ais/evt.o: _ASTCFLAGS+=${AIS_INCLUDE}
-
 $(if $(filter res_ais,$(EMBEDDED_MODS)),modules.link,res_ais.so): ais/clm.o ais/evt.o
+ais/clm.o ais/evt.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ais)
 
 $(if $(filter res_snmp,$(EMBEDDED_MODS)),modules.link,res_snmp.so): snmp/agent.o
+snmp/agent.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_snmp)
 
 $(if $(filter res_ael_share,$(EMBEDDED_MODS)),modules.link,res_ael_share.so): ael/ael_lex.o ael/ael.tab.o ael/pval.o
+ael/ael_lex.o ael/ael.tab.o ael/pval.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ael_share)
 
 ifneq ($(findstring REBUILD_PARSERS,$(MENUSELECT_CFLAGS)),)
 ael/ael_lex.c: ael/ael.flex
@@ -56,8 +57,12 @@ else
 ael/ael_lex.c:
 endif
 	$(ECHO_PREFIX) echo "   [FLEX] $< -> $@"
-	$(CMD_PREFIX) (cd ael; $(FLEX) ael.flex; sed -e "/begin standard C headers/i#include \"asterisk.h\"" ael_lex.c > zz; mv zz ael_lex.c)
-	$(CMD_PREFIX) (cd ael; sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' ael_lex.c > zz; mv zz ael_lex.c)
+	$(CMD_PREFIX) (cd ael; $(FLEX) ael.flex)
+	$(CMD_PREFIX) sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' $@ > $@.fix
+	$(CMD_PREFIX) echo "#include \"asterisk.h\"" > $@
+	$(CMD_PREFIX) echo >> $@
+	$(CMD_PREFIX) cat $@.fix >> $@
+	$(CMD_PREFIX) rm $@.fix
 
 ifneq ($(findstring REBUILD_PARSERS,$(MENUSELECT_CFLAGS)),)
 ael/ael.tab.c ael/ael.tab.h: ael/ael.y

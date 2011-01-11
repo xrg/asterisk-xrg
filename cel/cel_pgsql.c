@@ -55,7 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/logger.h"
 #include "asterisk.h"
 
-#define DATE_FORMAT "%Y-%m-%d %T"
+#define DATE_FORMAT "%Y-%m-%d %T.%6q"
 
 static char *config = "cel_pgsql.conf";
 static char *pghostname = NULL, *pgdbname = NULL, *pgdbuser = NULL, *pgpassword = NULL, *pgdbport = NULL, *table = NULL;
@@ -166,7 +166,7 @@ static void pgsql_log(const struct ast_event *event, void *userdata)
 			if (strcmp(cur->name, "eventtime") == 0) {
 				if (strncmp(cur->type, "int", 3) == 0) {
 					LENGTHEN_BUF2(13);
-					ast_str_append(&sql2, 0, "%s%ld", SEP, record.event_time.tv_sec);
+					ast_str_append(&sql2, 0, "%s%ld", SEP, (long) record.event_time.tv_sec);
 				} else if (strncmp(cur->type, "float", 5) == 0) {
 					LENGTHEN_BUF2(31);
 					ast_str_append(&sql2, 0, "%s%f",
@@ -240,9 +240,12 @@ static void pgsql_log(const struct ast_event *event, void *userdata)
 				} else if (strcmp(cur->name, "peer") == 0) {
 					value = record.peer;
 				} else {
-					value = "";
+					value = NULL;
 				}
-				if (strncmp(cur->type, "int", 3) == 0) {
+
+				if (value == NULL) {
+					ast_str_append(&sql2, 0, "%sDEFAULT", SEP);
+				} else if (strncmp(cur->type, "int", 3) == 0) {
 					long long whatever;
 					if (value && sscanf(value, "%30lld", &whatever) == 1) {
 						LENGTHEN_BUF2(26);
@@ -558,8 +561,9 @@ static int reload(void)
 	return my_load_module(1);
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "PostgreSQL CEL Backend",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "PostgreSQL CEL Backend",
 	.load = load_module,
 	.unload = unload_module,
 	.reload = reload,
+	.load_pri = AST_MODPRI_CDR_DRIVER,
 );

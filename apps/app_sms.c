@@ -1890,8 +1890,9 @@ static int sms_exec(struct ast_channel *chan, const char *data)
 	h.ipc0 = h.ipc1 = 20;                   /* phase for cosine */
 	h.dcs = 0xF1;                           /* default */
 
-	if (chan->cid.cid_num)
-		ast_copy_string(h.cli, chan->cid.cid_num, sizeof(h.cli));
+	ast_copy_string(h.cli,
+		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
+		sizeof(h.cli));
 
 	if (ast_strlen_zero(sms_args.queue)) {
 		ast_log(LOG_ERROR, "Requires queue name\n");
@@ -2038,6 +2039,12 @@ static int sms_exec(struct ast_channel *chan, const char *data)
 		ast_frfree(f);
 	}
 	res = h.err;                            /* XXX */
+
+	/* 
+	 * The SMS generator data is on the stack.  We _MUST_ make sure the generator
+	 * is stopped before returning from this function.
+	 */
+	ast_deactivate_generator(chan);
 
 	sms_log(&h, '?');                       /* log incomplete message */
 done:

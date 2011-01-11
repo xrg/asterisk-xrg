@@ -181,9 +181,14 @@ int ast_callerid_generate(unsigned char *buf, const char *name, const char *numb
 
 /*!
  * \brief Generate message waiting indicator
+ * \param buf
  * \param active The message indicator state
  *  -- either 0 no messages in mailbox or 1 messages in mailbox
  * \param type Format of message (any of CID_MWI_TYPE_*)
+ * \param codec
+ * \param name
+ * \param number
+ * \param flags
  * \see callerid_generate() for more info as it uses the same encoding
  * \version 1.6.1 changed mdmf parameter to type, added name, number and flags for caller id message generation
  */
@@ -474,6 +479,37 @@ const char *ast_connected_line_source_describe(int data);
  * \return string for config file
  */
 const char *ast_connected_line_source_name(int data);
+
+/*!
+ * \since 1.8
+ * \brief Convert ast_party_name.char_set text code to value (used in config file parsing)
+ *
+ * \param data text string from config file
+ *
+ * \retval AST_PARTY_CHAR_SET from channel.h
+ * \retval -1 if not in table
+ */
+int ast_party_name_charset_parse(const char *data);
+
+/*!
+ * \since 1.8
+ * \brief Convert ast_party_name.char_set value to explanatory string
+ *
+ * \param data AST_PARTY_CHAR_SET from channel.h
+ *
+ * \return string for human presentation
+ */
+const char *ast_party_name_charset_describe(int data);
+
+/*!
+ * \since 1.8
+ * \brief Convert ast_party_name.char_set value to text code
+ *
+ * \param data AST_PARTY_CHAR_SET from channel.h
+ *
+ * \return string for config file
+ */
+const char *ast_party_name_charset_str(int data);
 
 
 #endif /* _ASTERISK_CALLERID_H */

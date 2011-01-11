@@ -827,6 +827,7 @@ static int speech_background(struct ast_channel *chan, const char *data)
 				if (dtmf_terminator != '\0' && f->subclass.integer == dtmf_terminator) {
 					done = 1;
 				} else {
+					quieted = 1;
 					if (chan->stream != NULL) {
 						ast_stopstream(chan);
 					}
@@ -954,4 +955,8 @@ static int load_module(void)
 	return res;
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Dialplan Speech Applications");
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Dialplan Speech Applications",
+		.load = load_module,
+		.unload = unload_module,
+		.nonoptreq = "res_speech",
+		);

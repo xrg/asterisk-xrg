@@ -17,7 +17,7 @@
  */
 
 /*! \file
- * \brief Resource for handling iCalnedar calendars
+ * \brief Resource for handling MS Exchange calendars
  */
 
 /*** MODULEINFO
@@ -30,10 +30,11 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <libical/ical.h>
-#include <neon/ne_session.h>
-#include <neon/ne_uri.h>
-#include <neon/ne_request.h>
-#include <neon/ne_auth.h>
+#include <ne_session.h>
+#include <ne_uri.h>
+#include <ne_request.h>
+#include <ne_auth.h>
+#include <ne_redirect.h>
 #include <iksemel.h>
 
 #include "asterisk/module.h"
@@ -402,6 +403,7 @@ static struct ast_str *exchangecal_request(struct exchangecal_pvt *pvt, const ch
 	ne_add_request_header(req, "Content-type", "text/xml");
 
 	ret = ne_request_dispatch(req);
+	ne_request_destroy(req);
 
 	if (ret != NE_OK || !ast_str_strlen(response)) {
 		ast_log(LOG_WARNING, "Unknown response to CalDAV calendar %s, request %s to %s: %s\n", pvt->owner->name, method, pvt->url, ne_get_error(pvt->session));
@@ -693,6 +695,7 @@ static void *exchangecal_load_calendar(void *void_data)
 	}
 
 	pvt->session = ne_session_create(pvt->uri.scheme, pvt->uri.host, pvt->uri.port);
+	ne_redirect_register(pvt->session);
 	ne_set_server_auth(pvt->session, auth_credentials, pvt);
 	if (!strcasecmp(pvt->uri.scheme, "https")) {
 		ne_ssl_trust_default_ca(pvt->session);
@@ -753,7 +756,8 @@ static int unload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk MS Exchange Calendar Integration",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Asterisk MS Exchange Calendar Integration",
 		.load = load_module,
 		.unload = unload_module,
+		.load_pri = AST_MODPRI_DEVSTATE_PLUGIN,
 	);

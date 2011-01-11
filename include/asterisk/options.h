@@ -23,6 +23,8 @@
 #ifndef _ASTERISK_OPTIONS_H
 #define _ASTERISK_OPTIONS_H
 
+#include "asterisk/autoconfig.h"
+
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
 #endif
@@ -78,10 +80,10 @@ enum ast_option_flags {
 	AST_OPT_FLAG_ALWAYS_FORK = (1 << 21),
 	/*! Disable log/verbose output to remote consoles */
 	AST_OPT_FLAG_MUTE = (1 << 22),
-	/*! There is a per-file debug setting */
-	AST_OPT_FLAG_DEBUG_FILE = (1 << 23),
-	/*! There is a per-file verbose setting */
-	AST_OPT_FLAG_VERBOSE_FILE = (1 << 24),
+	/*! There is a per-module debug setting */
+	AST_OPT_FLAG_DEBUG_MODULE = (1 << 23),
+	/*! There is a per-module verbose setting */
+	AST_OPT_FLAG_VERBOSE_MODULE = (1 << 24),
 	/*! Terminal colors should be adjusted for a light-colored background */
 	AST_OPT_FLAG_LIGHT_BACKGROUND = (1 << 25),
 	/*! Count Initiated seconds in CDR's */
@@ -92,10 +94,16 @@ enum ast_option_flags {
 	AST_OPT_FLAG_HIDE_CONSOLE_CONNECT = (1 << 28),
 	/*! Protect the configuration file path with a lock */
 	AST_OPT_FLAG_LOCK_CONFIG_DIR = (1 << 29),
+	/*! Generic PLC */
+	AST_OPT_FLAG_GENERIC_PLC = (1 << 30),
 };
 
 /*! These are the options that set by default when Asterisk starts */
+#if (defined(HAVE_DAHDI_VERSION) && HAVE_DAHDI_VERSION >= 230)
+#define AST_DEFAULT_OPTIONS AST_OPT_FLAG_TRANSCODE_VIA_SLIN | AST_OPT_FLAG_INTERNAL_TIMING
+#else
 #define AST_DEFAULT_OPTIONS AST_OPT_FLAG_TRANSCODE_VIA_SLIN
+#endif
 
 #define ast_opt_exec_includes		ast_test_flag(&ast_options, AST_OPT_FLAG_EXEC_INCLUDES)
 #define ast_opt_no_fork			ast_test_flag(&ast_options, AST_OPT_FLAG_NO_FORK)
@@ -119,12 +127,13 @@ enum ast_option_flags {
 #define ast_opt_internal_timing		ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING)
 #define ast_opt_always_fork		ast_test_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK)
 #define ast_opt_mute			ast_test_flag(&ast_options, AST_OPT_FLAG_MUTE)
-#define ast_opt_dbg_file		ast_test_flag(&ast_options, AST_OPT_FLAG_DEBUG_FILE)
-#define ast_opt_verb_file		ast_test_flag(&ast_options, AST_OPT_FLAG_VERBOSE_FILE)
-#define ast_opt_light_background		ast_test_flag(&ast_options, AST_OPT_FLAG_LIGHT_BACKGROUND)
-#define ast_opt_force_black_background		ast_test_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND)
+#define ast_opt_dbg_module		ast_test_flag(&ast_options, AST_OPT_FLAG_DEBUG_MODULE)
+#define ast_opt_verb_module		ast_test_flag(&ast_options, AST_OPT_FLAG_VERBOSE_MODULE)
+#define ast_opt_light_background	ast_test_flag(&ast_options, AST_OPT_FLAG_LIGHT_BACKGROUND)
+#define ast_opt_force_black_background	ast_test_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND)
 #define ast_opt_hide_connect		ast_test_flag(&ast_options, AST_OPT_FLAG_HIDE_CONSOLE_CONNECT)
 #define ast_opt_lock_confdir		ast_test_flag(&ast_options, AST_OPT_FLAG_LOCK_CONFIG_DIR)
+#define ast_opt_generic_plc         ast_test_flag(&ast_options, AST_OPT_FLAG_GENERIC_PLC)
 
 extern struct ast_flags ast_options;
 

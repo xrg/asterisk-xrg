@@ -126,11 +126,11 @@ static int combined_results[] = {
 };
 
 static int exten_results[] = {
-	AST_EXTENSION_UNAVAILABLE,
+	AST_EXTENSION_NOT_INUSE,
 	AST_EXTENSION_NOT_INUSE,
 	AST_EXTENSION_INUSE,
 	AST_EXTENSION_BUSY,
-	AST_EXTENSION_UNAVAILABLE,
+	AST_EXTENSION_NOT_INUSE,
 	AST_EXTENSION_UNAVAILABLE,
 	AST_EXTENSION_RINGING,
 	AST_EXTENSION_INUSE | AST_EXTENSION_RINGING,
@@ -162,11 +162,11 @@ static int exten_results[] = {
 	AST_EXTENSION_INUSE | AST_EXTENSION_RINGING,
 	AST_EXTENSION_INUSE | AST_EXTENSION_RINGING,
 	AST_EXTENSION_BUSY,
-	AST_EXTENSION_UNAVAILABLE,
+	AST_EXTENSION_NOT_INUSE,
 	AST_EXTENSION_NOT_INUSE,
 	AST_EXTENSION_INUSE,
 	AST_EXTENSION_BUSY,
-	AST_EXTENSION_UNAVAILABLE,
+	AST_EXTENSION_NOT_INUSE,
 	AST_EXTENSION_UNAVAILABLE,
 	AST_EXTENSION_RINGING,
 	AST_EXTENSION_INUSE | AST_EXTENSION_RINGING,
@@ -220,7 +220,7 @@ AST_TEST_DEFINE(device2extenstate_test)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "device2extenstate_test";
-		info->category = "main/devicestate/";
+		info->category = "/main/devicestate/";
 		info->summary = "Tests combined devstate mapping and device to extension state mapping.";
 		info->description =
 			"Verifies device state aggregate results match the expected combined "

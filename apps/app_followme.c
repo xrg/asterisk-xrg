@@ -51,7 +51,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/manager.h"
 #include "asterisk/config.h"
-#include "asterisk/monitor.h"
 #include "asterisk/utils.h"
 #include "asterisk/causes.h"
 #include "asterisk/astdb.h"
@@ -812,7 +811,6 @@ static void findmeexec(struct fm_args *tpargs)
 			break;
 
 	while (nm) {
-
 		ast_debug(2, "Number %s timeout %ld\n", nm->number,nm->timeout);
 
 		number = ast_strdupa(nm->number);
@@ -824,6 +822,14 @@ static void findmeexec(struct fm_args *tpargs)
 				rest++;
 			}
 
+			/* We check if that context exists, before creating the ast_channel struct needed */
+			if (!ast_exists_extension(caller, tpargs->context, number, 1, S_COR(caller->caller.id.number.valid, caller->caller.id.number.str, NULL))) {
+				/* XXX Should probably restructure to simply skip this item, instead of returning. XXX */
+				ast_log(LOG_ERROR, "Extension '%s@%s' doesn't exist\n", number, tpargs->context);
+				free(findme_user_list);
+				return;
+			}
+
 			if (!strcmp(tpargs->context, ""))
 				snprintf(dialarg, sizeof(dialarg), "%s", number);
 			else
@@ -831,14 +837,16 @@ static void findmeexec(struct fm_args *tpargs)
 
 			tmpuser = ast_calloc(1, sizeof(*tmpuser));
 			if (!tmpuser) {
-				ast_log(LOG_WARNING, "Out of memory!\n");
 				ast_free(findme_user_list);
 				return;
 			}
 
 			outbound = ast_request("Local", ast_best_codec(caller->nativeformats), caller, dialarg, &dg);
 			if (outbound) {
-				ast_set_callerid(outbound, caller->cid.cid_num, caller->cid.cid_name, caller->cid.cid_num);
+				ast_set_callerid(outbound,
+					S_COR(caller->caller.id.number.valid, caller->caller.id.number.str, NULL),
+					S_COR(caller->caller.id.name.valid, caller->caller.id.name.str, NULL),
+					S_COR(caller->caller.id.number.valid, caller->caller.id.number.str, NULL));
 				ast_channel_inherit_variables(tpargs->chan, outbound);
 				ast_channel_datastore_inherit(tpargs->chan, outbound);
 				ast_string_field_set(outbound, language, tpargs->chan->language);
@@ -990,12 +998,12 @@ static void end_bridge_callback(void *data)
 
 	ast_channel_lock(chan);
 	if (chan->cdr->answer.tv_sec) {
-		snprintf(buf, sizeof(buf), "%ld", end - chan->cdr->answer.tv_sec);
+		snprintf(buf, sizeof(buf), "%ld", (long) end - chan->cdr->answer.tv_sec);
 		pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", buf);
 	}
 
 	if (chan->cdr->start.tv_sec) {
-		snprintf(buf, sizeof(buf), "%ld", end - chan->cdr->start.tv_sec);
+		snprintf(buf, sizeof(buf), "%ld", (long) end - chan->cdr->start.tv_sec);
 		pbx_builtin_setvar_helper(chan, "DIALEDTIME", buf);
 	}
 	ast_channel_unlock(chan);

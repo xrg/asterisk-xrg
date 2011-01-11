@@ -25,3 +25,5 @@ autom4te.cache
 .makeopts
 .moduleinfo
 .version
+*.exports
+/doc/core-en_US.xml

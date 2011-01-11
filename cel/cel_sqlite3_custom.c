@@ -226,7 +226,7 @@ static void free_config(void)
 	}
 }
 
-static void ast_sqlite3_log(const struct ast_event *event, void *userdata)
+static void write_cel(const struct ast_event *event, void *userdata)
 {
 	char *error = NULL;
 	char *sql = NULL;
@@ -336,7 +336,7 @@ static int load_module(void)
 		}
 	}
 
-	event_sub = ast_event_subscribe(AST_EVENT_CEL, ast_sqlite3_log, "CEL sqlite3 custom backend", NULL, AST_EVENT_IE_END);
+	event_sub = ast_event_subscribe(AST_EVENT_CEL, write_cel, "CEL sqlite3 custom backend", NULL, AST_EVENT_IE_END);
 	if (!event_sub) {
 		ast_log(LOG_ERROR, "Unable to register custom SQLite3 CEL handling\n");
 		free_config();
@@ -357,8 +357,9 @@ static int reload(void)
 	return res;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "SQLite3 Custom CEL Module",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "SQLite3 Custom CEL Module",
 	.load = load_module,
 	.unload = unload_module,
 	.reload = reload,
+	.load_pri = AST_MODPRI_CDR_DRIVER,
 );

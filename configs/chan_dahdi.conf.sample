@@ -85,10 +85,11 @@
 ;service_message_support=yes
 ; Enable service message support for channel. Must be set after switchtype.
 ;
-; PRI Reverse Charging Indication: Indicate to the called party that the
-; call will be reverse charged.  To enable, prefix the dialed number with one
-; of the following letters:
-; C - Reverse Charge Indication Requested
+; Dialing options for ISDN (i.e., Dial(DAHDI/g1/exten/options)):
+; R      Reverse Charge Indication
+;          Indicate to the called party that the call will be reverse charged.
+; K(n)   Keypad digits n
+;          Send out the specified digits as keypad digits.
 ;
 ; PRI Dialplan: The ISDN-level Type Of Number (TON) or numbering plan, used for
 ; the dialed number.  For most installations, leaving this as 'unknown' (the
@@ -230,14 +231,56 @@
 ; T203: Layer 2 max time without frames being exchanged (default 10000 ms)
 ; T305: Wait for DISCONNECT acknowledge (default 30000 ms)
 ; T308: Wait for RELEASE acknowledge (default 4000 ms)
-; T309: Maintain active calls on Layer 2 disconnection (default -1,
-;       Asterisk clears calls)
+; T309: Maintain active calls on Layer 2 disconnection (default 6000 ms)
 ;       EuroISDN: 6000 to 12000 ms, according to (N200 + 1) x T200 + 2s
 ;       May vary in other ISDN standards (Q.931 1993 : 90000 ms)
 ; T313: Wait for CONNECT acknowledge, CPE side only (default 3000 ms)
 ;
+; T-RESPONSE:   Maximum time to wait for a typical APDU response. (default 4000 ms)
+;               This is an implementation timer when the standard does not specify one.
+; T-ACTIVATE:   Request supervision timeout. (default 10000 ms)
+; T-RETENTION:  Maximum  time to wait for user A to activate call-completion. (default 30000 ms)
+;               Used by ETSI PTP, ETSI PTMP, and Q.SIG as the cc_offer_timer.
+; T-CCBS1:      T-STATUS timer equivalent for CC user A status. (default 4000 ms)
+; T-CCBS2:      Maximum  time the CCBS service will be active (default 45 min in ms)
+; T-CCBS3:      Maximum  time to wait for user A to respond to user B availability. (default 20000 ms)
+; T-CCBS5:      Network B CCBS supervision timeout. (default 60 min in ms)
+; T-CCBS6:      Network A CCBS supervision timeout. (default 60 min in ms)
+; T-CCNR2:      Maximum  time the CCNR service will be active (default 180 min in ms)
+; T-CCNR5:      Network B CCNR supervision timeout. (default 195 min in ms)
+; T-CCNR6:      Network A CCNR supervision timeout. (default 195 min in ms)
+; CC-T1:        Q.SIG CC request supervision timeout. (default 30000 ms)
+; CCBS-T2:      Q.SIG CCBS supervision timeout. (default 60 min in ms)
+; CCNR-T2:      Q.SIG CCNR supervision timeout. (default 195 min in ms)
+; CC-T3:        Q.SIG CC Maximum time to wait for user A to respond to user B availability. (default 30000 ms)
+;
 ;pritimer => t200,1000
 ;pritimer => t313,4000
+;
+; CC PTMP recall mode:
+; specific - Only the CC original party A can participate in the CC callback
+; global - Other compatible endpoints on the PTMP line can be party A in the CC callback
+;
+; cc_ptmp_recall_mode cannot be changed on a reload.
+;
+;cc_ptmp_recall_mode = specific
+;
+; CC Q.SIG Party A (requester) retain signaling link option
+; retain       Require that the signaling link be retained.
+; release      Request that the signaling link be released.
+; do_not_care  The responder is free to choose if the signaling link will be retained.
+;
+;cc_qsig_signaling_link_req = retain
+;
+; CC Q.SIG Party B (responder) retain signaling link option
+; retain       Prefer that the signaling link be retained.
+; release      Prefer that the signaling link be released.
+;
+;cc_qsig_signaling_link_rsp = retain
+;
+; See ccss.conf.sample for more options.  The timers described by ccss.conf.sample
+; are not used by ISDN for the native protocol since they are defined by the
+; standards and set by pritimer above.
 ;
 ; To enable transmission of facility-based ISDN supplementary services (such
 ; as caller name from CPE over facility), enable this option.
@@ -245,6 +288,24 @@
 ;
 ;facilityenable = yes
 ;
+
+; This option enables Advice of Charge pass-through between the ISDN PRI and
+; Asterisk.  This option can be set to any combination of 's', 'd', and 'e' which
+; represent the different variants of Advice of Charge, AOC-S, AOC-D, and AOC-E.
+; Advice of Charge pass-through is currently only supported for ETSI.  Since most
+; AOC messages are sent on facility messages, the 'facilityenable' option must
+; also be enabled to fully support AOC pass-through.
+;
+;aoc_enable=s,d,e
+;
+; When this option is enabled, a hangup initiated by the ISDN PRI side of the
+; asterisk channel will result in the channel delaying its hangup in an
+; attempt to receive the final AOC-E message from its bridge.  The delay
+; period is configured as one half the T305 timer length. If the channel
+; is not bridged the hangup will occur immediatly without delay.
+;
+;aoce_delayhangup=yes
+
 ; pritimer cannot be changed on a reload.
 ;
 ; Signalling method. The default is "auto". Valid values:
@@ -267,6 +328,10 @@
 ; fxo_ks:         FXO (Kewl Start)
 ; pri_cpe:        PRI signalling, CPE side
 ; pri_net:        PRI signalling, Network side
+; bri_cpe:        BRI PTP signalling, CPE side
+; bri_net:        BRI PTP signalling, Network side
+; bri_cpe_ptmp:   BRI PTMP signalling, CPE side
+; bri_net_ptmp:   BRI PTMP signalling, Network side
 ; sf:             SF (Inband Tone) Signalling
 ; sf_w:           SF Wink
 ; sf_featd:       SF Feature Group D (The fake, Adtran style, DTMF)
@@ -360,10 +425,6 @@
 ;
 usecallerid=yes
 ;
-; Hide the name part and leave just the number part of the caller ID
-; string. Only applies to PRI channels.
-;hidecalleridname=yes
-;
 ; Type of caller ID signalling in use
 ;     bell     = bell202 as used in US (default)
 ;     v23      = v23 as used in the UK
@@ -397,6 +458,10 @@ usecallerid=yes
 ; (If your dialplan doesn't catch it)
 ;
 ;hidecallerid=yes
+;
+; Enable if you need to hide just the name and not the number for legacy PBX use.
+; Only applies to PRI channels.
+;hidecalleridname=yes
 ;
 ; On UK analog lines, the caller hanging up determines the end of calls.  So
 ; Asterisk hanging up the line may or may not end a call (DAHDI could just as
@@ -449,6 +514,23 @@ usecallerid=yes
 ;
 callwaiting=yes
 ;
+; Configure the number of outstanding call waiting calls for internal ISDN
+; endpoints before bouncing the calls as busy.  This option is equivalent to
+; the callwaiting option for analog ports.
+; A call waiting call is a SETUP message with no B channel selected.
+; The default is zero to disable call waiting for ISDN endpoints.
+;max_call_waiting_calls=0
+;
+; Allow incoming ISDN call waiting calls.
+; A call waiting call is a SETUP message with no B channel selected.
+;allow_call_waiting_calls=no
+;
+; Configure the ISDN span to indicate MWI for the list of mailboxes.
+; You can give a comma separated list of up to 8 mailboxes per span.
+; An empty list disables MWI.
+; The default is an empty list.
+;mwi_mailboxes=mailbox_number[@context]{,mailbox_number[@context]}
+;
 ; Whether or not restrict outgoing caller ID (will be sent as ANI only, not
 ; available for the user)
 ; Mostly use with FXS ports
@@ -488,6 +570,8 @@ threewaycalling=yes
 ;   'facilityenable' setting must also be enabled to allow sending
 ;   the transfer to the ISDN switch, since it sent in a FACILITY
 ;   message.
+;   NOTE:  This should be disabled for NT PTMP mode.  Phones cannot
+;   have tromboned calls pushed down to them.
 ;
 transfer=yes
 ;
@@ -642,7 +726,23 @@ pickupgroup=1
 ; return to the caller performing the transfer (default is yes).
 ;
 ;transfertobusy=no
+
+; Calls will have the party id user tag set to this string value.
 ;
+;cid_tag=
+
+; With this set, you can automatically append the MSN of a party
+; to the cid_tag.  An '_' is used to separate the tag from the MSN.
+; Applies to ISDN spans.
+; Default is no.
+;
+; Table of what number is appended:
+;      outgoing  incoming
+; net  dialed    caller
+; cpe  caller    dialed
+;
+;append_msn_to_cid_tag=no
+
 ; caller ID can be set to "asreceived" or a specific number if you want to
 ; override it.  Note that "asreceived" only applies to trunk interfaces.
 ; fullname sets just the
@@ -716,17 +816,25 @@ pickupgroup=1
 ; BUSYDETECT_COMPARE_TONE_AND_SILENCE option.
 ;
 ; To further detect which hangup tone your telco provider is sending, it is
-; useful to use the ztmonitor utility to record the audio that main/dsp.c
+; useful to use the dahdi_monitor utility to record the audio that main/dsp.c
 ; is receiving after the caller hangs up.
 ;
-; Use a polarity reversal to mark when a outgoing call is answered by the
-; remote party.
+; For FXS (FXO signalled) ports
+;   switch the line polarity to signal the connected PBX that an outgoing
+;   call was answered by the remote party.
+; For FXO (FXS signalled) ports
+;   watch for a polarity reversal to mark when a outgoing call is
+;   answered by the remote party.
 ;
 ;answeronpolarityswitch=yes
 ;
-; In some countries, a polarity reversal is used to signal the disconnect of a
-; phone line.  If the hanguponpolarityswitch option is selected, the call will
-; be considered "hung up" on a polarity reversal.
+; For FXS (FXO signalled) ports
+;   switch the line polarity to signal the connected PBX that the current
+;   call was "hung up" by the remote party
+; For FXO (FXS signalled) ports
+;   In some countries, a polarity reversal is used to signal the disconnect of a
+;   phone line.  If the hanguponpolarityswitch option is selected, the call will
+;   be considered "hung up" on a polarity reversal.
 ;
 ;hanguponpolarityswitch=yes
 ;
@@ -794,14 +902,21 @@ pickupgroup=1
 ;
 ;faxbuffers=>6,full
 ;
+; This option specifies what to do when the channel's bridged peer puts the
+; ISDN channel on hold.  Settable per logical ISDN span.
+; moh:          Generate music-on-hold to the remote party.
+; notify:       Send hold notification signaling to the remote party.
+;               For ETSI PTP and ETSI PTMP NT links.
+;               (The notify setting deprecates the mohinterpret=passthrough setting.)
+; hold:         Use HOLD/RETRIEVE signaling to release the B channel while on hold.
+;               For ETSI PTMP TE links.
+;
+;moh_signaling=moh
+;
 ; This option specifies a preference for which music on hold class this channel
 ; should listen to when put on hold if the music class has not been set on the
 ; channel with Set(CHANNEL(musicclass)=whatever) in the dialplan, and the peer
 ; channel putting this one on hold did not suggest a music class.
-;
-; If this option is set to "passthrough", then the hold message will always be
-; passed through as signalling instead of generating hold music locally. This
-; setting is only valid when used on a channel that uses digital signalling.
 ;
 ; This option may be set globally or on a per-channel basis.
 ;
@@ -829,6 +944,15 @@ pickupgroup=1
 ;idleext=6999@dialout
 ;minunused=2
 ;minidle=1
+;
+;
+; ignore_failed_channels: Continue even if some channels failed to configure.
+; False by default, as if even a single channel failed to configure, it might
+; mean other channels are misplaced and having them work may not be a good
+; idea. If enabled (set to true), chan_dahdi will nevertheless attempt to
+; configure other channels rather than giving up. This normally makes sense
+; only if you use names (<subdir>!<number>) for DAHDI channels.
+;ignore_failed_channels = true
 ;
 ; Configure jitter buffers in DAHDI (each one is 20ms, default is 4)
 ; This is set globally, rather than per-channel.
@@ -942,8 +1066,24 @@ pickupgroup=1
 ; signalling = pri_cpe
 ; group = 2
 ; channel => 1-23
-
 ;
+; Alternatively, the number of the channel may be replaced with a relative
+; path to a device file under /dev/dahdi . The final element of that file
+; must be a number, though. The directory separator is '!', as we can't
+; use '/' in a dial string. So if we have
+;
+;   /dev/dahdi/span-name/pstn/00/1
+;   /dev/dahdi/span-name/pstn/00/2
+;   /dev/dahdi/span-name/pstn/00/3
+;   /dev/dahdi/span-name/pstn/00/4
+;
+; we could use:
+;channel => span-name!pstn!00!1-4
+;
+; or:
+;channel => span-name!pstn!00!1,2,3,4
+;
+; See also ignore_failed_channels above.
 
 ;  Used for distinctive ring support for x100p.
 ;  You can see the dringX patterns is to set any one of the dringXcontext fields

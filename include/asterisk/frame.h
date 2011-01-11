@@ -85,7 +85,8 @@ struct ast_codec_pref {
  * \arg \b HOLD            Call is placed on hold
  * \arg \b UNHOLD          Call is back from hold
  * \arg \b VIDUPDATE       Video update requested
- * \arg \b SRCUPDATE       The source of media has changed
+ * \arg \b SRCUPDATE       The source of media has changed (RTP marker bit must change)
+ * \arg \b SRCCHANGE       Media source has changed (RTP marker bit and SSRC must change)
  * \arg \b CONNECTED_LINE  Connected line has changed
  * \arg \b REDIRECTING     Call redirecting information has changed.
  */
@@ -293,9 +294,19 @@ extern struct ast_frame ast_null_frame;
 /*! Maximum text mask */
 #define AST_FORMAT_MAX_TEXT   (1ULL << 28)
 #define AST_FORMAT_TEXT_MASK  (((1ULL << 30)-1) & ~(AST_FORMAT_AUDIO_MASK) & ~(AST_FORMAT_VIDEO_MASK))
+/*! G.719 (64 kbps assumed) */
+#define AST_FORMAT_G719	      (1ULL << 32)
+/*! SpeeX Wideband (16kHz) Free Compression */
+#define AST_FORMAT_SPEEX16    (1ULL << 33)
 /*! Raw mu-law data (G.711) */
-#define AST_FORMAT_TESTLAW       (1ULL << 47)
-/*! Reserved bit - do not use */
+#define AST_FORMAT_TESTLAW    (1ULL << 47)
+/*! Reserved bit - do not use
+ * \warning We use this bit internally for iteration.  Additionally, using this
+ * bit will severely break the implementation of codec prefs within IAX2, as we
+ * rely on the equivalence of UTF-8 and ASCII.  The codec represented by this
+ * bit should use the first two-byte encoding of UTF-8, which is not presently
+ * accounted for.  Hence, we reserve this bit as unused.
+ */
 #define AST_FORMAT_RESERVED   (1ULL << 63)
 
 enum ast_control_frame_type {
@@ -323,6 +334,28 @@ enum ast_control_frame_type {
 	AST_CONTROL_CONNECTED_LINE = 22,/*!< Indicate connected line has changed */
 	AST_CONTROL_REDIRECTING = 23,    /*!< Indicate redirecting id has changed */
 	AST_CONTROL_T38_PARAMETERS = 24, /*! T38 state change request/notification with parameters */
+	AST_CONTROL_CC = 25, /*!< Indication that Call completion service is possible */
+	AST_CONTROL_SRCCHANGE = 26,  /*!< Media source has changed and requires a new RTP SSRC */
+	AST_CONTROL_READ_ACTION = 27, /*!< Tell ast_read to take a specific action */
+	AST_CONTROL_AOC = 28,           /*!< Advice of Charge with encoded generic AOC payload */
+	AST_CONTROL_END_OF_Q = 29,		/*!< Indicate that this position was the end of the channel queue for a softhangup. */
+};
+
+enum ast_frame_read_action {
+	AST_FRAME_READ_ACTION_CONNECTED_LINE_MACRO,
+};
+
+struct ast_control_read_action_payload {
+	/* An indicator to ast_read of what action to
+	 * take with the frame;
+	 */
+	enum ast_frame_read_action action;
+	/* The size of the frame's payload
+	 */
+	size_t payload_size;
+	/* A payload for the frame.
+	 */
+	unsigned char payload[0];
 };
 
 enum ast_control_t38 {
@@ -330,7 +363,8 @@ enum ast_control_t38 {
 	AST_T38_REQUEST_TERMINATE,	/*!< Terminate T38 on a channel (fax to voice) */
 	AST_T38_NEGOTIATED,		/*!< T38 negotiated (fax mode) */
 	AST_T38_TERMINATED,		/*!< T38 terminated (back to voice) */
-	AST_T38_REFUSED			/*!< T38 refused for some reason (usually rejected by remote end) */
+	AST_T38_REFUSED,		/*!< T38 refused for some reason (usually rejected by remote end) */
+	AST_T38_REQUEST_PARMS,		/*!< request far end T.38 parameters for a channel in 'negotiating' state */
 };
 
 enum ast_control_t38_rate {
@@ -409,6 +443,13 @@ enum ast_control_transfer {
 /*! Explicitly enable or disable echo cancelation for the given channel */
 #define	AST_OPTION_ECHOCAN		8
 
+/*! \brief Handle channel write data
+ * If a channel needs to process the data from a func_channel write operation
+ * after func_channel_write executes, it can define the setoption callback
+ * and process this option. A pointer to an ast_chan_write_info_t will be passed.
+ * */
+#define AST_OPTION_CHANNEL_WRITE 9
+
 /* !
  * Read-only. Allows query current status of T38 on the channel.
  * data: ast_t38state
@@ -429,6 +470,16 @@ enum ast_control_transfer {
 
 /*! Get or set the fax tone detection state of the channel */
 #define AST_OPTION_FAX_DETECT		15
+
+/*! Get the device name from the channel */
+#define AST_OPTION_DEVICE_NAME		16
+
+/*! Get the CC agent type from the channel */
+#define AST_OPTION_CC_AGENT_TYPE    17
+
+/*! Get or set the security options on a channel */
+#define AST_OPTION_SECURE_SIGNALING        18
+#define AST_OPTION_SECURE_MEDIA            19
 
 struct oprmode {
 	struct ast_channel *peer;
@@ -663,7 +714,15 @@ int ast_parse_allow_disallow(struct ast_codec_pref *pref, format_t *mask, const 
 /*! \brief Dump audio codec preference list into a string */
 int ast_codec_pref_string(struct ast_codec_pref *pref, char *buf, size_t size);
 
-/*! \brief Shift an audio codec preference list up or down 65 bytes so that it becomes an ASCII string */
+/*! \brief Shift an audio codec preference list up or down 65 bytes so that it becomes an ASCII string
+ * \note Due to a misunderstanding in how codec preferences are stored, this
+ * list starts at 'B', not 'A'.  For backwards compatibility reasons, this
+ * cannot change.
+ * \param pref A codec preference list structure
+ * \param buf A string denoting codec preference, appropriate for use in line transmission
+ * \param size Size of \a buf
+ * \param right Boolean:  if 0, convert from \a buf to \a pref; if 1, convert from \a pref to \a buf.
+ */
 void ast_codec_pref_convert(struct ast_codec_pref *pref, char *buf, size_t size, int right);
 
 /*! \brief Returns the number of samples contained in the frame */
@@ -710,13 +769,21 @@ static force_inline int ast_format_rate(format_t format)
 	case AST_FORMAT_G722:
 	case AST_FORMAT_SLINEAR16:
 	case AST_FORMAT_SIREN7:
+	case AST_FORMAT_SPEEX16:
 		return 16000;
 	case AST_FORMAT_SIREN14:
 		return 32000;
+	case AST_FORMAT_G719:
+		return 48000;
 	default:
 		return 8000;
 	}
 }
+
+/*!
+ * \brief Clear all audio samples from an ast_frame. The frame must be AST_FRAME_VOICE and AST_FORMAT_SLINEAR 
+ */
+int ast_frame_clear(struct ast_frame *frame);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

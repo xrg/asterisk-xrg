@@ -122,6 +122,7 @@ static const char * const cel_event_types[CEL_MAX_EVENT_IDS] = {
  * \brief Map of ast_cel_ama_flags to strings
  */
 static const char * const cel_ama_flags[AST_CEL_AMA_FLAG_TOTAL] = {
+	[AST_CEL_AMA_FLAG_NONE]          = "NONE",
 	[AST_CEL_AMA_FLAG_OMIT]          = "OMIT",
 	[AST_CEL_AMA_FLAG_BILLING]       = "BILLING",
 	[AST_CEL_AMA_FLAG_DOCUMENTATION] = "DOCUMENTATION",
@@ -349,6 +350,11 @@ const char *ast_cel_get_type_name(enum ast_cel_event_type type)
 
 const char *ast_cel_get_ama_flag_name(enum ast_cel_ama_flag flag)
 {
+	if (flag < 0 || flag >= ARRAY_LEN(cel_ama_flags)) {
+		ast_log(LOG_WARNING, "Invalid AMA flag: %d\n", flag);
+		return "Unknown";
+	}
+
 	return S_OR(cel_ama_flags[flag], "Unknown");
 }
 
@@ -421,7 +427,7 @@ struct ast_channel *ast_cel_fabricate_channel_from_event(const struct ast_event 
 	}
 
 	if (ast_strlen_zero(cel_dateformat)) {
-		snprintf(timebuf, sizeof(timebuf), "%ld.%06ld", record.event_time.tv_sec,
+		snprintf(timebuf, sizeof(timebuf), "%ld.%06ld", (long) record.event_time.tv_sec,
 				(long) record.event_time.tv_usec);
 	} else {
 		struct ast_tm tm;
@@ -437,11 +443,15 @@ struct ast_channel *ast_cel_fabricate_channel_from_event(const struct ast_event 
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
 	}
 
-	tchan->cid.cid_name = ast_strdup(record.caller_id_name);
-	tchan->cid.cid_num = ast_strdup(record.caller_id_num);
-	tchan->cid.cid_ani = ast_strdup(record.caller_id_ani);
-	tchan->cid.cid_rdnis = ast_strdup(record.caller_id_rdnis);
-	tchan->cid.cid_dnid = ast_strdup(record.caller_id_dnid);
+	tchan->caller.id.name.valid = 1;
+	tchan->caller.id.name.str = ast_strdup(record.caller_id_name);
+	tchan->caller.id.number.valid = 1;
+	tchan->caller.id.number.str = ast_strdup(record.caller_id_num);
+	tchan->caller.ani.number.valid = 1;
+	tchan->caller.ani.number.str = ast_strdup(record.caller_id_ani);
+	tchan->redirecting.from.number.valid = 1;
+	tchan->redirecting.from.number.str = ast_strdup(record.caller_id_rdnis);
+	tchan->dialed.number.str = ast_strdup(record.caller_id_dnid);
 
 	ast_copy_string(tchan->exten, record.extension, sizeof(tchan->exten));
 	ast_copy_string(tchan->context, record.context, sizeof(tchan->context));
@@ -526,29 +536,34 @@ int ast_cel_report_event(struct ast_channel *chan, enum ast_cel_event_type event
 	ast_channel_lock(chan);
 
 	ev = ast_event_new(AST_EVENT_CEL,
-			AST_EVENT_IE_CEL_EVENT_TYPE, AST_EVENT_IE_PLTYPE_UINT, event_type,
-			AST_EVENT_IE_CEL_EVENT_TIME, AST_EVENT_IE_PLTYPE_UINT, eventtime.tv_sec,
-			AST_EVENT_IE_CEL_EVENT_TIME_USEC, AST_EVENT_IE_PLTYPE_UINT, eventtime.tv_usec,
-			AST_EVENT_IE_CEL_USEREVENT_NAME, AST_EVENT_IE_PLTYPE_STR, userdefevname,
-			AST_EVENT_IE_CEL_CIDNAME, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->cid.cid_name, ""),
-			AST_EVENT_IE_CEL_CIDNUM, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->cid.cid_num, ""),
-			AST_EVENT_IE_CEL_CIDANI, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->cid.cid_ani, ""),
-			AST_EVENT_IE_CEL_CIDRDNIS, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->cid.cid_rdnis, ""),
-			AST_EVENT_IE_CEL_CIDDNID, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->cid.cid_dnid, ""),
-			AST_EVENT_IE_CEL_EXTEN, AST_EVENT_IE_PLTYPE_STR, chan->exten,
-			AST_EVENT_IE_CEL_CONTEXT, AST_EVENT_IE_PLTYPE_STR, chan->context,
-			AST_EVENT_IE_CEL_CHANNAME, AST_EVENT_IE_PLTYPE_STR, chan->name,
-			AST_EVENT_IE_CEL_APPNAME, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->appl, ""),
-			AST_EVENT_IE_CEL_APPDATA, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->data, ""),
-			AST_EVENT_IE_CEL_AMAFLAGS, AST_EVENT_IE_PLTYPE_UINT, chan->amaflags,
-			AST_EVENT_IE_CEL_ACCTCODE, AST_EVENT_IE_PLTYPE_STR, chan->accountcode,
-			AST_EVENT_IE_CEL_PEERACCT, AST_EVENT_IE_PLTYPE_STR, chan->peeraccount,
-			AST_EVENT_IE_CEL_UNIQUEID, AST_EVENT_IE_PLTYPE_STR, chan->uniqueid,
-			AST_EVENT_IE_CEL_LINKEDID, AST_EVENT_IE_PLTYPE_STR, chan->linkedid,
-			AST_EVENT_IE_CEL_USERFIELD, AST_EVENT_IE_PLTYPE_STR, chan->userfield,
-			AST_EVENT_IE_CEL_EXTRA, AST_EVENT_IE_PLTYPE_STR, extra,
-			AST_EVENT_IE_CEL_PEER, AST_EVENT_IE_PLTYPE_STR, peername,
-			AST_EVENT_IE_END);
+		AST_EVENT_IE_CEL_EVENT_TYPE, AST_EVENT_IE_PLTYPE_UINT, event_type,
+		AST_EVENT_IE_CEL_EVENT_TIME, AST_EVENT_IE_PLTYPE_UINT, eventtime.tv_sec,
+		AST_EVENT_IE_CEL_EVENT_TIME_USEC, AST_EVENT_IE_PLTYPE_UINT, eventtime.tv_usec,
+		AST_EVENT_IE_CEL_USEREVENT_NAME, AST_EVENT_IE_PLTYPE_STR, userdefevname,
+		AST_EVENT_IE_CEL_CIDNAME, AST_EVENT_IE_PLTYPE_STR,
+			S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, ""),
+		AST_EVENT_IE_CEL_CIDNUM, AST_EVENT_IE_PLTYPE_STR,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
+		AST_EVENT_IE_CEL_CIDANI, AST_EVENT_IE_PLTYPE_STR,
+			S_COR(chan->caller.ani.number.valid, chan->caller.ani.number.str, ""),
+		AST_EVENT_IE_CEL_CIDRDNIS, AST_EVENT_IE_PLTYPE_STR,
+			S_COR(chan->redirecting.from.number.valid, chan->redirecting.from.number.str, ""),
+		AST_EVENT_IE_CEL_CIDDNID, AST_EVENT_IE_PLTYPE_STR,
+			S_OR(chan->dialed.number.str, ""),
+		AST_EVENT_IE_CEL_EXTEN, AST_EVENT_IE_PLTYPE_STR, chan->exten,
+		AST_EVENT_IE_CEL_CONTEXT, AST_EVENT_IE_PLTYPE_STR, chan->context,
+		AST_EVENT_IE_CEL_CHANNAME, AST_EVENT_IE_PLTYPE_STR, chan->name,
+		AST_EVENT_IE_CEL_APPNAME, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->appl, ""),
+		AST_EVENT_IE_CEL_APPDATA, AST_EVENT_IE_PLTYPE_STR, S_OR(chan->data, ""),
+		AST_EVENT_IE_CEL_AMAFLAGS, AST_EVENT_IE_PLTYPE_UINT, chan->amaflags,
+		AST_EVENT_IE_CEL_ACCTCODE, AST_EVENT_IE_PLTYPE_STR, chan->accountcode,
+		AST_EVENT_IE_CEL_PEERACCT, AST_EVENT_IE_PLTYPE_STR, chan->peeraccount,
+		AST_EVENT_IE_CEL_UNIQUEID, AST_EVENT_IE_PLTYPE_STR, chan->uniqueid,
+		AST_EVENT_IE_CEL_LINKEDID, AST_EVENT_IE_PLTYPE_STR, chan->linkedid,
+		AST_EVENT_IE_CEL_USERFIELD, AST_EVENT_IE_PLTYPE_STR, chan->userfield,
+		AST_EVENT_IE_CEL_EXTRA, AST_EVENT_IE_PLTYPE_STR, extra,
+		AST_EVENT_IE_CEL_PEER, AST_EVENT_IE_PLTYPE_STR, peername,
+		AST_EVENT_IE_END);
 
 	ast_channel_unlock(chan);
 

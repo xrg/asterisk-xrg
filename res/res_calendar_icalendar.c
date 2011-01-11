@@ -17,7 +17,7 @@
  */
 
 /*! \file
- * \brief Resource for handling iCalnedar calendars
+ * \brief Resource for handling iCalendar calendars
  */
 
 /*** MODULEINFO
@@ -29,10 +29,11 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <libical/ical.h>
-#include <neon/ne_session.h>
-#include <neon/ne_uri.h>
-#include <neon/ne_request.h>
-#include <neon/ne_auth.h>
+#include <ne_session.h>
+#include <ne_uri.h>
+#include <ne_request.h>
+#include <ne_auth.h>
+#include <ne_redirect.h>
 
 #include "asterisk/module.h"
 #include "asterisk/calendar.h"
@@ -141,6 +142,7 @@ static icalcomponent *fetch_icalendar(struct icalendar_pvt *pvt)
 	ne_add_response_body_reader(req, ne_accept_2xx, fetch_response_reader, &response);
 
 	ret = ne_request_dispatch(req);
+	ne_request_destroy(req);
 	if (ret != NE_OK || !ast_str_strlen(response)) {
 		ast_log(LOG_WARNING, "Unable to retrieve iCalendar '%s' from '%s': %s\n", pvt->owner->name, pvt->url, ne_get_error(pvt->session));
 		ast_free(response);
@@ -222,6 +224,14 @@ static void icalendar_add_event(icalcomponent *comp, struct icaltime_span *span,
 
 	if ((prop = icalcomponent_get_first_property(comp, ICAL_LOCATION_PROPERTY))) {
 		ast_string_field_set(event, location, icalproperty_get_value_as_string(prop));
+	}
+
+	if ((prop = icalcomponent_get_first_property(comp, ICAL_CATEGORIES_PROPERTY))) {
+		ast_string_field_set(event, categories, icalproperty_get_value_as_string(prop));
+	}
+
+	if ((prop = icalcomponent_get_first_property(comp, ICAL_PRIORITY_PROPERTY))) {
+		event->priority = icalvalue_get_integer(icalproperty_get_value(prop));
 	}
 
 	if ((prop = icalcomponent_get_first_property(comp, ICAL_UID_PROPERTY))) {
@@ -412,6 +422,7 @@ static void *ical_load_calendar(void *void_data)
 	}
 
 	pvt->session = ne_session_create(pvt->uri.scheme, pvt->uri.host, pvt->uri.port);
+	ne_redirect_register(pvt->session);
 	ne_set_server_auth(pvt->session, auth_credentials, pvt);
 	if (!strcasecmp(pvt->uri.scheme, "https")) {
 		ne_ssl_trust_default_ca(pvt->session);
@@ -481,7 +492,8 @@ static int unload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk iCalendar .ics file integration",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Asterisk iCalendar .ics file integration",
 		.load = load_module,
 		.unload = unload_module,
+		.load_pri = AST_MODPRI_DEVSTATE_PLUGIN,
 	);

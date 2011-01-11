@@ -25,8 +25,7 @@
  */
 
 /*** MODULEINFO
-	<depend>generic_odbc</depend>
-	<depend>ltdl</depend>
+	<depend>res_odbc</depend>
  ***/
 
 #include "asterisk.h"
@@ -66,6 +65,7 @@ struct columns {
 	SQLSMALLINT nullable;
 	SQLINTEGER octetlen;
 	AST_LIST_ENTRY(columns) list;
+	unsigned int negatefiltervalue:1;
 };
 
 struct tables {
@@ -164,9 +164,16 @@ static int load_config(void)
 		/* Check for filters first */
 		for (var = ast_variable_browse(cfg, catg); var; var = var->next) {
 			if (strncmp(var->name, "filter", 6) == 0) {
+				int negate = 0;
 				char *cdrvar = ast_strdupa(var->name + 6);
 				cdrvar = ast_strip(cdrvar);
-				ast_verb(3, "Found filter %s for cdr variable %s in %s@%s\n", var->value, cdrvar, tableptr->table, tableptr->connection);
+				if (cdrvar[strlen(cdrvar) - 1] == '!') {
+					negate = 1;
+					cdrvar[strlen(cdrvar) - 1] = '\0';
+					ast_trim_blanks(cdrvar);
+				}
+
+				ast_verb(3, "Found filter %s'%s' for cdr variable %s in %s@%s\n", negate ? "!" : "", var->value, cdrvar, tableptr->table, tableptr->connection);
 
 				entry = ast_calloc(sizeof(char), sizeof(*entry) + strlen(cdrvar) + 1 + strlen(var->value) + 1);
 				if (!entry) {
@@ -181,6 +188,7 @@ static int load_config(void)
 				entry->filtervalue = (char *)entry + sizeof(*entry) + strlen(cdrvar) + 1;
 				strcpy(entry->cdrname, cdrvar);
 				strcpy(entry->filtervalue, var->value);
+				entry->negatefiltervalue = negate;
 
 				AST_LIST_INSERT_TAIL(&(tableptr->columns), entry, list);
 			}
@@ -404,10 +412,11 @@ static int odbc_log(struct ast_cdr *cdr)
 				 * is very specifically NOT ast_strlen_zero(), because the filter
 				 * could legitimately specify that the field is blank, which is
 				 * different from the field being unspecified (NULL). */
-				if (entry->filtervalue && strcasecmp(colptr, entry->filtervalue) != 0) {
+				if ((entry->filtervalue && !entry->negatefiltervalue && strcasecmp(colptr, entry->filtervalue) != 0) ||
+					(entry->filtervalue && entry->negatefiltervalue && strcasecmp(colptr, entry->filtervalue) == 0)) {
 					ast_verb(4, "CDR column '%s' with value '%s' does not match filter of"
-						" '%s'.  Cancelling this CDR.\n",
-						entry->cdrname, colptr, entry->filtervalue);
+						" %s'%s'.  Cancelling this CDR.\n",
+						entry->cdrname, colptr, entry->negatefiltervalue ? "!" : "", entry->filtervalue);
 					goto early_release;
 				}
 
@@ -611,6 +620,23 @@ static int odbc_log(struct ast_cdr *cdr)
 						continue;
 					} else {
 						double number = 0.0;
+
+						if (!strcasecmp(entry->cdrname, "billsec")) {
+							if (!ast_tvzero(cdr->answer)) {
+								snprintf(colbuf, sizeof(colbuf), "%lf",
+											(double) (ast_tvdiff_us(cdr->end, cdr->answer) / 1000000.0));
+							} else {
+								ast_copy_string(colbuf, "0", sizeof(colbuf));
+							}
+						} else if (!strcasecmp(entry->cdrname, "duration")) {
+							snprintf(colbuf, sizeof(colbuf), "%lf",
+										(double) (ast_tvdiff_us(cdr->end, cdr->start) / 1000000.0));
+
+							if (!ast_strlen_zero(colbuf)) {
+								colptr = colbuf;
+							}
+						}
+
 						if (sscanf(colptr, "%30lf", &number) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an numeric type.\n", entry->name);
 							continue;
@@ -628,6 +654,23 @@ static int odbc_log(struct ast_cdr *cdr)
 						continue;
 					} else {
 						double number = 0.0;
+
+						if (!strcasecmp(entry->cdrname, "billsec")) {
+							if (!ast_tvzero(cdr->answer)) {
+								snprintf(colbuf, sizeof(colbuf), "%lf",
+											(double) (ast_tvdiff_us(cdr->end, cdr->answer) / 1000000.0));
+							} else {
+								ast_copy_string(colbuf, "0", sizeof(colbuf));
+							}
+						} else if (!strcasecmp(entry->cdrname, "duration")) {
+							snprintf(colbuf, sizeof(colbuf), "%lf",
+										(double) (ast_tvdiff_us(cdr->end, cdr->start) / 1000000.0));
+
+							if (!ast_strlen_zero(colbuf)) {
+								colptr = colbuf;
+							}
+						}
+
 						if (sscanf(colptr, "%30lf", &number) != 1) {
 							ast_log(LOG_WARNING, "CDR variable %s is not an numeric type.\n", entry->name);
 							continue;
@@ -720,9 +763,10 @@ static int reload(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Adaptive ODBC CDR backend",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Adaptive ODBC CDR backend",
 	.load = load_module,
 	.unload = unload_module,
 	.reload = reload,
+	.load_pri = AST_MODPRI_CDR_DRIVER,
 );
 

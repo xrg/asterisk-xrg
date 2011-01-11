@@ -3,7 +3,7 @@
 # 
 # Makefile rules
 #
-# Copyright (C) 2006-2008, Digium, Inc.
+# Copyright (C) 2006-2010, Digium, Inc.
 #
 # Kevin P. Fleming <kpfleming@digium.com>
 #
@@ -43,10 +43,19 @@ ifneq ($(findstring darwin,$(OSARCH)),)
   endif
 endif
 
-ifeq ($(findstring DONT_OPTIMIZE,$(MENUSELECT_CFLAGS)),)
+ifeq ($(findstring DONT_OPTIMIZE,$(MENUSELECT_CFLAGS))$(AST_CODE_COVERAGE),no)
     _ASTCFLAGS+=$(OPTIMIZE)
 else
     _ASTCFLAGS+=-O0
+endif
+
+ifeq ($(AST_CODE_COVERAGE),yes)
+    _ASTCFLAGS+=-ftest-coverage -fprofile-arcs
+    _ASTLDFLAGS+=-ftest-coverage -fprofile-arcs
+endif
+
+ifeq ($(findstring $(CONFIG_CFLAGS),$(_ASTCFLAGS)),)
+    _ASTCFLAGS+=$(CONFIG_CFLAGS)
 endif
 
 # shortcuts for common combinations of flags; these must be recursively expanded so that
@@ -56,7 +65,7 @@ CXX_CFLAGS=$(PTHREAD_CFLAGS) $(filter-out -Wstrict-prototypes -Wmissing-prototyp
 BAD_SO_WORDS := -Wl,--no-undefined --no-undefined
 
 ifeq ($(GNU_LD),1)
-SO_SUPPRESS_SYMBOLS=-Wl,--version-script,$(if $(wildcard $(subst .so,.exports,$@)),$(subst .so,.exports,$@),$(ASTTOPDIR)/default.exports),--warn-common
+SO_SUPPRESS_SYMBOLS=-Wl,--version-script,$(subst .so,.exports,$@),--warn-common
 ifneq ($(wildcard $(subst .so,.dynamics,$@)),)
 SO_SUPPRESS_SYMBOLS+=-Wl,--dynamic-list,$(subst .so,.dynamics,$@)
 endif
@@ -118,10 +127,16 @@ endif
 	$(CMD_PREFIX) $(CXX) -o $@ -E $< $(MAKE_DEPS) $(CXX_CFLAGS)
 
 %.so: %.o
+ifeq ($(GNU_LD),1)
+	$(CMD_PREFIX) $(ASTTOPDIR)/build_tools/make_linker_version_script $* "$(LINKER_SYMBOL_PREFIX)" "$(ASTTOPDIR)"
+endif
 	$(ECHO_PREFIX) echo "   [LD] $^ -> $@"
 	$(CMD_PREFIX) $(CC) $(STATIC_BUILD) -o $@ $(CC_LDFLAGS_SO) $^ $(CC_LIBS)
 
 %.so: %.oo
+ifeq ($(GNU_LD),1)
+	$(CMD_PREFIX) $(ASTTOPDIR)/build_tools/make_linker_version_script $* "$(LINKER_SYMBOL_PREFIX)" "$(ASTTOPDIR)"
+endif
 	$(ECHO_PREFIX) echo "   [LDXX] $^ -> $@"
 	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(CXX_LDFLAGS_SO) $^ $(CXX_LIBS)
 

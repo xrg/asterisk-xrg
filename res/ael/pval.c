@@ -57,6 +57,7 @@ extern int localized_pbx_load_module(void);
 
 static char expr_output[2096];
 #define AST_PBX_MAX_STACK  128
+#define BUF_SIZE 2000
 
 /* these functions are in ../ast_expr2.fl */
 
@@ -2506,7 +2507,6 @@ void check_pval_item(pval *item, struct argapp *apps, int in_globals)
 			|| strcasecmp(item->u1.str,"endwhile") == 0
 			|| strcasecmp(item->u1.str,"random") == 0
 			|| strcasecmp(item->u1.str,"gosub") == 0
-			|| strcasecmp(item->u1.str,"return") == 0
 			|| strcasecmp(item->u1.str,"gosubif") == 0
 			|| strcasecmp(item->u1.str,"continuewhile") == 0
 			|| strcasecmp(item->u1.str,"endwhile") == 0
@@ -3335,7 +3335,7 @@ int contains_switch(pval *item)
 }
 
 
-static void gen_prios(struct ael_extension *exten, char *label, pval *statement, struct ael_extension *mother_exten, struct ast_context *this_context )
+static int gen_prios(struct ael_extension *exten, char *label, pval *statement, struct ael_extension *mother_exten, struct ast_context *this_context )
 {
 	pval *p,*p2,*p3;
 	struct ael_priority *pr;
@@ -3346,16 +3346,26 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 #ifdef OLD_RAND_ACTION
 	struct ael_priority *rand_test, *rand_end, *rand_skip;
 #endif
-	char buf1[2000];
-	char buf2[2000];
+	char *buf1;
+	char *buf2;
+	char *new_label;
 	char *strp, *strp2;
-	char new_label[2000];
 	int default_exists;
 	int local_control_statement_count;
 	int first;
 	struct ael_priority *loop_break_save;
 	struct ael_priority *loop_continue_save;
 	struct ael_extension *switch_case,*switch_null;
+
+	if (!(buf1 = malloc(BUF_SIZE))) {
+		return -1;
+	}
+	if (!(buf2 = malloc(BUF_SIZE))) {
+		return -1;
+	}
+	if (!(new_label = malloc(BUF_SIZE))) {
+		return -1;
+	}
 	
 	if ((mother_exten && !mother_exten->checked_switch) || (exten && !exten->checked_switch)) {
 		if (contains_switch(statement)) { /* only run contains_switch if you haven't checked before */
@@ -3370,7 +3380,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							switch_set->app = strdup("Set");
 						}
 						/* Are we likely inside a gosub subroutine? */
-						if (!strcmp(mother_exten->name, "s") && first) {
+						if (!strcmp(mother_exten->name, "~~s~~") && first) {
 							/* If we're not actually within a gosub, this will fail, but the
 							 * second time through, it will get set.  If we are within gosub,
 							 * the second time through is redundant, but acceptable. */
@@ -3399,7 +3409,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							switch_set->app = strdup("Set");
 						}
 						/* Are we likely inside a gosub subroutine? */
-						if (!strcmp(exten->name, "s")) {
+						if (!strcmp(exten->name, "~~s~~")) {
 							/* If we're not actually within a gosub, this will fail, but the
 							 * second time through, it will get set.  If we are within gosub,
 							 * the second time through is redundant, but acceptable. */
@@ -3432,7 +3442,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 		case PV_VARDEC:
 			pr = new_prio();
 			pr->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"%s=$[%s]", p->u1.str, p->u2.val);
+			snprintf(buf1, BUF_SIZE, "%s=$[%s]", p->u1.str, p->u2.val);
 			if (!ast_compat_app_set) {
 				pr->app = strdup("MSet");
 			} else {
@@ -3447,7 +3457,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 		case PV_LOCALVARDEC:
 			pr = new_prio();
 			pr->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"LOCAL(%s)=$[%s]", p->u1.str, p->u2.val);
+			snprintf(buf1, BUF_SIZE, "LOCAL(%s)=$[%s]", p->u1.str, p->u2.val);
 			if (!ast_compat_app_set) {
 				pr->app = strdup("MSet");
 			} else {
@@ -3472,16 +3482,16 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 				if (!mother_exten)
 					pr->appargs = strdup(p->u1.list->u1.str);
 				else {  /* for the case of simple within-extension gotos in case/pattern/default statement blocks: */ 
-					snprintf(buf1,sizeof(buf1),"%s,%s", mother_exten->name, p->u1.list->u1.str);
+					snprintf(buf1, BUF_SIZE, "%s,%s", mother_exten->name, p->u1.list->u1.str);
 					pr->appargs = strdup(buf1);
 				}
 				
 			} else if (p->u1.list->next && !p->u1.list->next->next) /* two */ {
-				snprintf(buf1,sizeof(buf1),"%s,%s", p->u1.list->u1.str, p->u1.list->next->u1.str);
+				snprintf(buf1, BUF_SIZE, "%s,%s", p->u1.list->u1.str, p->u1.list->next->u1.str);
 				pr->app = strdup("Goto");
 				pr->appargs = strdup(buf1);
 			} else if (p->u1.list->next && p->u1.list->next->next) {
-				snprintf(buf1,sizeof(buf1),"%s,%s,%s", p->u1.list->u1.str, 
+				snprintf(buf1, BUF_SIZE, "%s,%s,%s", p->u1.list->u1.str, 
 						p->u1.list->next->u1.str,
 						p->u1.list->next->next->u1.str);
 				pr->app = strdup("Goto");
@@ -3503,7 +3513,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			control_statement_count++;
 			loop_break_save = exten->loop_break; /* save them, then restore before leaving */
 			loop_continue_save = exten->loop_continue;
-			snprintf(new_label,sizeof(new_label),"for-%s-%d", label, control_statement_count);
+			snprintf(new_label, BUF_SIZE, "for_%s_%d", label, control_statement_count);
 			for_init = new_prio();
 			for_inc = new_prio();
 			for_test = new_prio();
@@ -3528,7 +3538,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 				strp2 = strchr(p->u1.for_init, '=');
 				*(strp+1) = 0;
 				strcat(buf2,"$[");
-				strncat(buf2,strp2+1, sizeof(buf2)-strlen(strp2+1)-2);
+				strncat(buf2,strp2+1, BUF_SIZE-strlen(strp2+1)-2);
 				strcat(buf2,"]");
 				for_init->appargs = strdup(buf2);
 			} else {
@@ -3577,7 +3587,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 				strp2 = strchr(p->u3.for_inc, '=');
 				*(strp+1) = 0;
 				strcat(buf2,"$[");
-				strncat(buf2,strp2+1, sizeof(buf2)-strlen(strp2+1)-2);
+				strncat(buf2,strp2+1, BUF_SIZE-strlen(strp2+1)-2);
 				strcat(buf2,"]");
 				for_inc->appargs = strdup(buf2);
 				if (!ast_compat_app_set) {
@@ -3619,11 +3629,11 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					}
 				}
 			}
-			snprintf(buf1,sizeof(buf1),"$[%s]",p->u2.for_test);
+			snprintf(buf1, BUF_SIZE, "$[%s]",p->u2.for_test);
 			for_test->app = 0;
 			for_test->appargs = strdup(buf1);
 			for_loop->goto_true = for_test;
-			snprintf(buf1,sizeof(buf1),"Finish for-%s-%d", label, control_statement_count);
+			snprintf(buf1, BUF_SIZE, "Finish for_%s_%d", label, control_statement_count);
 			for_end->app = strdup("NoOp");
 			for_end->appargs = strdup(buf1);
 			/* link & load! */
@@ -3634,7 +3644,9 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			exten->loop_break = for_end;
 			exten->loop_continue = for_inc;
 			
-			gen_prios(exten, new_label, p->u4.for_statements, mother_exten, this_context); /* this will link in all the statements here */
+			if (gen_prios(exten, new_label, p->u4.for_statements, mother_exten, this_context)) { /* this will link in all the statements here */
+				return -1;
+			}
 			
 			linkprio(exten, for_inc, mother_exten);
 			linkprio(exten, for_loop, mother_exten);
@@ -3650,7 +3662,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			control_statement_count++;
 			loop_break_save = exten->loop_break; /* save them, then restore before leaving */
 			loop_continue_save = exten->loop_continue;
-			snprintf(new_label,sizeof(new_label),"while-%s-%d", label, control_statement_count);
+			snprintf(new_label, BUF_SIZE, "while_%s_%d", label, control_statement_count);
 			while_test = new_prio();
 			while_loop = new_prio();
 			while_end = new_prio();
@@ -3658,11 +3670,11 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			while_test->goto_false = while_end;
 			while_loop->type = AEL_CONTROL1; /* simple goto */
 			while_end->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"$[%s]",p->u1.str);
+			snprintf(buf1, BUF_SIZE, "$[%s]",p->u1.str);
 			while_test->app = 0;
 			while_test->appargs = strdup(buf1);
 			while_loop->goto_true = while_test;
-			snprintf(buf1,sizeof(buf1),"Finish while-%s-%d", label, control_statement_count);
+			snprintf(buf1, BUF_SIZE, "Finish while_%s_%d", label, control_statement_count);
 			while_end->app = strdup("NoOp");
 			while_end->appargs = strdup(buf1);
 
@@ -3672,7 +3684,9 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			exten->loop_break = while_end;
 			exten->loop_continue = while_test;
 			
-			gen_prios(exten, new_label, p->u2.statements, mother_exten, this_context); /* this will link in all the while body statements here */
+			if (gen_prios(exten, new_label, p->u2.statements, mother_exten, this_context)) { /* this will link in all the while body statements here */
+				return -1;
+			}
 
 			linkprio(exten, while_loop, mother_exten);
 			linkprio(exten, while_end, mother_exten);
@@ -3688,15 +3702,15 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			local_control_statement_count = control_statement_count;
 			loop_break_save = exten->loop_break; /* save them, then restore before leaving */
 			loop_continue_save = exten->loop_continue;
-			snprintf(new_label,sizeof(new_label),"sw-%s-%d", label, control_statement_count);
+			snprintf(new_label, BUF_SIZE, "sw_%s_%d", label, control_statement_count);
 			switch_test = new_prio();
 			switch_end = new_prio();
 			switch_test->type = AEL_APPCALL;
 			switch_end->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"sw-%d-%s,10",control_statement_count, p->u1.str);
+			snprintf(buf1, BUF_SIZE, "sw_%d_%s,10", control_statement_count, p->u1.str);
 			switch_test->app = strdup("Goto");
 			switch_test->appargs = strdup(buf1);
-			snprintf(buf1,sizeof(buf1),"Finish switch-%s-%d", label, control_statement_count);
+			snprintf(buf1, BUF_SIZE, "Finish switch_%s_%d", label, control_statement_count);
 			switch_end->app = strdup("NoOp");
 			switch_end->appargs = strdup(buf1);
 			switch_end->origin = p;
@@ -3729,11 +3743,13 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					switch_case->loop_continue = exten->loop_continue;
 					
 					linkexten(exten,switch_case);
-					snprintf(buf1,sizeof(buf1),"sw-%d-%s", local_control_statement_count, p2->u1.str);
+					snprintf(buf1, BUF_SIZE, "sw_%d_%s", local_control_statement_count, p2->u1.str);
 					switch_case->name = strdup(buf1);
-					snprintf(new_label,sizeof(new_label),"sw-%s-%s-%d", label, p2->u1.str, local_control_statement_count);
+					snprintf(new_label, BUF_SIZE, "sw_%s_%s_%d", label, p2->u1.str, local_control_statement_count);
 					
-					gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context); /* this will link in all the case body statements here */
+					if (gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context)) { /* this will link in all the case body statements here */
+						return -1;
+					}
 
 					/* here is where we write code to "fall thru" to the next case... if there is one... */
 					for (p3=p2->u2.statements; p3; p3=p3->next) {
@@ -3747,7 +3763,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s,10",local_control_statement_count, p2->next->u1.str);
+							snprintf(buf1, BUF_SIZE, "sw_%d_%s,10", local_control_statement_count, p2->next->u1.str);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3755,14 +3771,14 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s,10", local_control_statement_count, buf2);
+							snprintf(buf1, BUF_SIZE, "sw_%d_%s,10", local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-.,10",local_control_statement_count);
+							snprintf(buf1, BUF_SIZE, "sw_%d_.,10", local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (!p2->next) {
@@ -3778,7 +3794,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 						struct ael_priority *np2 = new_prio();
 						np2->type = AEL_APPCALL;
 						np2->app = strdup("NoOp");
-						snprintf(buf,sizeof(buf),"End of Extension %s", switch_case->name);
+						snprintf(buf, BUF_SIZE, "End of Extension %s", switch_case->name);
 						np2->appargs = strdup(buf);
 						linkprio(switch_case, np2, mother_exten);
 						switch_case-> return_target = np2;
@@ -3799,13 +3815,15 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					/* the break/continue locations are inherited from parent */
 					switch_case->loop_break = exten->loop_break;
 					switch_case->loop_continue = exten->loop_continue;
-					
+
 					linkexten(exten,switch_case);
-					snprintf(buf1,sizeof(buf1),"_sw-%d-%s", local_control_statement_count, p2->u1.str);
+					snprintf(buf1, BUF_SIZE, "_sw_%d_%s", local_control_statement_count, p2->u1.str);
 					switch_case->name = strdup(buf1);
-					snprintf(new_label,sizeof(new_label),"sw-%s-%s-%d", label, p2->u1.str, local_control_statement_count);
-					
-					gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context); /* this will link in all the while body statements here */
+					snprintf(new_label, BUF_SIZE, "sw_%s_%s_%d", label, p2->u1.str, local_control_statement_count);
+
+					if (gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context)) { /* this will link in all the while body statements here */
+						return -1;
+					}
 					/* here is where we write code to "fall thru" to the next case... if there is one... */
 					for (p3=p2->u2.statements; p3; p3=p3->next) {
 						if (!p3->next)
@@ -3818,7 +3836,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s,10",local_control_statement_count, p2->next->u1.str);
+							snprintf(buf1, BUF_SIZE, "sw_%d_%s,10", local_control_statement_count, p2->next->u1.str);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3826,14 +3844,14 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s,10",local_control_statement_count, buf2);
+							snprintf(buf1, BUF_SIZE, "sw_%d_%s,10", local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-.,10",local_control_statement_count);
+							snprintf(buf1, BUF_SIZE, "sw_%d_.,10", local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (!p2->next) {
@@ -3885,11 +3903,11 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					switch_null->context = this_context;
 					switch_null->is_switch = 1;
 					switch_empty = new_prio();
-					snprintf(buf1,sizeof(buf1),"sw-%d-.,10",local_control_statement_count);
+					snprintf(buf1, BUF_SIZE, "sw_%d_.,10", local_control_statement_count);
 					switch_empty->app = strdup("Goto");
 					switch_empty->appargs = strdup(buf1);
 					linkprio(switch_null, switch_empty, mother_exten);
-					snprintf(buf1,sizeof(buf1),"sw-%d-", local_control_statement_count);
+					snprintf(buf1, BUF_SIZE, "sw_%d_", local_control_statement_count);
 					switch_null->name = strdup(buf1);
 					switch_null->loop_break = exten->loop_break;
 					switch_null->loop_continue = exten->loop_continue;
@@ -3899,12 +3917,14 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 					switch_case->loop_break = exten->loop_break;
 					switch_case->loop_continue = exten->loop_continue;
 					linkexten(exten,switch_case);
-					snprintf(buf1,sizeof(buf1),"_sw-%d-.", local_control_statement_count);
+					snprintf(buf1, BUF_SIZE, "_sw_%d_.", local_control_statement_count);
 					switch_case->name = strdup(buf1);
 					
-					snprintf(new_label,sizeof(new_label),"sw-%s-default-%d", label, local_control_statement_count);
+					snprintf(new_label, BUF_SIZE, "sw_%s_default_%d", label, local_control_statement_count);
 					
-					gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context); /* this will link in all the default:  body statements here */
+					if (gen_prios(switch_case, new_label, p2->u2.statements, exten, this_context)) { /* this will link in all the default:  body statements here */
+						return -1;
+					}
 					
 					/* here is where we write code to "fall thru" to the next case... if there is one... */
 					for (p3=p2->u2.statements; p3; p3=p3->next) {
@@ -3918,7 +3938,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s,10",local_control_statement_count, p2->next->u1.str);
+							snprintf(buf1, BUF_SIZE, "sw_%d_%s,10", local_control_statement_count, p2->next->u1.str);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (p2->next && p2->next->type == PV_PATTERN) {
@@ -3926,14 +3946,14 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
 							gen_match_to_pattern(p2->next->u1.str, buf2);
-							snprintf(buf1,sizeof(buf1),"sw-%d-%s,10",local_control_statement_count, buf2);
+							snprintf(buf1, BUF_SIZE, "sw_%d_%s,10", local_control_statement_count, buf2);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (p2->next && p2->next->type == PV_DEFAULT) {
 							fall_thru = new_prio();
 							fall_thru->type = AEL_APPCALL;
 							fall_thru->app = strdup("Goto");
-							snprintf(buf1,sizeof(buf1),"sw-%d-.,10",local_control_statement_count);
+							snprintf(buf1, BUF_SIZE, "sw_%d_.,10", local_control_statement_count);
 							fall_thru->appargs = strdup(buf1);
 							linkprio(switch_case, fall_thru, mother_exten);
 						} else if (!p2->next) {
@@ -3968,7 +3988,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 		case PV_MACRO_CALL:
 			pr = new_prio();
 			pr->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"%s,s,1", p->u1.str);
+			snprintf(buf1, BUF_SIZE, "%s,~~s~~,1", p->u1.str);
 			first = 1;
 			for (p2 = p->u2.arglist; p2; p2 = p2->next) {
 				if (first)
@@ -4032,11 +4052,11 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 
 		case PV_IFTIME:
 			control_statement_count++;
-			snprintf(new_label,sizeof(new_label),"iftime-%s-%d", label, control_statement_count);
+			snprintf(new_label, BUF_SIZE, "iftime_%s_%d", label, control_statement_count);
 			
 			if_test = new_prio();
 			if_test->type = AEL_IFTIME_CONTROL;
-			snprintf(buf1,sizeof(buf1),"%s,%s,%s,%s",
+			snprintf(buf1, BUF_SIZE, "%s,%s,%s,%s",
 					 p->u1.list->u1.str, 
 					 p->u1.list->next->u1.str, 
 					 p->u1.list->next->next->u1.str, 
@@ -4047,7 +4067,7 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 
 			if_end = new_prio();
 			if_end->type = AEL_APPCALL;
-			snprintf(buf1,sizeof(buf1),"Finish iftime-%s-%d", label, control_statement_count);
+			snprintf(buf1, BUF_SIZE, "Finish iftime_%s_%d", label, control_statement_count);
 			if_end->app = strdup("NoOp");
 			if_end->appargs = strdup(buf1);
 
@@ -4077,12 +4097,15 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			
 			/* now, put the body of the if here */
 			
-			gen_prios(exten, new_label, p->u2.statements, mother_exten, this_context); /* this will link in all the statements here */
+			if (gen_prios(exten, new_label, p->u2.statements, mother_exten, this_context)) { /* this will link in all the statements here */
+				return -1;
+			}
 			
 			if (p->u3.else_statements) {
 				linkprio(exten, if_skip, mother_exten);
-				gen_prios(exten, new_label, p->u3.else_statements, mother_exten, this_context); /* this will link in all the statements here */
-
+				if (gen_prios(exten, new_label, p->u3.else_statements, mother_exten, this_context)) { /* this will link in all the statements here */
+					return -1;
+				}
 			}
 			
 			linkprio(exten, if_end, mother_exten);
@@ -4092,19 +4115,19 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 		case PV_RANDOM:
 		case PV_IF:
 			control_statement_count++;
-			snprintf(new_label,sizeof(new_label),"if-%s-%d", label, control_statement_count);
+			snprintf(new_label, BUF_SIZE, "if_%s_%d", label, control_statement_count);
 			
 			if_test = new_prio();
 			if_end = new_prio();
 			if_test->type = AEL_IF_CONTROL;
 			if_end->type = AEL_APPCALL;
 			if ( p->type == PV_RANDOM )
-				snprintf(buf1,sizeof(buf1),"$[${RAND(0,99)} < (%s)]",p->u1.str);
+				snprintf(buf1, BUF_SIZE, "$[${RAND(0,99)} < (%s)]", p->u1.str);
 			else
-				snprintf(buf1,sizeof(buf1),"$[%s]",p->u1.str);
+				snprintf(buf1, BUF_SIZE, "$[%s]", p->u1.str);
 			if_test->app = 0;
 			if_test->appargs = strdup(buf1);
-			snprintf(buf1,sizeof(buf1),"Finish if-%s-%d", label, control_statement_count);
+			snprintf(buf1, BUF_SIZE, "Finish if_%s_%d", label, control_statement_count);
 			if_end->app = strdup("NoOp");
 			if_end->appargs = strdup(buf1);
 			if_test->origin = p;
@@ -4124,12 +4147,15 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			
 			/* now, put the body of the if here */
 			
-			gen_prios(exten, new_label, p->u2.statements, mother_exten, this_context); /* this will link in all the statements here */
+			if (gen_prios(exten, new_label, p->u2.statements, mother_exten, this_context)) { /* this will link in all the statements here */
+				return -1;
+			}
 			
 			if (p->u3.else_statements) {
 				linkprio(exten, if_skip, mother_exten);
-				gen_prios(exten, new_label, p->u3.else_statements, mother_exten, this_context); /* this will link in all the statements here */
-
+				if (gen_prios(exten, new_label, p->u3.else_statements, mother_exten, this_context)) { /* this will link in all the statements here */
+					return -1;
+				}
 			}
 			
 			linkprio(exten, if_end, mother_exten);
@@ -4137,7 +4163,9 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			break;
 
 		case PV_STATEMENTBLOCK:
-			gen_prios(exten, label, p->u1.list, mother_exten, this_context ); /* recurse into the block */
+			if (gen_prios(exten, label, p->u1.list, mother_exten, this_context)) { /* recurse into the block */
+				return -1;
+			}
 			break;
 
 		case PV_CATCH:
@@ -4157,9 +4185,11 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			switch_case->context = this_context;
 			linkexten(exten,switch_case);
 			switch_case->name = strdup(p->u1.str);
-			snprintf(new_label,sizeof(new_label),"catch-%s-%d",p->u1.str, control_statement_count);
+			snprintf(new_label, BUF_SIZE, "catch_%s_%d",p->u1.str, control_statement_count);
 			
-			gen_prios(switch_case, new_label, p->u2.statements,mother_exten,this_context); /* this will link in all the catch body statements here */
+			if (gen_prios(switch_case, new_label, p->u2.statements, mother_exten,this_context)) { /* this will link in all the catch body statements here */
+				return -1;
+			}
 			if (switch_case->return_needed) { /* returns now generate a Return() app call, no longer a goto to the end of the exten */
 				char buf[2000];
 				struct ael_priority *np2 = new_prio();
@@ -4176,6 +4206,10 @@ static void gen_prios(struct ael_extension *exten, char *label, pval *statement,
 			break;
 		}
 	}
+	free(buf1);
+	free(buf2);
+	free(new_label);
+	return 0;
 }
 
 void set_priorities(struct ael_extension *exten)
@@ -4390,7 +4424,7 @@ static void fix_gotos_in_extensions(struct ael_extension *exten)
 }
 
 
-void ast_compile_ael2(struct ast_context **local_contexts, struct ast_hashtab *local_table, struct pval *root)
+int ast_compile_ael2(struct ast_context **local_contexts, struct ast_hashtab *local_table, struct pval *root)
 {
 	pval *p,*p2;
 	struct ast_context *context;
@@ -4425,7 +4459,7 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct ast_hashtab *l
 			
 			exten = new_exten();
 			exten->context = context;
-			exten->name = strdup("s");
+			exten->name = strdup("~~s~~");
 			argc = 1;
 			for (lp=p->u2.arglist; lp; lp=lp->next) {
 				/* for each arg, set up a "Set" command */
@@ -4443,7 +4477,9 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct ast_hashtab *l
 			}
 			
 			/* CONTAINS APPCALLS, CATCH, just like extensions... */
-			gen_prios(exten, p->u1.str, p->u3.macro_statements, 0, context );
+			if (gen_prios(exten, p->u1.str, p->u3.macro_statements, 0, context)) {
+				return -1;
+			}
 			if (exten->return_needed) {  /* most likely, this will go away */
 				struct ael_priority *np2 = new_prio();
 				np2->type = AEL_APPCALL;
@@ -4485,7 +4521,9 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct ast_hashtab *l
 					if ( p2->u3.hints )
 						exten->hints = strdup(p2->u3.hints);
 					exten->regexten = p2->u4.regexten;
-					gen_prios(exten, p->u1.str, p2->u2.statements, 0, context );
+					if (gen_prios(exten, p->u1.str, p2->u2.statements, 0, context)) {
+						return -1;
+					}
 					if (exten->return_needed) { /* returns don't generate a goto eoe (end of extension) any more, just a Return() app call) */
 						struct ael_priority *np2 = new_prio();
 						np2->type = AEL_APPCALL;
@@ -4573,6 +4611,7 @@ void ast_compile_ael2(struct ast_context **local_contexts, struct ast_hashtab *l
 	add_extensions(exten_list);   /* actually makes calls to create priorities in ast_contexts -- feeds dialplan to asterisk */
 	destroy_extensions(exten_list);  /* all that remains is an empty husk, discard of it as is proper */
 	
+	return 0;
 }
 
 

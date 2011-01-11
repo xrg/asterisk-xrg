@@ -26,12 +26,15 @@ OBJS=$(filter-out $(OBJSFILTER),$(SRC:.c=.o))
 # otherwise modules will not have them available if none of the static
 # objects use it.
 OBJS+=stdtime/localtime.o
+ifneq ($(firstword $(subst :, ,$(WEAKREF))),1)
+OBJS+=../res/res_adsi.o
+endif
 
 AST_LIBS += $(OPENSSL_LIB)
 AST_LIBS += $(BKTR_LIB)
 AST_LIBS += $(LIBXML2_LIB) 
 
-ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi ),)
+ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi kfreebsd-gnu),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
   AST_LIBS+=-ldl
   endif
@@ -41,6 +44,10 @@ ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi ),)
   AST_LIBS+=-lpthread $(EDITLINE_LIB) -lm -lresolv
 else
   AST_LIBS+=$(EDITLINE_LIB) -lm
+endif
+
+ifneq ($(findstring BETTER_BACKTRACES,$(MENUSELECT_CFLAGS)),)
+  AST_LIBS+=$(BFD_LIB)
 endif
 
 ifneq ($(findstring darwin,$(OSARCH)),)
@@ -93,6 +100,9 @@ endif
 
 ifeq ($(GNU_LD),1)
 ASTLINK+=-Wl,--version-script,asterisk.exports
+  ifeq ($(HAVE_DYNAMIC_LIST),1)
+  ASTLINK+=-Wl,--dynamic-list,asterisk.dynamics
+  endif
 endif
 
 CHECK_SUBDIR:	# do nothing, just make sure that we recurse in the subdir/
@@ -102,7 +112,7 @@ editline/libedit.a: CHECK_SUBDIR
 	$(MAKE) -C editline libedit.a
 
 db1-ast/libdb1.a: CHECK_SUBDIR
-	_ASTCFLAGS="$(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS) -Wno-strict-aliasing" $(MAKE) -C db1-ast libdb1.a
+	_ASTCFLAGS="$(_ASTCFLAGS) -Wno-strict-aliasing" ASTCFLAGS="$(ASTCFLAGS)" $(MAKE) -C db1-ast libdb1.a
 
 ifneq ($(findstring REBUILD_PARSERS,$(MENUSELECT_CFLAGS)),)
 ast_expr2.c ast_expr2.h: ast_expr2.y
@@ -165,7 +175,9 @@ ifneq ($(findstring ENABLE_UPLOADS,$(MENUSELECT_CFLAGS)),)
 GMIMELDFLAGS+=$(GMIME_LIB)
 endif
 
-$(MAIN_TGT): $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS) asterisk.exports
+$(OBJS): _ASTCFLAGS+=-DAST_MODULE=\"core\"
+
+$(MAIN_TGT): $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS)
 	@$(CC) -c -o buildinfo.o $(_ASTCFLAGS) buildinfo.c $(ASTCFLAGS)
 	$(ECHO_PREFIX) echo "   [LD] $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS) -> $@"
 ifneq ($(findstring chan_h323,$(MENUSELECT_CHANNELS)),)
@@ -174,9 +186,16 @@ else
 	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(_ASTLDFLAGS) $(ASTLDFLAGS) $(H323LDFLAGS) $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS) buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(H323LDLIBS) $(GMIMELDFLAGS)
 endif
 
+ifeq ($(GNU_LD),1)
+$(MAIN_TGT): asterisk.exports
+asterisk.exports: asterisk.exports.in
+	$(CMD_PREFIX) $(ASTTOPDIR)/build_tools/make_linker_version_script asterisk $(LINKER_SYMBOL_PREFIX)
+endif
+
 clean::
 	rm -f asterisk
 	rm -f db1-ast/.*.d
+	rm -f asterisk.exports
 	@if [ -f editline/Makefile ]; then $(MAKE) -C editline distclean ; fi
 	@$(MAKE) -C db1-ast clean
 	@$(MAKE) -C stdtime clean

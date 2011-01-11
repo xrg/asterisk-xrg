@@ -449,7 +449,7 @@ static void xmldoc_string_cleanup(const char *text, struct ast_str **output, int
 		}
 	}
 
-	/* remove last spaces (we dont want always to remove the trailing spaces). */
+	/* remove last spaces (we don't want always to remove the trailing spaces). */
 	if (lastspaces) {
 		ast_str_trim_blanks(*output);
 	}
@@ -1786,14 +1786,14 @@ static char *xmldoc_build_field(const char *type, const char *name, const char *
 	node = xmldoc_get_node(type, name, documentation_language);
 
 	if (!node) {
-		ast_log(LOG_WARNING, "Counldn't find %s %s in XML documentation\n", type, name);
+		ast_log(LOG_WARNING, "Couldn't find %s %s in XML documentation\n", type, name);
 		return ret;
 	}
 
 	node = ast_xml_find_element(ast_xml_node_get_children(node), var, NULL, NULL);
 
 	if (!node || !ast_xml_node_get_children(node)) {
-		ast_log(LOG_DEBUG, "Cannot find variable '%s' in tree '%s'\n", name, var);
+		ast_log(LOG_DEBUG, "Cannot find variable '%s' in tree '%s'\n", var, name);
 		return ret;
 	}
 
@@ -1815,6 +1815,49 @@ char *ast_xmldoc_build_description(const char *type, const char *name)
 {
 	return xmldoc_build_field(type, name, "description", 0);
 }
+
+#if !defined(HAVE_GLOB_NOMAGIC) || !defined(HAVE_GLOB_BRACE) || defined(DEBUG_NONGNU)
+static int xml_pathmatch(char *xmlpattern, int xmlpattern_maxlen, glob_t *globbuf)
+{
+	int globret;
+
+	snprintf(xmlpattern, xmlpattern_maxlen, "%s/documentation/thirdparty/*-%s.xml",
+		ast_config_AST_DATA_DIR, documentation_language);
+	if((globret = glob(xmlpattern, GLOB_NOCHECK, NULL, globbuf))) {
+		return globret;
+	}
+
+	snprintf(xmlpattern, xmlpattern_maxlen, "%s/documentation/thirdparty/*-%.2s_??.xml",
+		ast_config_AST_DATA_DIR, documentation_language);
+	if((globret = glob(xmlpattern, GLOB_APPEND | GLOB_NOCHECK, NULL, globbuf))) {
+		return globret;
+	}
+
+	snprintf(xmlpattern, xmlpattern_maxlen, "%s/documentation/thirdparty/*-%s.xml",
+		ast_config_AST_DATA_DIR, default_documentation_language);
+	if((globret = glob(xmlpattern, GLOB_APPEND | GLOB_NOCHECK, NULL, globbuf))) {
+		return globret;
+	}
+
+	snprintf(xmlpattern, xmlpattern_maxlen, "%s/documentation/*-%s.xml",
+		ast_config_AST_DATA_DIR, documentation_language);
+	if((globret = glob(xmlpattern, GLOB_APPEND | GLOB_NOCHECK, NULL, globbuf))) {
+		return globret;
+	}
+
+	snprintf(xmlpattern, xmlpattern_maxlen, "%s/documentation/*-%.2s_??.xml",
+		ast_config_AST_DATA_DIR, documentation_language);
+	if((globret = glob(xmlpattern, GLOB_APPEND | GLOB_NOCHECK, NULL, globbuf))) {
+		return globret;
+	}
+
+	snprintf(xmlpattern, xmlpattern_maxlen, "%s/documentation/*-%s.xml",
+		ast_config_AST_DATA_DIR, default_documentation_language);
+	globret = glob(xmlpattern, GLOB_APPEND | GLOB_NOCHECK, NULL, globbuf);
+
+	return globret;
+}
+#endif
 
 /*! \brief Close and unload XML documentation. */
 static void xmldoc_unload_documentation(void)
@@ -1842,6 +1885,9 @@ int ast_xmldoc_load_documentation(void)
 	struct ast_flags cnfflags = { 0 };
 	int globret, i, dup, duplicate;
 	glob_t globbuf;
+#if !defined(HAVE_GLOB_NOMAGIC) || !defined(HAVE_GLOB_BRACE) || defined(DEBUG_NONGNU)
+	int xmlpattern_maxlen;
+#endif
 
 	/* setup default XML documentation language */
 	snprintf(documentation_language, sizeof(documentation_language), default_documentation_language);
@@ -1863,17 +1909,26 @@ int ast_xmldoc_load_documentation(void)
 	/* register function to be run when asterisk finish. */
 	ast_register_atexit(xmldoc_unload_documentation);
 
+	globbuf.gl_offs = 0;    /* slots to reserve in gl_pathv */
+
+#if !defined(HAVE_GLOB_NOMAGIC) || !defined(HAVE_GLOB_BRACE) || defined(DEBUG_NONGNU)
+	xmlpattern_maxlen = strlen(ast_config_AST_DATA_DIR) + strlen("/documentation/thirdparty") + strlen("/*-??_??.xml") + 1;
+	xmlpattern = ast_malloc(xmlpattern_maxlen);
+	globret = xml_pathmatch(xmlpattern, xmlpattern_maxlen, &globbuf);
+#else
 	/* Get every *-LANG.xml file inside $(ASTDATADIR)/documentation */
 	ast_asprintf(&xmlpattern, "%s/documentation{/thirdparty/,/}*-{%s,%.2s_??,%s}.xml", ast_config_AST_DATA_DIR,
-			documentation_language, documentation_language, default_documentation_language);
-	globbuf.gl_offs = 0;    /* initialize it to silence gcc */
+		documentation_language, documentation_language, default_documentation_language);
 	globret = glob(xmlpattern, MY_GLOB_FLAGS, NULL, &globbuf);
+#endif
+
+	ast_debug(3, "gl_pathc %zd\n", globbuf.gl_pathc);
 	if (globret == GLOB_NOSPACE) {
-		ast_log(LOG_WARNING, "Glob Expansion of pattern '%s' failed: Not enough memory\n", xmlpattern);
+		ast_log(LOG_WARNING, "XML load failure, glob expansion of pattern '%s' failed: Not enough memory\n", xmlpattern);
 		ast_free(xmlpattern);
 		return 1;
 	} else if (globret  == GLOB_ABORTED) {
-		ast_log(LOG_WARNING, "Glob Expansion of pattern '%s' failed: Read error\n", xmlpattern);
+		ast_log(LOG_WARNING, "XML load failure, glob expansion of pattern '%s' failed: Read error\n", xmlpattern);
 		ast_free(xmlpattern);
 		return 1;
 	}
@@ -1890,7 +1945,9 @@ int ast_xmldoc_load_documentation(void)
 				break;
 			}
 		}
-		if (duplicate) {
+		if (duplicate || strchr(globbuf.gl_pathv[i], '*')) {
+		/* skip duplicates as well as pathnames not found 
+		 * (due to use of GLOB_NOCHECK in xml_pathmatch) */
 			continue;
 		}
 		tmpdoc = NULL;

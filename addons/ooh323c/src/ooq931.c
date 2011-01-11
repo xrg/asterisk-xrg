@@ -14,8 +14,9 @@
  *
  *****************************************************************************/
 
-#include <asterisk.h>
-#include <asterisk/lock.h>
+#include "asterisk.h"
+#include "asterisk/lock.h"
+#include "asterisk/utils.h"
 #include <time.h>
 
 #include "ooq931.h"
@@ -1212,14 +1213,6 @@ int ooSendTCSandMSD(OOH323CallData *call)
 			return ret;
 		}
 	}
-	if(call->masterSlaveState == OO_MasterSlave_Idle) {
-		ret = ooSendMasterSlaveDetermination(call);
-		if(ret != OO_OK) {
-			OOTRACEERR3("ERROR:Sending Master-slave determination message "
-				"(%s, %s)\n", call->callType, call->callToken);
-			return ret;
-		}
-	}
 
 	return OO_OK;
 }
@@ -1382,10 +1375,10 @@ int ooSendAlerting(OOH323CallData *call)
    alerting->m.alertingAddressPresent = TRUE;
    if(call->ourAliases)
       ret = ooPopulateAliasList(pctxt, call->ourAliases, 
-                                       &alerting->alertingAddress);
+                                       &alerting->alertingAddress, 0);
    else
       ret = ooPopulateAliasList(pctxt, gH323ep.aliases,
-                                       &alerting->alertingAddress);
+                                       &alerting->alertingAddress, 0);
    if(OO_OK != ret)
    {
       OOTRACEERR1("Error:Failed to populate alias list in Alert message\n");
@@ -1591,6 +1584,9 @@ int ooSendProgress(OOH323CallData *call)
    {
       OOTRACEERR3("Error: Failed to enqueue Alerting message to outbound queue. (%s, %s)\n", call->callType, call->callToken);
    }
+
+   if (!OO_TESTFLAG(call->flags, OO_M_TUNNELING) && call->h245listener)
+      ooSendStartH245Facility(call);
 
    ooSendTCSandMSD(call);
    memReset (call->msgctxt);
@@ -1888,10 +1884,10 @@ int ooAcceptCall(OOH323CallData *call)
    connect->m.connectedAddressPresent = TRUE;
    if(call->ourAliases)
       ret = ooPopulateAliasList(pctxt, call->ourAliases, 
-                                      &connect->connectedAddress);
+                                      &connect->connectedAddress, 0);
    else
       ret =  ooPopulateAliasList(pctxt, gH323ep.aliases, 
-                                        &connect->connectedAddress);
+                                        &connect->connectedAddress, 0);
    if(OO_OK != ret)
    {
       OOTRACEERR1("Error:Failed to populate alias list in Connect message\n");
@@ -2003,6 +1999,11 @@ int ooAcceptCall(OOH323CallData *call)
    /* memReset(&gH323ep.msgctxt); */
    memReset(call->msgctxt);
 
+   call->callState = OO_CALL_CONNECTED;
+   
+   if (call->rtdrCount > 0 && call->rtdrInterval > 0) {
+	return ooSendRoundTripDelayRequest(call);
+   }
    return OO_OK;
 }
 
@@ -2012,6 +2013,7 @@ int ooH323HandleCallFwdRequest(OOH323CallData *call)
    OOCTXT *pctxt;
    ooAliases *pNewAlias=NULL, *alias=NULL;
    struct timespec ts;
+   struct timeval tv;
    int i=0, irand=0, ret = OO_OK;
    /* Note: We keep same callToken, for new call which is going
       to replace an existing call, thus treating it as a single call.*/
@@ -2067,8 +2069,9 @@ int ooH323HandleCallFwdRequest(OOH323CallData *call)
       ret = ooGkClientSendAdmissionRequest(gH323ep.gkClient, fwdedCall, FALSE);
       fwdedCall->callState = OO_CALL_WAITING_ADMISSION;
       ast_mutex_lock(&fwdedCall->Lock);
-      clock_gettime(CLOCK_REALTIME, &ts);
-      ts.tv_sec += 24;
+	  tv = ast_tvnow();
+      ts.tv_sec += tv.tv_sec + 24;
+	  ts.tv_nsec = tv.tv_usec * 1000;
       ast_cond_timedwait(&fwdedCall->gkWait, &fwdedCall->Lock, &ts);
       if (fwdedCall->callState == OO_CALL_WAITING_ADMISSION) /* GK is not responding */
           fwdedCall->callState = OO_CALL_CLEAR;
@@ -2106,9 +2109,10 @@ int ooH323MakeCall(char *dest, char *callToken, ooCallOptions *opts)
 {
    OOCTXT *pctxt;
    OOH323CallData *call;
-   int ret=0, i=0, irand=0;
+   int ret=OO_OK, i=0, irand=0;
    char tmp[30]="\0";
    char *ip=NULL, *port = NULL;
+   struct timeval tv;
    struct timespec ts;
 
    if(!dest)
@@ -2190,8 +2194,9 @@ int ooH323MakeCall(char *dest, char *callToken, ooCallOptions *opts)
      call->callState = OO_CALL_WAITING_ADMISSION;
      ast_mutex_lock(&call->Lock);
      ret = ooGkClientSendAdmissionRequest(gH323ep.gkClient, call, FALSE);
-     clock_gettime(CLOCK_REALTIME, &ts);
-     ts.tv_sec += 24;
+	 tv = ast_tvnow();
+     ts.tv_sec = tv.tv_sec + 24;
+	 ts.tv_nsec = tv.tv_usec * 1000;
      ast_cond_timedwait(&call->gkWait, &call->Lock, &ts);
      if (call->callState == OO_CALL_WAITING_ADMISSION)
 		call->callState = OO_CALL_CLEAR;
@@ -2201,14 +2206,15 @@ int ooH323MakeCall(char *dest, char *callToken, ooCallOptions *opts)
 
    /* Send as H225 message to calling endpoint */
    ast_mutex_lock(&call->Lock);
-   if (call->callState < OO_CALL_CLEAR) 
+   if (call->callState < OO_CALL_CLEAR) {
     if ((ret = ooH323CallAdmitted (call)) != OO_OK) {
      ast_mutex_unlock(&call->Lock);
      return ret;
     }
+   } else ret = OO_FAILED;
    ast_mutex_unlock(&call->Lock);
 
-   return OO_OK;
+   return ret;
 }
 
 
@@ -2366,10 +2372,10 @@ int ooH323MakeCall_helper(OOH323CallData *call)
       setup->m.sourceAddressPresent = TRUE;
       if(call->ourAliases)
          ret = ooPopulateAliasList(pctxt, call->ourAliases, 
-                                                       &setup->sourceAddress);
+                                                       &setup->sourceAddress, 0);
       else if(gH323ep.aliases)
          ret =  ooPopulateAliasList(pctxt, gH323ep.aliases, 
-                                                       &setup->sourceAddress);
+                                                       &setup->sourceAddress, 0);
       if(OO_OK != ret)
       {
          OOTRACEERR1("Error:Failed to populate alias list in SETUP message\n");
@@ -2394,7 +2400,7 @@ int ooH323MakeCall_helper(OOH323CallData *call)
    {
       setup->m.destinationAddressPresent = TRUE;
       ret = ooPopulateAliasList(pctxt, call->remoteAliases, 
-                                                 &setup->destinationAddress);
+                                                 &setup->destinationAddress, 0);
       if(OO_OK != ret)
       {
          OOTRACEERR1("Error:Failed to populate destination alias list in SETUP"
@@ -2943,7 +2949,7 @@ int ooH323ForwardCall(char* callToken, char *dest)
    {    
       facility->m.alternativeAliasAddressPresent = TRUE;
       ret = ooPopulateAliasList(pctxt, call->pCallFwdData->aliases, 
-                                        &facility->alternativeAliasAddress);
+                                        &facility->alternativeAliasAddress, 0);
       if(ret != OO_OK)
       {
          OOTRACEERR3("Error:Failed to populate alternate aliases in "
@@ -3669,7 +3675,9 @@ const char* ooGetMsgTypeText (int msgType)
       "OOUserInputIndication",
       "OORequestModeAck",
       "OORequestModeReject",
-      "OORequestMode"
+      "OORequestMode",
+      "OORequestDelayResponse",
+      "OORequestDelayRequest"
    };
    int idx = msgType - OO_MSGTYPE_MIN;
    return ooUtilsGetText (idx, msgTypeText, OONUMBEROF(msgTypeText));

@@ -21,7 +21,7 @@
  * \brief Block all calls without Caller*ID, require phone # to be entered
  *
  * \author Mark Spencer <markster@digium.com>
- * 
+ *
  * \ingroup applications
  */
 
@@ -96,53 +96,61 @@ static int privacy_exec(struct ast_channel *chan, const char *data)
 		AST_APP_ARG(checkcontext);
 	);
 
-	if (!ast_strlen_zero(chan->cid.cid_num)) {
-		ast_verb(3, "CallerID Present: Skipping\n");
+	if (chan->caller.id.number.valid
+		&& !ast_strlen_zero(chan->caller.id.number.str)) {
+		ast_verb(3, "CallerID number present: Skipping\n");
 	} else {
 		/*Answer the channel if it is not already*/
 		if (chan->_state != AST_STATE_UP) {
-			if ((res = ast_answer(chan)))
+			if ((res = ast_answer(chan))) {
 				return -1;
+			}
 		}
 
-		if (!ast_strlen_zero(data)) {
-			parse = ast_strdupa(data);
-			
-			AST_STANDARD_APP_ARGS(args, parse);
+		parse = ast_strdupa(S_OR(data, ""));
 
-			if (args.maxretries) {
-				if (sscanf(args.maxretries, "%30d", &x) == 1)
-					maxretries = x;
-				else
-					ast_log(LOG_WARNING, "Invalid max retries argument\n");
+		AST_STANDARD_APP_ARGS(args, parse);
+
+		if (!ast_strlen_zero(args.maxretries)) {
+			if (sscanf(args.maxretries, "%30d", &x) == 1 && x > 0) {
+				maxretries = x;
+			} else {
+				ast_log(LOG_WARNING, "Invalid max retries argument: '%s'\n", args.maxretries);
 			}
-			if (args.minlength) {
-				if (sscanf(args.minlength, "%30d", &x) == 1)
-					minlength = x;
-				else
-					ast_log(LOG_WARNING, "Invalid min length argument\n");
+		}
+		if (!ast_strlen_zero(args.minlength)) {
+			if (sscanf(args.minlength, "%30d", &x) == 1 && x > 0) {
+				minlength = x;
+			} else {
+				ast_log(LOG_WARNING, "Invalid min length argument: '%s'\n", args.minlength);
 			}
-		}		
+		}
 
 		/* Play unidentified call */
 		res = ast_safe_sleep(chan, 1000);
-		if (!res)
+		if (!res) {
 			res = ast_streamfile(chan, "privacy-unident", chan->language);
-		if (!res)
+		}
+		if (!res) {
 			res = ast_waitstream(chan, "");
+		}
 
 		/* Ask for 10 digit number, give 3 attempts */
 		for (retries = 0; retries < maxretries; retries++) {
-			if (!res)
+			if (!res) {
 				res = ast_streamfile(chan, "privacy-prompt", chan->language);
-			if (!res)
+			}
+			if (!res) {
 				res = ast_waitstream(chan, "");
+			}
 
-			if (!res ) 
+			if (!res) {
 				res = ast_readstring(chan, phone, sizeof(phone) - 1, /* digit timeout ms */ 3200, /* first digit timeout */ 5000, "#");
+			}
 
-			if (res < 0)
+			if (res < 0) {
 				break;
+			}
 
 			/* Make sure we get at least digits */
 			if (strlen(phone) >= minlength ) {
@@ -161,25 +169,32 @@ static int privacy_exec(struct ast_channel *chan, const char *data)
 				}
 			} else {
 				res = ast_streamfile(chan, "privacy-incorrect", chan->language);
-				if (!res)
+				if (!res) {
 					res = ast_waitstream(chan, "");
+				}
 			}
 		}
-		
+
 		/* Got a number, play sounds and send them on their way */
-		if ((retries < maxretries) && res >= 0 ) {
+		if ((retries < maxretries) && res >= 0) {
 			res = ast_streamfile(chan, "privacy-thankyou", chan->language);
-			if (!res)
+			if (!res) {
 				res = ast_waitstream(chan, "");
+			}
 
-			ast_set_callerid (chan, phone, "Privacy Manager", NULL); 
-
-			/* Clear the unavailable presence bit so if it came in on PRI
-			 * the caller id will now be passed out to other channels
+			/*
+			 * This is a caller entered number that is going to be used locally.
+			 * Therefore, the given number presentation is allowed and should
+			 * be passed out to other channels.  This is the point of the
+			 * privacy application.
 			 */
-			chan->cid.cid_pres &= (AST_PRES_UNAVAILABLE ^ 0xFF);
+			chan->caller.id.name.presentation = AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED;
+			chan->caller.id.number.presentation = AST_PRES_ALLOWED_USER_NUMBER_NOT_SCREENED;
+			chan->caller.id.number.plan = 0;/* Unknown */
 
-			ast_verb(3, "Changed Caller*ID to %s, callerpres to %d\n",phone,chan->cid.cid_pres);
+			ast_set_callerid(chan, phone, "Privacy Manager", NULL);
+
+			ast_verb(3, "Changed Caller*ID number to '%s'\n", phone);
 
 			pbx_builtin_setvar_helper(chan, "PRIVACYMGRSTATUS", "SUCCESS");
 		} else {
@@ -192,7 +207,7 @@ static int privacy_exec(struct ast_channel *chan, const char *data)
 
 static int unload_module(void)
 {
-	return ast_unregister_application (app);
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)

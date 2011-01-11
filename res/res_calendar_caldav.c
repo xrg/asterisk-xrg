@@ -17,7 +17,7 @@
  */
 
 /*! \file
- * \brief Resource for handling iCalnedar calendars
+ * \brief Resource for handling CalDAV calendars
  */
 
 /*** MODULEINFO
@@ -30,10 +30,11 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <libical/ical.h>
-#include <neon/ne_session.h>
-#include <neon/ne_uri.h>
-#include <neon/ne_request.h>
-#include <neon/ne_auth.h>
+#include <ne_session.h>
+#include <ne_uri.h>
+#include <ne_request.h>
+#include <ne_auth.h>
+#include <ne_redirect.h>
 #include <libxml/xmlmemory.h>
 #include <libxml/parser.h>
 
@@ -216,6 +217,12 @@ static int caldav_write_event(struct ast_calendar_event *event)
 	if (!ast_strlen_zero(event->location)) {
 		icalcomponent_add_property(icalevent, icalproperty_new_location(event->location));
 	}
+	if (!ast_strlen_zero(event->categories)) {
+		icalcomponent_add_property(icalevent, icalproperty_new_categories(event->categories));
+	}
+	if (event->priority > 0) {
+		icalcomponent_add_property(icalevent, icalproperty_new_priority(event->priority));
+	}
 
 	switch (event->busy_state) {
 	case AST_CALENDAR_BS_BUSY:
@@ -363,6 +370,14 @@ static void caldav_add_event(icalcomponent *comp, struct icaltime_span *span, vo
 
 	if ((prop = icalcomponent_get_first_property(comp, ICAL_LOCATION_PROPERTY))) {
 		ast_string_field_set(event, location, icalproperty_get_value_as_string(prop));
+	}
+
+	if ((prop = icalcomponent_get_first_property(comp, ICAL_CATEGORIES_PROPERTY))) {
+		ast_string_field_set(event, categories, icalproperty_get_value_as_string(prop));
+	}
+
+	if ((prop = icalcomponent_get_first_property(comp, ICAL_PRIORITY_PROPERTY))) {
+		event->priority = icalvalue_get_integer(icalproperty_get_value(prop));
 	}
 
 	if ((prop = icalcomponent_get_first_property(comp, ICAL_UID_PROPERTY))) {
@@ -629,6 +644,7 @@ static void *caldav_load_calendar(void *void_data)
 	}
 
 	pvt->session = ne_session_create(pvt->uri.scheme, pvt->uri.host, pvt->uri.port);
+	ne_redirect_register(pvt->session);
 	ne_set_server_auth(pvt->session, auth_credentials, pvt);
 	if (!strcasecmp(pvt->uri.scheme, "https")) {
 		ne_ssl_trust_default_ca(pvt->session);
@@ -690,7 +706,8 @@ static int unload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Asterisk CalDAV Calendar Integration",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Asterisk CalDAV Calendar Integration",
 		.load = load_module,
 		.unload = unload_module,
+		.load_pri = AST_MODPRI_DEVSTATE_PLUGIN,
 	);

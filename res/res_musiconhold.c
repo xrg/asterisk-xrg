@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2006, Digium, Inc.
+ * Copyright (C) 1999 - 2010, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -27,7 +27,6 @@
 
 /*** MODULEINFO
 	<conflict>win32</conflict>
-	<use>dahdi</use>
  ***/
 
 #include "asterisk.h"
@@ -41,14 +40,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <netinet/in.h>
 #include <sys/stat.h>
 #include <dirent.h>
-#include <sys/ioctl.h>
 
 #ifdef SOLARIS
 #include <thread.h>
-#endif
-
-#ifdef HAVE_DAHDI
-#include <dahdi/user.h>
 #endif
 
 #include "asterisk/lock.h"
@@ -68,6 +62,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/paths.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/timing.h"
+#include "asterisk/time.h"
+#include "asterisk/poll-compat.h"
 
 #define INITIAL_NUM_FILES   8
 #define HANDLE_REF	1
@@ -198,10 +195,10 @@ struct mohclass {
 	pthread_t thread;
 	/*! Source of audio */
 	int srcfd;
-	/*! FD for timing source */
-	int pseudofd;
+	/*! Generic timer */
+	struct ast_timer *timer;
 	/*! Created on the fly, from RT engine */
-	int realtime;
+	unsigned int realtime:1;
 	unsigned int delete:1;
 	AST_LIST_HEAD_NOLOCK(, mohdata) members;
 	AST_LIST_ENTRY(mohclass) list;
@@ -295,16 +292,20 @@ static int ast_moh_files_next(struct ast_channel *chan)
 		return -1;
 	}
 
-	/* If a specific file has been saved confirm it still exists and that it is still valid */
-	if (state->save_pos >= 0 && state->save_pos < state->class->total_files && state->class->filearray[state->save_pos] == state->save_pos_filename) {
+	if (state->pos == 0 && state->save_pos_filename == NULL) {
+		/* First time so lets play the file. */
+		state->save_pos = -1;
+	} else if (state->save_pos >= 0 && state->save_pos < state->class->total_files && state->class->filearray[state->save_pos] == state->save_pos_filename) {
+		/* If a specific file has been saved confirm it still exists and that it is still valid */
 		state->pos = state->save_pos;
 		state->save_pos = -1;
 	} else if (ast_test_flag(state->class, MOH_RANDOMIZE)) {
 		/* Get a random file and ensure we can open it */
 		for (tries = 0; tries < 20; tries++) {
 			state->pos = ast_random() % state->class->total_files;
-			if (ast_fileexists(state->class->filearray[state->pos], NULL, NULL) > 0)
+			if (ast_fileexists(state->class->filearray[state->pos], NULL, NULL) > 0) {
 				break;
+			}
 		}
 		state->save_pos = -1;
 		state->samples = 0;
@@ -316,10 +317,17 @@ static int ast_moh_files_next(struct ast_channel *chan)
 		state->samples = 0;
 	}
 
-	if (!ast_openstream_full(chan, state->class->filearray[state->pos], chan->language, 1)) {
+	for (tries = 0; tries < state->class->total_files; ++tries) {
+		if (ast_openstream_full(chan, state->class->filearray[state->pos], chan->language, 1)) {
+			break;
+		}
+
 		ast_log(LOG_WARNING, "Unable to open file '%s': %s\n", state->class->filearray[state->pos], strerror(errno));
 		state->pos++;
 		state->pos %= state->class->total_files;
+	}
+
+	if (tries == state->class->total_files) {
 		return -1;
 	}
 
@@ -328,8 +336,9 @@ static int ast_moh_files_next(struct ast_channel *chan)
 
 	ast_debug(1, "%s Opened file %d '%s'\n", chan->name, state->pos, state->class->filearray[state->pos]);
 
-	if (state->samples)
+	if (state->samples) {
 		ast_seekstream(chan->stream, state->samples, SEEK_SET);
+	}
 
 	return 0;
 }
@@ -355,7 +364,15 @@ static int moh_files_generator(struct ast_channel *chan, void *data, int len, in
 	state->sample_queue += samples;
 
 	while (state->sample_queue > 0) {
+		ast_channel_lock(chan);
 		if ((f = moh_files_readframe(chan))) {
+			/* We need to be sure that we unlock
+			 * the channel prior to calling
+			 * ast_write. Otherwise, the recursive locking
+			 * that occurs can cause deadlocks when using
+			 * indirect channels, like local channels
+			 */
+			ast_channel_unlock(chan);
 			state->samples += f->samples;
 			state->sample_queue -= f->samples;
 			res = ast_write(chan, f);
@@ -364,8 +381,10 @@ static int moh_files_generator(struct ast_channel *chan, void *data, int len, in
 				ast_log(LOG_WARNING, "Failed to write frame to '%s': %s\n", chan->name, strerror(errno));
 				return -1;
 			}
-		} else
+		} else {
+			ast_channel_unlock(chan);
 			return -1;	
+		}
 	}
 	return res;
 }
@@ -592,9 +611,8 @@ static void *monmp3thread(void *data)
 
 	struct mohclass *class = data;
 	struct mohdata *moh;
-	char buf[8192];
 	short sbuf[8192];
-	int res, res2;
+	int res = 0, res2;
 	int len;
 	struct timeval deadline, tv_tmp;
 
@@ -611,12 +629,22 @@ static void *monmp3thread(void *data)
 				pthread_testcancel();
 			}
 		}
-		if (class->pseudofd > -1) {
+		if (class->timer) {
+			struct pollfd pfd = { .fd = ast_timer_fd(class->timer), .events = POLLIN, };
+			struct timeval tv;
+
 #ifdef SOLARIS
 			thr_yield();
 #endif
 			/* Pause some amount of time */
-			res = read(class->pseudofd, buf, sizeof(buf));
+			tv = ast_tvnow();
+			if (ast_poll(&pfd, 1, -1) > 0) {
+				ast_timer_ack(class->timer, 1);
+				res = 320;
+			} else {
+				ast_log(LOG_ERROR, "poll() failed: %s\n", strerror(errno));
+				res = 0;
+			}
 			pthread_testcancel();
 		} else {
 			long delta;
@@ -993,7 +1021,7 @@ static int moh_scan_files(struct mohclass *class) {
 	int i;
 
 	if (class->dir[0] != '/') {
-		ast_copy_string(dir_path, ast_config_AST_VAR_DIR, sizeof(dir_path));
+		ast_copy_string(dir_path, ast_config_AST_DATA_DIR, sizeof(dir_path));
 		strncat(dir_path, "/", sizeof(dir_path) - 1);
 		strncat(dir_path, class->dir, sizeof(dir_path) - 1);
 	} else {
@@ -1082,13 +1110,29 @@ static int init_files_class(struct mohclass *class)
 		return -1;
 	}
 
+#if 0
+	/* XXX This isn't correct.  Args is an application for custom mode. XXX */
 	if (strchr(class->args, 'r')) {
 		ast_set_flag(class, MOH_RANDOMIZE);
 	}
+#endif
 
 	return 0;
 }
 
+static void moh_rescan_files(void) {
+	struct ao2_iterator i;
+	struct mohclass *c;
+
+	i = ao2_iterator_init(mohclasses, 0);
+
+	while ((c = ao2_iterator_next(&i))) {
+		moh_scan_files(c);
+		ao2_ref(c, -1);
+	}
+
+	ao2_iterator_destroy(&i);
+}
 
 static int moh_diff(struct mohclass *old, struct mohclass *new)
 {
@@ -1111,10 +1155,6 @@ static int moh_diff(struct mohclass *old, struct mohclass *new)
 
 static int init_app_class(struct mohclass *class)
 {
-#ifdef HAVE_DAHDI
-	int x;
-#endif
-
 	if (!strcasecmp(class->mode, "custom")) {
 		ast_set_flag(class, MOH_CUSTOM);
 	} else if (!strcasecmp(class->mode, "mp3nb")) {
@@ -1124,27 +1164,23 @@ static int init_app_class(struct mohclass *class)
 	} else if (!strcasecmp(class->mode, "quietmp3")) {
 		ast_set_flag(class, MOH_QUIET);
 	}
-		
-	class->srcfd = -1;
-	class->pseudofd = -1;
 
-#ifdef HAVE_DAHDI
-	/* Open /dev/zap/pseudo for timing...  Is
-	   there a better, yet reliable way to do this? */
-	class->pseudofd = open("/dev/dahdi/pseudo", O_RDONLY);
-	if (class->pseudofd < 0) {
-		ast_log(LOG_WARNING, "Unable to open pseudo channel for timing...  Sound may be choppy.\n");
-	} else {
-		x = 320;
-		ioctl(class->pseudofd, DAHDI_SET_BLOCKSIZE, &x);
+	class->srcfd = -1;
+
+	if (!(class->timer = ast_timer_open())) {
+		ast_log(LOG_WARNING, "Unable to create timer: %s\n", strerror(errno));
 	}
-#endif
+	if (class->timer && ast_timer_set_rate(class->timer, 25)) {
+		ast_log(LOG_WARNING, "Unable to set 40ms frame rate: %s\n", strerror(errno));
+		ast_timer_close(class->timer);
+		class->timer = NULL;
+	}
 
 	if (ast_pthread_create_background(&class->thread, NULL, monmp3thread, class)) {
 		ast_log(LOG_WARNING, "Unable to create moh thread...\n");
-		if (class->pseudofd > -1) {
-			close(class->pseudofd);
-			class->pseudofd = -1;
+		if (class->timer) {
+			ast_timer_close(class->timer);
+			class->timer = NULL;
 		}
 		return -1;
 	}
@@ -1174,7 +1210,7 @@ static int _moh_register(struct mohclass *moh, int reload, int unref, const char
 
 	time(&moh->start);
 	moh->start -= respawn_time;
-	
+
 	if (!strcasecmp(moh->mode, "files")) {
 		if (init_files_class(moh)) {
 			if (unref) {
@@ -1204,7 +1240,7 @@ static int _moh_register(struct mohclass *moh, int reload, int unref, const char
 	if (unref) {
 		moh = mohclass_unref(moh, "Unreffing new moh class because we just added it to the container");
 	}
-	
+
 	return 0;
 }
 
@@ -1363,13 +1399,16 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 				 * has a pointer to a freed mohclass, so any operations involving the mohclass container would result in reading
 				 * invalid memory.
 				 */
-				moh_register(mohclass, 0, DONT_UNREF);
+				if (moh_register(mohclass, 0, DONT_UNREF) == -1) {
+					mohclass = mohclass_unref(mohclass, "unreffing mohclass failed to register");
+					return -1;
+				}
 			} else {
 				/* We don't register RT moh class, so let's init it manualy */
 
 				time(&mohclass->start);
 				mohclass->start -= respawn_time;
-	
+
 				if (!strcasecmp(mohclass->mode, "files")) {
 					if (!moh_scan_files(mohclass)) {
 						mohclass = mohclass_unref(mohclass, "unreffing potential mohclass (moh_scan_files failed)");
@@ -1387,21 +1426,17 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 						ast_set_flag(mohclass, MOH_SINGLE | MOH_QUIET);
 					else if (!strcasecmp(mohclass->mode, "quietmp3"))
 						ast_set_flag(mohclass, MOH_QUIET);
-			
+
 					mohclass->srcfd = -1;
-#ifdef HAVE_DAHDI
-					/* Open /dev/dahdi/pseudo for timing...  Is
-					   there a better, yet reliable way to do this? */
-					mohclass->pseudofd = open("/dev/dahdi/pseudo", O_RDONLY);
-					if (mohclass->pseudofd < 0) {
-						ast_log(LOG_WARNING, "Unable to open pseudo channel for timing...  Sound may be choppy.\n");
-					} else {
-						int x = 320;
-						ioctl(mohclass->pseudofd, DAHDI_SET_BLOCKSIZE, &x);
+					if (!(mohclass->timer = ast_timer_open())) {
+						ast_log(LOG_WARNING, "Unable to create timer: %s\n", strerror(errno));
 					}
-#else
-					mohclass->pseudofd = -1;
-#endif
+					if (mohclass->timer && ast_timer_set_rate(mohclass->timer, 25)) {
+						ast_log(LOG_WARNING, "Unable to set 40ms frame rate: %s\n", strerror(errno));
+						ast_timer_close(mohclass->timer);
+						mohclass->timer = NULL;
+					}
+
 					/* Let's check if this channel already had a moh class before */
 					if (state && state->class) {
 						/* Class already exist for this channel */
@@ -1414,9 +1449,9 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 					} else {
 						if (ast_pthread_create_background(&mohclass->thread, NULL, monmp3thread, mohclass)) {
 							ast_log(LOG_WARNING, "Unable to create moh...\n");
-							if (mohclass->pseudofd > -1) {
-								close(mohclass->pseudofd);
-								mohclass->pseudofd = -1;
+							if (mohclass->timer) {
+								ast_timer_close(mohclass->timer);
+								mohclass->timer = NULL;
 							}
 							mohclass = mohclass_unref(mohclass, "Unreffing potential mohclass (failed to create background thread)");
 							return -1;
@@ -1460,11 +1495,11 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 
 static void local_ast_moh_stop(struct ast_channel *chan)
 {
-	struct moh_files_state *state = chan->music_state;
 	ast_clear_flag(chan, AST_FLAG_MOH);
 	ast_deactivate_generator(chan);
 
-	if (state) {
+	ast_channel_lock(chan);
+	if (chan->music_state) {
 		if (chan->stream) {
 			ast_closestream(chan->stream);
 			chan->stream = NULL;
@@ -1476,6 +1511,7 @@ static void local_ast_moh_stop(struct ast_channel *chan)
 		"Channel: %s\r\n"
 		"UniqueID: %s\r\n",
 		chan->name, chan->uniqueid);
+	ast_channel_unlock(chan);
 }
 
 static void moh_class_destructor(void *obj)
@@ -1586,13 +1622,20 @@ static int load_moh_classes(int reload)
 	cfg = ast_config_load("musiconhold.conf", config_flags);
 
 	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID) {
+		if (ast_check_realtime("musiconhold") && reload) {
+			ao2_t_callback(mohclasses, OBJ_NODATA, moh_class_mark, NULL, "Mark deleted classes");
+			ao2_t_callback(mohclasses, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, moh_classes_delete_marked, NULL, "Purge marked classes");
+		}
+		if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
+			moh_rescan_files();
+		}
 		return 0;
 	}
 
 	if (reload) {
 		ao2_t_callback(mohclasses, OBJ_NODATA, moh_class_mark, NULL, "Mark deleted classes");
 	}
-	
+
 	ast_clear_flag(global_flags, AST_FLAGS_ALL);
 
 	cat = ast_category_browse(cfg, NULL);
@@ -1808,7 +1851,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	if (!load_moh_classes(0)) { 	/* No music classes configured, so skip it */
+	if (!load_moh_classes(0) && ast_check_realtime("musiconhold") == 0) { 	/* No music classes configured, so skip it */
 		ast_log(LOG_WARNING, "No music on hold classes configured, "
 				"disabling music on hold.\n");
 	} else {
@@ -1879,8 +1922,9 @@ static int unload_module(void)
 	return res;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Music On Hold Resource",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Music On Hold Resource",
 	.load = load_module,
 	.unload = unload_module,
 	.reload = reload,
+	.load_pri = AST_MODPRI_CHANNEL_DEPEND,
 );

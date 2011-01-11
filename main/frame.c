@@ -104,6 +104,7 @@ static const struct ast_format_list AST_FORMAT_LIST[] = {
 	{ AST_FORMAT_LPC10, "lpc10", 8000, "LPC10", 7, 20, 20, 20, 20 },                                       /*!< codec_lpc10.c */ 
 	{ AST_FORMAT_G729A, "g729", 8000, "G.729A", 10, 10, 230, 10, 20, AST_SMOOTHER_FLAG_G729 },             /*!< Binary commercial distribution */
 	{ AST_FORMAT_SPEEX, "speex", 8000, "SpeeX", 10, 10, 60, 10, 20 },                                      /*!< codec_speex.c */
+	{ AST_FORMAT_SPEEX16, "speex16", 16000, "SpeeX 16khz", 10, 10, 60, 10, 20 },                          /*!< codec_speex.c */
 	{ AST_FORMAT_ILBC, "ilbc", 8000, "iLBC", 50, 30, 30, 30, 30 },                                         /*!< codec_ilbc.c */ /* inc=30ms - workaround */
 	{ AST_FORMAT_G726_AAL2, "g726aal2", 8000, "G.726 AAL2", 40, 10, 300, 10, 20 },                         /*!< codec_g726.c */
 	{ AST_FORMAT_G722, "g722", 16000, "G722", 80, 10, 150, 10, 20 },                                       /*!< codec_g722.c */
@@ -119,7 +120,8 @@ static const struct ast_format_list AST_FORMAT_LIST[] = {
 	{ AST_FORMAT_T140, "t140", 0, "Passthrough T.140 Realtime Text" },                                     /*!< Passthrough support for T.140 Realtime Text */
 	{ AST_FORMAT_SIREN7, "siren7", 16000, "ITU G.722.1 (Siren7, licensed from Polycom)", 80, 20, 80, 20, 20 },			/*!< Binary commercial distribution */
 	{ AST_FORMAT_SIREN14, "siren14", 32000, "ITU G.722.1 Annex C, (Siren14, licensed from Polycom)", 120, 20, 80, 20, 20 },	/*!< Binary commercial distribution */
-	{ AST_FORMAT_TESTLAW, "testlaw", 8000, "G.711 test-law", 80, 10, 150, 10, 20 },                                 /*!< codec_ulaw.c */
+	{ AST_FORMAT_TESTLAW, "testlaw", 8000, "G.711 test-law", 80, 10, 150, 10, 20 },                        /*!< codec_ulaw.c */
+	{ AST_FORMAT_G719, "g719", 48000, "ITU G.719", 160, 20, 80, 20, 20 },
 };
 
 struct ast_frame ast_null_frame = { AST_FRAME_NULL, };
@@ -1353,7 +1355,7 @@ static unsigned char get_n_bits_at(unsigned char *data, int n, int bit)
 static int speex_get_wb_sz_at(unsigned char *data, int len, int bit)
 {
 	static const int SpeexWBSubModeSz[] = {
-		0, 36, 112, 192,
+		4, 36, 112, 192,
 		352, 0, 0, 0 };
 	int off = bit;
 	unsigned char c;
@@ -1406,10 +1408,8 @@ static int speex_samples(unsigned char *data, int len)
 		}
 		bit += off;
 
-		if ((len * 8 - bit) < 5) {
-			ast_log(LOG_WARNING, "Not enough bits remaining after wide band for speex samples.\n");
+		if ((len * 8 - bit) < 5)
 			break;
-		}
 
 		/* get control bits */
 		c = get_n_bits_at(data, 5, bit);
@@ -1424,12 +1424,14 @@ static int speex_samples(unsigned char *data, int len)
 			bit += 4;
 			bit += SpeexInBandSz[c];
 		} else if (c == 13) {
-			/* user in-band; next 5 bits contain msg len */
-			c = get_n_bits_at(data, 5, bit);
-			bit += 5;
-			bit += c * 8;
+			/* user in-band; next 4 bits contain msg len */
+			c = get_n_bits_at(data, 4, bit);
+			bit += 4;
+			/* after which it's 5-bit signal id + c bytes of data */
+			bit += 5 + c * 8;
 		} else if (c > 8) {
 			/* unknown */
+			ast_log(LOG_WARNING, "Unknown speex control frame %d\n", c);
 			break;
 		} else {
 			/* skip number bits for submode (less the 5 control bits) */
@@ -1448,6 +1450,9 @@ int ast_codec_get_samples(struct ast_frame *f)
 	switch (f->subclass.codec) {
 	case AST_FORMAT_SPEEX:
 		samples = speex_samples(f->data.ptr, f->datalen);
+		break;
+	case AST_FORMAT_SPEEX16:
+		samples = 2 * speex_samples(f->data.ptr, f->datalen);
 		break;
 	case AST_FORMAT_G723_1:
 		samples = g723_samples(f->data.ptr, f->datalen);
@@ -1488,6 +1493,10 @@ int ast_codec_get_samples(struct ast_frame *f)
 	case AST_FORMAT_SIREN14:
 		/* 32,000 samples per second at 48kbps is 6,000 bytes per second */
 		samples = (int) f->datalen * ((float) 32000 / 6000);
+		break;
+	case AST_FORMAT_G719:
+		/* 48,000 samples per second at 64kbps is 8,000 bytes per second */
+		samples = (int) f->datalen * ((float) 48000 / 8000);
 		break;
 	default:
 		ast_log(LOG_WARNING, "Unable to calculate samples for format %s\n", ast_getformatname_multiple(tmp, sizeof(tmp), f->subclass.codec));
@@ -1535,6 +1544,10 @@ int ast_codec_get_len(format_t format, int samples)
 	case AST_FORMAT_SIREN14:
 		/* 32,000 samples per second at 48kbps is 6,000 bytes per second */
 		len = (int) samples / ((float) 32000 / 6000);
+		break;
+	case AST_FORMAT_G719:
+		/* 48,000 samples per second at 64kbps is 8,000 bytes per second */
+		len = (int) samples / ((float) 48000 / 8000);
 		break;
 	default:
 		ast_log(LOG_WARNING, "Unable to calculate sample length for format %s\n", ast_getformatname(format));
@@ -1585,5 +1598,17 @@ int ast_frame_slinear_sum(struct ast_frame *f1, struct ast_frame *f2)
 	     count++, data1++, data2++)
 		ast_slinear_saturated_add(data1, data2);
 
+	return 0;
+}
+
+int ast_frame_clear(struct ast_frame *frame)
+{
+	struct ast_frame *next;
+
+	for (next = AST_LIST_NEXT(frame, frame_list);
+		 frame;
+		 frame = next, next = frame ? AST_LIST_NEXT(frame, frame_list) : NULL) {
+		memset(frame->data.ptr, 0, frame->datalen);
+	}
 	return 0;
 }

@@ -105,13 +105,15 @@ int ast_app_dtget(struct ast_channel *chan, const char *context, char *collect, 
 			break;
 		}
 		collect[x++] = res;
-		if (!ast_matchmore_extension(chan, context, collect, 1, chan->cid.cid_num)) {
+		if (!ast_matchmore_extension(chan, context, collect, 1,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 			break;
 		}
 	}
 
 	if (res >= 0) {
-		res = ast_exists_extension(chan, context, collect, 1, chan->cid.cid_num) ? 1 : 0;
+		res = ast_exists_extension(chan, context, collect, 1,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL)) ? 1 : 0;
 	}
 
 	return res;
@@ -331,7 +333,7 @@ int ast_app_messagecount(const char *context, const char *mailbox, const char *f
 	return 0;
 }
 
-int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, const char *digits, int between, unsigned int duration) 
+int ast_dtmf_stream(struct ast_channel *chan, struct ast_channel *peer, const char *digits, int between, unsigned int duration)
 {
 	const char *ptr;
 	int res = 0;
@@ -912,8 +914,9 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 			totalsilence += dspsilence;
 		}
 
-        	if (totalsilence > 0)
+		if (totalsilence > 0) {
 			*duration -= (totalsilence - 200) / 1000;
+		}
 		if (*duration < 0) {
 			*duration = 0;
 		}
@@ -927,7 +930,7 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 			 * to trim ANY part of the recording.
 			 */
 			if (res > 0 && dspsilence) {
-                                /* rewind only the trailing silence */
+				/* rewind only the trailing silence */
 				ast_stream_rewind(others[x], dspsilence - 200);
 			}
 			ast_truncstream(others[x]);
@@ -1095,8 +1098,10 @@ int ast_app_group_match_get_count(const char *groupmatch, const char *category)
 	regex_t regexbuf_category;
 	int count = 0;
 
-	if (ast_strlen_zero(groupmatch))
+	if (ast_strlen_zero(groupmatch)) {
+		ast_log(LOG_NOTICE, "groupmatch empty\n");
 		return 0;
+	}
 
 	/* if regex compilation fails, return zero matches */
 	if (regcomp(&regexbuf_group, groupmatch, REG_EXTENDED | REG_NOSUB)) {
@@ -1104,7 +1109,7 @@ int ast_app_group_match_get_count(const char *groupmatch, const char *category)
 		return 0;
 	}
 
-	if (regcomp(&regexbuf_category, category, REG_EXTENDED | REG_NOSUB)) {
+	if (!ast_strlen_zero(category) && regcomp(&regexbuf_category, category, REG_EXTENDED | REG_NOSUB)) {
 		ast_log(LOG_ERROR, "Regex compile failed on: %s\n", category);
 		return 0;
 	}
@@ -1118,7 +1123,9 @@ int ast_app_group_match_get_count(const char *groupmatch, const char *category)
 	AST_RWLIST_UNLOCK(&groups);
 
 	regfree(&regexbuf_group);
-	regfree(&regexbuf_category);
+	if (!ast_strlen_zero(category)) {
+		regfree(&regexbuf_category);
+	}
 
 	return count;
 }
@@ -1186,13 +1193,17 @@ unsigned int __ast_app_separate_args(char *buf, char delim, int remove_chars, ch
 {
 	int argc;
 	char *scan, *wasdelim = NULL;
-	int paren = 0, quote = 0;
+	int paren = 0, quote = 0, bracket = 0;
 
-	if (!buf || !array || !arraylen) {
+	if (!array || !arraylen) {
 		return 0;
 	}
 
 	memset(array, 0, arraylen * sizeof(*array));
+
+	if (!buf) {
+		return 0;
+	}
 
 	scan = buf;
 
@@ -1204,6 +1215,12 @@ unsigned int __ast_app_separate_args(char *buf, char delim, int remove_chars, ch
 			} else if (*scan == ')') {
 				if (paren) {
 					paren--;
+				}
+			} else if (*scan == '[') {
+				bracket++;
+			} else if (*scan == ']') {
+				if (bracket) {
+					bracket--;
 				}
 			} else if (*scan == '"' && delim != '"') {
 				quote = quote ? 0 : 1;
@@ -1219,7 +1236,7 @@ unsigned int __ast_app_separate_args(char *buf, char delim, int remove_chars, ch
 				} else {
 					scan++;
 				}
-			} else if ((*scan == delim) && !paren && !quote) {
+			} else if ((*scan == delim) && !paren && !quote && !bracket) {
 				wasdelim = scan;
 				*scan++ = '\0';
 				break;
@@ -1805,13 +1822,19 @@ char *ast_read_textfile(const char *filename)
 	return output;
 }
 
-int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags *flags, char **args, char *optstr)
+static int parse_options(const struct ast_app_option *options, void *_flags, char **args, char *optstr, int flaglen)
 {
 	char *s, *arg;
 	int curarg, res = 0;
 	unsigned int argloc;
+	struct ast_flags *flags = _flags;
+	struct ast_flags64 *flags64 = _flags;
 
-	ast_clear_flag(flags, AST_FLAGS_ALL);
+	if (flaglen == 32) {
+		ast_clear_flag(flags, AST_FLAGS_ALL);
+	} else {
+		flags64->flags = 0;
+	}
 
 	if (!optstr) {
 		return 0;
@@ -1822,8 +1845,40 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
 		curarg = *s++ & 0x7f;	/* the array (in app.h) has 128 entries */
 		argloc = options[curarg].arg_index;
 		if (*s == '(') {
+			int paren = 1, quote = 0;
+			int parsequotes = (s[1] == '"') ? 1 : 0;
+
 			/* Has argument */
 			arg = ++s;
+			for (; *s; s++) {
+				if (*s == '(' && !quote) {
+					paren++;
+				} else if (*s == ')' && !quote) {
+					/* Count parentheses, unless they're within quotes (or backslashed, below) */
+					paren--;
+				} else if (*s == '"' && parsequotes) {
+					/* Leave embedded quotes alone, unless they are the first character */
+					quote = quote ? 0 : 1;
+					ast_copy_string(s, s + 1, INT_MAX);
+					s--;
+				} else if (*s == '\\') {
+					if (!quote) {
+						/* If a backslash is found outside of quotes, remove it */
+						ast_copy_string(s, s + 1, INT_MAX);
+					} else if (quote && s[1] == '"') {
+						/* Backslash for a quote character within quotes, remove the backslash */
+						ast_copy_string(s, s + 1, INT_MAX);
+					} else {
+						/* Backslash within quotes, keep both characters */
+						s++;
+					}
+				}
+
+				if (paren == 0) {
+					break;
+				}
+			}
+			/* This will find the closing paren we found above, or none, if the string ended before we found one. */
 			if ((s = strchr(s, ')'))) {
 				if (argloc) {
 					args[argloc - 1] = arg;
@@ -1837,48 +1892,24 @@ int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags
 		} else if (argloc) {
 			args[argloc - 1] = "";
 		}
-		ast_set_flag(flags, options[curarg].flag);
+		if (flaglen == 32) {
+			ast_set_flag(flags, options[curarg].flag);
+		} else {
+			ast_set_flag64(flags64, options[curarg].flag);
+		}
 	}
 
 	return res;
 }
 
+int ast_app_parse_options(const struct ast_app_option *options, struct ast_flags *flags, char **args, char *optstr)
+{
+	return parse_options(options, flags, args, optstr, 32);
+}
+
 int ast_app_parse_options64(const struct ast_app_option *options, struct ast_flags64 *flags, char **args, char *optstr)
 {
-	char *s, *arg;
-	int curarg, res = 0;
-	unsigned int argloc;
-
-	flags->flags = 0;
-
-	if (!optstr) {
-		return 0;
-	}
-
-	s = optstr;
-	while (*s) {
-		curarg = *s++ & 0x7f;	/* the array (in app.h) has 128 entries */
-		ast_set_flag64(flags, options[curarg].flag);
-		argloc = options[curarg].arg_index;
-		if (*s == '(') {
-			/* Has argument */
-			arg = ++s;
-			if ((s = strchr(s, ')'))) {
-				if (argloc) {
-					args[argloc - 1] = arg;
-				}
-				*s++ = '\0';
-			} else {
-				ast_log(LOG_WARNING, "Missing closing parenthesis for argument '%c' in string '%s'\n", curarg, arg);
-				res = -1;
-				break;
-			}
-		} else if (argloc) {
-			args[argloc - 1] = NULL;
-		}
-	}
-
-	return res;
+	return parse_options(options, flags, args, optstr, 64);
 }
 
 void ast_app_options2str64(const struct ast_app_option *options, struct ast_flags64 *flags, char *buf, size_t len)

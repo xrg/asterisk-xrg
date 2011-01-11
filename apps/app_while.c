@@ -163,7 +163,11 @@ static int find_matching_endwhile(struct ast_channel *chan)
 				/* This is the matching context we want */
 				int cur_priority = chan->priority + 1, level=1;
 
-				for (e = find_matching_priority(c, chan->exten, cur_priority, chan->cid.cid_num); e; e = find_matching_priority(c, chan->exten, ++cur_priority, chan->cid.cid_num)) {
+				for (e = find_matching_priority(c, chan->exten, cur_priority,
+					S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL));
+					e;
+					e = find_matching_priority(c, chan->exten, ++cur_priority,
+						S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 					if (!strcasecmp(ast_get_extension_app(e), "WHILE")) {
 						level++;
 					} else if (!strcasecmp(ast_get_extension_app(e), "ENDWHILE")) {
@@ -204,7 +208,7 @@ static int _while_exec(struct ast_channel *chan, const char *data, int end)
 	}
 
 #if 0
-	/* dont want run away loops if the chan isn't even up
+	/* don't want run away loops if the chan isn't even up
 	   this is up for debate since it slows things down a tad ......
 
 	   Debate is over... this prevents While/EndWhile from working

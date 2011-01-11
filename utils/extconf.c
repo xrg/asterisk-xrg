@@ -49,6 +49,7 @@
 #include <pthread.h>
 #include <netdb.h>
 #include <sys/param.h>
+#include <signal.h>
 
 static void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
 void ast_verbose(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -1258,13 +1259,18 @@ static void CB_RESET(void )
 /*! \brief Keep track of how many threads are currently trying to wait*() on
  *  a child process */
 static unsigned int safe_system_level = 0;
-static void *safe_system_prev_handler;
+static struct sigaction safe_system_prev_handler;
 
 /*! \brief NULL handler so we can collect the child exit status */
-static void null_sig_handler(int sig)
+static void _null_sig_handler(int sig)
 {
 
 }
+
+static struct sigaction null_sig_handler = {
+	.sa_handler = _null_sig_handler,
+	.sa_flags = SA_RESTART,
+};
 
 void ast_replace_sigchld(void);
 
@@ -1275,9 +1281,9 @@ void ast_replace_sigchld(void)
 	level = safe_system_level++;
 
 	/* only replace the handler if it has not already been done */
-	if (level == 0)
-		safe_system_prev_handler = signal(SIGCHLD, null_sig_handler);
-
+	if (level == 0) {
+		sigaction(SIGCHLD, &null_sig_handler, &safe_system_prev_handler);
+	}
 }
 
 void ast_unreplace_sigchld(void);
@@ -1289,9 +1295,9 @@ void ast_unreplace_sigchld(void)
 	level = --safe_system_level;
 
 	/* only restore the handler if we are the last one */
-	if (level == 0)
-		signal(SIGCHLD, safe_system_prev_handler);
-
+	if (level == 0) {
+		sigaction(SIGCHLD, &safe_system_prev_handler, NULL);
+	}
 }
 
 int ast_safe_system(const char *s);
@@ -2799,6 +2805,63 @@ static int ast_true(const char *s)
 		return -1;
 
 	return 0;
+}
+
+#define ONE_MILLION	1000000
+/*
+ * put timeval in a valid range. usec is 0..999999
+ * negative values are not allowed and truncated.
+ */
+static struct timeval tvfix(struct timeval a)
+{
+	if (a.tv_usec >= ONE_MILLION) {
+		ast_log(LOG_WARNING, "warning too large timestamp %ld.%ld\n",
+			(long)a.tv_sec, (long int) a.tv_usec);
+		a.tv_sec += a.tv_usec / ONE_MILLION;
+		a.tv_usec %= ONE_MILLION;
+	} else if (a.tv_usec < 0) {
+		ast_log(LOG_WARNING, "warning negative timestamp %ld.%ld\n",
+			(long)a.tv_sec, (long int) a.tv_usec);
+		a.tv_usec = 0;
+	}
+	return a;
+}
+
+struct timeval ast_tvadd(struct timeval a, struct timeval b);
+struct timeval ast_tvadd(struct timeval a, struct timeval b)
+{
+	/* consistency checks to guarantee usec in 0..999999 */
+	a = tvfix(a);
+	b = tvfix(b);
+	a.tv_sec += b.tv_sec;
+	a.tv_usec += b.tv_usec;
+	if (a.tv_usec >= ONE_MILLION) {
+		a.tv_sec++;
+		a.tv_usec -= ONE_MILLION;
+	}
+	return a;
+}
+
+struct timeval ast_tvsub(struct timeval a, struct timeval b);
+struct timeval ast_tvsub(struct timeval a, struct timeval b)
+{
+	/* consistency checks to guarantee usec in 0..999999 */
+	a = tvfix(a);
+	b = tvfix(b);
+	a.tv_sec -= b.tv_sec;
+	a.tv_usec -= b.tv_usec;
+	if (a.tv_usec < 0) {
+		a.tv_sec-- ;
+		a.tv_usec += ONE_MILLION;
+	}
+	return a;
+}
+#undef ONE_MILLION
+
+void ast_mark_lock_failed(void *lock_addr);
+void ast_mark_lock_failed(void *lock_addr)
+{
+	/* Pretend to do something. */
 }
 
 /* stolen from pbx.c */
@@ -6191,5 +6254,15 @@ int localized_pbx_load_module(void)
 	printf("=========\n");
 	
 	return 0;
+}
+
+/* For platforms which don't have pthread_rwlock_timedrdlock() */
+struct timeval ast_tvnow(void);
+
+struct timeval ast_tvnow(void)
+{
+	struct timeval t;
+	gettimeofday(&t, NULL);
+	return t;
 }
 

@@ -87,6 +87,7 @@ struct cdr_tds_config {
 		AST_STRING_FIELD(table);
 		AST_STRING_FIELD(charset);
 		AST_STRING_FIELD(language);
+		AST_STRING_FIELD(hrtime);
 	);
 	DBPROCESS *dbproc;
 	unsigned int connected:1;
@@ -149,7 +150,36 @@ retry:
 	}
 
 	if (settings->has_userfield) {
-		erc = dbfcmd(settings->dbproc,
+		if (settings->hrtime) {
+			double hrbillsec = 0.0;
+			double hrduration;
+
+			if (!ast_tvzero(cdr->answer)) {
+				hrbillsec = (double)(ast_tvdiff_us(cdr->end, cdr->answer) / 1000000.0);
+			}
+			hrduration = (double)(ast_tvdiff_us(cdr->end, cdr->start) / 1000000.0);
+
+			erc = dbfcmd(settings->dbproc,
+					 "INSERT INTO %s "
+					 "("
+					 "accountcode, src, dst, dcontext, clid, channel, "
+					 "dstchannel, lastapp, lastdata, start, answer, [end], duration, "
+					 "billsec, disposition, amaflags, uniqueid, userfield"
+					 ") "
+					 "VALUES "
+					 "("
+					 "'%s', '%s', '%s', '%s', '%s', '%s', "
+					 "'%s', '%s', '%s', %s, %s, %s, %lf, "
+					 "%lf, '%s', '%s', '%s', '%s'"
+					 ")",
+					 settings->table,
+					 accountcode, src, dst, dcontext, clid, channel,
+					 dstchannel, lastapp, lastdata, start, answer, end, hrduration,
+					 hrbillsec, ast_cdr_disp2str(cdr->disposition), ast_cdr_flags2str(cdr->amaflags), uniqueid,
+					 userfield
+			);
+		} else {
+			erc = dbfcmd(settings->dbproc,
 					 "INSERT INTO %s "
 					 "("
 					 "accountcode, src, dst, dcontext, clid, channel, "
@@ -168,8 +198,37 @@ retry:
 					 cdr->billsec, ast_cdr_disp2str(cdr->disposition), ast_cdr_flags2str(cdr->amaflags), uniqueid,
 					 userfield
 			);
+		}
 	} else {
-		erc = dbfcmd(settings->dbproc,
+		if (settings->hrtime) {
+			double hrbillsec = 0.0;
+			double hrduration;
+
+			if (!ast_tvzero(cdr->answer)) {
+				hrbillsec = (double)(ast_tvdiff_us(cdr->end, cdr->answer) / 1000000.0);
+			}
+			hrduration = (double)(ast_tvdiff_us(cdr->end, cdr->start) / 1000000.0);
+
+			erc = dbfcmd(settings->dbproc,
+					 "INSERT INTO %s "
+					 "("
+					 "accountcode, src, dst, dcontext, clid, channel, "
+					 "dstchannel, lastapp, lastdata, start, answer, [end], duration, "
+					 "billsec, disposition, amaflags, uniqueid"
+					 ") "
+					 "VALUES "
+					 "("
+					 "'%s', '%s', '%s', '%s', '%s', '%s', "
+					 "'%s', '%s', '%s', %s, %s, %s, %lf, "
+					 "%lf, '%s', '%s', '%s'"
+					 ")",
+					 settings->table,
+					 accountcode, src, dst, dcontext, clid, channel,
+					 dstchannel, lastapp, lastdata, start, answer, end, hrduration,
+					 hrbillsec, ast_cdr_disp2str(cdr->disposition), ast_cdr_flags2str(cdr->amaflags), uniqueid
+			);
+		} else {
+			erc = dbfcmd(settings->dbproc,
 					 "INSERT INTO %s "
 					 "("
 					 "accountcode, src, dst, dcontext, clid, channel, "
@@ -187,6 +246,7 @@ retry:
 					 dstchannel, lastapp, lastdata, start, answer, end, cdr->duration,
 					 cdr->billsec, ast_cdr_disp2str(cdr->disposition), ast_cdr_flags2str(cdr->amaflags), uniqueid
 			);
+		}
 	}
 
 	if (erc == FAIL) {
@@ -357,7 +417,7 @@ static int mssql_connect(void)
 		goto failed;
 	}
 
-	if (execute_and_consume(settings->dbproc, "SELECT 1 FROM [%s]", settings->table)) {
+	if (execute_and_consume(settings->dbproc, "SELECT 1 FROM [%s] WHERE 1 = 0", settings->table)) {
 		ast_log(LOG_ERROR, "Unable to find table '%s'\n", settings->table);
 		goto failed;
 	}
@@ -502,6 +562,13 @@ static int tds_load_module(int reload)
 		ast_string_field_set(settings, table, "cdr");
 	}
 
+	ptr = ast_variable_retrieve(cfg, "global", "hrtime");
+	if (ptr && ast_true(ptr)) {
+		ast_string_field_set(settings, hrtime, ptr);
+	} else {
+		ast_log(LOG_NOTICE, "High Resolution Time not found, using integers for billsec and duration fields by default.\n");
+	}
+
 	mssql_disconnect();
 
 	if (mssql_connect()) {
@@ -561,8 +628,9 @@ static int unload_module(void)
 	return tds_unload_module();
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "FreeTDS CDR Backend",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "FreeTDS CDR Backend",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,
+		.load_pri = AST_MODPRI_CDR_DRIVER,
 	       );

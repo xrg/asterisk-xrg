@@ -127,6 +127,7 @@ int ast_audiohook_write_frame(struct ast_audiohook *audiohook, enum ast_audiohoo
 	int our_factory_ms;
 	int other_factory_samples;
 	int other_factory_ms;
+	int muteme = 0;
 
 	/* Update last feeding time to be current */
 	*rwtime = ast_tvnow();
@@ -149,6 +150,17 @@ int ast_audiohook_write_frame(struct ast_audiohook *audiohook, enum ast_audiohoo
 		}
 		ast_slinfactory_flush(factory);
 		ast_slinfactory_flush(other_factory);
+	}
+
+	/* swap frame data for zeros if mute is required */
+	if ((ast_test_flag(audiohook, AST_AUDIOHOOK_MUTE_READ) && (direction == AST_AUDIOHOOK_DIRECTION_READ)) ||
+		(ast_test_flag(audiohook, AST_AUDIOHOOK_MUTE_WRITE) && (direction == AST_AUDIOHOOK_DIRECTION_WRITE)) ||
+		(ast_test_flag(audiohook, AST_AUDIOHOOK_MUTE_READ | AST_AUDIOHOOK_MUTE_WRITE) == (AST_AUDIOHOOK_MUTE_READ | AST_AUDIOHOOK_MUTE_WRITE))) {
+			muteme = 1;
+	}
+
+	if (muteme && frame->datalen > 0) {
+		ast_frame_clear(frame);
 	}
 
 	/* Write frame out to respective factory */
@@ -359,8 +371,8 @@ int ast_audiohook_attach(struct ast_channel *chan, struct ast_audiohook *audioho
 }
 
 /*! \brief Update audiohook's status
- * \param audiohook status enum
  * \param audiohook Audiohook structure
+ * \param status Audiohook status enum
  *
  * \note once status is updated to DONE, this function can not be used to set the
  * status back to any other setting.  Setting DONE effectively locks the status as such.
@@ -572,7 +584,29 @@ static struct ast_frame *dtmf_audiohook_write_list(struct ast_channel *chan, str
 	return frame;
 }
 
-/*! \brief Pass an AUDIO frame off to be handled by the audiohook core
+/*!
+ * \brief Pass an AUDIO frame off to be handled by the audiohook core
+ *
+ * \details
+ * This function has 3 ast_frames and 3 parts to handle each.  At the beginning of this
+ * function all 3 frames, start_frame, middle_frame, and end_frame point to the initial
+ * input frame.
+ *
+ * Part_1: Translate the start_frame into SLINEAR audio if it is not already in that
+ *         format.  The result of this part is middle_frame is guaranteed to be in
+ *         SLINEAR format for Part_2.
+ * Part_2: Send middle_frame off to spies and manipulators.  At this point middle_frame is
+ *         either a new frame as result of the translation, or points directly to the start_frame
+ *         because no translation to SLINEAR audio was required.  The result of this part
+ *         is end_frame will be updated to point to middle_frame if any audiohook manipulation
+ *         took place.
+ * Part_3: Translate end_frame's audio back into the format of start frame if necessary.
+ *         At this point if middle_frame != end_frame, we are guaranteed that no manipulation
+ *         took place and middle_frame can be freed as it was translated... If middle_frame was
+ *         not translated and still pointed to start_frame, it would be equal to end_frame as well
+ *         regardless if manipulation took place which would not result in this free.  The result
+ *         of this part is end_frame is guaranteed to be the format of start_frame for the return.
+ *         
  * \param chan Channel that the list is coming off of
  * \param audiohook_list List of audiohooks
  * \param direction Direction frame is coming in from
@@ -587,6 +621,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 	struct ast_audiohook *audiohook = NULL;
 	int samples = frame->samples;
 
+	/* ---Part_1. translate start_frame to SLINEAR if necessary. */
 	/* If the frame coming in is not signed linear we have to send it through the in_translate path */
 	if (frame->subclass.codec != AST_FORMAT_SLINEAR) {
 		if (in_translate->format != frame->subclass.codec) {
@@ -601,6 +636,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 		samples = middle_frame->samples;
 	}
 
+	/* ---Part_2: Send middle_frame to spy and manipulator lists.  middle_frame is guaranteed to be SLINEAR here.*/
 	/* Queue up signed linear frame to each spy */
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&audiohook_list->spy_list, audiohook, list) {
 		ast_audiohook_lock(audiohook);
@@ -654,20 +690,21 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 				audiohook->manipulate_callback(audiohook, chan, NULL, direction);
 				continue;
 			}
-			/* Feed in frame to manipulation */
+			/* Feed in frame to manipulation. */
 			if (audiohook->manipulate_callback(audiohook, chan, middle_frame, direction)) {
-				ast_frfree(middle_frame);
-				middle_frame = NULL;
+				/* XXX IGNORE FAILURE */
+
+				/* If the manipulation fails then the frame will be returned in its original state.
+				 * Since there are potentially more manipulator callbacks in the list, no action should
+				 * be taken here to exit early. */
 			}
 			ast_audiohook_unlock(audiohook);
 		}
 		AST_LIST_TRAVERSE_SAFE_END;
-		if (middle_frame) {
-			end_frame = middle_frame;
-		}
+		end_frame = middle_frame;
 	}
 
-	/* Now we figure out what to do with our end frame (whether to transcode or not) */
+	/* ---Part_3: Decide what to do with the end_frame (whether to transcode or not) */
 	if (middle_frame == end_frame) {
 		/* Middle frame was modified and became the end frame... let's see if we need to transcode */
 		if (end_frame->subclass.codec != start_frame->subclass.codec) {
@@ -692,12 +729,21 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 		}
 	} else {
 		/* No frame was modified, we can just drop our middle frame and pass the frame we got in out */
-		if (middle_frame) {
-			ast_frfree(middle_frame);
-		}
+		ast_frfree(middle_frame);
 	}
 
 	return end_frame;
+}
+
+int ast_audiohook_write_list_empty(struct ast_audiohook_list *audiohook_list)
+{
+	if (AST_LIST_EMPTY(&audiohook_list->spy_list) &&
+		AST_LIST_EMPTY(&audiohook_list->whisper_list) &&
+		AST_LIST_EMPTY(&audiohook_list->manipulate_list)) {
+
+		return 1;
+	}
+	return 0;
 }
 
 /*! \brief Pass a frame off to be handled by the audiohook core
@@ -717,7 +763,6 @@ struct ast_frame *ast_audiohook_write_list(struct ast_channel *chan, struct ast_
 	else
 		return frame;
 }
-			
 
 /*! \brief Wait for audiohook trigger to be triggered
  * \param audiohook Audiohook to wait on
@@ -1000,4 +1045,38 @@ int ast_audiohook_volume_adjust(struct ast_channel *chan, enum ast_audiohook_dir
 	}
 
 	return 0;
+}
+
+/*! \brief Mute frames read from or written to a channel
+ * \param chan Channel to muck with
+ * \param source Type of audiohook
+ * \param flag which flag to set / clear
+ * \param clear set or clear
+ * \return Returns 0 on success, -1 on failure
+ */
+int ast_audiohook_set_mute(struct ast_channel *chan, const char *source, enum ast_audiohook_flags flag, int clear)
+{
+	struct ast_audiohook *audiohook = NULL;
+
+	ast_channel_lock(chan);
+
+	/* Ensure the channel has audiohooks on it */
+	if (!chan->audiohooks) {
+		ast_channel_unlock(chan);
+		return -1;
+	}
+
+	audiohook = find_audiohook_by_source(chan->audiohooks, source);
+
+	if (audiohook) {
+		if (clear) {
+			ast_clear_flag(audiohook, flag);
+		} else {
+			ast_set_flag(audiohook, flag);
+		}
+	}
+
+	ast_channel_unlock(chan);
+
+	return (audiohook ? 0 : -1);
 }

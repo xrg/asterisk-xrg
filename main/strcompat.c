@@ -26,6 +26,10 @@
 #include <sys/resource.h>   /* for getrlimit(2) */
 #include <sys/types.h>      /* for opendir(3) */
 #include <dirent.h>         /* for opendir(3) */
+#include <unistd.h>         /* for fcntl(2) */
+#include <fcntl.h>          /* for fcntl(2) */
+
+#include "asterisk/utils.h"
 
 #ifndef HAVE_STRSEP
 char *strsep(char **str, const char *delims)
@@ -166,6 +170,19 @@ int vasprintf(char **strp, const char *fmt, va_list ap)
 	return size;
 }
 #endif /* !defined(HAVE_VASPRINTF) && !defined(__AST_DEBUG_MALLOC) */
+
+#ifndef HAVE_TIMERSUB
+void timersub(struct timeval *tvend, struct timeval *tvstart, struct timeval *tvdiff)
+{
+	tvdiff->tv_sec = tvend->tv_sec - tvstart->tv_sec;
+	tvdiff->tv_usec = tvend->tv_usec - tvstart->tv_usec;
+	if (tvdiff->tv_usec < 0) {
+		tvdiff->tv_sec --;
+		tvdiff->tv_usec += 1000000;
+	}
+
+}
+#endif
 
 /*
  * Based on Code from bsd-asprintf from OpenSSH
@@ -350,14 +367,14 @@ uint64_t ntohll(uint64_t net64)
 	} number;
 	number.u = net64;
 	return
-		(((uint64_t) number.c[0]) <<  0) |
-		(((uint64_t) number.c[1]) <<  8) |
-		(((uint64_t) number.c[2]) << 16) |
-		(((uint64_t) number.c[3]) << 24) |
-		(((uint64_t) number.c[4]) << 32) |
-		(((uint64_t) number.c[5]) << 40) |
-		(((uint64_t) number.c[6]) << 48) |
-		(((uint64_t) number.c[7]) << 56);
+		(((uint64_t) number.c[0]) << 56) |
+		(((uint64_t) number.c[1]) << 48) |
+		(((uint64_t) number.c[2]) << 40) |
+		(((uint64_t) number.c[3]) << 32) |
+		(((uint64_t) number.c[4]) << 24) |
+		(((uint64_t) number.c[5]) << 16) |
+		(((uint64_t) number.c[6]) <<  8) |
+		(((uint64_t) number.c[7]) <<  0);
 #else
 	#error "Unknown byte order"
 #endif
@@ -376,14 +393,14 @@ uint64_t htonll(uint64_t host64)
 	} number;
 	number.u = host64;
 	return
-		(((uint64_t) number.c[0]) <<  0) |
-		(((uint64_t) number.c[1]) <<  8) |
-		(((uint64_t) number.c[2]) << 16) |
-		(((uint64_t) number.c[3]) << 24) |
-		(((uint64_t) number.c[4]) << 32) |
-		(((uint64_t) number.c[5]) << 40) |
-		(((uint64_t) number.c[6]) << 48) |
-		(((uint64_t) number.c[7]) << 56);
+		(((uint64_t) number.c[0]) << 56) |
+		(((uint64_t) number.c[1]) << 48) |
+		(((uint64_t) number.c[2]) << 40) |
+		(((uint64_t) number.c[3]) << 32) |
+		(((uint64_t) number.c[4]) << 24) |
+		(((uint64_t) number.c[5]) << 16) |
+		(((uint64_t) number.c[6]) <<  8) |
+		(((uint64_t) number.c[7]) <<  0);
 #else
 	#error "Unknown byte order"
 #endif
@@ -420,16 +437,134 @@ void closefrom(int n)
 				continue;
 			}
 			if ((x = strtol(entry->d_name, &result, 10)) && x >= n) {
+#ifdef STRICT_COMPAT
 				close(x);
+#else
+				/* This isn't strictly compatible, but it's actually faster
+				 * for our purposes to set the CLOEXEC flag than to close
+				 * file descriptors.
+				 */
+				long flags = fcntl(x, F_GETFD);
+				if (flags == -1 && errno == EBADF) {
+					continue;
+				}
+				fcntl(x, F_SETFD, flags | FD_CLOEXEC);
+#endif
 			}
 		}
 		closedir(dir);
 	} else {
 		getrlimit(RLIMIT_NOFILE, &rl);
+		if (rl.rlim_cur > 65535) {
+			/* A more reasonable value.  Consider that the primary source of
+			 * file descriptors in Asterisk are UDP sockets, of which we are
+			 * limited to 65,535 per address.  We additionally limit that down
+			 * to about 10,000 sockets per protocol.  While the kernel will
+			 * allow us to set the fileno limit higher (up to 4.2 billion),
+			 * there really is no practical reason for it to be that high.
+			 */
+			rl.rlim_cur = 65535;
+		}
 		for (x = n; x < rl.rlim_cur; x++) {
+#ifdef STRICT_COMPAT
 			close(x);
+#else
+			long flags = fcntl(x, F_GETFD);
+			if (flags == -1 && errno == EBADF) {
+				continue;
+			}
+			fcntl(x, F_SETFD, flags | FD_CLOEXEC);
+#endif
 		}
 	}
 }
 #endif
 
+#ifndef HAVE_MKDTEMP
+/*	$OpenBSD: mktemp.c,v 1.30 2010/03/21 23:09:30 schwarze Exp $ */
+/*
+ * Copyright (c) 1996-1998, 2008 Theo de Raadt
+ * Copyright (c) 1997, 2008-2009 Todd C. Miller
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+#define MKTEMP_NAME	0
+#define MKTEMP_FILE	1
+#define MKTEMP_DIR	2
+
+#define TEMPCHARS	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_."
+#define NUM_CHARS	(sizeof(TEMPCHARS) - 1)
+
+static int mktemp_internal(char *path, int slen, int mode)
+{
+	char *start, *cp, *ep;
+	const char *tempchars = TEMPCHARS;
+	unsigned int r, tries;
+	struct stat sb;
+	size_t len;
+	int fd;
+
+	len = strlen(path);
+	if (len == 0 || slen >= len) {
+		errno = EINVAL;
+		return(-1);
+	}
+	ep = path + len - slen;
+
+	tries = 1;
+	for (start = ep; start > path && start[-1] == 'X'; start--) {
+		if (tries < INT_MAX / NUM_CHARS) {
+			tries *= NUM_CHARS;
+		}
+	}
+	tries *= 2;
+
+	do {
+		for (cp = start; cp != ep; cp++) {
+			r = ast_random() % NUM_CHARS;
+			*cp = tempchars[r];
+		}
+
+		switch (mode) {
+		case MKTEMP_NAME:
+			if (lstat(path, &sb) != 0) {
+				return (errno == ENOENT ? 0 : -1);
+			}
+			break;
+		case MKTEMP_FILE:
+			fd = open(path, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
+			if (fd != -1 || errno != EEXIST) {
+				return (fd);
+			}
+			break;
+		case MKTEMP_DIR:
+			if (mkdir(path, S_IRUSR | S_IWUSR | S_IXUSR) == 0) {
+				return (0);
+			}
+			if (errno != EEXIST) {
+				return (-1);
+			}
+			break;
+		}
+	} while (--tries);
+
+	errno = EEXIST;
+	return(-1);
+}
+
+char *mkdtemp(char *path)
+{
+	return mktemp_internal(path, 0, MKTEMP_DIR) ? NULL : path;
+}
+#endif

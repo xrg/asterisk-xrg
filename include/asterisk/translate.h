@@ -105,8 +105,6 @@ struct ast_translator {
 	int buf_size;
 
 	int desc_size;                         /*!< size of private descriptor in pvt->pvt, if any */
-	int plc_samples;                       /*!< set to the plc block size if used, 0 otherwise */
-	int useplc;                            /*!< current status of plc, changed at runtime */
 	int native_plc;                        /*!< true if the translator can do native plc */
 
 	struct ast_module *module;             /*!< opaque reference to the parent module */
@@ -255,6 +253,14 @@ unsigned int ast_translate_path_steps(format_t dest, format_t src);
  * present in 'src', or the function will produce unexpected results.
  */
 format_t ast_translate_available_formats(format_t dest, format_t src);
+
+/*!
+ * \brief Puts a string representation of the translation path into outbuf
+ * \param translator structure containing the translation path
+ * \param ast_str output buffer
+ * \retval on success pointer to beginning of outbuf. on failure "".
+ */
+const char *ast_translate_path_to_str(struct ast_trans_pvt *t, struct ast_str **str);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

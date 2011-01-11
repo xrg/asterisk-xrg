@@ -210,7 +210,7 @@ static const struct ast_channel_tech jingle_tech = {
 
 static struct sockaddr_in bindaddr = { 0, };	/*!< The address we bind to */
 
-static struct sched_context *sched;	/*!< The scheduling context */
+static struct ast_sched_context *sched;	/*!< The scheduling context */
 static struct io_context *io;	/*!< The IO context */
 static struct in_addr __ourip;
 
@@ -581,6 +581,9 @@ static int jingle_create_candidates(struct jingle *client, struct jingle_pvt *p,
 	struct aji_client *c = client->connection;
 	struct jingle_candidate *ours1 = NULL, *ours2 = NULL;
 	struct sockaddr_in sin = { 0, };
+	struct ast_sockaddr sin_tmp;
+	struct ast_sockaddr us_tmp;
+	struct ast_sockaddr bindaddr_tmp;
 	struct sockaddr_in dest;
 	struct in_addr us;
 	struct in_addr externaddr;
@@ -617,8 +620,11 @@ static int jingle_create_candidates(struct jingle *client, struct jingle_pvt *p,
 		goto safeout;
 	}
 
-	ast_rtp_instance_get_local_address(p->rtp, &sin);
-	ast_find_ourip(&us, bindaddr);
+	ast_rtp_instance_get_local_address(p->rtp, &sin_tmp);
+	ast_sockaddr_to_sin(&sin_tmp, &sin);
+	ast_sockaddr_from_sin(&bindaddr_tmp, &bindaddr);
+	ast_find_ourip(&us_tmp, &bindaddr_tmp, AF_INET);
+	us.s_addr = htonl(ast_sockaddr_ipv4(&us_tmp));
 
 	/* Setup our first jingle candidate */
 	ours1->component = 1;
@@ -739,6 +745,7 @@ static struct jingle_pvt *jingle_alloc(struct jingle *client, const char *from, 
 	struct aji_resource *resources = NULL;
 	struct aji_buddy *buddy;
 	char idroster[200];
+	struct ast_sockaddr bindaddr_tmp;
 
 	ast_debug(1, "The client is %s for alloc\n", client->name);
 	if (!sid && !strchr(from, '/')) {	/* I started call! */
@@ -775,7 +782,8 @@ static struct jingle_pvt *jingle_alloc(struct jingle *client, const char *from, 
 		ast_copy_string(tmp->them, idroster, sizeof(tmp->them));
 		tmp->initiator = 1;
 	}
-	tmp->rtp = ast_rtp_instance_new("asterisk", sched, &bindaddr, NULL);
+	ast_sockaddr_from_sin(&bindaddr_tmp, &bindaddr);
+	tmp->rtp = ast_rtp_instance_new("asterisk", sched, &bindaddr_tmp, NULL);
 	tmp->parent = client;
 	if (!tmp->rtp) {
 		ast_log(LOG_WARNING, "Out of RTP sessions?\n");
@@ -845,7 +853,8 @@ static struct ast_channel *jingle_new(struct jingle *client, struct jingle_pvt *
 
 	tmp->callgroup = client->callgroup;
 	tmp->pickupgroup = client->pickupgroup;
-	tmp->cid.cid_pres = client->callingpres;
+	tmp->caller.id.name.presentation = client->callingpres;
+	tmp->caller.id.number.presentation = client->callingpres;
 	if (!ast_strlen_zero(client->accountcode))
 		ast_string_field_set(tmp, accountcode, client->accountcode);
 	if (client->amaflags)
@@ -859,9 +868,13 @@ static struct ast_channel *jingle_new(struct jingle *client, struct jingle_pvt *
 	ast_copy_string(tmp->exten, i->exten, sizeof(tmp->exten));
 	/* Don't use ast_set_callerid() here because it will
 	 * generate an unnecessary NewCallerID event  */
-	tmp->cid.cid_ani = ast_strdup(i->cid_num);
-	if (!ast_strlen_zero(i->exten) && strcmp(i->exten, "s"))
-		tmp->cid.cid_dnid = ast_strdup(i->exten);
+	if (!ast_strlen_zero(i->cid_num)) {
+		tmp->caller.ani.number.valid = 1;
+		tmp->caller.ani.number.str = ast_strdup(i->cid_num);
+	}
+	if (!ast_strlen_zero(i->exten) && strcmp(i->exten, "s")) {
+		tmp->dialed.number.str = ast_strdup(i->exten);
+	}
 	tmp->priority = 1;
 	if (i->rtp)
 		ast_jb_configure(tmp, &global_jbconf);
@@ -1061,6 +1074,7 @@ static int jingle_update_stun(struct jingle *client, struct jingle_pvt *p)
 	struct hostent *hp;
 	struct ast_hostent ahp;
 	struct sockaddr_in sin;
+	struct ast_sockaddr sin_tmp;
 
 	if (time(NULL) == p->laststun)
 		return 0;
@@ -1075,7 +1089,8 @@ static int jingle_update_stun(struct jingle *client, struct jingle_pvt *p)
 		sin.sin_port = htons(tmp->port);
 		snprintf(username, sizeof(username), "%s:%s", tmp->ufrag, p->ourcandidates->ufrag);
 
-		ast_rtp_instance_stun_request(p->rtp, &sin, username);
+		ast_sockaddr_from_sin(&sin_tmp, &sin);
+		ast_rtp_instance_stun_request(p->rtp, &sin_tmp, username);
 		tmp = tmp->next;
 	}
 	return 1;
@@ -1867,6 +1882,9 @@ static int jingle_load_config(void)
 /*! \brief Load module into PBX, register channel */
 static int load_module(void)
 {
+	struct ast_sockaddr ourip_tmp;
+	struct ast_sockaddr bindaddr_tmp;
+
 	char *jabber_loaded = ast_module_helper("", "res_jabber.so", 0, 0, 0, 0);
 	free(jabber_loaded);
 	if (!jabber_loaded) {
@@ -1885,18 +1903,22 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	sched = sched_context_create();
-	if (!sched) 
+	sched = ast_sched_context_create();
+	if (!sched) {
 		ast_log(LOG_WARNING, "Unable to create schedule context\n");
+	}
 
 	io = io_context_create();
-	if (!io) 
+	if (!io) {
 		ast_log(LOG_WARNING, "Unable to create I/O context\n");
+	}
 
-	if (ast_find_ourip(&__ourip, bindaddr)) {
+	ast_sockaddr_from_sin(&bindaddr_tmp, &bindaddr);
+	if (ast_find_ourip(&ourip_tmp, &bindaddr_tmp, AF_INET)) {
 		ast_log(LOG_WARNING, "Unable to get own IP address, Jingle disabled\n");
 		return 0;
 	}
+	__ourip.s_addr = htonl(ast_sockaddr_ipv4(&ourip_tmp));
 
 	ast_rtp_glue_register(&jingle_rtp_glue);
 	ast_cli_register_multiple(jingle_cli, ARRAY_LEN(jingle_cli));
@@ -1946,8 +1968,9 @@ static int unload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Jingle Channel Driver",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Jingle Channel Driver",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,
+		.load_pri = AST_MODPRI_CHANNEL_DRIVER,
 	       );

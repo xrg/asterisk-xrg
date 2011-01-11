@@ -29,9 +29,17 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <ctype.h>
 #include <sys/stat.h>
+#include <sys/stat.h>
 
 #ifdef HAVE_DEV_URANDOM
 #include <fcntl.h>
+#endif
+
+#include <sys/syscall.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#elif defined(HAVE_SYS_THR_H)
+#include <sys/thr.h>
 #endif
 
 #include "asterisk/network.h"
@@ -283,7 +291,7 @@ int ast_base64decode(unsigned char *dst, const char *src, int max)
 			cnt++;
 		}
 	}
-	/* Dont worry about left over bits, they're extra anyway */
+	/* Don't worry about left over bits, they're extra anyway */
 	return cnt;
 }
 
@@ -739,7 +747,7 @@ static void append_backtrace_information(struct ast_str **str, struct ast_bt *bt
 		return;
 	}
 
-	if ((symbols = backtrace_symbols(bt->addresses, bt->num_frames))) {
+	if ((symbols = ast_bt_get_symbols(bt->addresses, bt->num_frames))) {
 		int frame_iterator;
 		
 		for (frame_iterator = 0; frame_iterator < bt->num_frames; ++frame_iterator) {
@@ -1615,7 +1623,8 @@ ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr
 	size_t space = (*pool_head)->size - (*pool_head)->used;
 	size_t to_alloc = needed + sizeof(ast_string_field_allocation);
 
-	if (__builtin_expect(to_alloc > space, 0)) {
+	/* This +1 accounts for alignment on SPARC */
+	if (__builtin_expect(to_alloc + 1 > space, 0)) {
 		size_t new_size = (*pool_head)->size;
 
 		while (new_size < to_alloc) {
@@ -1632,6 +1641,13 @@ ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr
 	}
 
 	result = (*pool_head)->base + (*pool_head)->used;
+#ifdef __sparc__
+	/* SPARC requires that the allocation field be aligned. */
+	if ((long) result % sizeof(ast_string_field_allocation)) {
+		result++;
+		(*pool_head)->used++;
+	}
+#endif
 	(*pool_head)->used += to_alloc;
 	(*pool_head)->active += needed;
 	result += sizeof(ast_string_field_allocation);
@@ -1706,6 +1722,12 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 		}
 	} else {
 		target = (*pool_head)->base + (*pool_head)->used + sizeof(ast_string_field_allocation);
+#ifdef __sparc__
+		if ((long) target % sizeof(ast_string_field_allocation)) {
+			target++;
+			space--;
+		}
+#endif
 		available = space - sizeof(ast_string_field_allocation);
 	}
 
@@ -2067,3 +2089,40 @@ int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, co
 	return res;
 }
 #endif
+
+int ast_get_tid(void)
+{
+	int ret = -1;
+#if defined (__linux) && defined(SYS_gettid)
+	ret = syscall(SYS_gettid); /* available since Linux 1.4.11 */
+#elif defined(__sun)
+	ret = pthread_self();
+#elif defined(__APPLE__)
+	ret = mach_thread_self();
+	mach_port_deallocate(mach_task_self(), ret);
+#elif defined(__FreeBSD__) && defined(HAVE_SYS_THR_H)
+	long lwpid;
+	thr_self(&lwpid); /* available since sys/thr.h creation 2003 */
+	ret = lwpid;
+#endif
+	return ret;
+}
+
+char *ast_utils_which(const char *binary, char *fullpath, size_t fullpath_size)
+{
+	const char *envPATH = getenv("PATH");
+	char *tpath, *path;
+	struct stat unused;
+	if (!envPATH) {
+		return NULL;
+	}
+	tpath = ast_strdupa(envPATH);
+	while ((path = strsep(&tpath, ":"))) {
+		snprintf(fullpath, fullpath_size, "%s/%s", path, binary);
+		if (!stat(fullpath, &unused)) {
+			return fullpath;
+		}
+	}
+	return NULL;
+}
+

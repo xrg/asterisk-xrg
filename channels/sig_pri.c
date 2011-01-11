@@ -46,6 +46,7 @@
 #include "asterisk/cli.h"
 #include "asterisk/transcap.h"
 #include "asterisk/features.h"
+#include "asterisk/aoc.h"
 
 #include "sig_pri.h"
 #ifndef PRI_EVENT_FACILITY
@@ -55,11 +56,32 @@
 /* define this to send PRI user-user information elements */
 #undef SUPPORT_USERUSER
 
-#if 0
-#define DEFAULT_PRI_DEBUG (PRI_DEBUG_Q931_DUMP | PRI_DEBUG_Q921_DUMP | PRI_DEBUG_Q921_RAW | PRI_DEBUG_Q921_STATE)
-#else
-#define DEFAULT_PRI_DEBUG 0
-#endif
+#if defined(HAVE_PRI_CCSS)
+struct sig_pri_cc_agent_prv {
+	/*! Asterisk span D channel control structure. */
+	struct sig_pri_span *pri;
+	/*! CC id value to use with libpri. -1 if invalid. */
+	long cc_id;
+	/*! TRUE if CC has been requested and we are waiting for the response. */
+	unsigned char cc_request_response_pending;
+};
+
+struct sig_pri_cc_monitor_instance {
+	/*! \brief Asterisk span D channel control structure. */
+	struct sig_pri_span *pri;
+	/*! CC id value to use with libpri. (-1 if already canceled). */
+	long cc_id;
+	/*! CC core id value. */
+	int core_id;
+	/*! Device name(Channel name less sequence number) */
+	char name[1];
+};
+
+/*! Upper level agent/monitor type name. */
+static const char *sig_pri_cc_type_name;
+/*! Container of sig_pri monitor instances. */
+static struct ao2_container *sig_pri_cc_monitors;
+#endif	/* defined(HAVE_PRI_CCSS) */
 
 static int pri_matchdigittimeout = 3000;
 
@@ -85,9 +107,9 @@ static int pri_gendigittimeout = 8000;
 		sig_pri_lock_private(p); \
 	} while (0)
 
-static int pri_active_dchan_index(struct sig_pri_pri *pri);
+static int pri_active_dchan_index(struct sig_pri_span *pri);
 
-static inline void pri_rel(struct sig_pri_pri *pri)
+static inline void pri_rel(struct sig_pri_span *pri)
 {
 	ast_mutex_unlock(&pri->lock);
 }
@@ -101,23 +123,72 @@ static unsigned int PVT_TO_CHANNEL(struct sig_pri_chan *p)
 	return res;
 }
 
-static void sig_pri_handle_dchan_exception(struct sig_pri_pri *pri, int index)
+static void sig_pri_handle_dchan_exception(struct sig_pri_span *pri, int index)
 {
 	if (pri->calls->handle_dchan_exception)
 		pri->calls->handle_dchan_exception(pri, index);
 }
 
-static void sig_pri_set_dialing(struct sig_pri_chan *p, int flag)
+static void sig_pri_set_dialing(struct sig_pri_chan *p, int is_dialing)
 {
-	if (p->calls->set_dialing)
-		p->calls->set_dialing(p->chan_pvt, flag);
+	if (p->calls->set_dialing) {
+		p->calls->set_dialing(p->chan_pvt, is_dialing);
+	}
 }
 
-static void sig_pri_set_digital(struct sig_pri_chan *p, int flag)
+static void sig_pri_set_digital(struct sig_pri_chan *p, int is_digital)
 {
-	p->digital = flag;
-	if (p->calls->set_digital)
-		p->calls->set_digital(p->chan_pvt, flag);
+	p->digital = is_digital;
+	if (p->calls->set_digital) {
+		p->calls->set_digital(p->chan_pvt, is_digital);
+	}
+}
+
+static void sig_pri_set_alarm(struct sig_pri_chan *p, int in_alarm)
+{
+	p->inalarm = in_alarm;
+	if (p->calls->set_alarm) {
+		p->calls->set_alarm(p->chan_pvt, in_alarm);
+	}
+}
+
+static const char *sig_pri_get_orig_dialstring(struct sig_pri_chan *p)
+{
+	if (p->calls->get_orig_dialstring) {
+		return p->calls->get_orig_dialstring(p->chan_pvt);
+	}
+	ast_log(LOG_ERROR, "get_orig_dialstring callback not defined\n");
+	return "";
+}
+
+#if defined(HAVE_PRI_CCSS)
+static void sig_pri_make_cc_dialstring(struct sig_pri_chan *p, char *buf, size_t buf_size)
+{
+	if (p->calls->make_cc_dialstring) {
+		p->calls->make_cc_dialstring(p->chan_pvt, buf, buf_size);
+	} else {
+		ast_log(LOG_ERROR, "make_cc_dialstring callback not defined\n");
+		buf[0] = '\0';
+	}
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+/*!
+ * \internal
+ * \brief Reevaluate the PRI span device state.
+ * \since 1.8
+ *
+ * \param pri Asterisk D channel control structure.
+ *
+ * \return Nothing
+ *
+ * \note Assumes the pri->lock is already obtained.
+ */
+static void sig_pri_span_devstate_changed(struct sig_pri_span *pri)
+{
+	if (pri->calls->update_span_devstate) {
+		pri->calls->update_span_devstate(pri);
+	}
 }
 
 /*!
@@ -135,17 +206,29 @@ static void sig_pri_set_caller_id(struct sig_pri_chan *p)
 
 	if (p->calls->set_callerid) {
 		ast_party_caller_init(&caller);
-		caller.id.number = p->cid_num;
-		caller.id.name = p->cid_name;
+
+		caller.id.name.str = p->cid_name;
+		caller.id.name.presentation = p->callingpres;
+		caller.id.name.valid = 1;
+
+		caller.id.number.str = p->cid_num;
+		caller.id.number.plan = p->cid_ton;
+		caller.id.number.presentation = p->callingpres;
+		caller.id.number.valid = 1;
+
 		if (!ast_strlen_zero(p->cid_subaddr)) {
 			caller.id.subaddress.valid = 1;
 			//caller.id.subaddress.type = 0;/* nsap */
 			//caller.id.subaddress.odd_even_indicator = 0;
 			caller.id.subaddress.str = p->cid_subaddr;
 		}
-		caller.id.number_type = p->cid_ton;
-		caller.id.number_presentation = p->callingpres;
-		caller.ani = p->cid_ani;
+		caller.id.tag = p->user_tag;
+
+		caller.ani.number.str = p->cid_ani;
+		//caller.ani.number.plan = p->xxx;
+		//caller.ani.number.presentation = p->xxx;
+		caller.ani.number.valid = 1;
+
 		caller.ani2 = p->cid_ani2;
 		p->calls->set_callerid(p->chan_pvt, &caller);
 	}
@@ -197,7 +280,7 @@ static void sig_pri_lock_private(struct sig_pri_chan *p)
 		p->calls->lock_private(p->chan_pvt);
 }
 
-static inline int pri_grab(struct sig_pri_chan *p, struct sig_pri_pri *pri)
+static inline int pri_grab(struct sig_pri_chan *p, struct sig_pri_span *pri)
 {
 	int res;
 	/* Grab the lock first */
@@ -382,76 +465,102 @@ static int ast_to_pri_presentation(int ast_presentation)
 
 /*!
  * \internal
- * \brief Determine the overall presentation value for the given party.
+ * \brief Convert PRI name char_set to asterisk version.
  * \since 1.8
  *
- * \param id Party to determine the overall presentation value.
+ * \param pri_char_set PRI name char_set.
  *
- * \return Overall presentation value for the given party converted to ast values.
+ * \return Equivalent asterisk name char_set value.
  */
-static int overall_ast_presentation(const struct pri_party_id *id)
+static enum AST_PARTY_CHAR_SET pri_to_ast_char_set(int pri_char_set)
 {
-	int number_priority;
-	int number_value;
-	int number_screening;
-	int name_priority;
-	int name_value;
+	enum AST_PARTY_CHAR_SET ast_char_set;
 
-	/* Determine name presentation priority. */
-	if (!id->name.valid) {
-		name_value = PRI_PRES_UNAVAILABLE;
-		name_priority = 3;
-	} else {
-		name_value = id->name.presentation & PRI_PRES_RESTRICTION;
-		switch (name_value) {
-		case PRI_PRES_RESTRICTED:
-			name_priority = 0;
-			break;
-		case PRI_PRES_ALLOWED:
-			name_priority = 1;
-			break;
-		case PRI_PRES_UNAVAILABLE:
-			name_priority = 2;
-			break;
-		default:
-			name_value = PRI_PRES_UNAVAILABLE;
-			name_priority = 3;
-			break;
-		}
+	switch (pri_char_set) {
+	default:
+	case PRI_CHAR_SET_UNKNOWN:
+		ast_char_set = AST_PARTY_CHAR_SET_UNKNOWN;
+		break;
+	case PRI_CHAR_SET_ISO8859_1:
+		ast_char_set = AST_PARTY_CHAR_SET_ISO8859_1;
+		break;
+	case PRI_CHAR_SET_WITHDRAWN:
+		ast_char_set = AST_PARTY_CHAR_SET_WITHDRAWN;
+		break;
+	case PRI_CHAR_SET_ISO8859_2:
+		ast_char_set = AST_PARTY_CHAR_SET_ISO8859_2;
+		break;
+	case PRI_CHAR_SET_ISO8859_3:
+		ast_char_set = AST_PARTY_CHAR_SET_ISO8859_3;
+		break;
+	case PRI_CHAR_SET_ISO8859_4:
+		ast_char_set = AST_PARTY_CHAR_SET_ISO8859_4;
+		break;
+	case PRI_CHAR_SET_ISO8859_5:
+		ast_char_set = AST_PARTY_CHAR_SET_ISO8859_5;
+		break;
+	case PRI_CHAR_SET_ISO8859_7:
+		ast_char_set = AST_PARTY_CHAR_SET_ISO8859_7;
+		break;
+	case PRI_CHAR_SET_ISO10646_BMPSTRING:
+		ast_char_set = AST_PARTY_CHAR_SET_ISO10646_BMPSTRING;
+		break;
+	case PRI_CHAR_SET_ISO10646_UTF_8STRING:
+		ast_char_set = AST_PARTY_CHAR_SET_ISO10646_UTF_8STRING;
+		break;
 	}
 
-	/* Determine number presentation priority. */
-	if (!id->number.valid) {
-		number_screening = PRI_PRES_USER_NUMBER_UNSCREENED;
-		number_value = PRI_PRES_UNAVAILABLE;
-		number_priority = 3;
-	} else {
-		number_screening = id->number.presentation & PRI_PRES_NUMBER_TYPE;
-		number_value = id->number.presentation & PRI_PRES_RESTRICTION;
-		switch (number_value) {
-		case PRI_PRES_RESTRICTED:
-			number_priority = 0;
-			break;
-		case PRI_PRES_ALLOWED:
-			number_priority = 1;
-			break;
-		case PRI_PRES_UNAVAILABLE:
-			number_priority = 2;
-			break;
-		default:
-			number_screening = PRI_PRES_USER_NUMBER_UNSCREENED;
-			number_value = PRI_PRES_UNAVAILABLE;
-			number_priority = 3;
-			break;
-		}
+	return ast_char_set;
+}
+
+/*!
+ * \internal
+ * \brief Convert asterisk name char_set to PRI version.
+ * \since 1.8
+ *
+ * \param ast_char_set Asterisk name char_set.
+ *
+ * \return Equivalent PRI name char_set value.
+ */
+static int ast_to_pri_char_set(enum AST_PARTY_CHAR_SET ast_char_set)
+{
+	int pri_char_set;
+
+	switch (ast_char_set) {
+	default:
+	case AST_PARTY_CHAR_SET_UNKNOWN:
+		pri_char_set = PRI_CHAR_SET_UNKNOWN;
+		break;
+	case AST_PARTY_CHAR_SET_ISO8859_1:
+		pri_char_set = PRI_CHAR_SET_ISO8859_1;
+		break;
+	case AST_PARTY_CHAR_SET_WITHDRAWN:
+		pri_char_set = PRI_CHAR_SET_WITHDRAWN;
+		break;
+	case AST_PARTY_CHAR_SET_ISO8859_2:
+		pri_char_set = PRI_CHAR_SET_ISO8859_2;
+		break;
+	case AST_PARTY_CHAR_SET_ISO8859_3:
+		pri_char_set = PRI_CHAR_SET_ISO8859_3;
+		break;
+	case AST_PARTY_CHAR_SET_ISO8859_4:
+		pri_char_set = PRI_CHAR_SET_ISO8859_4;
+		break;
+	case AST_PARTY_CHAR_SET_ISO8859_5:
+		pri_char_set = PRI_CHAR_SET_ISO8859_5;
+		break;
+	case AST_PARTY_CHAR_SET_ISO8859_7:
+		pri_char_set = PRI_CHAR_SET_ISO8859_7;
+		break;
+	case AST_PARTY_CHAR_SET_ISO10646_BMPSTRING:
+		pri_char_set = PRI_CHAR_SET_ISO10646_BMPSTRING;
+		break;
+	case AST_PARTY_CHAR_SET_ISO10646_UTF_8STRING:
+		pri_char_set = PRI_CHAR_SET_ISO10646_UTF_8STRING;
+		break;
 	}
 
-	/* Select the wining presentation value. */
-	if (name_priority < number_priority) {
-		number_value = name_value;
-	}
-
-	return pri_to_ast_presentation(number_value | number_screening);
+	return pri_char_set;
 }
 
 #if defined(HAVE_PRI_SUBADDR)
@@ -618,6 +727,56 @@ static void sig_pri_party_subaddress_from_ast(struct pri_party_subaddress *pri_s
 
 /*!
  * \internal
+ * \brief Fill in the PRI party name from the given asterisk party name.
+ * \since 1.8
+ *
+ * \param pri_name PRI party name structure.
+ * \param ast_name Asterisk party name structure.
+ *
+ * \return Nothing
+ *
+ * \note Assumes that pri_name has been previously memset to zero.
+ */
+static void sig_pri_party_name_from_ast(struct pri_party_name *pri_name, const struct ast_party_name *ast_name)
+{
+	if (!ast_name->valid) {
+		return;
+	}
+	pri_name->valid = 1;
+	pri_name->presentation = ast_to_pri_presentation(ast_name->presentation);
+	pri_name->char_set = ast_to_pri_char_set(ast_name->char_set);
+	if (!ast_strlen_zero(ast_name->str)) {
+		ast_copy_string(pri_name->str, ast_name->str, sizeof(pri_name->str));
+	}
+}
+
+/*!
+ * \internal
+ * \brief Fill in the PRI party number from the given asterisk party number.
+ * \since 1.8
+ *
+ * \param pri_number PRI party number structure.
+ * \param ast_number Asterisk party number structure.
+ *
+ * \return Nothing
+ *
+ * \note Assumes that pri_number has been previously memset to zero.
+ */
+static void sig_pri_party_number_from_ast(struct pri_party_number *pri_number, const struct ast_party_number *ast_number)
+{
+	if (!ast_number->valid) {
+		return;
+	}
+	pri_number->valid = 1;
+	pri_number->presentation = ast_to_pri_presentation(ast_number->presentation);
+	pri_number->plan = ast_number->plan;
+	if (!ast_strlen_zero(ast_number->str)) {
+		ast_copy_string(pri_number->str, ast_number->str, sizeof(pri_number->str));
+	}
+}
+
+/*!
+ * \internal
  * \brief Fill in the PRI party id from the given asterisk party id.
  * \since 1.8
  *
@@ -630,21 +789,8 @@ static void sig_pri_party_subaddress_from_ast(struct pri_party_subaddress *pri_s
  */
 static void sig_pri_party_id_from_ast(struct pri_party_id *pri_id, const struct ast_party_id *ast_id)
 {
-	int presentation;
-
-	presentation = ast_to_pri_presentation(ast_id->number_presentation);
-	if (!ast_strlen_zero(ast_id->name)) {
-		pri_id->name.valid = 1;
-		pri_id->name.presentation = presentation;
-		pri_id->name.char_set = PRI_CHAR_SET_ISO8859_1;
-		ast_copy_string(pri_id->name.str, ast_id->name, sizeof(pri_id->name.str));
-	}
-	if (!ast_strlen_zero(ast_id->number)) {
-		pri_id->number.valid = 1;
-		pri_id->number.presentation = presentation;
-		pri_id->number.plan = ast_id->number_type;
-		ast_copy_string(pri_id->number.str, ast_id->number, sizeof(pri_id->number.str));
-	}
+	sig_pri_party_name_from_ast(&pri_id->name, &ast_id->name);
+	sig_pri_party_number_from_ast(&pri_id->number, &ast_id->number);
 #if defined(HAVE_PRI_SUBADDR)
 	sig_pri_party_subaddress_from_ast(&pri_id->subaddress, &ast_id->subaddress);
 #endif	/* defined(HAVE_PRI_SUBADDR) */
@@ -665,19 +811,14 @@ static void sig_pri_party_id_from_ast(struct pri_party_id *pri_id, const struct 
 static void sig_pri_redirecting_update(struct sig_pri_chan *pvt, struct ast_channel *ast)
 {
 	struct pri_party_redirecting pri_redirecting;
-	struct ast_party_redirecting ast_redirecting;
-
-	/* Gather asterisk redirecting data */
-	ast_redirecting = ast->redirecting;
-	ast_redirecting.from.number = ast->cid.cid_rdnis;
 
 /*! \todo XXX Original called data can be put in a channel data store that is inherited. */
 
 	memset(&pri_redirecting, 0, sizeof(pri_redirecting));
-	sig_pri_party_id_from_ast(&pri_redirecting.from, &ast_redirecting.from);
-	sig_pri_party_id_from_ast(&pri_redirecting.to, &ast_redirecting.to);
-	pri_redirecting.count = ast_redirecting.count;
-	pri_redirecting.reason = ast_to_pri_reason(ast_redirecting.reason);
+	sig_pri_party_id_from_ast(&pri_redirecting.from, &ast->redirecting.from);
+	sig_pri_party_id_from_ast(&pri_redirecting.to, &ast->redirecting.to);
+	pri_redirecting.count = ast->redirecting.count;
+	pri_redirecting.reason = ast_to_pri_reason(ast->redirecting.reason);
 
 	pri_redirecting_update(pvt->pri->pri, pvt->call, &pri_redirecting);
 }
@@ -720,12 +861,12 @@ static int sig_pri_play_tone(struct sig_pri_chan *p, enum sig_pri_tone tone)
 		return -1;
 }
 
-static struct ast_channel *sig_pri_new_ast_channel(struct sig_pri_chan *p, int state, int startpbx, int ulaw, int transfercapability, char *exten, const struct ast_channel *requestor)
+static struct ast_channel *sig_pri_new_ast_channel(struct sig_pri_chan *p, int state, int ulaw, int transfercapability, char *exten, const struct ast_channel *requestor)
 {
 	struct ast_channel *c;
 
 	if (p->calls->new_ast_channel)
-		c = p->calls->new_ast_channel(p->chan_pvt, state, startpbx, ulaw, transfercapability, exten, requestor);
+		c = p->calls->new_ast_channel(p->chan_pvt, state, ulaw, exten, requestor);
 	else
 		return NULL;
 
@@ -733,13 +874,40 @@ static struct ast_channel *sig_pri_new_ast_channel(struct sig_pri_chan *p, int s
 		p->owner = c;
 	p->isidlecall = 0;
 	p->alreadyhungup = 0;
+	c->transfercapability = transfercapability;
+	pbx_builtin_setvar_helper(c, "TRANSFERCAPABILITY",
+		ast_transfercapability2str(transfercapability));
 	if (transfercapability & AST_TRANS_CAP_DIGITAL) {
-		c->transfercapability = transfercapability;
-		pbx_builtin_setvar_helper(c, "TRANSFERCAPABILITY", ast_transfercapability2str(transfercapability));
 		sig_pri_set_digital(p, 1);
+	}
+	if (p->pri && !pri_grab(p, p->pri)) {
+		sig_pri_span_devstate_changed(p->pri);
+		pri_rel(p->pri);
+	} else {
+		ast_log(LOG_WARNING, "Failed to grab PRI!\n");
 	}
 
 	return c;
+}
+
+/*!
+ * \internal
+ * \brief Open the PRI channel media path.
+ * \since 1.8
+ *
+ * \param p Channel private control structure.
+ *
+ * \return Nothing
+ */
+static void sig_pri_open_media(struct sig_pri_chan *p)
+{
+	if (p->no_b_channel) {
+		return;
+	}
+
+	if (p->calls->open_media) {
+		p->calls->open_media(p->chan_pvt);
+	}
 }
 
 struct ast_channel *sig_pri_request(struct sig_pri_chan *p, enum sig_pri_law law, const struct ast_channel *requestor, int transfercapability)
@@ -749,17 +917,17 @@ struct ast_channel *sig_pri_request(struct sig_pri_chan *p, enum sig_pri_law law
 	ast_log(LOG_DEBUG, "%s %d\n", __FUNCTION__, p->channel);
 
 	p->outgoing = 1;
-	ast = sig_pri_new_ast_channel(p, AST_STATE_RESERVED, 0, law, transfercapability, p->exten, requestor);
+	ast = sig_pri_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability, p->exten, requestor);
 	if (!ast) {
 		p->outgoing = 0;
 	}
 	return ast;
 }
 
-int pri_is_up(struct sig_pri_pri *pri)
+int pri_is_up(struct sig_pri_span *pri)
 {
 	int x;
-	for (x = 0; x < NUM_DCHANS; x++) {
+	for (x = 0; x < SIG_PRI_NUM_DCHANS; x++) {
 		if (pri->dchanavail[x] == DCHAN_AVAILABLE)
 			return 1;
 	}
@@ -783,11 +951,11 @@ static char *pri_order(int level)
 }
 
 /* Returns index of the active dchan */
-static int pri_active_dchan_index(struct sig_pri_pri *pri)
+static int pri_active_dchan_index(struct sig_pri_span *pri)
 {
 	int x;
 
-	for (x = 0; x < NUM_DCHANS; x++) {
+	for (x = 0; x < SIG_PRI_NUM_DCHANS; x++) {
 		if ((pri->dchans[x] == pri->pri))
 			return x;
 	}
@@ -796,14 +964,14 @@ static int pri_active_dchan_index(struct sig_pri_pri *pri)
 	return -1;
 }
 
-static int pri_find_dchan(struct sig_pri_pri *pri)
+static int pri_find_dchan(struct sig_pri_span *pri)
 {
 	int oldslot = -1;
 	struct pri *old;
 	int newslot = -1;
 	int x;
 	old = pri->pri;
-	for (x = 0; x < NUM_DCHANS; x++) {
+	for (x = 0; x < SIG_PRI_NUM_DCHANS; x++) {
 		if ((pri->dchanavail[x] == DCHAN_AVAILABLE) && (newslot < 0))
 			newslot = x;
 		if (pri->dchans[x] == old) {
@@ -813,9 +981,14 @@ static int pri_find_dchan(struct sig_pri_pri *pri)
 	if (newslot < 0) {
 		newslot = 0;
 		/* This is annoying to see on non persistent layer 2 connections.  Let's not complain in that case */
-		if (pri->sig != SIG_BRI_PTMP) {
-			ast_log(LOG_WARNING, "No D-channels available!  Using Primary channel as D-channel anyway!\n");
+		if (pri->sig != SIG_BRI_PTMP && !pri->no_d_channels) {
+			pri->no_d_channels = 1;
+			ast_log(LOG_WARNING,
+				"Span %d: No D-channels available!  Using Primary channel as D-channel anyway!\n",
+				pri->span);
 		}
+	} else {
+		pri->no_d_channels = 0;
 	}
 	if (old && (oldslot != newslot))
 		ast_log(LOG_NOTICE, "Switching from d-channel fd %d to fd %d!\n",
@@ -824,64 +997,146 @@ static int pri_find_dchan(struct sig_pri_pri *pri)
 	return 0;
 }
 
-static void pri_queue_frame(struct sig_pri_chan *p, struct ast_frame *f, struct sig_pri_pri *pri)
+/*!
+ * \internal
+ * \brief Obtain the sig_pri owner channel lock if the owner exists.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param chanpos Channel position in the span.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pri->pvts[chanpos]) is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_lock_owner(struct sig_pri_span *pri, int chanpos)
 {
-	/* We must unlock the PRI to avoid the possibility of a deadlock */
-	if (pri)
-		ast_mutex_unlock(&pri->lock);
 	for (;;) {
-		if (p->owner) {
-			if (ast_channel_trylock(p->owner)) {
-				PRI_DEADLOCK_AVOIDANCE(p);
-			} else {
-				ast_queue_frame(p->owner, f);
-				ast_channel_unlock(p->owner);
-				break;
-			}
-		} else
+		if (!pri->pvts[chanpos]->owner) {
+			/* There is no owner lock to get. */
 			break;
-	}
-	if (pri)
+		}
+		if (!ast_channel_trylock(pri->pvts[chanpos]->owner)) {
+			/* We got the lock */
+			break;
+		}
+		/* We must unlock the PRI to avoid the possibility of a deadlock */
+		ast_mutex_unlock(&pri->lock);
+		PRI_DEADLOCK_AVOIDANCE(pri->pvts[chanpos]);
 		ast_mutex_lock(&pri->lock);
+	}
 }
 
-static void pri_queue_control(struct sig_pri_chan *p, int subclass, struct sig_pri_pri *pri)
+/*!
+ * \internal
+ * \brief Queue the given frame onto the owner channel.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param chanpos Channel position in the span.
+ * \param frame Frame to queue onto the owner channel.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pri->pvts[chanpos]) is already obtained.
+ *
+ * \return Nothing
+ */
+static void pri_queue_frame(struct sig_pri_span *pri, int chanpos, struct ast_frame *frame)
+{
+	sig_pri_lock_owner(pri, chanpos);
+	if (pri->pvts[chanpos]->owner) {
+		ast_queue_frame(pri->pvts[chanpos]->owner, frame);
+		ast_channel_unlock(pri->pvts[chanpos]->owner);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Queue a control frame of the specified subclass onto the owner channel.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param chanpos Channel position in the span.
+ * \param subclass Control frame subclass to queue onto the owner channel.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pri->pvts[chanpos]) is already obtained.
+ *
+ * \return Nothing
+ */
+static void pri_queue_control(struct sig_pri_span *pri, int chanpos, int subclass)
 {
 	struct ast_frame f = {AST_FRAME_CONTROL, };
+	struct sig_pri_chan *p = pri->pvts[chanpos];
 
 	if (p->calls->queue_control) {
 		p->calls->queue_control(p->chan_pvt, subclass);
 	}
 
 	f.subclass.integer = subclass;
-	pri_queue_frame(p, &f, pri);
+	pri_queue_frame(pri, chanpos, &f);
 }
 
-static int pri_find_principle(struct sig_pri_pri *pri, int channel, q931_call *call)
+/*!
+ * \internal
+ * \brief Find the channel associated with the libpri call.
+ * \since 1.10
+ *
+ * \param pri sig_pri span controller to find interface.
+ * \param call LibPRI opaque call pointer to find.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \retval array-index into private pointer array on success.
+ * \retval -1 on error.
+ */
+static int pri_find_principle_by_call(struct sig_pri_span *pri, q931_call *call)
+{
+	int idx;
+
+	if (!call) {
+		/* Cannot find a call without a call. */
+		return -1;
+	}
+	for (idx = 0; idx < pri->numchans; ++idx) {
+		if (pri->pvts[idx] && pri->pvts[idx]->call == call) {
+			/* Found the principle */
+			return idx;
+		}
+	}
+	return -1;
+}
+
+/*!
+ * \internal
+ * \brief Find the private structure for the libpri call.
+ *
+ * \param pri Span controller structure.
+ * \param channel LibPRI encoded channel ID.
+ * \param call LibPRI opaque call pointer.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \retval array-index into private pointer array on success.
+ * \retval -1 on error.
+ */
+static int pri_find_principle(struct sig_pri_span *pri, int channel, q931_call *call)
 {
 	int x;
 	int span;
 	int principle;
+	int prioffset;
 
 	if (channel < 0) {
 		/* Channel is not picked yet. */
 		return -1;
 	}
 
-	if (channel & PRI_HELD_CALL) {
-		if (!call) {
-			/* Cannot find a held call without a call. */
-			return -1;
-		}
-		principle = -1;
-		for (x = 0; x < pri->numchans; ++x) {
-			if (pri->pvts[x]
-				&& pri->pvts[x]->call == call) {
-				principle = x;
-				break;
-			}
-		}
-		return principle;
+	prioffset = PRI_CHANNEL(channel);
+	if (!prioffset || (channel & PRI_HELD_CALL)) {
+		/* Find the call waiting call or held call. */
+		return pri_find_principle_by_call(pri, call);
 	}
 
 	span = PRI_SPAN(channel);
@@ -895,11 +1150,10 @@ static int pri_find_principle(struct sig_pri_pri *pri, int channel, q931_call *c
 		span = pri->dchan_logical_span[index];
 	}
 
-	channel = PRI_CHANNEL(channel);
 	principle = -1;
 	for (x = 0; x < pri->numchans; x++) {
 		if (pri->pvts[x]
-			&& pri->pvts[x]->prioffset == channel
+			&& pri->pvts[x]->prioffset == prioffset
 			&& pri->pvts[x]->logicalspan == span
 			&& !pri->pvts[x]->no_b_channel) {
 			principle = x;
@@ -910,7 +1164,20 @@ static int pri_find_principle(struct sig_pri_pri *pri, int channel, q931_call *c
 	return principle;
 }
 
-static int pri_fixup_principle(struct sig_pri_pri *pri, int principle, q931_call *call)
+/*!
+ * \internal
+ * \brief Fixup the private structure associated with the libpri call.
+ *
+ * \param pri Span controller structure.
+ * \param principle Array-index into private array to move call to if not already there.
+ * \param call LibPRI opaque call pointer to find if need to move call.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \retval principle on success.
+ * \retval -1 on error.
+ */
+static int pri_fixup_principle(struct sig_pri_span *pri, int principle, q931_call *call)
 {
 	int x;
 
@@ -940,12 +1207,24 @@ static int pri_fixup_principle(struct sig_pri_pri *pri, int principle, q931_call
 		new_chan = pri->pvts[principle];
 		old_chan = pri->pvts[x];
 
-		ast_verb(3, "Moving call from channel %d to channel %d\n",
+		/* Get locks to safely move to the new private structure. */
+		sig_pri_lock_private(old_chan);
+		sig_pri_lock_owner(pri, x);
+		sig_pri_lock_private(new_chan);
+
+		ast_verb(3, "Moving call (%s) from channel %d to %d.\n",
+			old_chan->owner ? old_chan->owner->name : "",
 			old_chan->channel, new_chan->channel);
 		if (new_chan->owner) {
 			ast_log(LOG_WARNING,
-				"Can't fix up channel from %d to %d because %d is already in use\n",
-				old_chan->channel, new_chan->channel, new_chan->channel);
+				"Can't move call (%s) from channel %d to %d.  It is already in use.\n",
+				old_chan->owner ? old_chan->owner->name : "",
+				old_chan->channel, new_chan->channel);
+			sig_pri_unlock_private(new_chan);
+			if (old_chan->owner) {
+				ast_channel_unlock(old_chan->owner);
+			}
+			sig_pri_unlock_private(old_chan);
 			return -1;
 		}
 
@@ -959,6 +1238,11 @@ static int pri_fixup_principle(struct sig_pri_pri *pri, int principle, q931_call
 		old_chan->call = NULL;
 
 		/* Transfer flags from the old channel. */
+#if defined(HAVE_PRI_AOC_EVENTS)
+		new_chan->aoc_s_request_invoke_id_valid = old_chan->aoc_s_request_invoke_id_valid;
+		new_chan->waiting_for_aoce = old_chan->waiting_for_aoce;
+		new_chan->holding_aoce = old_chan->holding_aoce;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
 		new_chan->alerting = old_chan->alerting;
 		new_chan->alreadyhungup = old_chan->alreadyhungup;
 		new_chan->isidlecall = old_chan->isidlecall;
@@ -967,6 +1251,15 @@ static int pri_fixup_principle(struct sig_pri_pri *pri, int principle, q931_call
 		new_chan->setup_ack = old_chan->setup_ack;
 		new_chan->outgoing = old_chan->outgoing;
 		new_chan->digital = old_chan->digital;
+#if defined(HAVE_PRI_CALL_WAITING)
+		new_chan->is_call_waiting = old_chan->is_call_waiting;
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+		old_chan->aoc_s_request_invoke_id_valid = 0;
+		old_chan->waiting_for_aoce = 0;
+		old_chan->holding_aoce = 0;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
 		old_chan->alerting = 0;
 		old_chan->alreadyhungup = 0;
 		old_chan->isidlecall = 0;
@@ -975,6 +1268,9 @@ static int pri_fixup_principle(struct sig_pri_pri *pri, int principle, q931_call
 		old_chan->setup_ack = 0;
 		old_chan->outgoing = 0;
 		old_chan->digital = 0;
+#if defined(HAVE_PRI_CALL_WAITING)
+		old_chan->is_call_waiting = 0;
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
 
 		/* More stuff to transfer to the new channel. */
 #if defined(HAVE_PRI_REVERSE_CHARGE)
@@ -983,6 +1279,15 @@ static int pri_fixup_principle(struct sig_pri_pri *pri, int principle, q931_call
 #if defined(HAVE_PRI_SETUP_KEYPAD)
 		strcpy(new_chan->keypad_digits, old_chan->keypad_digits);
 #endif	/* defined(HAVE_PRI_SETUP_KEYPAD) */
+		strcpy(new_chan->moh_suggested, old_chan->moh_suggested);
+		new_chan->moh_state = old_chan->moh_state;
+		old_chan->moh_state = SIG_PRI_MOH_STATE_IDLE;
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+		new_chan->aoc_s_request_invoke_id = old_chan->aoc_s_request_invoke_id;
+		new_chan->aoc_e = old_chan->aoc_e;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+		strcpy(new_chan->user_tag, old_chan->user_tag);
 
 		if (new_chan->no_b_channel) {
 			/* Copy the real channel configuration to the no B channel interface. */
@@ -1000,11 +1305,25 @@ static int pri_fixup_principle(struct sig_pri_pri *pri, int principle, q931_call
 			/* Become a member of the old channel span/trunk-group. */
 			new_chan->logicalspan = old_chan->logicalspan;
 			new_chan->mastertrunkgroup = old_chan->mastertrunkgroup;
+		} else if (old_chan->no_b_channel) {
+			/*
+			 * We are transitioning from a held/call-waiting channel to a
+			 * real channel so we need to make sure that the media path is
+			 * open.  (Needed especially if the channel is natively
+			 * bridged.)
+			 */
+			sig_pri_open_media(new_chan);
 		}
+
+		sig_pri_unlock_private(old_chan);
+		if (new_chan->owner) {
+			ast_channel_unlock(new_chan->owner);
+		}
+		sig_pri_unlock_private(new_chan);
 
 		return principle;
 	}
-	ast_log(LOG_WARNING, "Call specified, but not found?\n");
+	ast_verb(3, "Call specified, but not found.\n");
 	return -1;
 }
 
@@ -1032,7 +1351,7 @@ static char *dialplan2str(int dialplan)
 	return (pri_plan2str(dialplan));
 }
 
-static void apply_plan_to_number(char *buf, size_t size, const struct sig_pri_pri *pri, const char *number, const int plan)
+static void apply_plan_to_number(char *buf, size_t size, const struct sig_pri_span *pri, const char *number, const int plan)
 {
 	switch (plan) {
 	case PRI_INTERNATIONAL_ISDN:		/* Q.931 dialplan == 0x11 international dialplan => prepend international prefix digits */
@@ -1057,7 +1376,7 @@ static void apply_plan_to_number(char *buf, size_t size, const struct sig_pri_pr
 }
 
 /*! \note Assumes the pri->lock is already obtained. */
-static int pri_check_restart(struct sig_pri_pri *pri)
+static int pri_check_restart(struct sig_pri_span *pri)
 {
 #if defined(HAVE_PRI_SERVICE_MESSAGES)
 tryanotherpos:
@@ -1091,7 +1410,39 @@ tryanotherpos:
 	return 0;
 }
 
-static int pri_find_empty_chan(struct sig_pri_pri *pri, int backwards)
+#if defined(HAVE_PRI_CALL_WAITING)
+/*!
+ * \internal
+ * \brief Init the private channel configuration using the span controller.
+ * \since 1.8
+ *
+ * \param pvt Channel to init the configuration.
+ * \param pri sig_pri PRI control structure.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_init_config(struct sig_pri_chan *pvt, struct sig_pri_span *pri)
+{
+	pvt->stripmsd = pri->ch_cfg.stripmsd;
+	pvt->hidecallerid = pri->ch_cfg.hidecallerid;
+	pvt->hidecalleridname = pri->ch_cfg.hidecalleridname;
+	pvt->immediate = pri->ch_cfg.immediate;
+	pvt->priexclusive = pri->ch_cfg.priexclusive;
+	pvt->priindication_oob = pri->ch_cfg.priindication_oob;
+	pvt->use_callerid = pri->ch_cfg.use_callerid;
+	pvt->use_callingpres = pri->ch_cfg.use_callingpres;
+	ast_copy_string(pvt->context, pri->ch_cfg.context, sizeof(pvt->context));
+	ast_copy_string(pvt->mohinterpret, pri->ch_cfg.mohinterpret, sizeof(pvt->mohinterpret));
+
+	if (pri->calls->init_config) {
+		pri->calls->init_config(pvt->chan_pvt, pri);
+	}
+}
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+
+static int pri_find_empty_chan(struct sig_pri_span *pri, int backwards)
 {
 	int x;
 	if (backwards)
@@ -1132,7 +1483,7 @@ static int pri_find_empty_chan(struct sig_pri_pri *pri, int backwards)
  * \retval array-index into private pointer array on success.
  * \retval -1 on error.
  */
-static int pri_find_empty_nobch(struct sig_pri_pri *pri)
+static int pri_find_empty_nobch(struct sig_pri_span *pri)
 {
 	int idx;
 
@@ -1153,34 +1504,6 @@ static int pri_find_empty_nobch(struct sig_pri_pri *pri)
 		idx = -1;
 	}
 	return idx;
-}
-#endif	/* defined(HAVE_PRI_CALL_HOLD) */
-
-#if defined(HAVE_PRI_CALL_HOLD)
-/*!
- * \internal
- * \brief Find the channel associated with the libpri call.
- * \since 1.8
- *
- * \param pri sig_pri span controller to find interface.
- * \param call LibPRI opaque call pointer to find.
- *
- * \note Assumes the pri->lock is already obtained.
- *
- * \retval array-index into private pointer array on success.
- * \retval -1 on error.
- */
-static int pri_find_pri_call(struct sig_pri_pri *pri, q931_call *call)
-{
-	int idx;
-
-	for (idx = 0; idx < pri->numchans; ++idx) {
-		if (pri->pvts[idx] && pri->pvts[idx]->call == call) {
-			/* Found the channel */
-			return idx;
-		}
-	}
-	return -1;
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
@@ -1283,7 +1606,7 @@ static void *pri_ss_thread(void *data)
 			exten[len++] = res;
 			exten[len] = '\0';
 		} else
-			goto exit;
+			break;
 	}
 	/* if no extension was received ('unspecified') on overlap call, use the 's' extension */
 	if (ast_strlen_zero(exten)) {
@@ -1291,10 +1614,19 @@ static void *pri_ss_thread(void *data)
 		exten[0] = 's';
 		exten[1] = '\0';
 	} else {
-		if (chan->cid.cid_dnid) {
-			ast_free(chan->cid.cid_dnid);
+		ast_free(chan->dialed.number.str);
+		chan->dialed.number.str = ast_strdup(exten);
+
+		if (p->pri->append_msn_to_user_tag && p->pri->nodetype != PRI_NETWORK) {
+			/*
+			 * Update the user tag for party id's from this device for this call
+			 * now that we have a complete MSN from the network.
+			 */
+			snprintf(p->user_tag, sizeof(p->user_tag), "%s_%s", p->pri->initial_user_tag,
+				exten);
+			ast_free(chan->caller.id.tag);
+			chan->caller.id.tag = ast_strdup(p->user_tag);
 		}
-		chan->cid.cid_dnid = ast_strdup(exten);
 	}
 	sig_pri_play_tone(p, -1);
 	if (ast_exists_extension(chan, chan->context, exten, 1, p->cid_num)) {
@@ -1302,6 +1634,7 @@ static void *pri_ss_thread(void *data)
 		ast_copy_string(chan->exten, exten, sizeof(chan->exten));
 		sig_pri_dsp_reset_and_flush_digits(p);
 		if (p->pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING) {
+			sig_pri_lock_private(p);
 			if (p->pri->pri) {		
 				if (!pri_grab(p, p->pri)) {
 					pri_proceeding(p->pri->pri, p->call, PVT_TO_CHANNEL(p), 0);
@@ -1311,6 +1644,7 @@ static void *pri_ss_thread(void *data)
 					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
 				}
 			}
+			sig_pri_unlock_private(p);
 		}
 
 		sig_pri_set_echocanceller(p, 1);
@@ -1328,27 +1662,66 @@ static void *pri_ss_thread(void *data)
 		p->call = NULL;
 	}
 	return NULL;
-
-exit:
-	res = sig_pri_play_tone(p, SIG_PRI_TONE_CONGESTION);
-	if (res < 0)
-		ast_log(LOG_WARNING, "Unable to play congestion tone on channel %d\n", p->channel);
-	ast_hangup(chan);
-	return NULL;
 }
 
-void pri_event_alarm(struct sig_pri_pri *pri, int index, int before_start_pri)
+void pri_event_alarm(struct sig_pri_span *pri, int index, int before_start_pri)
 {
 	pri->dchanavail[index] &= ~(DCHAN_NOTINALARM | DCHAN_UP);
 	if (!before_start_pri)
 		pri_find_dchan(pri);
 }
 
-void pri_event_noalarm(struct sig_pri_pri *pri, int index, int before_start_pri)
+void pri_event_noalarm(struct sig_pri_span *pri, int index, int before_start_pri)
 {
 	pri->dchanavail[index] |= DCHAN_NOTINALARM;
 	if (!before_start_pri)
 		pri_restart(pri->dchans[index]);
+}
+
+/*!
+ * \internal
+ * \brief Convert libpri party name into asterisk party name.
+ * \since 1.8
+ *
+ * \param ast_name Asterisk party name structure to fill.  Must already be set initialized.
+ * \param pri_name libpri party name structure containing source information.
+ *
+ * \note The filled in ast_name structure needs to be destroyed by
+ * ast_party_name_free() when it is no longer needed.
+ *
+ * \return Nothing
+ */
+static void sig_pri_party_name_convert(struct ast_party_name *ast_name, const struct pri_party_name *pri_name)
+{
+	ast_name->str = ast_strdup(pri_name->str);
+	ast_name->char_set = pri_to_ast_char_set(pri_name->char_set);
+	ast_name->presentation = pri_to_ast_presentation(pri_name->presentation);
+	ast_name->valid = 1;
+}
+
+/*!
+ * \internal
+ * \brief Convert libpri party number into asterisk party number.
+ * \since 1.8
+ *
+ * \param ast_number Asterisk party number structure to fill.  Must already be set initialized.
+ * \param pri_number libpri party number structure containing source information.
+ * \param pri Span controlling structure.
+ *
+ * \note The filled in ast_number structure needs to be destroyed by
+ * ast_party_number_free() when it is no longer needed.
+ *
+ * \return Nothing
+ */
+static void sig_pri_party_number_convert(struct ast_party_number *ast_number, const struct pri_party_number *pri_number, struct sig_pri_span *pri)
+{
+	char number[AST_MAX_EXTENSION];
+
+	apply_plan_to_number(number, sizeof(number), pri, pri_number->str, pri_number->plan);
+	ast_number->str = ast_strdup(number);
+	ast_number->plan = pri_number->plan;
+	ast_number->presentation = pri_to_ast_presentation(pri_number->presentation);
+	ast_number->valid = 1;
 }
 
 /*!
@@ -1365,22 +1738,13 @@ void pri_event_noalarm(struct sig_pri_pri *pri, int index, int before_start_pri)
  *
  * \return Nothing
  */
-static void sig_pri_party_id_convert(struct ast_party_id *ast_id,
-	const struct pri_party_id *pri_id, struct sig_pri_pri *pri)
+static void sig_pri_party_id_convert(struct ast_party_id *ast_id, const struct pri_party_id *pri_id, struct sig_pri_span *pri)
 {
-	char number[AST_MAX_EXTENSION];
-
 	if (pri_id->name.valid) {
-		ast_id->name = ast_strdup(pri_id->name.str);
+		sig_pri_party_name_convert(&ast_id->name, &pri_id->name);
 	}
 	if (pri_id->number.valid) {
-		apply_plan_to_number(number, sizeof(number), pri, pri_id->number.str,
-			pri_id->number.plan);
-		ast_id->number = ast_strdup(number);
-		ast_id->number_type = pri_id->number.plan;
-	}
-	if (pri_id->name.valid || pri_id->number.valid) {
-		ast_id->number_presentation = overall_ast_presentation(pri_id);
+		sig_pri_party_number_convert(&ast_id->number, &pri_id->number, pri);
 	}
 #if defined(HAVE_PRI_SUBADDR)
 	if (pri_id->subaddress.valid) {
@@ -1407,7 +1771,7 @@ static void sig_pri_party_id_convert(struct ast_party_id *ast_id,
 static void sig_pri_redirecting_convert(struct ast_party_redirecting *ast_redirecting,
 	const struct pri_party_redirecting *pri_redirecting,
 	const struct ast_party_redirecting *ast_guide,
-	struct sig_pri_pri *pri)
+	struct sig_pri_span *pri)
 {
 	ast_party_redirecting_set_init(ast_redirecting, ast_guide);
 
@@ -1434,7 +1798,7 @@ static int sig_pri_msn_match(const char *msn_patterns, const char *exten)
 	char *msn_list;
 	char *list_tail;
 
-	msn_list = strdupa(msn_patterns);
+	msn_list = ast_strdupa(msn_patterns);
 
 	list_tail = NULL;
 	pattern = strtok_r(msn_list, ",", &list_tail);
@@ -1450,36 +1814,1926 @@ static int sig_pri_msn_match(const char *msn_patterns, const char *exten)
 	return 0;
 }
 
+#if defined(HAVE_PRI_MCID)
 /*!
  * \internal
- * \brief Obtain the sig_pri owner channel lock if the owner exists.
+ * \brief Append the given party id to the event string.
+ * \since 1.8
+ *
+ * \param msg Event message string being built.
+ * \param prefix Prefix to add to the party id lines.
+ * \param party Party information to encode.
+ *
+ * \return Nothing
+ */
+static void sig_pri_event_party_id(struct ast_str **msg, const char *prefix, struct ast_party_id *party)
+{
+	int pres;
+
+	/* Combined party presentation */
+	pres = ast_party_id_presentation(party);
+	ast_str_append(msg, 0, "%sPres: %d (%s)\r\n", prefix, pres,
+		ast_describe_caller_presentation(pres));
+
+	/* Party number */
+	ast_str_append(msg, 0, "%sNumValid: %d\r\n", prefix,
+		(unsigned) party->number.valid);
+	ast_str_append(msg, 0, "%sNum: %s\r\n", prefix,
+		S_COR(party->number.valid, party->number.str, ""));
+	ast_str_append(msg, 0, "%ston: %d\r\n", prefix, party->number.plan);
+	if (party->number.valid) {
+		ast_str_append(msg, 0, "%sNumPlan: %d\r\n", prefix, party->number.plan);
+		ast_str_append(msg, 0, "%sNumPres: %d (%s)\r\n", prefix,
+			party->number.presentation,
+			ast_describe_caller_presentation(party->number.presentation));
+	}
+
+	/* Party name */
+	ast_str_append(msg, 0, "%sNameValid: %d\r\n", prefix,
+		(unsigned) party->name.valid);
+	ast_str_append(msg, 0, "%sName: %s\r\n", prefix,
+		S_COR(party->name.valid, party->name.str, ""));
+	if (party->name.valid) {
+		ast_str_append(msg, 0, "%sNameCharSet: %s\r\n", prefix,
+			ast_party_name_charset_describe(party->name.char_set));
+		ast_str_append(msg, 0, "%sNamePres: %d (%s)\r\n", prefix,
+			party->name.presentation,
+			ast_describe_caller_presentation(party->name.presentation));
+	}
+
+#if defined(HAVE_PRI_SUBADDR)
+	/* Party subaddress */
+	if (party->subaddress.valid) {
+		static const char subaddress[] = "Subaddr";
+
+		ast_str_append(msg, 0, "%s%s: %s\r\n", prefix, subaddress,
+			S_OR(party->subaddress.str, ""));
+		ast_str_append(msg, 0, "%s%sType: %d\r\n", prefix, subaddress,
+			party->subaddress.type);
+		ast_str_append(msg, 0, "%s%sOdd: %d\r\n", prefix, subaddress,
+			party->subaddress.odd_even_indicator);
+	}
+#endif	/* defined(HAVE_PRI_SUBADDR) */
+}
+#endif	/* defined(HAVE_PRI_MCID) */
+
+#if defined(HAVE_PRI_MCID)
+/*!
+ * \internal
+ * \brief Handle the MCID event.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param mcid MCID event parameters.
+ * \param owner Asterisk channel associated with the call.
+ * NULL if Asterisk no longer has the ast_channel struct.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the owner channel lock is already obtained if still present.
+ *
+ * \return Nothing
+ */
+static void sig_pri_mcid_event(struct sig_pri_span *pri, const struct pri_subcmd_mcid_req *mcid, struct ast_channel *owner)
+{
+	struct ast_channel *chans[1];
+	struct ast_str *msg;
+	struct ast_party_id party;
+
+	msg = ast_str_create(4096);
+	if (!msg) {
+		return;
+	}
+
+	if (owner) {
+		/* The owner channel is present. */
+		ast_str_append(&msg, 0, "Channel: %s\r\n", owner->name);
+		ast_str_append(&msg, 0, "UniqueID: %s\r\n", owner->uniqueid);
+
+		sig_pri_event_party_id(&msg, "CallerID", &owner->connected.id);
+	} else {
+		/*
+		 * Since we no longer have an owner channel,
+		 * we have to use the caller information supplied by libpri.
+		 */
+		ast_party_id_init(&party);
+		sig_pri_party_id_convert(&party, &mcid->originator, pri);
+		sig_pri_event_party_id(&msg, "CallerID", &party);
+		ast_party_id_free(&party);
+	}
+
+	/* Always use libpri's called party information. */
+	ast_party_id_init(&party);
+	sig_pri_party_id_convert(&party, &mcid->answerer, pri);
+	sig_pri_event_party_id(&msg, "ConnectedID", &party);
+	ast_party_id_free(&party);
+
+	chans[0] = owner;
+	ast_manager_event_multichan(EVENT_FLAG_CALL, "MCID", owner ? 1 : 0, chans, "%s",
+		ast_str_buffer(msg));
+	ast_free(msg);
+}
+#endif	/* defined(HAVE_PRI_MCID) */
+
+#if defined(HAVE_PRI_TRANSFER)
+struct xfer_rsp_data {
+	struct sig_pri_span *pri;
+	/*! Call to send transfer success/fail response over. */
+	q931_call *call;
+	/*! Invocation ID to use when sending a reply to the transfer request. */
+	int invoke_id;
+};
+#endif	/* defined(HAVE_PRI_TRANSFER) */
+
+#if defined(HAVE_PRI_TRANSFER)
+/*!
+ * \internal
+ * \brief Send the transfer success/fail response message.
+ * \since 1.8
+ *
+ * \param data Callback user data pointer
+ * \param is_successful TRUE if the transfer was successful.
+ *
+ * \return Nothing
+ */
+static void sig_pri_transfer_rsp(void *data, int is_successful)
+{
+	struct xfer_rsp_data *rsp = data;
+
+	pri_transfer_rsp(rsp->pri->pri, rsp->call, rsp->invoke_id, is_successful);
+}
+#endif	/* defined(HAVE_PRI_TRANSFER) */
+
+#if defined(HAVE_PRI_CALL_HOLD) || defined(HAVE_PRI_TRANSFER)
+/*!
+ * \brief Protocol callback to indicate if transfer will happen.
+ * \since 1.8
+ *
+ * \param data Callback user data pointer
+ * \param is_successful TRUE if the transfer will happen.
+ *
+ * \return Nothing
+ */
+typedef void (*xfer_rsp_callback)(void *data, int is_successful);
+#endif	/* defined(HAVE_PRI_CALL_HOLD) || defined(HAVE_PRI_TRANSFER) */
+
+#if defined(HAVE_PRI_CALL_HOLD) || defined(HAVE_PRI_TRANSFER)
+/*!
+ * \internal
+ * \brief Attempt to transfer the two calls to each other.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param call_1_pri First call involved in the transfer. (transferee; usually on hold)
+ * \param call_1_held TRUE if call_1_pri is on hold.
+ * \param call_2_pri Second call involved in the transfer. (target; usually active/ringing)
+ * \param call_2_held TRUE if call_2_pri is on hold.
+ * \param rsp_callback Protocol callback to indicate if transfer will happen. NULL if not used.
+ * \param data Callback user data pointer
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int sig_pri_attempt_transfer(struct sig_pri_span *pri, q931_call *call_1_pri, int call_1_held, q931_call *call_2_pri, int call_2_held, xfer_rsp_callback rsp_callback, void *data)
+{
+	struct attempt_xfer_call {
+		q931_call *pri;
+		struct ast_channel *ast;
+		int held;
+		int chanpos;
+	};
+	int retval;
+	struct ast_channel *transferee;
+	struct attempt_xfer_call *call_1;
+	struct attempt_xfer_call *call_2;
+	struct attempt_xfer_call *swap_call;
+	struct attempt_xfer_call c1;
+	struct attempt_xfer_call c2;
+
+	c1.pri = call_1_pri;
+	c1.held = call_1_held;
+	call_1 = &c1;
+
+	c2.pri = call_2_pri;
+	c2.held = call_2_held;
+	call_2 = &c2;
+
+	call_1->chanpos = pri_find_principle_by_call(pri, call_1->pri);
+	call_2->chanpos = pri_find_principle_by_call(pri, call_2->pri);
+	if (call_1->chanpos < 0 || call_2->chanpos < 0) {
+		/* Calls not found in span control. */
+		if (rsp_callback) {
+			/* Transfer failed. */
+			rsp_callback(data, 0);
+		}
+		return -1;
+	}
+
+	/* Attempt to make transferee and target consistent. */
+	if (!call_1->held && call_2->held) {
+		/*
+		 * Swap call_1 and call_2 to make call_1 the transferee(held call)
+		 * and call_2 the target(active call).
+		 */
+		swap_call = call_1;
+		call_1 = call_2;
+		call_2 = swap_call;
+	}
+
+	/* Deadlock avoidance is attempted. */
+	sig_pri_lock_private(pri->pvts[call_1->chanpos]);
+	sig_pri_lock_owner(pri, call_1->chanpos);
+	sig_pri_lock_private(pri->pvts[call_2->chanpos]);
+	sig_pri_lock_owner(pri, call_2->chanpos);
+
+	call_1->ast = pri->pvts[call_1->chanpos]->owner;
+	call_2->ast = pri->pvts[call_2->chanpos]->owner;
+	if (!call_1->ast || !call_2->ast) {
+		/* At least one owner is not present. */
+		if (call_1->ast) {
+			ast_channel_unlock(call_1->ast);
+		}
+		if (call_2->ast) {
+			ast_channel_unlock(call_2->ast);
+		}
+		sig_pri_unlock_private(pri->pvts[call_1->chanpos]);
+		sig_pri_unlock_private(pri->pvts[call_2->chanpos]);
+		if (rsp_callback) {
+			/* Transfer failed. */
+			rsp_callback(data, 0);
+		}
+		return -1;
+	}
+
+	for (;;) {
+		transferee = ast_bridged_channel(call_1->ast);
+		if (transferee) {
+			break;
+		}
+
+		/* Try masquerading the other way. */
+		swap_call = call_1;
+		call_1 = call_2;
+		call_2 = swap_call;
+
+		transferee = ast_bridged_channel(call_1->ast);
+		if (transferee) {
+			break;
+		}
+
+		/* Could not transfer.  Neither call is bridged. */
+		ast_channel_unlock(call_1->ast);
+		ast_channel_unlock(call_2->ast);
+		sig_pri_unlock_private(pri->pvts[call_1->chanpos]);
+		sig_pri_unlock_private(pri->pvts[call_2->chanpos]);
+
+		if (rsp_callback) {
+			/* Transfer failed. */
+			rsp_callback(data, 0);
+		}
+		return -1;
+	}
+
+	ast_verb(3, "TRANSFERRING %s to %s\n", call_1->ast->name, call_2->ast->name);
+
+	/*
+	 * Setup transfer masquerade.
+	 *
+	 * Note:  There is an extremely nasty deadlock avoidance issue
+	 * with ast_channel_transfer_masquerade().  Deadlock may be possible if
+	 * the channels involved are proxies (chan_agent channels) and
+	 * it is called with locks.  Unfortunately, there is no simple
+	 * or even merely difficult way to guarantee deadlock avoidance
+	 * and still be able to send an ECT success response without the
+	 * possibility of the bridged channel hanging up on us.
+	 */
+	ast_mutex_unlock(&pri->lock);
+	retval = ast_channel_transfer_masquerade(
+		call_2->ast,
+		&call_2->ast->connected,
+		call_2->held,
+		transferee,
+		&call_1->ast->connected,
+		call_1->held);
+
+	/* Reacquire the pri->lock to hold off completion of the transfer masquerade. */
+	ast_mutex_lock(&pri->lock);
+
+	ast_channel_unlock(call_1->ast);
+	ast_channel_unlock(call_2->ast);
+	sig_pri_unlock_private(pri->pvts[call_1->chanpos]);
+	sig_pri_unlock_private(pri->pvts[call_2->chanpos]);
+
+	if (rsp_callback) {
+		/*
+		 * Report transfer status.
+		 *
+		 * Must do the callback before the masquerade completes to ensure
+		 * that the protocol message goes out before the call leg is
+		 * disconnected.
+		 */
+		rsp_callback(data, retval ? 0 : 1);
+	}
+	return retval;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) || defined(HAVE_PRI_TRANSFER) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Compare the CC agent private data by libpri cc_id.
+ * \since 1.8
+ *
+ * \param obj pointer to the (user-defined part) of an object.
+ * \param arg callback argument from ao2_callback()
+ * \param flags flags from ao2_callback()
+ *
+ * \return values are a combination of enum _cb_results.
+ */
+static int sig_pri_cc_agent_cmp_cc_id(void *obj, void *arg, int flags)
+{
+	struct ast_cc_agent *agent_1 = obj;
+	struct sig_pri_cc_agent_prv *agent_prv_1 = agent_1->private_data;
+	struct sig_pri_cc_agent_prv *agent_prv_2 = arg;
+
+	return (agent_prv_1 && agent_prv_1->pri == agent_prv_2->pri
+		&& agent_prv_1->cc_id == agent_prv_2->cc_id) ? CMP_MATCH | CMP_STOP : 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Find the CC agent by libpri cc_id.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param cc_id CC record ID to find.
+ *
+ * \note
+ * Since agents are refcounted, and this function returns
+ * a reference to the agent, it is imperative that you decrement
+ * the refcount of the agent once you have finished using it.
+ *
+ * \retval agent on success.
+ * \retval NULL not found.
+ */
+static struct ast_cc_agent *sig_pri_find_cc_agent_by_cc_id(struct sig_pri_span *pri, long cc_id)
+{
+	struct sig_pri_cc_agent_prv finder = {
+		.pri = pri,
+		.cc_id = cc_id,
+	};
+
+	return ast_cc_agent_callback(0, sig_pri_cc_agent_cmp_cc_id, &finder,
+		sig_pri_cc_type_name);
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Compare the CC monitor instance by libpri cc_id.
+ * \since 1.8
+ *
+ * \param obj pointer to the (user-defined part) of an object.
+ * \param arg callback argument from ao2_callback()
+ * \param flags flags from ao2_callback()
+ *
+ * \return values are a combination of enum _cb_results.
+ */
+static int sig_pri_cc_monitor_cmp_cc_id(void *obj, void *arg, int flags)
+{
+	struct sig_pri_cc_monitor_instance *monitor_1 = obj;
+	struct sig_pri_cc_monitor_instance *monitor_2 = arg;
+
+	return (monitor_1->pri == monitor_2->pri
+		&& monitor_1->cc_id == monitor_2->cc_id) ? CMP_MATCH | CMP_STOP : 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Find the CC monitor instance by libpri cc_id.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param cc_id CC record ID to find.
+ *
+ * \note
+ * Since monitor_instances are refcounted, and this function returns
+ * a reference to the instance, it is imperative that you decrement
+ * the refcount of the instance once you have finished using it.
+ *
+ * \retval monitor_instance on success.
+ * \retval NULL not found.
+ */
+static struct sig_pri_cc_monitor_instance *sig_pri_find_cc_monitor_by_cc_id(struct sig_pri_span *pri, long cc_id)
+{
+	struct sig_pri_cc_monitor_instance finder = {
+		.pri = pri,
+		.cc_id = cc_id,
+	};
+
+	return ao2_callback(sig_pri_cc_monitors, 0, sig_pri_cc_monitor_cmp_cc_id, &finder);
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Destroy the given monitor instance.
+ * \since 1.8
+ *
+ * \param data Monitor instance to destroy.
+ *
+ * \return Nothing
+ */
+static void sig_pri_cc_monitor_instance_destroy(void *data)
+{
+	struct sig_pri_cc_monitor_instance *monitor_instance = data;
+
+	if (monitor_instance->cc_id != -1) {
+		ast_mutex_lock(&monitor_instance->pri->lock);
+		pri_cc_cancel(monitor_instance->pri->pri, monitor_instance->cc_id);
+		ast_mutex_unlock(&monitor_instance->pri->lock);
+	}
+	monitor_instance->pri->calls->module_unref();
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Construct a new monitor instance.
+ * \since 1.8
+ *
+ * \param core_id CC core ID.
+ * \param pri sig_pri PRI control structure.
+ * \param cc_id CC record ID.
+ * \param device_name Name of device (Asterisk channel name less sequence number).
+ *
+ * \note
+ * Since monitor_instances are refcounted, and this function returns
+ * a reference to the instance, it is imperative that you decrement
+ * the refcount of the instance once you have finished using it.
+ *
+ * \retval monitor_instance on success.
+ * \retval NULL on error.
+ */
+static struct sig_pri_cc_monitor_instance *sig_pri_cc_monitor_instance_init(int core_id, struct sig_pri_span *pri, long cc_id, const char *device_name)
+{
+	struct sig_pri_cc_monitor_instance *monitor_instance;
+
+	if (!pri->calls->module_ref || !pri->calls->module_unref) {
+		return NULL;
+	}
+
+	monitor_instance = ao2_alloc(sizeof(*monitor_instance) + strlen(device_name),
+		sig_pri_cc_monitor_instance_destroy);
+	if (!monitor_instance) {
+		return NULL;
+	}
+
+	monitor_instance->cc_id = cc_id;
+	monitor_instance->pri = pri;
+	monitor_instance->core_id = core_id;
+	strcpy(monitor_instance->name, device_name);
+
+	pri->calls->module_ref();
+
+	ao2_link(sig_pri_cc_monitors, monitor_instance);
+	return monitor_instance;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Announce to the CC core that protocol CC monitor is available for this call.
  * \since 1.8
  *
  * \param pri sig_pri PRI control structure.
  * \param chanpos Channel position in the span.
+ * \param cc_id CC record ID.
+ * \param service CCBS/CCNR indication.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pri->pvts[chanpos]) is already obtained.
+ * \note Assumes the sig_pri_lock_owner(pri, chanpos) is already obtained.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int sig_pri_cc_available(struct sig_pri_span *pri, int chanpos, long cc_id, enum ast_cc_service_type service)
+{
+	struct sig_pri_chan *pvt;
+	struct ast_cc_config_params *cc_params;
+	struct sig_pri_cc_monitor_instance *monitor;
+	enum ast_cc_monitor_policies monitor_policy;
+	int core_id;
+	int res;
+	char device_name[AST_CHANNEL_NAME];
+	char dialstring[AST_CHANNEL_NAME];
+
+	pvt = pri->pvts[chanpos];
+
+	core_id = ast_cc_get_current_core_id(pvt->owner);
+	if (core_id == -1) {
+		return -1;
+	}
+
+	cc_params = ast_channel_get_cc_config_params(pvt->owner);
+	if (!cc_params) {
+		return -1;
+	}
+
+	res = -1;
+	monitor_policy = ast_get_cc_monitor_policy(cc_params);
+	switch (monitor_policy) {
+	case AST_CC_MONITOR_NEVER:
+		/* CCSS is not enabled. */
+		break;
+	case AST_CC_MONITOR_NATIVE:
+	case AST_CC_MONITOR_ALWAYS:
+		/*
+		 * If it is AST_CC_MONITOR_ALWAYS and native fails we will attempt the fallback
+		 * later in the call to sig_pri_cc_generic_check().
+		 */
+		ast_channel_get_device_name(pvt->owner, device_name, sizeof(device_name));
+		sig_pri_make_cc_dialstring(pvt, dialstring, sizeof(dialstring));
+		monitor = sig_pri_cc_monitor_instance_init(core_id, pri, cc_id, device_name);
+		if (!monitor) {
+			break;
+		}
+		res = ast_queue_cc_frame(pvt->owner, sig_pri_cc_type_name, dialstring, service,
+			monitor);
+		if (res) {
+			monitor->cc_id = -1;
+			ao2_unlink(sig_pri_cc_monitors, monitor);
+			ao2_ref(monitor, -1);
+		}
+		break;
+	case AST_CC_MONITOR_GENERIC:
+		ast_queue_cc_frame(pvt->owner, AST_CC_GENERIC_MONITOR_TYPE,
+			sig_pri_get_orig_dialstring(pvt), service, NULL);
+		/* Say it failed to force caller to cancel native CC. */
+		break;
+	}
+	return res;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+/*!
+ * \internal
+ * \brief Check if generic CC monitor is needed and request it.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param chanpos Channel position in the span.
+ * \param service CCBS/CCNR indication.
  *
  * \note Assumes the pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pri->pvts[chanpos]) is already obtained.
  *
  * \return Nothing
  */
-static void sig_pri_lock_owner(struct sig_pri_pri *pri, int chanpos)
+static void sig_pri_cc_generic_check(struct sig_pri_span *pri, int chanpos, enum ast_cc_service_type service)
 {
-	for (;;) {
-		if (!pri->pvts[chanpos]->owner) {
-			/* There is no owner lock to get. */
+	struct ast_channel *owner;
+	struct ast_cc_config_params *cc_params;
+#if defined(HAVE_PRI_CCSS)
+	struct ast_cc_monitor *monitor;
+	char device_name[AST_CHANNEL_NAME];
+#endif	/* defined(HAVE_PRI_CCSS) */
+	enum ast_cc_monitor_policies monitor_policy;
+	int core_id;
+
+	if (!pri->pvts[chanpos]->outgoing) {
+		/* This is not an outgoing call so it cannot be CC monitor. */
+		return;
+	}
+
+	sig_pri_lock_owner(pri, chanpos);
+	owner = pri->pvts[chanpos]->owner;
+	if (!owner) {
+		return;
+	}
+	core_id = ast_cc_get_current_core_id(owner);
+	if (core_id == -1) {
+		/* No CC core setup */
+		goto done;
+	}
+
+	cc_params = ast_channel_get_cc_config_params(owner);
+	if (!cc_params) {
+		/* Could not get CC config parameters. */
+		goto done;
+	}
+
+#if defined(HAVE_PRI_CCSS)
+	ast_channel_get_device_name(owner, device_name, sizeof(device_name));
+	monitor = ast_cc_get_monitor_by_recall_core_id(core_id, device_name);
+	if (monitor) {
+		/* CC monitor is already present so no need for generic CC. */
+		ao2_ref(monitor, -1);
+		goto done;
+	}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+	monitor_policy = ast_get_cc_monitor_policy(cc_params);
+	switch (monitor_policy) {
+	case AST_CC_MONITOR_NEVER:
+		/* CCSS is not enabled. */
+		break;
+	case AST_CC_MONITOR_NATIVE:
+		if (pri->sig == SIG_BRI_PTMP && pri->nodetype == PRI_NETWORK) {
+			/* Request generic CC monitor. */
+			ast_queue_cc_frame(owner, AST_CC_GENERIC_MONITOR_TYPE,
+				sig_pri_get_orig_dialstring(pri->pvts[chanpos]), service, NULL);
+		}
+		break;
+	case AST_CC_MONITOR_ALWAYS:
+		if (pri->sig == SIG_BRI_PTMP && pri->nodetype != PRI_NETWORK) {
+			/*
+			 * Cannot monitor PTMP TE side since this is not defined.
+			 * We are playing the roll of a phone in this case and
+			 * a phone cannot monitor a party over the network without
+			 * protocol help.
+			 */
 			break;
 		}
-		if (!ast_channel_trylock(pri->pvts[chanpos]->owner)) {
-			/* We got the lock */
-			break;
+		/*
+		 * We are either falling back or this is a PTMP NT span.
+		 * Request generic CC monitor.
+		 */
+		ast_queue_cc_frame(owner, AST_CC_GENERIC_MONITOR_TYPE,
+			sig_pri_get_orig_dialstring(pri->pvts[chanpos]), service, NULL);
+		break;
+	case AST_CC_MONITOR_GENERIC:
+		if (pri->sig == SIG_BRI_PTMP && pri->nodetype == PRI_NETWORK) {
+			/* Request generic CC monitor. */
+			ast_queue_cc_frame(owner, AST_CC_GENERIC_MONITOR_TYPE,
+				sig_pri_get_orig_dialstring(pri->pvts[chanpos]), service, NULL);
 		}
-		/* We must unlock the PRI to avoid the possibility of a deadlock */
-		ast_mutex_unlock(&pri->lock);
-		PRI_DEADLOCK_AVOIDANCE(pri->pvts[chanpos]);
-		ast_mutex_lock(&pri->lock);
+		break;
+	}
+
+done:
+	ast_channel_unlock(owner);
+}
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief The CC link canceled the CC instance.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param cc_id CC record ID.
+ * \param is_agent TRUE if the cc_id is for an agent.
+ *
+ * \return Nothing
+ */
+static void sig_pri_cc_link_canceled(struct sig_pri_span *pri, long cc_id, int is_agent)
+{
+	if (is_agent) {
+		struct ast_cc_agent *agent;
+
+		agent = sig_pri_find_cc_agent_by_cc_id(pri, cc_id);
+		if (!agent) {
+			return;
+		}
+		ast_cc_failed(agent->core_id, "%s agent got canceled by link",
+			sig_pri_cc_type_name);
+		ao2_ref(agent, -1);
+	} else {
+		struct sig_pri_cc_monitor_instance *monitor;
+
+		monitor = sig_pri_find_cc_monitor_by_cc_id(pri, cc_id);
+		if (!monitor) {
+			return;
+		}
+		monitor->cc_id = -1;
+		ast_cc_monitor_failed(monitor->core_id, monitor->name,
+			"%s monitor got canceled by link", sig_pri_cc_type_name);
+		ao2_ref(monitor, -1);
 	}
 }
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Convert ast_aoc_charged_item to PRI_AOC_CHARGED_ITEM .
+ * \since 1.8
+ *
+ * \param value Value to convert to string.
+ *
+ * \return PRI_AOC_CHARGED_ITEM
+ */
+static enum PRI_AOC_CHARGED_ITEM sig_pri_aoc_charged_item_to_pri(enum PRI_AOC_CHARGED_ITEM value)
+{
+	switch (value) {
+	case AST_AOC_CHARGED_ITEM_NA:
+		return PRI_AOC_CHARGED_ITEM_NOT_AVAILABLE;
+	case AST_AOC_CHARGED_ITEM_SPECIAL_ARRANGEMENT:
+		return PRI_AOC_CHARGED_ITEM_SPECIAL_ARRANGEMENT;
+	case AST_AOC_CHARGED_ITEM_BASIC_COMMUNICATION:
+		return PRI_AOC_CHARGED_ITEM_BASIC_COMMUNICATION;
+	case AST_AOC_CHARGED_ITEM_CALL_ATTEMPT:
+		return PRI_AOC_CHARGED_ITEM_CALL_ATTEMPT;
+	case AST_AOC_CHARGED_ITEM_CALL_SETUP:
+		return PRI_AOC_CHARGED_ITEM_CALL_SETUP;
+	case AST_AOC_CHARGED_ITEM_USER_USER_INFO:
+		return PRI_AOC_CHARGED_ITEM_USER_USER_INFO;
+	case AST_AOC_CHARGED_ITEM_SUPPLEMENTARY_SERVICE:
+		return PRI_AOC_CHARGED_ITEM_SUPPLEMENTARY_SERVICE;
+	}
+	return PRI_AOC_CHARGED_ITEM_NOT_AVAILABLE;
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Convert PRI_AOC_CHARGED_ITEM to ast_aoc_charged_item.
+ * \since 1.8
+ *
+ * \param value Value to convert to string.
+ *
+ * \return ast_aoc_charged_item
+ */
+static enum ast_aoc_s_charged_item sig_pri_aoc_charged_item_to_ast(enum PRI_AOC_CHARGED_ITEM value)
+{
+	switch (value) {
+	case PRI_AOC_CHARGED_ITEM_NOT_AVAILABLE:
+		return AST_AOC_CHARGED_ITEM_NA;
+	case PRI_AOC_CHARGED_ITEM_SPECIAL_ARRANGEMENT:
+		return AST_AOC_CHARGED_ITEM_SPECIAL_ARRANGEMENT;
+	case PRI_AOC_CHARGED_ITEM_BASIC_COMMUNICATION:
+		return AST_AOC_CHARGED_ITEM_BASIC_COMMUNICATION;
+	case PRI_AOC_CHARGED_ITEM_CALL_ATTEMPT:
+		return AST_AOC_CHARGED_ITEM_CALL_ATTEMPT;
+	case PRI_AOC_CHARGED_ITEM_CALL_SETUP:
+		return AST_AOC_CHARGED_ITEM_CALL_SETUP;
+	case PRI_AOC_CHARGED_ITEM_USER_USER_INFO:
+		return AST_AOC_CHARGED_ITEM_USER_USER_INFO;
+	case PRI_AOC_CHARGED_ITEM_SUPPLEMENTARY_SERVICE:
+		return AST_AOC_CHARGED_ITEM_SUPPLEMENTARY_SERVICE;
+	}
+	return AST_AOC_CHARGED_ITEM_NA;
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Convert AST_AOC_MULTIPLER to PRI_AOC_MULTIPLIER.
+ * \since 1.8
+ *
+ * \return pri enum equivalent.
+ */
+static int sig_pri_aoc_multiplier_from_ast(enum ast_aoc_currency_multiplier mult)
+{
+	switch (mult) {
+	case AST_AOC_MULT_ONETHOUSANDTH:
+		return PRI_AOC_MULTIPLIER_THOUSANDTH;
+	case AST_AOC_MULT_ONEHUNDREDTH:
+		return PRI_AOC_MULTIPLIER_HUNDREDTH;
+	case AST_AOC_MULT_ONETENTH:
+		return PRI_AOC_MULTIPLIER_TENTH;
+	case AST_AOC_MULT_ONE:
+		return PRI_AOC_MULTIPLIER_ONE;
+	case AST_AOC_MULT_TEN:
+		return PRI_AOC_MULTIPLIER_TEN;
+	case AST_AOC_MULT_HUNDRED:
+		return PRI_AOC_MULTIPLIER_HUNDRED;
+	case AST_AOC_MULT_THOUSAND:
+		return PRI_AOC_MULTIPLIER_THOUSAND;
+	default:
+		return PRI_AOC_MULTIPLIER_ONE;
+	}
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Convert PRI_AOC_MULTIPLIER to AST_AOC_MULTIPLIER
+ * \since 1.8
+ *
+ * \return ast enum equivalent.
+ */
+static int sig_pri_aoc_multiplier_from_pri(const int mult)
+{
+	switch (mult) {
+	case PRI_AOC_MULTIPLIER_THOUSANDTH:
+		return AST_AOC_MULT_ONETHOUSANDTH;
+	case PRI_AOC_MULTIPLIER_HUNDREDTH:
+		return AST_AOC_MULT_ONEHUNDREDTH;
+	case PRI_AOC_MULTIPLIER_TENTH:
+		return AST_AOC_MULT_ONETENTH;
+	case PRI_AOC_MULTIPLIER_ONE:
+		return AST_AOC_MULT_ONE;
+	case PRI_AOC_MULTIPLIER_TEN:
+		return AST_AOC_MULT_TEN;
+	case PRI_AOC_MULTIPLIER_HUNDRED:
+		return AST_AOC_MULT_HUNDRED;
+	case PRI_AOC_MULTIPLIER_THOUSAND:
+		return AST_AOC_MULT_THOUSAND;
+	default:
+		return AST_AOC_MULT_ONE;
+	}
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Convert ast_aoc_time_scale representation to PRI_AOC_TIME_SCALE
+ * \since 1.8
+ *
+ * \param value Value to convert to ast representation
+ *
+ * \return PRI_AOC_TIME_SCALE
+ */
+static enum PRI_AOC_TIME_SCALE sig_pri_aoc_scale_to_pri(enum ast_aoc_time_scale value)
+{
+	switch (value) {
+	default:
+	case AST_AOC_TIME_SCALE_HUNDREDTH_SECOND:
+		return PRI_AOC_TIME_SCALE_HUNDREDTH_SECOND;
+	case AST_AOC_TIME_SCALE_TENTH_SECOND:
+		return PRI_AOC_TIME_SCALE_TENTH_SECOND;
+	case AST_AOC_TIME_SCALE_SECOND:
+		return PRI_AOC_TIME_SCALE_SECOND;
+	case AST_AOC_TIME_SCALE_TEN_SECOND:
+		return PRI_AOC_TIME_SCALE_TEN_SECOND;
+	case AST_AOC_TIME_SCALE_MINUTE:
+		return PRI_AOC_TIME_SCALE_MINUTE;
+	case AST_AOC_TIME_SCALE_HOUR:
+		return PRI_AOC_TIME_SCALE_HOUR;
+	case AST_AOC_TIME_SCALE_DAY:
+		return PRI_AOC_TIME_SCALE_DAY;
+	}
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Convert PRI_AOC_TIME_SCALE to ast aoc representation
+ * \since 1.8
+ *
+ * \param value Value to convert to ast representation
+ *
+ * \return ast aoc time scale
+ */
+static enum ast_aoc_time_scale sig_pri_aoc_scale_to_ast(enum PRI_AOC_TIME_SCALE value)
+{
+	switch (value) {
+	default:
+	case PRI_AOC_TIME_SCALE_HUNDREDTH_SECOND:
+		return AST_AOC_TIME_SCALE_HUNDREDTH_SECOND;
+	case PRI_AOC_TIME_SCALE_TENTH_SECOND:
+		return AST_AOC_TIME_SCALE_TENTH_SECOND;
+	case PRI_AOC_TIME_SCALE_SECOND:
+		return AST_AOC_TIME_SCALE_SECOND;
+	case PRI_AOC_TIME_SCALE_TEN_SECOND:
+		return AST_AOC_TIME_SCALE_TEN_SECOND;
+	case PRI_AOC_TIME_SCALE_MINUTE:
+		return AST_AOC_TIME_SCALE_MINUTE;
+	case PRI_AOC_TIME_SCALE_HOUR:
+		return AST_AOC_TIME_SCALE_HOUR;
+	case PRI_AOC_TIME_SCALE_DAY:
+		return AST_AOC_TIME_SCALE_DAY;
+	}
+	return AST_AOC_TIME_SCALE_HUNDREDTH_SECOND;
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Handle AOC-S control frame
+ * \since 1.8
+ *
+ * \param aoc_s AOC-S event parameters.
+ * \param owner Asterisk channel associated with the call.
+ * \param passthrough indicating if this message should be queued on the ast channel
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri private is locked
+ * \note Assumes the owner channel lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_aoc_s_from_pri(const struct pri_subcmd_aoc_s *aoc_s, struct ast_channel *owner, int passthrough)
+{
+	struct ast_aoc_decoded *decoded = NULL;
+	struct ast_aoc_encoded *encoded = NULL;
+	size_t encoded_size = 0;
+	int idx;
+
+	if (!owner || !aoc_s) {
+		return;
+	}
+
+	if (!(decoded = ast_aoc_create(AST_AOC_S, 0, 0))) {
+		return;
+	}
+
+	for (idx = 0; idx < aoc_s->num_items; ++idx) {
+		enum ast_aoc_s_charged_item charged_item;
+
+		charged_item = sig_pri_aoc_charged_item_to_ast(aoc_s->item[idx].chargeable);
+		if (charged_item == AST_AOC_CHARGED_ITEM_NA) {
+			/* Delete the unknown charged item from the list. */
+			continue;
+		}
+		switch (aoc_s->item[idx].rate_type) {
+		case PRI_AOC_RATE_TYPE_DURATION:
+			ast_aoc_s_add_rate_duration(decoded,
+				charged_item,
+				aoc_s->item[idx].rate.duration.amount.cost,
+				sig_pri_aoc_multiplier_from_pri(aoc_s->item[idx].rate.duration.amount.multiplier),
+				aoc_s->item[idx].rate.duration.currency,
+				aoc_s->item[idx].rate.duration.time.length,
+				sig_pri_aoc_scale_to_ast(aoc_s->item[idx].rate.duration.time.scale),
+				aoc_s->item[idx].rate.duration.granularity.length,
+				sig_pri_aoc_scale_to_ast(aoc_s->item[idx].rate.duration.granularity.scale),
+				aoc_s->item[idx].rate.duration.charging_type);
+			break;
+		case PRI_AOC_RATE_TYPE_FLAT:
+			ast_aoc_s_add_rate_flat(decoded,
+				charged_item,
+				aoc_s->item[idx].rate.flat.amount.cost,
+				sig_pri_aoc_multiplier_from_pri(aoc_s->item[idx].rate.flat.amount.multiplier),
+				aoc_s->item[idx].rate.flat.currency);
+			break;
+		case PRI_AOC_RATE_TYPE_VOLUME:
+			ast_aoc_s_add_rate_volume(decoded,
+				charged_item,
+				aoc_s->item[idx].rate.volume.unit,
+				aoc_s->item[idx].rate.volume.amount.cost,
+				sig_pri_aoc_multiplier_from_pri(aoc_s->item[idx].rate.volume.amount.multiplier),
+				aoc_s->item[idx].rate.volume.currency);
+			break;
+		case PRI_AOC_RATE_TYPE_SPECIAL_CODE:
+			ast_aoc_s_add_rate_special_charge_code(decoded,
+				charged_item,
+				aoc_s->item[idx].rate.special);
+			break;
+		case PRI_AOC_RATE_TYPE_FREE:
+			ast_aoc_s_add_rate_free(decoded, charged_item, 0);
+			break;
+		case PRI_AOC_RATE_TYPE_FREE_FROM_BEGINNING:
+			ast_aoc_s_add_rate_free(decoded, charged_item, 1);
+			break;
+		default:
+			ast_aoc_s_add_rate_na(decoded, charged_item);
+			break;
+		}
+	}
+
+	if (passthrough && (encoded = ast_aoc_encode(decoded, &encoded_size, owner))) {
+		ast_queue_control_data(owner, AST_CONTROL_AOC, encoded, encoded_size);
+	}
+
+	ast_aoc_manager_event(decoded, owner);
+
+	ast_aoc_destroy_decoded(decoded);
+	ast_aoc_destroy_encoded(encoded);
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Generate AOC Request Response
+ * \since 1.8
+ *
+ * \param aoc_request
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri private is locked
+ * \note Assumes the owner channel lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_aoc_request_from_pri(const struct pri_subcmd_aoc_request *aoc_request, struct sig_pri_chan *pvt, q931_call *call)
+{
+	int request;
+
+	if (!aoc_request) {
+		return;
+	}
+
+	request = aoc_request->charging_request;
+
+	if (request & PRI_AOC_REQUEST_S) {
+		if (pvt->pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_S) {
+			/* An AOC-S response must come from the other side, so save off this invoke_id
+			 * and see if an AOC-S message comes in before the call is answered. */
+			pvt->aoc_s_request_invoke_id = aoc_request->invoke_id;
+			pvt->aoc_s_request_invoke_id_valid = 1;
+
+		} else {
+			pri_aoc_s_request_response_send(pvt->pri->pri,
+				call,
+				aoc_request->invoke_id,
+				NULL);
+		}
+	}
+
+	if (request & PRI_AOC_REQUEST_D) {
+		if (pvt->pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_D) {
+			pri_aoc_de_request_response_send(pvt->pri->pri,
+				call,
+				PRI_AOC_REQ_RSP_CHARGING_INFO_FOLLOWS,
+				aoc_request->invoke_id);
+		} else {
+			pri_aoc_de_request_response_send(pvt->pri->pri,
+				call,
+				PRI_AOC_REQ_RSP_ERROR_NOT_AVAILABLE,
+				aoc_request->invoke_id);
+		}
+	}
+
+	if (request & PRI_AOC_REQUEST_E) {
+		if (pvt->pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_E) {
+			pri_aoc_de_request_response_send(pvt->pri->pri,
+				call,
+				PRI_AOC_REQ_RSP_CHARGING_INFO_FOLLOWS,
+				aoc_request->invoke_id);
+		} else {
+			pri_aoc_de_request_response_send(pvt->pri->pri,
+				call,
+				PRI_AOC_REQ_RSP_ERROR_NOT_AVAILABLE,
+				aoc_request->invoke_id);
+		}
+	}
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Generate AOC-D AST_CONTROL_AOC frame
+ * \since 1.8
+ *
+ * \param aoc_e AOC-D event parameters.
+ * \param owner Asterisk channel associated with the call.
+ * \param passthrough indicating if this message should be queued on the ast channel
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri private is locked
+ * \note Assumes the owner channel lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_aoc_d_from_pri(const struct pri_subcmd_aoc_d *aoc_d, struct ast_channel *owner, int passthrough)
+{
+	struct ast_aoc_decoded *decoded = NULL;
+	struct ast_aoc_encoded *encoded = NULL;
+	size_t encoded_size = 0;
+	enum ast_aoc_charge_type type;
+
+	if (!owner || !aoc_d) {
+		return;
+	}
+
+	switch (aoc_d->charge) {
+	case PRI_AOC_DE_CHARGE_CURRENCY:
+		type = AST_AOC_CHARGE_CURRENCY;
+		break;
+	case PRI_AOC_DE_CHARGE_UNITS:
+		type = AST_AOC_CHARGE_UNIT;
+		break;
+	case PRI_AOC_DE_CHARGE_FREE:
+		type = AST_AOC_CHARGE_FREE;
+		break;
+	default:
+		type = AST_AOC_CHARGE_NA;
+		break;
+	}
+
+	if (!(decoded = ast_aoc_create(AST_AOC_D, type, 0))) {
+		return;
+	}
+
+	switch (aoc_d->billing_accumulation) {
+	default:
+		ast_debug(1, "AOC-D billing accumulation has unknown value: %d\n",
+			aoc_d->billing_accumulation);
+		/* Fall through */
+	case 0:/* subTotal */
+		ast_aoc_set_total_type(decoded, AST_AOC_SUBTOTAL);
+		break;
+	case 1:/* total */
+		ast_aoc_set_total_type(decoded, AST_AOC_TOTAL);
+		break;
+	}
+
+	switch (aoc_d->billing_id) {
+	case PRI_AOC_D_BILLING_ID_NORMAL:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_NORMAL);
+		break;
+	case PRI_AOC_D_BILLING_ID_REVERSE:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_REVERSE_CHARGE);
+		break;
+	case PRI_AOC_D_BILLING_ID_CREDIT_CARD:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_CREDIT_CARD);
+		break;
+	case PRI_AOC_D_BILLING_ID_NOT_AVAILABLE:
+	default:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_NA);
+		break;
+	}
+
+	switch (aoc_d->charge) {
+	case PRI_AOC_DE_CHARGE_CURRENCY:
+		ast_aoc_set_currency_info(decoded,
+			aoc_d->recorded.money.amount.cost,
+			sig_pri_aoc_multiplier_from_pri(aoc_d->recorded.money.amount.multiplier),
+			aoc_d->recorded.money.currency);
+		break;
+	case PRI_AOC_DE_CHARGE_UNITS:
+		{
+			int i;
+			for (i = 0; i < aoc_d->recorded.unit.num_items; ++i) {
+				/* if type or number are negative, then they are not present */
+				ast_aoc_add_unit_entry(decoded,
+					(aoc_d->recorded.unit.item[i].number >= 0 ? 1 : 0),
+					aoc_d->recorded.unit.item[i].number,
+					(aoc_d->recorded.unit.item[i].type >= 0 ? 1 : 0),
+					aoc_d->recorded.unit.item[i].type);
+			}
+		}
+		break;
+	}
+
+	if (passthrough && (encoded = ast_aoc_encode(decoded, &encoded_size, owner))) {
+		ast_queue_control_data(owner, AST_CONTROL_AOC, encoded, encoded_size);
+	}
+
+	ast_aoc_manager_event(decoded, owner);
+
+	ast_aoc_destroy_decoded(decoded);
+	ast_aoc_destroy_encoded(encoded);
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief Generate AOC-E AST_CONTROL_AOC frame
+ * \since 1.8
+ *
+ * \param aoc_e AOC-E event parameters.
+ * \param owner Asterisk channel associated with the call.
+ * \param passthrough indicating if this message should be queued on the ast channel
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri private is locked
+ * \note Assumes the owner channel lock is already obtained.
+ * \note owner channel may be NULL. In that case, generate event only
+ *
+ * \return Nothing
+ */
+static void sig_pri_aoc_e_from_pri(const struct pri_subcmd_aoc_e *aoc_e, struct ast_channel *owner, int passthrough)
+{
+	struct ast_aoc_decoded *decoded = NULL;
+	struct ast_aoc_encoded *encoded = NULL;
+	size_t encoded_size = 0;
+	enum ast_aoc_charge_type type;
+
+	if (!aoc_e) {
+		return;
+	}
+
+	switch (aoc_e->charge) {
+	case PRI_AOC_DE_CHARGE_CURRENCY:
+		type = AST_AOC_CHARGE_CURRENCY;
+		break;
+	case PRI_AOC_DE_CHARGE_UNITS:
+		type = AST_AOC_CHARGE_UNIT;
+		break;
+	case PRI_AOC_DE_CHARGE_FREE:
+		type = AST_AOC_CHARGE_FREE;
+		break;
+	default:
+		type = AST_AOC_CHARGE_NA;
+		break;
+	}
+
+	if (!(decoded = ast_aoc_create(AST_AOC_E, type, 0))) {
+		return;
+	}
+
+	switch (aoc_e->associated.charging_type) {
+	case PRI_AOC_E_CHARGING_ASSOCIATION_NUMBER:
+		if (!aoc_e->associated.charge.number.valid) {
+			break;
+		}
+		ast_aoc_set_association_number(decoded, aoc_e->associated.charge.number.str, aoc_e->associated.charge.number.plan);
+		break;
+	case PRI_AOC_E_CHARGING_ASSOCIATION_ID:
+		ast_aoc_set_association_id(decoded, aoc_e->associated.charge.id);
+		break;
+	default:
+		break;
+	}
+
+	switch (aoc_e->billing_id) {
+	case PRI_AOC_E_BILLING_ID_NORMAL:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_NORMAL);
+		break;
+	case PRI_AOC_E_BILLING_ID_REVERSE:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_REVERSE_CHARGE);
+		break;
+	case PRI_AOC_E_BILLING_ID_CREDIT_CARD:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_CREDIT_CARD);
+		break;
+	case PRI_AOC_E_BILLING_ID_CALL_FORWARDING_UNCONDITIONAL:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_CALL_FWD_UNCONDITIONAL);
+		break;
+	case PRI_AOC_E_BILLING_ID_CALL_FORWARDING_BUSY:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_CALL_FWD_BUSY);
+		break;
+	case PRI_AOC_E_BILLING_ID_CALL_FORWARDING_NO_REPLY:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_CALL_FWD_NO_REPLY);
+		break;
+	case PRI_AOC_E_BILLING_ID_CALL_DEFLECTION:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_CALL_DEFLECTION);
+		break;
+	case PRI_AOC_E_BILLING_ID_CALL_TRANSFER:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_CALL_TRANSFER);
+		break;
+	case PRI_AOC_E_BILLING_ID_NOT_AVAILABLE:
+	default:
+		ast_aoc_set_billing_id(decoded, AST_AOC_BILLING_NA);
+		break;
+	}
+
+	switch (aoc_e->charge) {
+	case PRI_AOC_DE_CHARGE_CURRENCY:
+		ast_aoc_set_currency_info(decoded,
+			aoc_e->recorded.money.amount.cost,
+			sig_pri_aoc_multiplier_from_pri(aoc_e->recorded.money.amount.multiplier),
+			aoc_e->recorded.money.currency);
+		break;
+	case PRI_AOC_DE_CHARGE_UNITS:
+		{
+			int i;
+			for (i = 0; i < aoc_e->recorded.unit.num_items; ++i) {
+				/* if type or number are negative, then they are not present */
+				ast_aoc_add_unit_entry(decoded,
+					(aoc_e->recorded.unit.item[i].number >= 0 ? 1 : 0),
+					aoc_e->recorded.unit.item[i].number,
+					(aoc_e->recorded.unit.item[i].type >= 0 ? 1 : 0),
+					aoc_e->recorded.unit.item[i].type);
+			}
+		}
+	}
+
+	if (passthrough && owner && (encoded = ast_aoc_encode(decoded, &encoded_size, owner))) {
+		ast_queue_control_data(owner, AST_CONTROL_AOC, encoded, encoded_size);
+	}
+
+	ast_aoc_manager_event(decoded, owner);
+
+	ast_aoc_destroy_decoded(decoded);
+	ast_aoc_destroy_encoded(encoded);
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief send an AOC-S message on the current call
+ *
+ * \param pvt sig_pri private channel structure.
+ * \param generic decoded ast AOC message
+ *
+ * \return Nothing
+ *
+ * \note Assumes that the PRI lock is already obtained.
+ */
+static void sig_pri_aoc_s_from_ast(struct sig_pri_chan *pvt, struct ast_aoc_decoded *decoded)
+{
+	struct pri_subcmd_aoc_s aoc_s = { 0, };
+	const struct ast_aoc_s_entry *entry;
+	int idx;
+
+	for (idx = 0; idx < ast_aoc_s_get_count(decoded); idx++) {
+		if (!(entry = ast_aoc_s_get_rate_info(decoded, idx))) {
+			break;
+		}
+
+		aoc_s.item[idx].chargeable = sig_pri_aoc_charged_item_to_pri(entry->charged_item);
+
+		switch (entry->rate_type) {
+		case AST_AOC_RATE_TYPE_DURATION:
+			aoc_s.item[idx].rate_type = PRI_AOC_RATE_TYPE_DURATION;
+			aoc_s.item[idx].rate.duration.amount.cost = entry->rate.duration.amount;
+			aoc_s.item[idx].rate.duration.amount.multiplier =
+				sig_pri_aoc_multiplier_from_ast(entry->rate.duration.multiplier);
+			aoc_s.item[idx].rate.duration.time.length = entry->rate.duration.time;
+			aoc_s.item[idx].rate.duration.time.scale =
+				sig_pri_aoc_scale_to_pri(entry->rate.duration.time_scale);
+			aoc_s.item[idx].rate.duration.granularity.length = entry->rate.duration.granularity_time;
+			aoc_s.item[idx].rate.duration.granularity.scale =
+				sig_pri_aoc_scale_to_pri(entry->rate.duration.granularity_time_scale);
+			aoc_s.item[idx].rate.duration.charging_type = entry->rate.duration.charging_type;
+
+			if (!ast_strlen_zero(entry->rate.duration.currency_name)) {
+				ast_copy_string(aoc_s.item[idx].rate.duration.currency,
+					entry->rate.duration.currency_name,
+					sizeof(aoc_s.item[idx].rate.duration.currency));
+			}
+			break;
+		case AST_AOC_RATE_TYPE_FLAT:
+			aoc_s.item[idx].rate_type = PRI_AOC_RATE_TYPE_FLAT;
+			aoc_s.item[idx].rate.flat.amount.cost = entry->rate.flat.amount;
+			aoc_s.item[idx].rate.flat.amount.multiplier =
+				sig_pri_aoc_multiplier_from_ast(entry->rate.flat.multiplier);
+
+			if (!ast_strlen_zero(entry->rate.flat.currency_name)) {
+				ast_copy_string(aoc_s.item[idx].rate.flat.currency,
+					entry->rate.flat.currency_name,
+					sizeof(aoc_s.item[idx].rate.flat.currency));
+			}
+			break;
+		case AST_AOC_RATE_TYPE_VOLUME:
+			aoc_s.item[idx].rate_type = PRI_AOC_RATE_TYPE_VOLUME;
+			aoc_s.item[idx].rate.volume.unit = entry->rate.volume.volume_unit;
+			aoc_s.item[idx].rate.volume.amount.cost = entry->rate.volume.amount;
+			aoc_s.item[idx].rate.volume.amount.multiplier =
+				sig_pri_aoc_multiplier_from_ast(entry->rate.volume.multiplier);
+
+			if (!ast_strlen_zero(entry->rate.volume.currency_name)) {
+				ast_copy_string(aoc_s.item[idx].rate.volume.currency,
+					entry->rate.volume.currency_name,
+					sizeof(aoc_s.item[idx].rate.volume.currency));
+			}
+			break;
+		case AST_AOC_RATE_TYPE_SPECIAL_CODE:
+			aoc_s.item[idx].rate_type = PRI_AOC_RATE_TYPE_SPECIAL_CODE;
+			aoc_s.item[idx].rate.special = entry->rate.special_code;
+			break;
+		case AST_AOC_RATE_TYPE_FREE:
+			aoc_s.item[idx].rate_type = PRI_AOC_RATE_TYPE_FREE;
+			break;
+		case AST_AOC_RATE_TYPE_FREE_FROM_BEGINNING:
+			aoc_s.item[idx].rate_type = PRI_AOC_RATE_TYPE_FREE_FROM_BEGINNING;
+			break;
+		default:
+		case AST_AOC_RATE_TYPE_NA:
+			aoc_s.item[idx].rate_type = PRI_AOC_RATE_TYPE_NOT_AVAILABLE;
+			break;
+		}
+	}
+	aoc_s.num_items = idx;
+
+	/* if this rate should be sent as a response to an AOC-S request we will
+	 * have an aoc_s_request_invoke_id associated with this pvt */
+	if (pvt->aoc_s_request_invoke_id_valid) {
+		pri_aoc_s_request_response_send(pvt->pri->pri, pvt->call, pvt->aoc_s_request_invoke_id, &aoc_s);
+		pvt->aoc_s_request_invoke_id_valid = 0;
+	} else {
+		pri_aoc_s_send(pvt->pri->pri, pvt->call, &aoc_s);
+	}
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief send an AOC-D message on the current call
+ *
+ * \param pvt sig_pri private channel structure.
+ * \param generic decoded ast AOC message
+ *
+ * \return Nothing
+ *
+ * \note Assumes that the PRI lock is already obtained.
+ */
+static void sig_pri_aoc_d_from_ast(struct sig_pri_chan *pvt, struct ast_aoc_decoded *decoded)
+{
+	struct pri_subcmd_aoc_d aoc_d = { 0, };
+
+	aoc_d.billing_accumulation = (ast_aoc_get_total_type(decoded) == AST_AOC_TOTAL) ? 1 : 0;
+
+	switch (ast_aoc_get_billing_id(decoded)) {
+	case AST_AOC_BILLING_NORMAL:
+		aoc_d.billing_id = PRI_AOC_D_BILLING_ID_NORMAL;
+		break;
+	case AST_AOC_BILLING_REVERSE_CHARGE:
+		aoc_d.billing_id = PRI_AOC_D_BILLING_ID_REVERSE;
+		break;
+	case AST_AOC_BILLING_CREDIT_CARD:
+		aoc_d.billing_id = PRI_AOC_D_BILLING_ID_CREDIT_CARD;
+		break;
+	case AST_AOC_BILLING_NA:
+	default:
+		aoc_d.billing_id = PRI_AOC_D_BILLING_ID_NOT_AVAILABLE;
+		break;
+	}
+
+	switch (ast_aoc_get_charge_type(decoded)) {
+	case AST_AOC_CHARGE_FREE:
+		aoc_d.charge = PRI_AOC_DE_CHARGE_FREE;
+		break;
+	case AST_AOC_CHARGE_CURRENCY:
+		{
+			const char *currency_name = ast_aoc_get_currency_name(decoded);
+			aoc_d.charge = PRI_AOC_DE_CHARGE_CURRENCY;
+			aoc_d.recorded.money.amount.cost = ast_aoc_get_currency_amount(decoded);
+			aoc_d.recorded.money.amount.multiplier = sig_pri_aoc_multiplier_from_ast(ast_aoc_get_currency_multiplier(decoded));
+			if (!ast_strlen_zero(currency_name)) {
+				ast_copy_string(aoc_d.recorded.money.currency, currency_name, sizeof(aoc_d.recorded.money.currency));
+			}
+		}
+		break;
+	case AST_AOC_CHARGE_UNIT:
+		{
+			const struct ast_aoc_unit_entry *entry;
+			int i;
+			aoc_d.charge = PRI_AOC_DE_CHARGE_UNITS;
+			for (i = 0; i < ast_aoc_get_unit_count(decoded); i++) {
+				if ((entry = ast_aoc_get_unit_info(decoded, i)) && i < ARRAY_LEN(aoc_d.recorded.unit.item)) {
+					if (entry->valid_amount) {
+						aoc_d.recorded.unit.item[i].number = entry->amount;
+					} else {
+						aoc_d.recorded.unit.item[i].number = -1;
+					}
+					if (entry->valid_type) {
+						aoc_d.recorded.unit.item[i].type = entry->type;
+					} else {
+						aoc_d.recorded.unit.item[i].type = -1;
+					}
+					aoc_d.recorded.unit.num_items++;
+				} else {
+					break;
+				}
+			}
+		}
+		break;
+	case AST_AOC_CHARGE_NA:
+	default:
+		aoc_d.charge = PRI_AOC_DE_CHARGE_NOT_AVAILABLE;
+		break;
+	}
+
+	pri_aoc_d_send(pvt->pri->pri, pvt->call, &aoc_d);
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief send an AOC-E message on the current call
+ *
+ * \param pvt sig_pri private channel structure.
+ * \param generic decoded ast AOC message
+ *
+ * \return Nothing
+ *
+ * \note Assumes that the PRI lock is already obtained.
+ */
+static void sig_pri_aoc_e_from_ast(struct sig_pri_chan *pvt, struct ast_aoc_decoded *decoded)
+{
+	struct pri_subcmd_aoc_e *aoc_e = &pvt->aoc_e;
+	const struct ast_aoc_charging_association *ca = ast_aoc_get_association_info(decoded);
+
+	memset(aoc_e, 0, sizeof(*aoc_e));
+	pvt->holding_aoce = 1;
+
+	switch (ca->charging_type) {
+	case AST_AOC_CHARGING_ASSOCIATION_NUMBER:
+		aoc_e->associated.charge.number.valid = 1;
+		ast_copy_string(aoc_e->associated.charge.number.str,
+			ca->charge.number.number,
+			sizeof(aoc_e->associated.charge.number.str));
+		aoc_e->associated.charge.number.plan = ca->charge.number.plan;
+		aoc_e->associated.charging_type = PRI_AOC_E_CHARGING_ASSOCIATION_NUMBER;
+		break;
+	case AST_AOC_CHARGING_ASSOCIATION_ID:
+		aoc_e->associated.charge.id = ca->charge.id;
+		aoc_e->associated.charging_type = PRI_AOC_E_CHARGING_ASSOCIATION_ID;
+		break;
+	case AST_AOC_CHARGING_ASSOCIATION_NA:
+	default:
+		break;
+	}
+
+	switch (ast_aoc_get_billing_id(decoded)) {
+	case AST_AOC_BILLING_NORMAL:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_NORMAL;
+		break;
+	case AST_AOC_BILLING_REVERSE_CHARGE:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_REVERSE;
+		break;
+	case AST_AOC_BILLING_CREDIT_CARD:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_CREDIT_CARD;
+		break;
+	case AST_AOC_BILLING_CALL_FWD_UNCONDITIONAL:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_CALL_FORWARDING_UNCONDITIONAL;
+		break;
+	case AST_AOC_BILLING_CALL_FWD_BUSY:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_CALL_FORWARDING_BUSY;
+		break;
+	case AST_AOC_BILLING_CALL_FWD_NO_REPLY:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_CALL_FORWARDING_NO_REPLY;
+		break;
+	case AST_AOC_BILLING_CALL_DEFLECTION:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_CALL_DEFLECTION;
+		break;
+	case AST_AOC_BILLING_CALL_TRANSFER:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_CALL_TRANSFER;
+		break;
+	case AST_AOC_BILLING_NA:
+	default:
+		aoc_e->billing_id = PRI_AOC_E_BILLING_ID_NOT_AVAILABLE;
+		break;
+	}
+
+	switch (ast_aoc_get_charge_type(decoded)) {
+	case AST_AOC_CHARGE_FREE:
+		aoc_e->charge = PRI_AOC_DE_CHARGE_FREE;
+		break;
+	case AST_AOC_CHARGE_CURRENCY:
+		{
+			const char *currency_name = ast_aoc_get_currency_name(decoded);
+			aoc_e->charge = PRI_AOC_DE_CHARGE_CURRENCY;
+			aoc_e->recorded.money.amount.cost = ast_aoc_get_currency_amount(decoded);
+			aoc_e->recorded.money.amount.multiplier = sig_pri_aoc_multiplier_from_ast(ast_aoc_get_currency_multiplier(decoded));
+			if (!ast_strlen_zero(currency_name)) {
+				ast_copy_string(aoc_e->recorded.money.currency, currency_name, sizeof(aoc_e->recorded.money.currency));
+			}
+		}
+		break;
+	case AST_AOC_CHARGE_UNIT:
+		{
+			const struct ast_aoc_unit_entry *entry;
+			int i;
+			aoc_e->charge = PRI_AOC_DE_CHARGE_UNITS;
+			for (i = 0; i < ast_aoc_get_unit_count(decoded); i++) {
+				if ((entry = ast_aoc_get_unit_info(decoded, i)) && i < ARRAY_LEN(aoc_e->recorded.unit.item)) {
+					if (entry->valid_amount) {
+						aoc_e->recorded.unit.item[i].number = entry->amount;
+					} else {
+						aoc_e->recorded.unit.item[i].number = -1;
+					}
+					if (entry->valid_type) {
+						aoc_e->recorded.unit.item[i].type = entry->type;
+					} else {
+						aoc_e->recorded.unit.item[i].type = -1;
+					}
+					aoc_e->recorded.unit.num_items++;
+				}
+			}
+		}
+		break;
+	case AST_AOC_CHARGE_NA:
+	default:
+		aoc_e->charge = PRI_AOC_DE_CHARGE_NOT_AVAILABLE;
+		break;
+	}
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief send an AOC-E termination request on ast_channel and set
+ * hangup delay.
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param chanpos Channel position in the span.
+ * \param ms to delay hangup
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pri->pvts[chanpos]) is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_send_aoce_termination_request(struct sig_pri_span *pri, int chanpos, unsigned int ms)
+{
+	struct sig_pri_chan *pvt;
+	struct ast_aoc_decoded *decoded = NULL;
+	struct ast_aoc_encoded *encoded = NULL;
+	size_t encoded_size;
+	struct timeval whentohangup = { 0, };
+
+	sig_pri_lock_owner(pri, chanpos);
+	pvt = pri->pvts[chanpos];
+	if (!pvt->owner) {
+		return;
+	}
+
+	if (!(decoded = ast_aoc_create(AST_AOC_REQUEST, 0, AST_AOC_REQUEST_E))) {
+		ast_softhangup_nolock(pvt->owner, AST_SOFTHANGUP_DEV);
+		goto cleanup_termination_request;
+	}
+
+	ast_aoc_set_termination_request(decoded);
+
+	if (!(encoded = ast_aoc_encode(decoded, &encoded_size, pvt->owner))) {
+		ast_softhangup_nolock(pvt->owner, AST_SOFTHANGUP_DEV);
+		goto cleanup_termination_request;
+	}
+
+	/* convert ms to timeval */
+	whentohangup.tv_usec = (ms % 1000) * 1000;
+	whentohangup.tv_sec = ms / 1000;
+
+	if (ast_queue_control_data(pvt->owner, AST_CONTROL_AOC, encoded, encoded_size)) {
+		ast_softhangup_nolock(pvt->owner, AST_SOFTHANGUP_DEV);
+		goto cleanup_termination_request;
+	}
+
+	pvt->waiting_for_aoce = 1;
+	ast_channel_setwhentohangup_tv(pvt->owner, whentohangup);
+	ast_log(LOG_DEBUG, "Delaying hangup on %s for aoc-e msg\n", pvt->owner->name);
+
+cleanup_termination_request:
+	ast_channel_unlock(pvt->owner);
+	ast_aoc_destroy_decoded(decoded);
+	ast_aoc_destroy_encoded(encoded);
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+/*!
+ * \internal
+ * \brief TRUE if PRI event came in on a CIS call.
+ * \since 1.8
+ *
+ * \param channel PRI encoded span/channel
+ *
+ * \retval non-zero if CIS call.
+ */
+static int sig_pri_is_cis_call(int channel)
+{
+	return channel != -1 && (channel & PRI_CIS_CALL);
+}
+
+/*!
+ * \internal
+ * \brief Handle the CIS associated PRI subcommand events.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param event_id PRI event id
+ * \param subcmds Subcommands to process if any. (Could be NULL).
+ * \param call_rsp libpri opaque call structure to send any responses toward.
+ * Could be NULL either because it is not available or the call is for the
+ * dummy call reference.  However, this should not be NULL in the cases that
+ * need to use the pointer to send a response message back.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_handle_cis_subcmds(struct sig_pri_span *pri, int event_id,
+	const struct pri_subcommands *subcmds, q931_call *call_rsp)
+{
+	int index;
+#if defined(HAVE_PRI_CCSS)
+	struct ast_cc_agent *agent;
+	struct sig_pri_cc_agent_prv *agent_prv;
+	struct sig_pri_cc_monitor_instance *monitor;
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+	if (!subcmds) {
+		return;
+	}
+	for (index = 0; index < subcmds->counter_subcmd; ++index) {
+		const struct pri_subcommand *subcmd = &subcmds->subcmd[index];
+
+		switch (subcmd->cmd) {
+#if defined(STATUS_REQUEST_PLACE_HOLDER)
+		case PRI_SUBCMD_STATUS_REQ:
+		case PRI_SUBCMD_STATUS_REQ_RSP:
+			/* Ignore for now. */
+			break;
+#endif	/* defined(STATUS_REQUEST_PLACE_HOLDER) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_REQ:
+			agent = sig_pri_find_cc_agent_by_cc_id(pri, subcmd->u.cc_request.cc_id);
+			if (!agent) {
+				pri_cc_cancel(pri->pri, subcmd->u.cc_request.cc_id);
+				break;
+			}
+			if (!ast_cc_request_is_within_limits()) {
+				if (pri_cc_req_rsp(pri->pri, subcmd->u.cc_request.cc_id,
+					5/* queue_full */)) {
+					pri_cc_cancel(pri->pri, subcmd->u.cc_request.cc_id);
+				}
+				ast_cc_failed(agent->core_id, "%s agent system CC queue full",
+					sig_pri_cc_type_name);
+				ao2_ref(agent, -1);
+				break;
+			}
+			agent_prv = agent->private_data;
+			agent_prv->cc_request_response_pending = 1;
+			if (ast_cc_agent_accept_request(agent->core_id,
+				"%s caller accepted CC offer.", sig_pri_cc_type_name)) {
+				agent_prv->cc_request_response_pending = 0;
+				if (pri_cc_req_rsp(pri->pri, subcmd->u.cc_request.cc_id,
+					2/* short_term_denial */)) {
+					pri_cc_cancel(pri->pri, subcmd->u.cc_request.cc_id);
+				}
+				ast_cc_failed(agent->core_id, "%s agent CC core request accept failed",
+					sig_pri_cc_type_name);
+			}
+			ao2_ref(agent, -1);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_REQ_RSP:
+			monitor = sig_pri_find_cc_monitor_by_cc_id(pri,
+				subcmd->u.cc_request_rsp.cc_id);
+			if (!monitor) {
+				pri_cc_cancel(pri->pri, subcmd->u.cc_request_rsp.cc_id);
+				break;
+			}
+			switch (subcmd->u.cc_request_rsp.status) {
+			case 0:/* success */
+				ast_cc_monitor_request_acked(monitor->core_id,
+					"%s far end accepted CC request", sig_pri_cc_type_name);
+				break;
+			case 1:/* timeout */
+				ast_verb(2, "core_id:%d %s CC request timeout\n", monitor->core_id,
+					sig_pri_cc_type_name);
+				ast_cc_monitor_failed(monitor->core_id, monitor->name,
+					"%s CC request timeout", sig_pri_cc_type_name);
+				break;
+			case 2:/* error */
+				ast_verb(2, "core_id:%d %s CC request error: %s\n", monitor->core_id,
+					sig_pri_cc_type_name,
+					pri_facility_error2str(subcmd->u.cc_request_rsp.fail_code));
+				ast_cc_monitor_failed(monitor->core_id, monitor->name,
+					"%s CC request error", sig_pri_cc_type_name);
+				break;
+			case 3:/* reject */
+				ast_verb(2, "core_id:%d %s CC request reject: %s\n", monitor->core_id,
+					sig_pri_cc_type_name,
+					pri_facility_reject2str(subcmd->u.cc_request_rsp.fail_code));
+				ast_cc_monitor_failed(monitor->core_id, monitor->name,
+					"%s CC request reject", sig_pri_cc_type_name);
+				break;
+			default:
+				ast_verb(2, "core_id:%d %s CC request unknown status %d\n",
+					monitor->core_id, sig_pri_cc_type_name,
+					subcmd->u.cc_request_rsp.status);
+				ast_cc_monitor_failed(monitor->core_id, monitor->name,
+					"%s CC request unknown status", sig_pri_cc_type_name);
+				break;
+			}
+			ao2_ref(monitor, -1);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_REMOTE_USER_FREE:
+			monitor = sig_pri_find_cc_monitor_by_cc_id(pri,
+				subcmd->u.cc_remote_user_free.cc_id);
+			if (!monitor) {
+				pri_cc_cancel(pri->pri, subcmd->u.cc_remote_user_free.cc_id);
+				break;
+			}
+			ast_cc_monitor_callee_available(monitor->core_id,
+				"%s callee has become available", sig_pri_cc_type_name);
+			ao2_ref(monitor, -1);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_B_FREE:
+			monitor = sig_pri_find_cc_monitor_by_cc_id(pri,
+				subcmd->u.cc_b_free.cc_id);
+			if (!monitor) {
+				pri_cc_cancel(pri->pri, subcmd->u.cc_b_free.cc_id);
+				break;
+			}
+			ast_cc_monitor_party_b_free(monitor->core_id);
+			ao2_ref(monitor, -1);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_STATUS_REQ:
+			monitor = sig_pri_find_cc_monitor_by_cc_id(pri,
+				subcmd->u.cc_status_req.cc_id);
+			if (!monitor) {
+				pri_cc_cancel(pri->pri, subcmd->u.cc_status_req.cc_id);
+				break;
+			}
+			ast_cc_monitor_status_request(monitor->core_id);
+			ao2_ref(monitor, -1);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_STATUS_REQ_RSP:
+			agent = sig_pri_find_cc_agent_by_cc_id(pri, subcmd->u.cc_status_req_rsp.cc_id);
+			if (!agent) {
+				pri_cc_cancel(pri->pri, subcmd->u.cc_status_req_rsp.cc_id);
+				break;
+			}
+			ast_cc_agent_status_response(agent->core_id,
+				subcmd->u.cc_status_req_rsp.status ? AST_DEVICE_INUSE
+				: AST_DEVICE_NOT_INUSE);
+			ao2_ref(agent, -1);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_STATUS:
+			agent = sig_pri_find_cc_agent_by_cc_id(pri, subcmd->u.cc_status.cc_id);
+			if (!agent) {
+				pri_cc_cancel(pri->pri, subcmd->u.cc_status.cc_id);
+				break;
+			}
+			if (subcmd->u.cc_status.status) {
+				ast_cc_agent_caller_busy(agent->core_id, "%s agent caller is busy",
+					sig_pri_cc_type_name);
+			} else {
+				ast_cc_agent_caller_available(agent->core_id,
+					"%s agent caller is available", sig_pri_cc_type_name);
+			}
+			ao2_ref(agent, -1);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_CANCEL:
+			sig_pri_cc_link_canceled(pri, subcmd->u.cc_cancel.cc_id,
+				subcmd->u.cc_cancel.is_agent);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_STOP_ALERTING:
+			monitor = sig_pri_find_cc_monitor_by_cc_id(pri,
+				subcmd->u.cc_stop_alerting.cc_id);
+			if (!monitor) {
+				pri_cc_cancel(pri->pri, subcmd->u.cc_stop_alerting.cc_id);
+				break;
+			}
+			ast_cc_monitor_stop_ringing(monitor->core_id);
+			ao2_ref(monitor, -1);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_AOC_EVENTS)
+		case PRI_SUBCMD_AOC_E:
+			/* Queue AST_CONTROL_AOC frame */
+			sig_pri_aoc_e_from_pri(&subcmd->u.aoc_e, NULL, 0);
+			break;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+		default:
+			ast_debug(2,
+				"Unknown CIS subcommand(%d) in %s event on span %d.\n",
+				subcmd->cmd, pri_event2str(event_id), pri->span);
+			break;
+		}
+	}
+}
+
+#if defined(HAVE_PRI_AOC_EVENTS)
+/*!
+ * \internal
+ * \brief detect if AOC-S subcmd is present.
+ * \since 1.8
+ *
+ * \param subcmds Subcommands to process if any. (Could be NULL).
+ *
+ * \note Knowing whether or not an AOC-E subcmd is present on certain
+ * PRI hangup events is necessary to determine what method to use to hangup
+ * the ast_channel.  If an AOC-E subcmd just came in, then a new AOC-E was queued
+ * on the ast_channel.  If a soft hangup is used, the AOC-E msg will never make it
+ * across the bridge, but if a AST_CONTROL_HANGUP frame is queued behind it
+ * we can ensure the AOC-E frame makes it to it's destination before the hangup
+ * frame is read.
+ *
+ *
+ * \retval 0 AOC-E is not present in subcmd list
+ * \retval 1 AOC-E is present in subcmd list
+ */
+static int detect_aoc_e_subcmd(const struct pri_subcommands *subcmds)
+{
+	int i;
+
+	if (!subcmds) {
+		return 0;
+	}
+	for (i = 0; i < subcmds->counter_subcmd; ++i) {
+		const struct pri_subcommand *subcmd = &subcmds->subcmd[i];
+		if (subcmd->cmd == PRI_SUBCMD_AOC_E) {
+			return 1;
+		}
+	}
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
 
 /*!
  * \internal
@@ -1501,12 +3755,15 @@ static void sig_pri_lock_owner(struct sig_pri_pri *pri, int chanpos)
  *
  * \return Nothing
  */
-static void sig_pri_handle_subcmds(struct sig_pri_pri *pri, int chanpos, int event_id,
+static void sig_pri_handle_subcmds(struct sig_pri_span *pri, int chanpos, int event_id,
 	int channel, const struct pri_subcommands *subcmds, q931_call *call_rsp)
 {
 	int index;
 	struct ast_channel *owner;
 	struct ast_party_redirecting ast_redirecting;
+#if defined(HAVE_PRI_TRANSFER)
+	struct xfer_rsp_data xfer_rsp;
+#endif	/* defined(HAVE_PRI_TRANSFER) */
 
 	if (!subcmds) {
 		return;
@@ -1526,29 +3783,28 @@ static void sig_pri_handle_subcmds(struct sig_pri_pri *pri, int chanpos, int eve
 				ast_party_connected_line_init(&ast_connected);
 				sig_pri_party_id_convert(&ast_connected.id, &subcmd->u.connected_line.id,
 					pri);
+				ast_connected.id.tag = ast_strdup(pri->pvts[chanpos]->user_tag);
 
 				caller_id_update = 0;
-				if (ast_connected.id.name) {
+				if (ast_connected.id.name.str) {
 					/* Save name for Caller-ID update */
 					ast_copy_string(pri->pvts[chanpos]->cid_name,
-						ast_connected.id.name, sizeof(pri->pvts[chanpos]->cid_name));
+						ast_connected.id.name.str, sizeof(pri->pvts[chanpos]->cid_name));
 					caller_id_update = 1;
 				}
-				if (ast_connected.id.number) {
+				if (ast_connected.id.number.str) {
 					/* Save number for Caller-ID update */
-					ast_copy_string(pri->pvts[chanpos]->cid_num, ast_connected.id.number,
-						sizeof(pri->pvts[chanpos]->cid_num));
-					pri->pvts[chanpos]->cid_ton = ast_connected.id.number_type;
+					ast_copy_string(pri->pvts[chanpos]->cid_num,
+						ast_connected.id.number.str, sizeof(pri->pvts[chanpos]->cid_num));
+					pri->pvts[chanpos]->cid_ton = ast_connected.id.number.plan;
 					caller_id_update = 1;
-				} else {
-					ast_connected.id.number = ast_strdup("");
 				}
 				ast_connected.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
 
 				pri->pvts[chanpos]->cid_subaddr[0] = '\0';
 #if defined(HAVE_PRI_SUBADDR)
 				if (ast_connected.id.subaddress.valid) {
-					ast_party_subaddress_set(&owner->cid.subaddress,
+					ast_party_subaddress_set(&owner->caller.id.subaddress,
 						&ast_connected.id.subaddress);
 					if (ast_connected.id.subaddress.str) {
 						ast_copy_string(pri->pvts[chanpos]->cid_subaddr,
@@ -1558,18 +3814,22 @@ static void sig_pri_handle_subcmds(struct sig_pri_pri *pri, int chanpos, int eve
 				}
 #endif	/* defined(HAVE_PRI_SUBADDR) */
 				if (caller_id_update) {
+					struct ast_party_caller ast_caller;
+
 					pri->pvts[chanpos]->callingpres =
-						ast_connected.id.number_presentation;
+						ast_party_id_presentation(&ast_connected.id);
 					sig_pri_set_caller_id(pri->pvts[chanpos]);
-					ast_set_callerid(owner, S_OR(ast_connected.id.number, NULL),
-						S_OR(ast_connected.id.name, NULL),
-						S_OR(ast_connected.id.number, NULL));
+
+					ast_party_caller_set_init(&ast_caller, &owner->caller);
+					ast_caller.id = ast_connected.id;
+					ast_caller.ani = ast_connected.id;
+					ast_channel_set_caller_event(owner, &ast_caller, NULL);
 				}
 
 				/* Update the connected line information on the other channel */
 				if (event_id != PRI_EVENT_RING) {
 					/* This connected_line update was not from a SETUP message. */
-					ast_channel_queue_connected_line_update(owner, &ast_connected);
+					ast_channel_queue_connected_line_update(owner, &ast_connected, NULL);
 				}
 
 				ast_party_connected_line_free(&ast_connected);
@@ -1582,13 +3842,15 @@ static void sig_pri_handle_subcmds(struct sig_pri_pri *pri, int chanpos, int eve
 			if (owner) {
 				sig_pri_redirecting_convert(&ast_redirecting, &subcmd->u.redirecting,
 					&owner->redirecting, pri);
+				ast_redirecting.from.tag = ast_strdup(pri->pvts[chanpos]->user_tag);
+				ast_redirecting.to.tag = ast_strdup(pri->pvts[chanpos]->user_tag);
 
 /*! \todo XXX Original called data can be put in a channel data store that is inherited. */
 
-				ast_channel_set_redirecting(owner, &ast_redirecting);
+				ast_channel_set_redirecting(owner, &ast_redirecting, NULL);
 				if (event_id != PRI_EVENT_RING) {
 					/* This redirection was not from a SETUP message. */
-					ast_channel_queue_redirecting_update(owner, &ast_redirecting);
+					ast_channel_queue_redirecting_update(owner, &ast_redirecting, NULL);
 				}
 				ast_party_redirecting_free(&ast_redirecting);
 
@@ -1633,7 +3895,9 @@ static void sig_pri_handle_subcmds(struct sig_pri_pri *pri, int chanpos, int eve
 				}
 				sig_pri_redirecting_convert(&ast_redirecting, &pri_deflection,
 					&owner->redirecting, pri);
-				ast_channel_set_redirecting(owner, &ast_redirecting);
+				ast_redirecting.from.tag = ast_strdup(pri->pvts[chanpos]->user_tag);
+				ast_redirecting.to.tag = ast_strdup(pri->pvts[chanpos]->user_tag);
+				ast_channel_set_redirecting(owner, &ast_redirecting, NULL);
 				ast_party_redirecting_free(&ast_redirecting);
 
 				/*
@@ -1652,6 +3916,162 @@ static void sig_pri_handle_subcmds(struct sig_pri_pri *pri, int chanpos, int eve
 			}
 			break;
 #endif	/* defined(HAVE_PRI_CALL_REROUTING) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_AVAILABLE:
+			sig_pri_lock_owner(pri, chanpos);
+			owner = pri->pvts[chanpos]->owner;
+			if (owner) {
+				enum ast_cc_service_type service;
+
+				switch (event_id) {
+				case PRI_EVENT_RINGING:
+					service = AST_CC_CCNR;
+					break;
+				case PRI_EVENT_HANGUP_REQ:
+					/* We will assume that the cause was busy/congestion. */
+					service = AST_CC_CCBS;
+					break;
+				default:
+					service = AST_CC_NONE;
+					break;
+				}
+				if (service == AST_CC_NONE
+					|| sig_pri_cc_available(pri, chanpos, subcmd->u.cc_available.cc_id,
+					service)) {
+					pri_cc_cancel(pri->pri, subcmd->u.cc_available.cc_id);
+				}
+				ast_channel_unlock(owner);
+			} else {
+				/* No asterisk channel. */
+				pri_cc_cancel(pri->pri, subcmd->u.cc_available.cc_id);
+			}
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_CALL:
+			sig_pri_lock_owner(pri, chanpos);
+			owner = pri->pvts[chanpos]->owner;
+			if (owner) {
+				struct ast_cc_agent *agent;
+
+				agent = sig_pri_find_cc_agent_by_cc_id(pri, subcmd->u.cc_call.cc_id);
+				if (agent) {
+					ast_setup_cc_recall_datastore(owner, agent->core_id);
+					ast_cc_agent_set_interfaces_chanvar(owner);
+					ast_cc_agent_recalling(agent->core_id,
+						"%s caller is attempting recall", sig_pri_cc_type_name);
+					ao2_ref(agent, -1);
+				}
+
+				ast_channel_unlock(owner);
+			}
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_CCSS)
+		case PRI_SUBCMD_CC_CANCEL:
+			sig_pri_cc_link_canceled(pri, subcmd->u.cc_cancel.cc_id,
+				subcmd->u.cc_cancel.is_agent);
+			break;
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_TRANSFER)
+		case PRI_SUBCMD_TRANSFER_CALL:
+			if (!call_rsp) {
+				/* Should never happen. */
+				ast_log(LOG_ERROR,
+					"Call transfer subcommand without call to send response!\n");
+				break;
+			}
+
+			sig_pri_unlock_private(pri->pvts[chanpos]);
+			xfer_rsp.pri = pri;
+			xfer_rsp.call = call_rsp;
+			xfer_rsp.invoke_id = subcmd->u.transfer.invoke_id;
+			sig_pri_attempt_transfer(pri,
+				subcmd->u.transfer.call_1, subcmd->u.transfer.is_call_1_held,
+				subcmd->u.transfer.call_2, subcmd->u.transfer.is_call_2_held,
+				sig_pri_transfer_rsp, &xfer_rsp);
+			sig_pri_lock_private(pri->pvts[chanpos]);
+			break;
+#endif	/* defined(HAVE_PRI_TRANSFER) */
+#if defined(HAVE_PRI_AOC_EVENTS)
+		case PRI_SUBCMD_AOC_S:
+			sig_pri_lock_owner(pri, chanpos);
+			owner = pri->pvts[chanpos]->owner;
+			if (owner) {
+				sig_pri_aoc_s_from_pri(&subcmd->u.aoc_s, owner,
+					(pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_S));
+				ast_channel_unlock(owner);
+			}
+			break;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+#if defined(HAVE_PRI_AOC_EVENTS)
+		case PRI_SUBCMD_AOC_D:
+			sig_pri_lock_owner(pri, chanpos);
+			owner = pri->pvts[chanpos]->owner;
+			if (owner) {
+				/* Queue AST_CONTROL_AOC frame on channel */
+				sig_pri_aoc_d_from_pri(&subcmd->u.aoc_d, owner,
+					(pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_D));
+				ast_channel_unlock(owner);
+			}
+			break;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+#if defined(HAVE_PRI_AOC_EVENTS)
+		case PRI_SUBCMD_AOC_E:
+			sig_pri_lock_owner(pri, chanpos);
+			owner = pri->pvts[chanpos]->owner;
+			/* Queue AST_CONTROL_AOC frame */
+			sig_pri_aoc_e_from_pri(&subcmd->u.aoc_e, owner,
+				(pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_E));
+			if (owner) {
+				ast_channel_unlock(owner);
+			}
+			break;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+#if defined(HAVE_PRI_AOC_EVENTS)
+		case PRI_SUBCMD_AOC_CHARGING_REQ:
+			sig_pri_lock_owner(pri, chanpos);
+			owner = pri->pvts[chanpos]->owner;
+			if (owner) {
+				sig_pri_aoc_request_from_pri(&subcmd->u.aoc_request, pri->pvts[chanpos],
+					call_rsp);
+				ast_channel_unlock(owner);
+			}
+			break;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+#if defined(HAVE_PRI_AOC_EVENTS)
+		case PRI_SUBCMD_AOC_CHARGING_REQ_RSP:
+			/*
+			 * An AOC request response may contain an AOC-S rate list.
+			 * If this is the case handle this just like we
+			 * would an incoming AOC-S msg.
+			 */
+			if (subcmd->u.aoc_request_response.valid_aoc_s) {
+				sig_pri_lock_owner(pri, chanpos);
+				owner = pri->pvts[chanpos]->owner;
+				if (owner) {
+					sig_pri_aoc_s_from_pri(&subcmd->u.aoc_request_response.aoc_s, owner,
+						(pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_S));
+					ast_channel_unlock(owner);
+				}
+			}
+			break;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+#if defined(HAVE_PRI_MCID)
+		case PRI_SUBCMD_MCID_REQ:
+			sig_pri_lock_owner(pri, chanpos);
+			owner = pri->pvts[chanpos]->owner;
+			sig_pri_mcid_event(pri, &subcmd->u.mcid_req, owner);
+			if (owner) {
+				ast_channel_unlock(owner);
+			}
+			break;
+#endif	/* defined(HAVE_PRI_MCID) */
+#if defined(HAVE_PRI_MCID)
+		case PRI_SUBCMD_MCID_RSP:
+			/* Ignore for now. */
+			break;
+#endif	/* defined(HAVE_PRI_MCID) */
 		default:
 			ast_debug(2,
 				"Unknown call subcommand(%d) in %s event on channel %d/%d on span %d.\n",
@@ -1665,72 +4085,694 @@ static void sig_pri_handle_subcmds(struct sig_pri_pri *pri, int chanpos, int eve
 #if defined(HAVE_PRI_CALL_HOLD)
 /*!
  * \internal
- * \brief Attempt to transfer the active call to the held call.
- * \since 1.8
+ * \brief Kill the call.
+ * \since 1.10
  *
- * \param pri sig_pri PRI control structure.
- * \param active_call Active call to transfer.
- * \param held_call Held call to transfer.
+ * \param pri Span controller to find interface.
+ * \param call LibPRI opaque call pointer to find.
+ * \param cause Reason call was killed.
  *
- * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the pvt->pri->lock is already obtained.
  *
- * \retval 0 on success.
- * \retval -1 on error.
+ * \return Nothing
  */
-static int sig_pri_attempt_transfer(struct sig_pri_pri *pri, q931_call *active_call, q931_call *held_call)
+static void sig_pri_kill_call(struct sig_pri_span *pri, q931_call *call, int cause)
 {
-	int retval;
-	int active_chanpos;
-	int held_chanpos;
-	struct ast_channel *active_ast;
-	struct ast_channel *held_ast;
-	struct ast_channel *bridged;
+	int chanpos;
 
-	active_chanpos = pri_find_pri_call(pri, active_call);
-	held_chanpos = pri_find_pri_call(pri, held_call);
-	if (active_chanpos < 0 || held_chanpos < 0) {
-		return -1;
+	chanpos = pri_find_principle_by_call(pri, call);
+	if (chanpos < 0) {
+		pri_hangup(pri->pri, call, cause);
+		return;
 	}
-
-	sig_pri_lock_private(pri->pvts[active_chanpos]);
-	sig_pri_lock_private(pri->pvts[held_chanpos]);
-	sig_pri_lock_owner(pri, active_chanpos);
-	sig_pri_lock_owner(pri, held_chanpos);
-
-	active_ast = pri->pvts[active_chanpos]->owner;
-	held_ast = pri->pvts[held_chanpos]->owner;
-	if (!active_ast || !held_ast) {
-		if (active_ast) {
-			ast_channel_unlock(active_ast);
-		}
-		if (held_ast) {
-			ast_channel_unlock(held_ast);
-		}
-		sig_pri_unlock_private(pri->pvts[active_chanpos]);
-		sig_pri_unlock_private(pri->pvts[held_chanpos]);
-		return -1;
+	sig_pri_lock_private(pri->pvts[chanpos]);
+	if (!pri->pvts[chanpos]->owner) {
+		pri_hangup(pri->pri, call, cause);
+		pri->pvts[chanpos]->call = NULL;
+		sig_pri_unlock_private(pri->pvts[chanpos]);
+		return;
 	}
+	pri->pvts[chanpos]->owner->hangupcause = cause;
+	pri_queue_control(pri, chanpos, AST_CONTROL_HANGUP);
+	sig_pri_unlock_private(pri->pvts[chanpos]);
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
-	bridged = ast_bridged_channel(held_ast);
-	if (bridged) {
-		ast_queue_control(held_ast, AST_CONTROL_UNHOLD);
+/*!
+ * \internal
+ * \brief Convert the MOH state to string.
+ * \since 1.10
+ *
+ * \param state MOH state to process.
+ *
+ * \return String version of MOH state.
+ */
+static const char *sig_pri_moh_state_str(enum sig_pri_moh_state state)
+{
+	const char *str;
 
-		ast_verb(3, "TRANSFERRING %s to %s\n", held_ast->name, active_ast->name);
-		retval = ast_channel_masquerade(active_ast, bridged);
-	} else {
+	str = "Unknown";
+	switch (state) {
+	case SIG_PRI_MOH_STATE_IDLE:
+		str = "SIG_PRI_MOH_STATE_IDLE";
+		break;
+	case SIG_PRI_MOH_STATE_NOTIFY:
+		str = "SIG_PRI_MOH_STATE_NOTIFY";
+		break;
+	case SIG_PRI_MOH_STATE_MOH:
+		str = "SIG_PRI_MOH_STATE_MOH";
+		break;
+#if defined(HAVE_PRI_CALL_HOLD)
+	case SIG_PRI_MOH_STATE_HOLD_REQ:
+		str = "SIG_PRI_MOH_STATE_HOLD_REQ";
+		break;
+	case SIG_PRI_MOH_STATE_PEND_UNHOLD:
+		str = "SIG_PRI_MOH_STATE_PEND_UNHOLD";
+		break;
+	case SIG_PRI_MOH_STATE_HOLD:
+		str = "SIG_PRI_MOH_STATE_HOLD";
+		break;
+	case SIG_PRI_MOH_STATE_RETRIEVE_REQ:
+		str = "SIG_PRI_MOH_STATE_RETRIEVE_REQ";
+		break;
+	case SIG_PRI_MOH_STATE_PEND_HOLD:
+		str = "SIG_PRI_MOH_STATE_PEND_HOLD";
+		break;
+	case SIG_PRI_MOH_STATE_RETRIEVE_FAIL:
+		str = "SIG_PRI_MOH_STATE_RETRIEVE_FAIL";
+		break;
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+	case SIG_PRI_MOH_STATE_NUM:
+		/* Not a real state. */
+		break;
+	}
+	return str;
+}
+
+/*!
+ * \internal
+ * \brief Convert the MOH event to string.
+ * \since 1.10
+ *
+ * \param event MOH event to process.
+ *
+ * \return String version of MOH event.
+ */
+static const char *sig_pri_moh_event_str(enum sig_pri_moh_event event)
+{
+	const char *str;
+
+	str = "Unknown";
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_RESET:
+		str = "SIG_PRI_MOH_EVENT_RESET";
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD:
+		str = "SIG_PRI_MOH_EVENT_HOLD";
+		break;
+	case SIG_PRI_MOH_EVENT_UNHOLD:
+		str = "SIG_PRI_MOH_EVENT_UNHOLD";
+		break;
+#if defined(HAVE_PRI_CALL_HOLD)
+	case SIG_PRI_MOH_EVENT_HOLD_ACK:
+		str = "SIG_PRI_MOH_EVENT_HOLD_ACK";
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD_REJ:
+		str = "SIG_PRI_MOH_EVENT_HOLD_REJ";
+		break;
+	case SIG_PRI_MOH_EVENT_RETRIEVE_ACK:
+		str = "SIG_PRI_MOH_EVENT_RETRIEVE_ACK";
+		break;
+	case SIG_PRI_MOH_EVENT_RETRIEVE_REJ:
+		str = "SIG_PRI_MOH_EVENT_RETRIEVE_REJ";
+		break;
+	case SIG_PRI_MOH_EVENT_REMOTE_RETRIEVE_ACK:
+		str = "SIG_PRI_MOH_EVENT_REMOTE_RETRIEVE_ACK";
+		break;
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+	case SIG_PRI_MOH_EVENT_NUM:
+		/* Not a real event. */
+		break;
+	}
+	return str;
+}
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief Retrieve a call that was placed on hold by the HOLD message.
+ * \since 1.10
+ *
+ * \param pvt Channel private control structure.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_retrieve_call(struct sig_pri_chan *pvt)
+{
+	int chanpos;
+	int channel;
+
+	if (pvt->pri->nodetype == PRI_NETWORK) {
+		/* Find an available channel to propose */
+		chanpos = pri_find_empty_chan(pvt->pri, 1);
+		if (chanpos < 0) {
+			/* No channels available. */
+			return SIG_PRI_MOH_STATE_RETRIEVE_FAIL;
+		}
+		channel = PVT_TO_CHANNEL(pvt->pri->pvts[chanpos]);
+
 		/*
-		 * Could not transfer.  Held channel is not bridged anymore.
-		 * Held party probably got tired of waiting and hung up.
+		 * We cannot occupy or reserve this channel at this time because
+		 * the retrieve may fail or we could have a RETRIEVE collision.
 		 */
-		retval = -1;
+	} else {
+		/* Let the network pick the channel. */
+		channel = 0;
 	}
 
-	ast_channel_unlock(active_ast);
-	ast_channel_unlock(held_ast);
-	sig_pri_unlock_private(pri->pvts[active_chanpos]);
-	sig_pri_unlock_private(pri->pvts[held_chanpos]);
+	if (pri_retrieve(pvt->pri->pri, pvt->call, channel)) {
+		return SIG_PRI_MOH_STATE_RETRIEVE_FAIL;
+	}
+	return SIG_PRI_MOH_STATE_RETRIEVE_REQ;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
-	return retval;
+/*!
+ * \internal
+ * \brief MOH FSM state idle.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_idle(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_HOLD:
+		if (!strcasecmp(pvt->mohinterpret, "passthrough")) {
+			/*
+			 * This config setting is deprecated.
+			 * The old way did not send MOH just in case the notification was ignored.
+			 */
+			pri_notify(pvt->pri->pri, pvt->call, pvt->prioffset, PRI_NOTIFY_REMOTE_HOLD);
+			next_state = SIG_PRI_MOH_STATE_NOTIFY;
+			break;
+		}
+
+		switch (pvt->pri->moh_signaling) {
+		default:
+		case SIG_PRI_MOH_SIGNALING_MOH:
+			ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+			next_state = SIG_PRI_MOH_STATE_MOH;
+			break;
+		case SIG_PRI_MOH_SIGNALING_NOTIFY:
+			/* Send MOH anyway in case the far end does not interpret the notification. */
+			ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+
+			pri_notify(pvt->pri->pri, pvt->call, pvt->prioffset, PRI_NOTIFY_REMOTE_HOLD);
+			next_state = SIG_PRI_MOH_STATE_NOTIFY;
+			break;
+#if defined(HAVE_PRI_CALL_HOLD)
+		case SIG_PRI_MOH_SIGNALING_HOLD:
+			if (pri_hold(pvt->pri->pri, pvt->call)) {
+				/* Fall back to MOH instead */
+				ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+				next_state = SIG_PRI_MOH_STATE_MOH;
+			} else {
+				next_state = SIG_PRI_MOH_STATE_HOLD_REQ;
+			}
+			break;
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+		}
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+
+/*!
+ * \internal
+ * \brief MOH FSM state notify remote party.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_notify(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_UNHOLD:
+		pri_notify(pvt->pri->pri, pvt->call, pvt->prioffset, PRI_NOTIFY_REMOTE_RETRIEVAL);
+		/* Fall through */
+	case SIG_PRI_MOH_EVENT_RESET:
+		ast_moh_stop(chan);
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+
+/*!
+ * \internal
+ * \brief MOH FSM state generate moh.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_moh(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_RESET:
+	case SIG_PRI_MOH_EVENT_UNHOLD:
+		ast_moh_stop(chan);
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief MOH FSM state hold requested.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_hold_req(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_RESET:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	case SIG_PRI_MOH_EVENT_UNHOLD:
+		next_state = SIG_PRI_MOH_STATE_PEND_UNHOLD;
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD_REJ:
+		/* Fall back to MOH */
+		if (chan) {
+			ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+		}
+		next_state = SIG_PRI_MOH_STATE_MOH;
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD_ACK:
+		next_state = SIG_PRI_MOH_STATE_HOLD;
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief MOH FSM state hold requested with pending unhold.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_pend_unhold(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_RESET:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD:
+		next_state = SIG_PRI_MOH_STATE_HOLD_REQ;
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD_REJ:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD_ACK:
+		next_state = sig_pri_moh_retrieve_call(pvt);
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief MOH FSM state hold.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_hold(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_RESET:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	case SIG_PRI_MOH_EVENT_UNHOLD:
+		next_state = sig_pri_moh_retrieve_call(pvt);
+		break;
+	case SIG_PRI_MOH_EVENT_REMOTE_RETRIEVE_ACK:
+		/* Fall back to MOH */
+		if (chan) {
+			ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+		}
+		next_state = SIG_PRI_MOH_STATE_MOH;
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief MOH FSM state retrieve requested.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_retrieve_req(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_RESET:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD:
+		next_state = SIG_PRI_MOH_STATE_PEND_HOLD;
+		break;
+	case SIG_PRI_MOH_EVENT_RETRIEVE_ACK:
+	case SIG_PRI_MOH_EVENT_REMOTE_RETRIEVE_ACK:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	case SIG_PRI_MOH_EVENT_RETRIEVE_REJ:
+		next_state = SIG_PRI_MOH_STATE_RETRIEVE_FAIL;
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief MOH FSM state retrieve requested with pending hold.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_pend_hold(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_RESET:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	case SIG_PRI_MOH_EVENT_UNHOLD:
+		next_state = SIG_PRI_MOH_STATE_RETRIEVE_REQ;
+		break;
+	case SIG_PRI_MOH_EVENT_RETRIEVE_ACK:
+	case SIG_PRI_MOH_EVENT_REMOTE_RETRIEVE_ACK:
+		/*
+		 * Successfully came off of hold.  Now we can reinterpret the
+		 * MOH signaling option to handle the pending HOLD request.
+		 */
+		switch (pvt->pri->moh_signaling) {
+		default:
+		case SIG_PRI_MOH_SIGNALING_MOH:
+			if (chan) {
+				ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+			}
+			next_state = SIG_PRI_MOH_STATE_MOH;
+			break;
+		case SIG_PRI_MOH_SIGNALING_NOTIFY:
+			/* Send MOH anyway in case the far end does not interpret the notification. */
+			if (chan) {
+				ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+			}
+
+			pri_notify(pvt->pri->pri, pvt->call, pvt->prioffset, PRI_NOTIFY_REMOTE_HOLD);
+			next_state = SIG_PRI_MOH_STATE_NOTIFY;
+			break;
+		case SIG_PRI_MOH_SIGNALING_HOLD:
+			if (pri_hold(pvt->pri->pri, pvt->call)) {
+				/* Fall back to MOH instead */
+				if (chan) {
+					ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+				}
+				next_state = SIG_PRI_MOH_STATE_MOH;
+			} else {
+				next_state = SIG_PRI_MOH_STATE_HOLD_REQ;
+			}
+			break;
+		}
+		break;
+	case SIG_PRI_MOH_EVENT_RETRIEVE_REJ:
+		/*
+		 * We cannot reinterpret the MOH signaling option because we
+		 * failed to come off of hold.
+		 */
+		next_state = SIG_PRI_MOH_STATE_HOLD;
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief MOH FSM state retrieve failed.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+static enum sig_pri_moh_state sig_pri_moh_fsm_retrieve_fail(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state next_state;
+
+	next_state = pvt->moh_state;
+	switch (event) {
+	case SIG_PRI_MOH_EVENT_RESET:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	case SIG_PRI_MOH_EVENT_HOLD:
+		next_state = SIG_PRI_MOH_STATE_HOLD;
+		break;
+	case SIG_PRI_MOH_EVENT_UNHOLD:
+		next_state = sig_pri_moh_retrieve_call(pvt);
+		break;
+	case SIG_PRI_MOH_EVENT_REMOTE_RETRIEVE_ACK:
+		next_state = SIG_PRI_MOH_STATE_IDLE;
+		break;
+	default:
+		break;
+	}
+	pvt->moh_state = next_state;
+	return next_state;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+/*!
+ * \internal
+ * \brief MOH FSM state function type.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Next MOH state
+ */
+typedef enum sig_pri_moh_state (*sig_pri_moh_fsm_state)(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event);
+
+/*! MOH FSM state table. */
+static const sig_pri_moh_fsm_state sig_pri_moh_fsm[SIG_PRI_MOH_STATE_NUM] = {
+/* *INDENT-OFF* */
+	[SIG_PRI_MOH_STATE_IDLE] = sig_pri_moh_fsm_idle,
+	[SIG_PRI_MOH_STATE_NOTIFY] = sig_pri_moh_fsm_notify,
+	[SIG_PRI_MOH_STATE_MOH] = sig_pri_moh_fsm_moh,
+#if defined(HAVE_PRI_CALL_HOLD)
+	[SIG_PRI_MOH_STATE_HOLD_REQ] = sig_pri_moh_fsm_hold_req,
+	[SIG_PRI_MOH_STATE_PEND_UNHOLD] = sig_pri_moh_fsm_pend_unhold,
+	[SIG_PRI_MOH_STATE_HOLD] = sig_pri_moh_fsm_hold,
+	[SIG_PRI_MOH_STATE_RETRIEVE_REQ] = sig_pri_moh_fsm_retrieve_req,
+	[SIG_PRI_MOH_STATE_PEND_HOLD] = sig_pri_moh_fsm_pend_hold,
+	[SIG_PRI_MOH_STATE_RETRIEVE_FAIL] = sig_pri_moh_fsm_retrieve_fail,
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+/* *INDENT-ON* */
+};
+
+/*!
+ * \internal
+ * \brief Send an event to the MOH FSM.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to (Usually pvt->owner)
+ * \param pvt Channel private control structure.
+ * \param event MOH event to process.
+ * 
+ * \note Assumes the pvt->pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_moh_fsm_event(struct ast_channel *chan, struct sig_pri_chan *pvt, enum sig_pri_moh_event event)
+{
+	enum sig_pri_moh_state orig_state;
+	enum sig_pri_moh_state next_state;
+	const char *chan_name;
+
+	if (chan) {
+		chan_name = ast_strdupa(chan->name);
+	} else {
+		chan_name = "Unknown";
+	}
+	orig_state = pvt->moh_state;
+	ast_debug(2, "Channel '%s' MOH-Event: %s in state %s\n", chan_name,
+		sig_pri_moh_event_str(event), sig_pri_moh_state_str(orig_state));
+	if (orig_state < SIG_PRI_MOH_STATE_IDLE || SIG_PRI_MOH_STATE_NUM <= orig_state
+		|| !sig_pri_moh_fsm[orig_state]) {
+		/* Programming error: State not implemented. */
+		ast_log(LOG_ERROR, "MOH state not implemented: %s(%d)\n",
+			sig_pri_moh_state_str(orig_state), orig_state);
+		return;
+	}
+	/* Execute the state. */
+	next_state = sig_pri_moh_fsm[orig_state](chan, pvt, event);
+	ast_debug(2, "Channel '%s'  MOH-Next-State: %s\n", chan_name,
+		(orig_state == next_state) ? "$" : sig_pri_moh_state_str(next_state));
+}
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief Post an AMI hold event.
+ * \since 1.10
+ *
+ * \param chan Channel to post event to
+ * \param is_held TRUE if the call was placed on hold.
+ *
+ * \return Nothing
+ */
+static void sig_pri_ami_hold_event(struct ast_channel *chan, int is_held)
+{
+	ast_manager_event(chan, EVENT_FLAG_CALL, "Hold",
+		"Status: %s\r\n"
+		"Channel: %s\r\n"
+		"Uniqueid: %s\r\n",
+		is_held ? "On" : "Off",
+		chan->name,
+		chan->uniqueid);
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
@@ -1748,7 +4790,7 @@ static int sig_pri_attempt_transfer(struct sig_pri_pri *pri, q931_call *active_c
  * \retval 0 on success.
  * \retval -1 on error.
  */
-static int sig_pri_handle_hold(struct sig_pri_pri *pri, pri_event *ev)
+static int sig_pri_handle_hold(struct sig_pri_span *pri, pri_event *ev)
 {
 	int retval;
 	int chanpos_old;
@@ -1789,15 +4831,15 @@ static int sig_pri_handle_hold(struct sig_pri_pri *pri, pri_event *ev)
 	}
 	sig_pri_handle_subcmds(pri, chanpos_old, ev->e, ev->hold.channel, ev->hold.subcmds,
 		ev->hold.call);
+	pri_queue_control(pri, chanpos_old, AST_CONTROL_HOLD);
 	chanpos_new = pri_fixup_principle(pri, chanpos_new, ev->hold.call);
 	if (chanpos_new < 0) {
 		/* Should never happen. */
+		pri_queue_control(pri, chanpos_old, AST_CONTROL_UNHOLD);
 		retval = -1;
 	} else {
-		struct ast_frame f = { AST_FRAME_CONTROL, };
-
-		f.subclass.integer = AST_CONTROL_HOLD;
-		ast_queue_frame(owner, &f);
+		sig_pri_ami_hold_event(owner, 1);
+		sig_pri_span_devstate_changed(pri);
 		retval = 0;
 	}
 
@@ -1807,6 +4849,94 @@ done_with_private:;
 	sig_pri_unlock_private(pri->pvts[chanpos_old]);
 
 	return retval;
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief Handle the hold acknowledge event from libpri.
+ * \since 1.10
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param ev Hold acknowledge event received.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_handle_hold_ack(struct sig_pri_span *pri, pri_event *ev)
+{
+	int chanpos;
+
+	/*
+	 * We were successfully put on hold by the remote party
+	 * so we just need to switch to a no_b_channel channel.
+	 */
+	chanpos = pri_find_empty_nobch(pri);
+	if (chanpos < 0) {
+		/* Very bad news.  No hold channel available. */
+		ast_log(LOG_ERROR,
+			"Span %d: No hold channel available for held call that is on %d/%d\n",
+			pri->span, PRI_SPAN(ev->hold_ack.channel), PRI_CHANNEL(ev->hold_ack.channel));
+		sig_pri_kill_call(pri, ev->hold_ack.call, PRI_CAUSE_RESOURCE_UNAVAIL_UNSPECIFIED);
+		return;
+	}
+	chanpos = pri_fixup_principle(pri, chanpos, ev->hold_ack.call);
+	if (chanpos < 0) {
+		/* Should never happen. */
+		sig_pri_kill_call(pri, ev->hold_ack.call, PRI_CAUSE_NORMAL_TEMPORARY_FAILURE);
+		return;
+	}
+
+	sig_pri_lock_private(pri->pvts[chanpos]);
+	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->hold_ack.channel,
+		ev->hold_ack.subcmds, ev->hold_ack.call);
+	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
+		SIG_PRI_MOH_EVENT_HOLD_ACK);
+	sig_pri_unlock_private(pri->pvts[chanpos]);
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief Handle the hold reject event from libpri.
+ * \since 1.10
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param ev Hold reject event received.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_handle_hold_rej(struct sig_pri_span *pri, pri_event *ev)
+{
+	int chanpos;
+
+	chanpos = pri_find_principle(pri, ev->hold_rej.channel, ev->hold_rej.call);
+	if (chanpos < 0) {
+		ast_log(LOG_WARNING, "Span %d: Could not find principle for HOLD_REJECT\n",
+			pri->span);
+		return;
+	}
+	chanpos = pri_fixup_principle(pri, chanpos, ev->hold_rej.call);
+	if (chanpos < 0) {
+		/* Should never happen. */
+		sig_pri_kill_call(pri, ev->hold_rej.call, PRI_CAUSE_NORMAL_TEMPORARY_FAILURE);
+		return;
+	}
+
+	ast_debug(1, "Span %d: HOLD_REJECT cause: %d(%s)\n", pri->span,
+		ev->hold_rej.cause, pri_cause2str(ev->hold_rej.cause));
+
+	sig_pri_lock_private(pri->pvts[chanpos]);
+	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->hold_rej.channel,
+		ev->hold_rej.subcmds, ev->hold_rej.call);
+	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
+		SIG_PRI_MOH_EVENT_HOLD_REJ);
+	sig_pri_unlock_private(pri->pvts[chanpos]);
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
@@ -1823,7 +4953,7 @@ done_with_private:;
  *
  * \return Nothing
  */
-static void sig_pri_handle_retrieve(struct sig_pri_pri *pri, pri_event *ev)
+static void sig_pri_handle_retrieve(struct sig_pri_span *pri, pri_event *ev)
 {
 	int chanpos;
 
@@ -1864,23 +4994,107 @@ static void sig_pri_handle_retrieve(struct sig_pri_pri *pri, pri_event *ev)
 	sig_pri_lock_private(pri->pvts[chanpos]);
 	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->retrieve.channel,
 		ev->retrieve.subcmds, ev->retrieve.call);
-	{
-		struct ast_frame f = { AST_FRAME_CONTROL, };
-
-		f.subclass.integer = AST_CONTROL_UNHOLD;
-		pri_queue_frame(pri->pvts[chanpos], &f, pri);
+	sig_pri_lock_owner(pri, chanpos);
+	pri_queue_control(pri, chanpos, AST_CONTROL_UNHOLD);
+	if (pri->pvts[chanpos]->owner) {
+		sig_pri_ami_hold_event(pri->pvts[chanpos]->owner, 0);
+		ast_channel_unlock(pri->pvts[chanpos]->owner);
 	}
-	sig_pri_unlock_private(pri->pvts[chanpos]);
 	pri_retrieve_ack(pri->pri, ev->retrieve.call,
 		PVT_TO_CHANNEL(pri->pvts[chanpos]));
+	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
+		SIG_PRI_MOH_EVENT_REMOTE_RETRIEVE_ACK);
+	sig_pri_unlock_private(pri->pvts[chanpos]);
+	sig_pri_span_devstate_changed(pri);
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief Handle the retrieve acknowledge event from libpri.
+ * \since 1.10
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param ev Retrieve acknowledge event received.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_handle_retrieve_ack(struct sig_pri_span *pri, pri_event *ev)
+{
+	int chanpos;
+
+	chanpos = pri_find_principle(pri, ev->retrieve_ack.channel, ev->retrieve_ack.call);
+	if (chanpos < 0) {
+		ast_log(LOG_WARNING,
+			"Span %d: Could not find principle for RETRIEVE_ACKNOWLEDGE\n", pri->span);
+		return;
+	}
+	chanpos = pri_fixup_principle(pri, chanpos, ev->retrieve_ack.call);
+	if (chanpos < 0) {
+		/* Very bad news.  The channel is already in use. */
+		sig_pri_kill_call(pri, ev->retrieve_ack.call, PRI_CAUSE_REQUESTED_CHAN_UNAVAIL);
+		return;
+	}
+
+	sig_pri_lock_private(pri->pvts[chanpos]);
+	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->retrieve_ack.channel,
+		ev->retrieve_ack.subcmds, ev->retrieve_ack.call);
+	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
+		SIG_PRI_MOH_EVENT_RETRIEVE_ACK);
+	sig_pri_unlock_private(pri->pvts[chanpos]);
+}
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+#if defined(HAVE_PRI_CALL_HOLD)
+/*!
+ * \internal
+ * \brief Handle the retrieve reject event from libpri.
+ * \since 1.10
+ *
+ * \param pri sig_pri PRI control structure.
+ * \param ev Retrieve reject event received.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void sig_pri_handle_retrieve_rej(struct sig_pri_span *pri, pri_event *ev)
+{
+	int chanpos;
+
+	chanpos = pri_find_principle(pri, ev->retrieve_rej.channel, ev->retrieve_rej.call);
+	if (chanpos < 0) {
+		ast_log(LOG_WARNING, "Span %d: Could not find principle for RETRIEVE_REJECT\n",
+			pri->span);
+		return;
+	}
+	chanpos = pri_fixup_principle(pri, chanpos, ev->retrieve_rej.call);
+	if (chanpos < 0) {
+		/* Should never happen. */
+		sig_pri_kill_call(pri, ev->retrieve_rej.call, PRI_CAUSE_NORMAL_TEMPORARY_FAILURE);
+		return;
+	}
+
+	ast_debug(1, "Span %d: RETRIEVE_REJECT cause: %d(%s)\n", pri->span,
+		ev->retrieve_rej.cause, pri_cause2str(ev->retrieve_rej.cause));
+
+	sig_pri_lock_private(pri->pvts[chanpos]);
+	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->retrieve_rej.channel,
+		ev->retrieve_rej.subcmds, ev->retrieve_rej.call);
+	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
+		SIG_PRI_MOH_EVENT_RETRIEVE_REJ);
+	sig_pri_unlock_private(pri->pvts[chanpos]);
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
 static void *pri_dchannel(void *vpri)
 {
-	struct sig_pri_pri *pri = vpri;
+	struct sig_pri_span *pri = vpri;
 	pri_event *e;
-	struct pollfd fds[NUM_DCHANS];
+	struct pollfd fds[SIG_PRI_NUM_DCHANS];
 	int res;
 	int chanpos = 0;
 	int x;
@@ -1925,7 +5139,7 @@ static void *pri_dchannel(void *vpri)
 			ast_log(LOG_WARNING, "Idle dial string '%s' lacks '@context'\n", pri->idleext);
 	}
 	for (;;) {
-		for (i = 0; i < NUM_DCHANS; i++) {
+		for (i = 0; i < SIG_PRI_NUM_DCHANS; i++) {
 			if (!pri->dchans[i])
 				break;
 			fds[i].fd = pri->fds[i];
@@ -1999,36 +5213,36 @@ static void *pri_dchannel(void *vpri)
 			}
 		}
 		/* Start with reasonable max */
-		lowest = ast_tv(60, 0);
-		for (i = 0; i < NUM_DCHANS; i++) {
-			/* Find lowest available d-channel */
-			if (!pri->dchans[i])
+		if (doidling || pri->resetting) {
+			/*
+			 * Make sure we stop at least once per second if we're
+			 * monitoring idle channels
+			 */
+			lowest = ast_tv(1, 0);
+		} else {
+			/* Don't poll for more than 60 seconds */
+			lowest = ast_tv(60, 0);
+		}
+		for (i = 0; i < SIG_PRI_NUM_DCHANS; i++) {
+			if (!pri->dchans[i]) {
+				/* We scanned all D channels on this span. */
 				break;
-			if ((next = pri_schedule_next(pri->dchans[i]))) {
+			}
+			next = pri_schedule_next(pri->dchans[i]);
+			if (next) {
 				/* We need relative time here */
 				tv = ast_tvsub(*next, ast_tvnow());
 				if (tv.tv_sec < 0) {
-					tv = ast_tv(0,0);
+					/*
+					 * A timer has already expired.
+					 * By definition zero time is the lowest so we can quit early.
+					 */
+					lowest = ast_tv(0, 0);
+					break;
 				}
-				if (doidling || pri->resetting) {
-					if (tv.tv_sec > 1) {
-						tv = ast_tv(1, 0);
-					}
-				} else {
-					if (tv.tv_sec > 60) {
-						tv = ast_tv(60, 0);
-					}
+				if (ast_tvcmp(tv, lowest) < 0) {
+					lowest = tv;
 				}
-			} else if (doidling || pri->resetting) {
-				/* Make sure we stop at least once per second if we're
-				   monitoring idle channels */
-				tv = ast_tv(1,0);
-			} else {
-				/* Don't poll for more than 60 seconds */
-				tv = ast_tv(60, 0);
-			}
-			if (!i || ast_tvcmp(tv, lowest) < 0) {
-				lowest = tv;
 			}
 		}
 		ast_mutex_unlock(&pri->lock);
@@ -2042,7 +5256,7 @@ static void *pri_dchannel(void *vpri)
 
 		ast_mutex_lock(&pri->lock);
 		if (!res) {
-			for (which = 0; which < NUM_DCHANS; which++) {
+			for (which = 0; which < SIG_PRI_NUM_DCHANS; which++) {
 				if (!pri->dchans[which])
 					break;
 				/* Just a timeout, run the scheduler */
@@ -2051,7 +5265,7 @@ static void *pri_dchannel(void *vpri)
 					break;
 			}
 		} else if (res > -1) {
-			for (which = 0; which < NUM_DCHANS; which++) {
+			for (which = 0; which < SIG_PRI_NUM_DCHANS; which++) {
 				if (!pri->dchans[which])
 					break;
 				if (fds[which].revents & POLLPRI) {
@@ -2066,8 +5280,10 @@ static void *pri_dchannel(void *vpri)
 			ast_log(LOG_WARNING, "pri_event returned error %d (%s)\n", errno, strerror(errno));
 
 		if (e) {
-			if (pri->debug)
-				pri_dump_event(pri->dchans[which], e);
+			if (pri->debug) {
+				ast_verbose("Span: %d Processing event: %s(%d)\n",
+					pri->span, pri_event2str(e->e), e->e);
+			}
 
 			if (e->e != PRI_EVENT_DCHAN_DOWN) {
 				if (!(pri->dchanavail[which] & DCHAN_UP)) {
@@ -2087,6 +5303,7 @@ static void *pri_dchannel(void *vpri)
 
 			switch (e->e) {
 			case PRI_EVENT_DCHAN_UP:
+				pri->no_d_channels = 0;
 				if (!pri->pri) pri_find_dchan(pri);
 
 				/* Note presense of D-channel */
@@ -2099,10 +5316,12 @@ static void *pri_dchannel(void *vpri)
 				}
 				pri->resetting = 0;
 				/* Take the channels from inalarm condition */
-				for (i = 0; i < pri->numchans; i++)
+				for (i = 0; i < pri->numchans; i++) {
 					if (pri->pvts[i]) {
-						pri->pvts[i]->inalarm = 0;
+						sig_pri_set_alarm(pri->pvts[i], 0);
 					}
+				}
+				sig_pri_span_devstate_changed(pri);
 				break;
 			case PRI_EVENT_DCHAN_DOWN:
 				pri_find_dchan(pri);
@@ -2128,11 +5347,12 @@ static void *pri_dchannel(void *vpri)
 										ast_log(LOG_WARNING, "The PRI Call have not been destroyed\n");
 								}
 								if (p->owner)
-									ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
+									p->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 							}
-							p->inalarm = 1;
+							sig_pri_set_alarm(p, 1);
 						}
 					}
+					sig_pri_span_devstate_changed(pri);
 				}
 				break;
 			case PRI_EVENT_RESTART:
@@ -2166,7 +5386,7 @@ static void *pri_dchannel(void *vpri)
 						}
 						/* Force soft hangup if appropriate */
 						if (pri->pvts[chanpos]->owner)
-							ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
+							pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 						sig_pri_unlock_private(pri->pvts[chanpos]);
 					}
 				} else {
@@ -2179,12 +5399,17 @@ static void *pri_dchannel(void *vpri)
 								pri->pvts[x]->call = NULL;
 							}
  							if (pri->pvts[x]->owner)
-								ast_softhangup_nolock(pri->pvts[x]->owner, AST_SOFTHANGUP_DEV);
+								pri->pvts[x]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 							sig_pri_unlock_private(pri->pvts[x]);
 						}
 				}
 				break;
 			case PRI_EVENT_KEYPAD_DIGIT:
+				if (sig_pri_is_cis_call(e->digit.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->digit.subcmds,
+						e->digit.call);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->digit.channel, e->digit.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "KEYPAD_DIGITs received on unconfigured channel %d/%d span %d\n",
@@ -2206,7 +5431,7 @@ static void *pri_dchannel(void *vpri)
 							for (i = 0; i < digitlen; i++) {
 								struct ast_frame f = { AST_FRAME_DTMF, .subclass.integer = e->digit.digits[i], };
 
-								pri_queue_frame(pri->pvts[chanpos], &f, pri);
+								pri_queue_frame(pri, chanpos, &f);
 							}
 						}
 						sig_pri_unlock_private(pri->pvts[chanpos]);
@@ -2215,6 +5440,11 @@ static void *pri_dchannel(void *vpri)
 				break;
 
 			case PRI_EVENT_INFO_RECEIVED:
+				if (sig_pri_is_cis_call(e->ring.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->ring.subcmds,
+						e->ring.call);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->ring.channel, e->ring.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "INFO received on unconfigured channel %d/%d span %d\n",
@@ -2236,7 +5466,7 @@ static void *pri_dchannel(void *vpri)
 							for (i = 0; i < digitlen; i++) {
 								struct ast_frame f = { AST_FRAME_DTMF, .subclass.integer = e->ring.callednum[i], };
 
-								pri_queue_frame(pri->pvts[chanpos], &f, pri);
+								pri_queue_frame(pri, chanpos, &f);
 							}
 						}
 						sig_pri_unlock_private(pri->pvts[chanpos]);
@@ -2267,6 +5497,8 @@ static void *pri_dchannel(void *vpri)
 							snprintf(db_answer, sizeof(db_answer), "%s:%u",
 								SRVST_TYPE_OOS, *why);
 							ast_db_put(db_chan_name, SRVST_DBKEY, db_answer);
+						} else {
+							sig_pri_span_devstate_changed(pri);
 						}
 						break;
 					case 2: /* out-of-service */
@@ -2276,6 +5508,7 @@ static void *pri_dchannel(void *vpri)
 						snprintf(db_answer, sizeof(db_answer), "%s:%u", SRVST_TYPE_OOS,
 							*why);
 						ast_db_put(db_chan_name, SRVST_DBKEY, db_answer);
+						sig_pri_span_devstate_changed(pri);
 						break;
 					default:
 						ast_log(LOG_ERROR, "Huh?  changestatus is: %d\n", e->service.changestatus);
@@ -2306,10 +5539,38 @@ static void *pri_dchannel(void *vpri)
 					pri_destroycall(pri->pri, e->ring.call);
 					break;
 				}
-				if (e->ring.channel == -1)
+				if (sig_pri_is_cis_call(e->ring.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->ring.subcmds,
+						e->ring.call);
+					break;
+				}
+				if (e->ring.channel == -1 || PRI_CHANNEL(e->ring.channel) == 0xFF) {
+					/* Any channel requested. */
 					chanpos = pri_find_empty_chan(pri, 1);
-				else
+				} else if (PRI_CHANNEL(e->ring.channel) == 0x00) {
+					/* No channel specified. */
+#if defined(HAVE_PRI_CALL_WAITING)
+					if (!pri->allow_call_waiting_calls)
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+					{
+						/* We will not accept incoming call waiting calls. */
+						pri_hangup(pri->pri, e->ring.call, PRI_CAUSE_INCOMPATIBLE_DESTINATION);
+						break;
+					}
+#if defined(HAVE_PRI_CALL_WAITING)
+					chanpos = pri_find_empty_nobch(pri);
+					if (chanpos < 0) {
+						/* We could not find/create a call interface. */
+						pri_hangup(pri->pri, e->ring.call, PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION);
+						break;
+					}
+					/* Setup the call interface to use. */
+					sig_pri_init_config(pri->pvts[chanpos], pri);
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+				} else {
+					/* A channel is specified. */
 					chanpos = pri_find_principle(pri, e->ring.channel, e->ring.call);
+				}
 				/* if no channel specified find one empty */
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "Ring requested on unconfigured channel %d/%d span %d\n",
@@ -2389,6 +5650,19 @@ static void *pri_dchannel(void *vpri)
 						pri->pvts[chanpos]->cid_ton = 0;
 						pri->pvts[chanpos]->callingpres = 0;
 					}
+
+					/* Setup the user tag for party id's from this device for this call. */
+					if (pri->append_msn_to_user_tag) {
+						snprintf(pri->pvts[chanpos]->user_tag,
+							sizeof(pri->pvts[chanpos]->user_tag), "%s_%s",
+							pri->initial_user_tag,
+							pri->nodetype == PRI_NETWORK
+								? plancallingnum : e->ring.callednum);
+					} else {
+						ast_copy_string(pri->pvts[chanpos]->user_tag,
+							pri->initial_user_tag, sizeof(pri->pvts[chanpos]->user_tag));
+					}
+
 					sig_pri_set_caller_id(pri->pvts[chanpos]);
 
 					/* Set DNID on all incoming calls -- even immediate */
@@ -2442,7 +5716,7 @@ static void *pri_dchannel(void *vpri)
 							 */
 							ast_mutex_unlock(&pri->lock);
 							c = sig_pri_new_ast_channel(pri->pvts[chanpos],
-								AST_STATE_RESERVED, 0,
+								AST_STATE_RESERVED,
 								(e->ring.layer1 == PRI_LAYER_1_ALAW)
 									? SIG_PRI_ALAW : SIG_PRI_ULAW,
 								e->ring.ctype, pri->pvts[chanpos]->exten, NULL);
@@ -2453,7 +5727,7 @@ static void *pri_dchannel(void *vpri)
 									/* Set Calling Subaddress */
 									sig_pri_lock_owner(pri, chanpos);
 									sig_pri_set_subaddress(
-										&pri->pvts[chanpos]->owner->cid.subaddress,
+										&pri->pvts[chanpos]->owner->caller.id.subaddress,
 										&e->ring.calling.subaddress);
 									if (!e->ring.calling.subaddress.type
 										&& !ast_strlen_zero(
@@ -2468,7 +5742,7 @@ static void *pri_dchannel(void *vpri)
 									/* Set Called Subaddress */
 									sig_pri_lock_owner(pri, chanpos);
 									sig_pri_set_subaddress(
-										&pri->pvts[chanpos]->owner->cid.dialed_subaddress,
+										&pri->pvts[chanpos]->owner->dialed.subaddress,
 										&e->ring.called_subaddress);
 									if (!e->ring.called_subaddress.type
 										&& !ast_strlen_zero(
@@ -2535,7 +5809,7 @@ static void *pri_dchannel(void *vpri)
 							 */
 							ast_mutex_unlock(&pri->lock);
 							c = sig_pri_new_ast_channel(pri->pvts[chanpos],
-								AST_STATE_RING, 0,
+								AST_STATE_RING,
 								(e->ring.layer1 == PRI_LAYER_1_ALAW)
 									? SIG_PRI_ALAW : SIG_PRI_ULAW, e->ring.ctype,
 								pri->pvts[chanpos]->exten, NULL);
@@ -2554,7 +5828,7 @@ static void *pri_dchannel(void *vpri)
 									/* Set Calling Subaddress */
 									sig_pri_lock_owner(pri, chanpos);
 									sig_pri_set_subaddress(
-										&pri->pvts[chanpos]->owner->cid.subaddress,
+										&pri->pvts[chanpos]->owner->caller.id.subaddress,
 										&e->ring.calling.subaddress);
 									if (!e->ring.calling.subaddress.type
 										&& !ast_strlen_zero(
@@ -2569,7 +5843,7 @@ static void *pri_dchannel(void *vpri)
 									/* Set Called Subaddress */
 									sig_pri_lock_owner(pri, chanpos);
 									sig_pri_set_subaddress(
-										&pri->pvts[chanpos]->owner->cid.dialed_subaddress,
+										&pri->pvts[chanpos]->owner->dialed.subaddress,
 										&e->ring.called_subaddress);
 									if (!e->ring.called_subaddress.type
 										&& !ast_strlen_zero(
@@ -2649,6 +5923,11 @@ static void *pri_dchannel(void *vpri)
 				}
 				break;
 			case PRI_EVENT_RINGING:
+				if (sig_pri_is_cis_call(e->ringing.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->ringing.subcmds,
+						e->ringing.call);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->ringing.channel, e->ringing.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "Ringing requested on unconfigured channel %d/%d span %d\n",
@@ -2663,9 +5942,21 @@ static void *pri_dchannel(void *vpri)
 
 						sig_pri_handle_subcmds(pri, chanpos, e->e, e->ringing.channel,
 							e->ringing.subcmds, e->ringing.call);
+						sig_pri_cc_generic_check(pri, chanpos, AST_CC_CCNR);
 						sig_pri_set_echocanceller(pri->pvts[chanpos], 1);
-						pri_queue_control(pri->pvts[chanpos], AST_CONTROL_RINGING, pri);
+						pri_queue_control(pri, chanpos, AST_CONTROL_RINGING);
 						pri->pvts[chanpos]->alerting = 1;
+
+						if (
+#ifdef PRI_PROGRESS_MASK
+							e->ringing.progressmask & PRI_PROG_INBAND_AVAILABLE
+#else
+							e->ringing.progress == 8
+#endif
+							) {
+							sig_pri_open_media(pri->pvts[chanpos]);
+						}
+
 
 #ifdef SUPPORT_USERUSER
 						if (!ast_strlen_zero(e->ringing.useruserinfo)) {
@@ -2686,85 +5977,96 @@ static void *pri_dchannel(void *vpri)
 				}
 				break;
 			case PRI_EVENT_PROGRESS:
-				/* Get chan value if e->e is not PRI_EVNT_RINGING */
+				if (sig_pri_is_cis_call(e->proceeding.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->proceeding.subcmds,
+						e->proceeding.call);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->proceeding.channel, e->proceeding.call);
 				if (chanpos > -1) {
 					sig_pri_lock_private(pri->pvts[chanpos]);
 					sig_pri_handle_subcmds(pri, chanpos, e->e, e->proceeding.channel,
 						e->proceeding.subcmds, e->proceeding.call);
-					if ((!pri->pvts[chanpos]->progress)
-#ifdef PRI_PROGRESS_MASK
-						|| (e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE)
-#else
-						|| (e->proceeding.progress == 8)
-#endif
-						) {
-						struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_PROGRESS, };
 
-						if (e->proceeding.cause > -1) {
-							ast_verb(3, "PROGRESS with cause code %d received\n", e->proceeding.cause);
+					if (e->proceeding.cause > -1) {
+						ast_verb(3, "PROGRESS with cause code %d received\n", e->proceeding.cause);
 
-							/* Work around broken, out of spec USER_BUSY cause in a progress message */
-							if (e->proceeding.cause == AST_CAUSE_USER_BUSY) {
-								if (pri->pvts[chanpos]->owner) {
-									ast_verb(3, "PROGRESS with 'user busy' received, signaling AST_CONTROL_BUSY instead of AST_CONTROL_PROGRESS\n");
+						/* Work around broken, out of spec USER_BUSY cause in a progress message */
+						if (e->proceeding.cause == AST_CAUSE_USER_BUSY) {
+							if (pri->pvts[chanpos]->owner) {
+								ast_verb(3, "PROGRESS with 'user busy' received, signaling AST_CONTROL_BUSY instead of AST_CONTROL_PROGRESS\n");
 
-									pri->pvts[chanpos]->owner->hangupcause = e->proceeding.cause;
-									f.subclass.integer = AST_CONTROL_BUSY;
-								}
+								pri->pvts[chanpos]->owner->hangupcause = e->proceeding.cause;
+								pri_queue_control(pri, chanpos, AST_CONTROL_BUSY);
 							}
 						}
+					}
 
+					if (!pri->pvts[chanpos]->progress
+						&& !pri->pvts[chanpos]->no_b_channel
+#ifdef PRI_PROGRESS_MASK
+						&& (e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE)
+#else
+						&& e->proceeding.progress == 8
+#endif
+						) {
+						/* Bring voice path up */
 						ast_debug(1, "Queuing frame from PRI_EVENT_PROGRESS on channel %d/%d span %d\n",
 							pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset,pri->span);
-						pri_queue_frame(pri->pvts[chanpos], &f, pri);
-						if (
-#ifdef PRI_PROGRESS_MASK
-							e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE
-#else
-							e->proceeding.progress == 8
-#endif
-							) {
-							/* Bring voice path up */
-							f.subclass.integer = AST_CONTROL_PROGRESS;
-							pri_queue_frame(pri->pvts[chanpos], &f, pri);
-						}
+						pri_queue_control(pri, chanpos, AST_CONTROL_PROGRESS);
 						pri->pvts[chanpos]->progress = 1;
 						sig_pri_set_dialing(pri->pvts[chanpos], 0);
+						sig_pri_open_media(pri->pvts[chanpos]);
 					}
 					sig_pri_unlock_private(pri->pvts[chanpos]);
 				}
 				break;
 			case PRI_EVENT_PROCEEDING:
+				if (sig_pri_is_cis_call(e->proceeding.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->proceeding.subcmds,
+						e->proceeding.call);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->proceeding.channel, e->proceeding.call);
 				if (chanpos > -1) {
 					sig_pri_lock_private(pri->pvts[chanpos]);
 					sig_pri_handle_subcmds(pri, chanpos, e->e, e->proceeding.channel,
 						e->proceeding.subcmds, e->proceeding.call);
 					if (!pri->pvts[chanpos]->proceeding) {
-						struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_PROCEEDING, };
-
 						ast_debug(1, "Queuing frame from PRI_EVENT_PROCEEDING on channel %d/%d span %d\n",
 							pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset,pri->span);
-						pri_queue_frame(pri->pvts[chanpos], &f, pri);
-						if (
-#ifdef PRI_PROGRESS_MASK
-							e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE
-#else
-							e->proceeding.progress == 8
-#endif
-							) {
-							/* Bring voice path up */
-							f.subclass.integer = AST_CONTROL_PROGRESS;
-							pri_queue_frame(pri->pvts[chanpos], &f, pri);
-						}
+						pri_queue_control(pri, chanpos, AST_CONTROL_PROCEEDING);
 						pri->pvts[chanpos]->proceeding = 1;
+					}
+					if (!pri->pvts[chanpos]->progress
+						&& !pri->pvts[chanpos]->no_b_channel
+#ifdef PRI_PROGRESS_MASK
+						&& (e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE)
+#else
+						&& e->proceeding.progress == 8
+#endif
+						) {
+						/* Bring voice path up */
+						pri_queue_control(pri, chanpos, AST_CONTROL_PROGRESS);
+						pri->pvts[chanpos]->progress = 1;
 						sig_pri_set_dialing(pri->pvts[chanpos], 0);
+						sig_pri_open_media(pri->pvts[chanpos]);
 					}
 					sig_pri_unlock_private(pri->pvts[chanpos]);
 				}
 				break;
 			case PRI_EVENT_FACILITY:
+				if (!e->facility.call || sig_pri_is_cis_call(e->facility.channel)) {
+					/* Event came in on the dummy channel or a CIS call. */
+#if defined(HAVE_PRI_CALL_REROUTING)
+					sig_pri_handle_cis_subcmds(pri, e->e, e->facility.subcmds,
+						e->facility.subcall);
+#else
+					sig_pri_handle_cis_subcmds(pri, e->e, e->facility.subcmds,
+						e->facility.call);
+#endif	/* !defined(HAVE_PRI_CALL_REROUTING) */
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->facility.channel, e->facility.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "Facility requested on unconfigured channel %d/%d span %d\n",
@@ -2788,48 +6090,157 @@ static void *pri_dchannel(void *vpri)
 				}
 				break;
 			case PRI_EVENT_ANSWER:
+				if (sig_pri_is_cis_call(e->answer.channel)) {
+#if defined(HAVE_PRI_CALL_WAITING)
+					/* Call is CIS so do normal CONNECT_ACKNOWLEDGE. */
+					pri_connect_ack(pri->pri, e->answer.call, 0);
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+					sig_pri_handle_cis_subcmds(pri, e->e, e->answer.subcmds,
+						e->answer.call);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->answer.channel, e->answer.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "Answer on unconfigured channel %d/%d span %d\n",
 						PRI_SPAN(e->answer.channel), PRI_CHANNEL(e->answer.channel), pri->span);
-				} else {
-					chanpos = pri_fixup_principle(pri, chanpos, e->answer.call);
-					if (chanpos < 0) {
-						ast_log(LOG_WARNING, "Answer requested on channel %d/%d not in use on span %d\n",
-							PRI_SPAN(e->answer.channel), PRI_CHANNEL(e->answer.channel), pri->span);
-					} else {
-						sig_pri_lock_private(pri->pvts[chanpos]);
+					break;
+				}
+				chanpos = pri_fixup_principle(pri, chanpos, e->answer.call);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "Answer requested on channel %d/%d not in use on span %d\n",
+						PRI_SPAN(e->answer.channel), PRI_CHANNEL(e->answer.channel), pri->span);
+					break;
+				}
+#if defined(HAVE_PRI_CALL_WAITING)
+				if (pri->pvts[chanpos]->is_call_waiting) {
+					if (pri->pvts[chanpos]->no_b_channel) {
+						int new_chanpos;
 
-						sig_pri_handle_subcmds(pri, chanpos, e->e, e->answer.channel,
-							e->answer.subcmds, e->answer.call);
-						pri_queue_control(pri->pvts[chanpos], AST_CONTROL_ANSWER, pri);
-						/* Enable echo cancellation if it's not on already */
-						sig_pri_set_dialing(pri->pvts[chanpos], 0);
-						sig_pri_set_echocanceller(pri->pvts[chanpos], 1);
+						/*
+						 * Need to find a free channel now or
+						 * kill the call with PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION.
+						 */
+						new_chanpos = pri_find_empty_chan(pri, 1);
+						if (new_chanpos < 0) {
+							sig_pri_lock_private(pri->pvts[chanpos]);
+							sig_pri_handle_subcmds(pri, chanpos, e->e, e->answer.channel,
+								e->answer.subcmds, e->answer.call);
+							sig_pri_cc_generic_check(pri, chanpos, AST_CC_CCBS);
+							if (pri->pvts[chanpos]->owner) {
+								pri->pvts[chanpos]->owner->hangupcause = PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION;
+								switch (pri->pvts[chanpos]->owner->_state) {
+								case AST_STATE_BUSY:
+								case AST_STATE_UP:
+									ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
+									break;
+								default:
+									pri_queue_control(pri, chanpos, AST_CONTROL_CONGESTION);
+									break;
+								}
+							} else {
+								pri->pvts[chanpos]->is_call_waiting = 0;
+								ast_atomic_fetchadd_int(&pri->num_call_waiting_calls, -1);
+								pri_hangup(pri->pri, e->answer.call, PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION);
+								pri->pvts[chanpos]->call = NULL;
+							}
+							sig_pri_unlock_private(pri->pvts[chanpos]);
+							break;
+						}
+						chanpos = pri_fixup_principle(pri, new_chanpos, e->answer.call);
+						if (chanpos < 0) {
+							ast_log(LOG_WARNING,
+								"Unable to move call waiting call channel on span %d\n",
+								pri->span);
+							break;
+						}
+					}
+					pri_connect_ack(pri->pri, e->answer.call, PVT_TO_CHANNEL(pri->pvts[chanpos]));
+				} else {
+					/* Call is normal so do normal CONNECT_ACKNOWLEDGE. */
+					pri_connect_ack(pri->pri, e->answer.call, 0);
+				}
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+				sig_pri_lock_private(pri->pvts[chanpos]);
+
+#if defined(HAVE_PRI_CALL_WAITING)
+				if (pri->pvts[chanpos]->is_call_waiting) {
+					pri->pvts[chanpos]->is_call_waiting = 0;
+					ast_atomic_fetchadd_int(&pri->num_call_waiting_calls, -1);
+					sig_pri_span_devstate_changed(pri);
+				}
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+				sig_pri_handle_subcmds(pri, chanpos, e->e, e->answer.channel,
+					e->answer.subcmds, e->answer.call);
+				pri->pvts[chanpos]->proceeding = 1;
+				sig_pri_open_media(pri->pvts[chanpos]);
+				pri_queue_control(pri, chanpos, AST_CONTROL_ANSWER);
+				/* Enable echo cancellation if it's not on already */
+				sig_pri_set_dialing(pri->pvts[chanpos], 0);
+				sig_pri_set_echocanceller(pri->pvts[chanpos], 1);
 
 #ifdef SUPPORT_USERUSER
-						if (!ast_strlen_zero(e->answer.useruserinfo)) {
-							struct ast_channel *owner;
+				if (!ast_strlen_zero(e->answer.useruserinfo)) {
+					struct ast_channel *owner;
 
-							sig_pri_lock_owner(pri, chanpos);
-							owner = pri->pvts[chanpos]->owner;
-							if (owner) {
-								pbx_builtin_setvar_helper(owner, "USERUSERINFO",
-									e->answer.useruserinfo);
-								ast_channel_unlock(owner);
-							}
-						}
-#endif
-
-						sig_pri_unlock_private(pri->pvts[chanpos]);
+					sig_pri_lock_owner(pri, chanpos);
+					owner = pri->pvts[chanpos]->owner;
+					if (owner) {
+						pbx_builtin_setvar_helper(owner, "USERUSERINFO",
+							e->answer.useruserinfo);
+						ast_channel_unlock(owner);
 					}
 				}
+#endif
+
+				sig_pri_unlock_private(pri->pvts[chanpos]);
 				break;
+#if defined(HAVE_PRI_CALL_WAITING)
+			case PRI_EVENT_CONNECT_ACK:
+				if (sig_pri_is_cis_call(e->connect_ack.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->connect_ack.subcmds,
+						e->connect_ack.call);
+					break;
+				}
+				chanpos = pri_find_principle(pri, e->connect_ack.channel,
+					e->connect_ack.call);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "Connect ACK on unconfigured channel %d/%d span %d\n",
+						PRI_SPAN(e->connect_ack.channel),
+						PRI_CHANNEL(e->connect_ack.channel), pri->span);
+					break;
+				}
+				chanpos = pri_fixup_principle(pri, chanpos, e->connect_ack.call);
+				if (chanpos < 0) {
+					ast_log(LOG_WARNING, "Connect ACK requested on channel %d/%d not in use on span %d\n",
+						PRI_SPAN(e->connect_ack.channel),
+						PRI_CHANNEL(e->connect_ack.channel), pri->span);
+					break;
+				}
+
+				sig_pri_lock_private(pri->pvts[chanpos]);
+				sig_pri_span_devstate_changed(pri);
+				sig_pri_handle_subcmds(pri, chanpos, e->e, e->connect_ack.channel,
+					e->connect_ack.subcmds, e->connect_ack.call);
+				sig_pri_open_media(pri->pvts[chanpos]);
+				sig_pri_unlock_private(pri->pvts[chanpos]);
+				break;
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
 			case PRI_EVENT_HANGUP:
+				if (sig_pri_is_cis_call(e->hangup.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->hangup.subcmds,
+						e->hangup.call);
+					pri_hangup(pri->pri, e->hangup.call, e->hangup.cause);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->hangup.channel, e->hangup.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "Hangup requested on unconfigured channel %d/%d span %d\n",
 						PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span);
+					/*
+					 * Continue hanging up the call even though
+					 * it is on an unconfigured channel.
+					 */
+					pri_hangup(pri->pri, e->hangup.call, e->hangup.cause);
 				} else {
 					chanpos = pri_fixup_principle(pri, chanpos, e->hangup.call);
 					if (chanpos > -1) {
@@ -2839,18 +6250,35 @@ static void *pri_dchannel(void *vpri)
 						if (!pri->pvts[chanpos]->alreadyhungup) {
 							/* we're calling here dahdi_hangup so once we get there we need to clear p->call after calling pri_hangup */
 							pri->pvts[chanpos]->alreadyhungup = 1;
+							switch (e->hangup.cause) {
+							case PRI_CAUSE_USER_BUSY:
+							case PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION:
+								sig_pri_cc_generic_check(pri, chanpos, AST_CC_CCBS);
+								break;
+							default:
+								break;
+							}
 							if (pri->pvts[chanpos]->owner) {
+								int do_hangup = 0;
 								/* Queue a BUSY instead of a hangup if our cause is appropriate */
 								pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
 								switch (pri->pvts[chanpos]->owner->_state) {
 								case AST_STATE_BUSY:
 								case AST_STATE_UP:
-									ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
+									do_hangup = 1;
 									break;
 								default:
+									if (!pri->pvts[chanpos]->outgoing) {
+										/*
+										 * The incoming call leg hung up before getting
+										 * connected so just hangup the call.
+										 */
+										do_hangup = 1;
+										break;
+									}
 									switch (e->hangup.cause) {
 									case PRI_CAUSE_USER_BUSY:
-										pri_queue_control(pri->pvts[chanpos], AST_CONTROL_BUSY, pri);
+										pri_queue_control(pri, chanpos, AST_CONTROL_BUSY);
 										break;
 									case PRI_CAUSE_CALL_REJECTED:
 									case PRI_CAUSE_NETWORK_OUT_OF_ORDER:
@@ -2858,18 +6286,40 @@ static void *pri_dchannel(void *vpri)
 									case PRI_CAUSE_SWITCH_CONGESTION:
 									case PRI_CAUSE_DESTINATION_OUT_OF_ORDER:
 									case PRI_CAUSE_NORMAL_TEMPORARY_FAILURE:
-										pri_queue_control(pri->pvts[chanpos], AST_CONTROL_CONGESTION, pri);
+										pri_queue_control(pri, chanpos, AST_CONTROL_CONGESTION);
 										break;
 									default:
-										ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
+										do_hangup = 1;
 										break;
 									}
 									break;
 								}
+
+								if (do_hangup) {
+#if defined(HAVE_PRI_AOC_EVENTS)
+									if (detect_aoc_e_subcmd(e->hangup.subcmds)) {
+										/* If a AOC-E msg was sent during the release, we must use a
+										 * AST_CONTROL_HANGUP frame to guarantee that frame gets read before hangup */
+										pri_queue_control(pri, chanpos, AST_CONTROL_HANGUP);
+									} else {
+										pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
+									}
+#else
+									pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+								}
+							} else {
+								/*
+								 * Continue hanging up the call even though
+								 * we do not have an owner.
+								 */
+								pri_hangup(pri->pri, pri->pvts[chanpos]->call, e->hangup.cause);
+								pri->pvts[chanpos]->call = NULL;
 							}
 							ast_verb(3, "Channel %d/%d, span %d got hangup, cause %d\n",
 								pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset, pri->span, e->hangup.cause);
 						} else {
+							/* Continue hanging up the call. */
 							pri_hangup(pri->pri, pri->pvts[chanpos]->call, e->hangup.cause);
 							pri->pvts[chanpos]->call = NULL;
 						}
@@ -2899,16 +6349,30 @@ static void *pri_dchannel(void *vpri)
 
 						sig_pri_unlock_private(pri->pvts[chanpos]);
 					} else {
-						ast_log(LOG_WARNING, "Hangup on bad channel %d/%d on span %d\n",
-							PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span);
+						/*
+						 * Continue hanging up the call even though
+						 * we do not remember it (if we ever did).
+						 */
+						pri_hangup(pri->pri, e->hangup.call, e->hangup.cause);
 					}
 				}
 				break;
 			case PRI_EVENT_HANGUP_REQ:
+				if (sig_pri_is_cis_call(e->hangup.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->hangup.subcmds,
+						e->hangup.call);
+					pri_hangup(pri->pri, e->hangup.call, e->hangup.cause);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->hangup.channel, e->hangup.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "Hangup REQ requested on unconfigured channel %d/%d span %d\n",
 						PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span);
+					/*
+					 * Continue hanging up the call even though
+					 * it is on an unconfigured channel.
+					 */
+					pri_hangup(pri->pri, e->hangup.call, e->hangup.cause);
 				} else {
 					chanpos = pri_fixup_principle(pri, chanpos, e->hangup.call);
 					if (chanpos > -1) {
@@ -2920,24 +6384,42 @@ static void *pri_dchannel(void *vpri)
 							&& pri->hold_disconnect_transfer) {
 							/* We are to transfer the call instead of simply hanging up. */
 							sig_pri_unlock_private(pri->pvts[chanpos]);
-							if (!sig_pri_attempt_transfer(pri, e->hangup.call_active,
-								e->hangup.call_held)) {
+							if (!sig_pri_attempt_transfer(pri, e->hangup.call_held, 1,
+								e->hangup.call_active, 0, NULL, NULL)) {
 								break;
 							}
 							sig_pri_lock_private(pri->pvts[chanpos]);
 						}
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
+						switch (e->hangup.cause) {
+						case PRI_CAUSE_USER_BUSY:
+						case PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION:
+							sig_pri_cc_generic_check(pri, chanpos, AST_CC_CCBS);
+							break;
+						default:
+							break;
+						}
 						if (pri->pvts[chanpos]->owner) {
+							int do_hangup = 0;
+
 							pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
 							switch (pri->pvts[chanpos]->owner->_state) {
 							case AST_STATE_BUSY:
 							case AST_STATE_UP:
-								ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
+								do_hangup = 1;
 								break;
 							default:
+								if (!pri->pvts[chanpos]->outgoing) {
+									/*
+									 * The incoming call leg hung up before getting
+									 * connected so just hangup the call.
+									 */
+									do_hangup = 1;
+									break;
+								}
 								switch (e->hangup.cause) {
 								case PRI_CAUSE_USER_BUSY:
-									pri_queue_control(pri->pvts[chanpos], AST_CONTROL_BUSY, pri);
+									pri_queue_control(pri, chanpos, AST_CONTROL_BUSY);
 									break;
 								case PRI_CAUSE_CALL_REJECTED:
 								case PRI_CAUSE_NETWORK_OUT_OF_ORDER:
@@ -2945,19 +6427,40 @@ static void *pri_dchannel(void *vpri)
 								case PRI_CAUSE_SWITCH_CONGESTION:
 								case PRI_CAUSE_DESTINATION_OUT_OF_ORDER:
 								case PRI_CAUSE_NORMAL_TEMPORARY_FAILURE:
-									pri_queue_control(pri->pvts[chanpos], AST_CONTROL_CONGESTION, pri);
+									pri_queue_control(pri, chanpos, AST_CONTROL_CONGESTION);
 									break;
 								default:
-									ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
+									do_hangup = 1;
 									break;
 								}
 								break;
 							}
-							ast_verb(3, "Channel %d/%d, span %d got hangup request, cause %d\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span, e->hangup.cause);
-							if (e->hangup.aoc_units > -1)
-								ast_verb(3, "Channel %d/%d, span %d received AOC-E charging %d unit%s\n",
-									pri->pvts[chanpos]->logicalspan, pri->pvts[chanpos]->prioffset, pri->span, (int)e->hangup.aoc_units, (e->hangup.aoc_units == 1) ? "" : "s");
+
+							if (do_hangup) {
+#if defined(HAVE_PRI_AOC_EVENTS)
+								if (!pri->pvts[chanpos]->holding_aoce
+									&& pri->aoce_delayhangup
+									&& ast_bridged_channel(pri->pvts[chanpos]->owner)) {
+									sig_pri_send_aoce_termination_request(pri, chanpos,
+										pri_get_timer(pri->pri, PRI_TIMER_T305) / 2);
+								} else if (detect_aoc_e_subcmd(e->hangup.subcmds)) {
+									/* If a AOC-E msg was sent during the Disconnect, we must use a AST_CONTROL_HANGUP frame
+									 * to guarantee that frame gets read before hangup */
+									pri_queue_control(pri, chanpos, AST_CONTROL_HANGUP);
+								} else {
+									pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
+								}
+#else
+								pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+							}
+							ast_verb(3, "Channel %d/%d, span %d got hangup request, cause %d\n",
+								PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span, e->hangup.cause);
 						} else {
+							/*
+							 * Continue hanging up the call even though
+							 * we do not have an owner.
+							 */
 							pri_hangup(pri->pri, pri->pvts[chanpos]->call, e->hangup.cause);
 							pri->pvts[chanpos]->call = NULL;
 						}
@@ -2984,11 +6487,20 @@ static void *pri_dchannel(void *vpri)
 
 						sig_pri_unlock_private(pri->pvts[chanpos]);
 					} else {
-						ast_log(LOG_WARNING, "Hangup REQ on bad channel %d/%d on span %d\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span);
+						/*
+						 * Continue hanging up the call even though
+						 * we do not remember it (if we ever did).
+						 */
+						pri_hangup(pri->pri, e->hangup.call, e->hangup.cause);
 					}
 				}
 				break;
 			case PRI_EVENT_HANGUP_ACK:
+				if (sig_pri_is_cis_call(e->hangup.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->hangup.subcmds,
+						e->hangup.call);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->hangup.channel, e->hangup.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "Hangup ACK requested on unconfigured channel number %d/%d span %d\n",
@@ -3002,7 +6514,6 @@ static void *pri_dchannel(void *vpri)
 						if (pri->pvts[chanpos]->owner) {
 							ast_verb(3, "Channel %d/%d, span %d got hangup ACK\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span);
 						}
-
 #ifdef SUPPORT_USERUSER
 						if (!ast_strlen_zero(e->hangup.useruserinfo)) {
 							struct ast_channel *owner;
@@ -3016,13 +6527,12 @@ static void *pri_dchannel(void *vpri)
 							}
 						}
 #endif
-
 						sig_pri_unlock_private(pri->pvts[chanpos]);
 					}
 				}
 				break;
 			case PRI_EVENT_CONFIG_ERR:
-				ast_log(LOG_WARNING, "PRI Error on span %d: %s\n", pri->trunkgroup, e->err.err);
+				ast_log(LOG_WARNING, "PRI Error on span %d: %s\n", pri->span, e->err.err);
 				break;
 			case PRI_EVENT_RESTART_ACK:
 				chanpos = pri_find_principle(pri, e->restartack.channel, NULL);
@@ -3039,7 +6549,7 @@ static void *pri_dchannel(void *vpri)
 							if (pri->pvts[chanpos]->owner) {
 								ast_log(LOG_WARNING, "Got restart ack on channel %d/%d with owner on span %d\n", pri->pvts[chanpos]->logicalspan,
 									pri->pvts[chanpos]->prioffset, pri->span);
-								ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
+								pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 							}
 							pri->pvts[chanpos]->resetting = 0;
 							ast_verb(3, "B-channel %d/%d successfully restarted on span %d\n", pri->pvts[chanpos]->logicalspan,
@@ -3060,7 +6570,7 @@ static void *pri_dchannel(void *vpri)
 						if (pri->pvts[chanpos]->owner) {
 							ast_log(LOG_WARNING, "Got restart ack on channel %d/%d span %d with owner\n",
 								PRI_SPAN(e->restartack.channel), PRI_CHANNEL(e->restartack.channel), pri->span);
-							ast_softhangup_nolock(pri->pvts[chanpos]->owner, AST_SOFTHANGUP_DEV);
+							pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 						}
 						pri->pvts[chanpos]->resetting = 0;
 						ast_verb(3, "B-channel %d/%d successfully restarted on span %d\n", pri->pvts[chanpos]->logicalspan,
@@ -3072,6 +6582,11 @@ static void *pri_dchannel(void *vpri)
 				}
 				break;
 			case PRI_EVENT_SETUP_ACK:
+				if (sig_pri_is_cis_call(e->setup_ack.channel)) {
+					sig_pri_handle_cis_subcmds(pri, e->e, e->setup_ack.subcmds,
+						e->setup_ack.call);
+					break;
+				}
 				chanpos = pri_find_principle(pri, e->setup_ack.channel, e->setup_ack.call);
 				if (chanpos < 0) {
 					ast_log(LOG_WARNING, "Received SETUP_ACKNOWLEDGE on unconfigured channel %d/%d span %d\n",
@@ -3095,6 +6610,15 @@ static void *pri_dchannel(void *vpri)
 				}
 				break;
 			case PRI_EVENT_NOTIFY:
+				if (sig_pri_is_cis_call(e->notify.channel)) {
+#if defined(HAVE_PRI_CALL_HOLD)
+					sig_pri_handle_cis_subcmds(pri, e->e, e->notify.subcmds,
+						e->notify.call);
+#else
+					sig_pri_handle_cis_subcmds(pri, e->e, e->notify.subcmds, NULL);
+#endif	/* !defined(HAVE_PRI_CALL_HOLD) */
+					break;
+				}
 #if defined(HAVE_PRI_CALL_HOLD)
 				chanpos = pri_find_principle(pri, e->notify.channel, e->notify.call);
 #else
@@ -3115,18 +6639,12 @@ static void *pri_dchannel(void *vpri)
 					switch (e->notify.info) {
 					case PRI_NOTIFY_REMOTE_HOLD:
 						if (!pri->discardremoteholdretrieval) {
-							struct ast_frame f = { AST_FRAME_CONTROL, };
-
-							f.subclass.integer = AST_CONTROL_HOLD;
-							pri_queue_frame(pri->pvts[chanpos], &f, pri);
+							pri_queue_control(pri, chanpos, AST_CONTROL_HOLD);
 						}
 						break;
 					case PRI_NOTIFY_REMOTE_RETRIEVAL:
 						if (!pri->discardremoteholdretrieval) {
-							struct ast_frame f = { AST_FRAME_CONTROL, };
-
-							f.subclass.integer = AST_CONTROL_UNHOLD;
-							pri_queue_frame(pri->pvts[chanpos], &f, pri);
+							pri_queue_control(pri, chanpos, AST_CONTROL_UNHOLD);
 						}
 						break;
 					}
@@ -3135,6 +6653,7 @@ static void *pri_dchannel(void *vpri)
 				break;
 #if defined(HAVE_PRI_CALL_HOLD)
 			case PRI_EVENT_HOLD:
+				/* We should not be getting any CIS calls with this message type. */
 				if (sig_pri_handle_hold(pri, e)) {
 					pri_hold_rej(pri->pri, e->hold.call,
 						PRI_CAUSE_RESOURCE_UNAVAIL_UNSPECIFIED);
@@ -3145,31 +6664,37 @@ static void *pri_dchannel(void *vpri)
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 #if defined(HAVE_PRI_CALL_HOLD)
 			case PRI_EVENT_HOLD_ACK:
-				ast_debug(1, "Event: HOLD_ACK\n");
+				/* We should not be getting any CIS calls with this message type. */
+				sig_pri_handle_hold_ack(pri, e);
 				break;
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 #if defined(HAVE_PRI_CALL_HOLD)
 			case PRI_EVENT_HOLD_REJ:
-				ast_debug(1, "Event: HOLD_REJ\n");
+				/* We should not be getting any CIS calls with this message type. */
+				sig_pri_handle_hold_rej(pri, e);
 				break;
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 #if defined(HAVE_PRI_CALL_HOLD)
 			case PRI_EVENT_RETRIEVE:
+				/* We should not be getting any CIS calls with this message type. */
 				sig_pri_handle_retrieve(pri, e);
 				break;
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 #if defined(HAVE_PRI_CALL_HOLD)
 			case PRI_EVENT_RETRIEVE_ACK:
-				ast_debug(1, "Event: RETRIEVE_ACK\n");
+				/* We should not be getting any CIS calls with this message type. */
+				sig_pri_handle_retrieve_ack(pri, e);
 				break;
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 #if defined(HAVE_PRI_CALL_HOLD)
 			case PRI_EVENT_RETRIEVE_REJ:
-				ast_debug(1, "Event: RETRIEVE_REJ\n");
+				/* We should not be getting any CIS calls with this message type. */
+				sig_pri_handle_retrieve_rej(pri, e);
 				break;
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 			default:
-				ast_debug(1, "Event: %d\n", e->e);
+				ast_debug(1, "Span: %d Unhandled event: %s(%d)\n",
+					pri->span, pri_event2str(e->e), e->e);
 				break;
 			}
 		}
@@ -3179,7 +6704,7 @@ static void *pri_dchannel(void *vpri)
 	return NULL;
 }
 
-void sig_pri_init_pri(struct sig_pri_pri *pri)
+void sig_pri_init_pri(struct sig_pri_span *pri)
 {
 	int i;
 
@@ -3188,13 +6713,13 @@ void sig_pri_init_pri(struct sig_pri_pri *pri)
 	ast_mutex_init(&pri->lock);
 
 	pri->master = AST_PTHREADT_NULL;
-	for (i = 0; i < NUM_DCHANS; i++)
+	for (i = 0; i < SIG_PRI_NUM_DCHANS; i++)
 		pri->fds[i] = -1;
 }
 
 int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 {
-	int res = 0;
+	int res;
 #ifdef SUPPORT_USERUSER
 	const char *useruser = pbx_builtin_getvar_helper(ast, "USERUSERINFO");
 #endif
@@ -3208,6 +6733,12 @@ int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 	p->owner = NULL;
 	p->outgoing = 0;
 	sig_pri_set_digital(p, 0);	/* push up to parent for EC*/
+#if defined(HAVE_PRI_CALL_WAITING)
+	if (p->is_call_waiting) {
+		p->is_call_waiting = 0;
+		ast_atomic_fetchadd_int(&p->pri->num_call_waiting_calls, -1);
+	}
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
 	p->proceeding = 0;
 	p->progress = 0;
 	p->alerting = 0;
@@ -3215,50 +6746,63 @@ int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 	p->cid_num[0] = '\0';
 	p->cid_subaddr[0] = '\0';
 	p->cid_name[0] = '\0';
+	p->user_tag[0] = '\0';
 	p->exten[0] = '\0';
 	sig_pri_set_dialing(p, 0);
 
-	if (!p->call) {
-		res = 0;
-		goto exit;
-	}
-
 	/* Make sure we have a call (or REALLY have a call in the case of a PRI) */
 	if (!pri_grab(p, p->pri)) {
-		if (p->alreadyhungup) {
-			ast_log(LOG_DEBUG, "Already hungup...  Calling hangup once, and clearing call\n");
+		sig_pri_moh_fsm_event(ast, p, SIG_PRI_MOH_EVENT_RESET);
+		if (p->call) {
+			if (p->alreadyhungup) {
+				ast_log(LOG_DEBUG, "Already hungup...  Calling hangup once, and clearing call\n");
 
 #ifdef SUPPORT_USERUSER
-			pri_call_set_useruser(p->call, useruser);
+				pri_call_set_useruser(p->call, useruser);
 #endif
 
-			pri_hangup(p->pri->pri, p->call, -1);
-			p->call = NULL;
-		} else {
-			const char *cause = pbx_builtin_getvar_helper(ast,"PRI_CAUSE");
-			int icause = ast->hangupcause ? ast->hangupcause : -1;
-			ast_log(LOG_DEBUG, "Not yet hungup...  Calling hangup once with icause, and clearing call\n");
+#if defined(HAVE_PRI_AOC_EVENTS)
+				if (p->holding_aoce) {
+					pri_aoc_e_send(p->pri->pri, p->call, &p->aoc_e);
+				}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+				pri_hangup(p->pri->pri, p->call, -1);
+				p->call = NULL;
+			} else {
+				const char *cause = pbx_builtin_getvar_helper(ast,"PRI_CAUSE");
+				int icause = ast->hangupcause ? ast->hangupcause : -1;
+				ast_log(LOG_DEBUG, "Not yet hungup...  Calling hangup once with icause, and clearing call\n");
 
 #ifdef SUPPORT_USERUSER
-			pri_call_set_useruser(p->call, useruser);
+				pri_call_set_useruser(p->call, useruser);
 #endif
 
-			p->alreadyhungup = 1;
-			if (cause) {
-				if (atoi(cause))
-					icause = atoi(cause);
+				p->alreadyhungup = 1;
+				if (cause) {
+					if (atoi(cause))
+						icause = atoi(cause);
+				}
+#if defined(HAVE_PRI_AOC_EVENTS)
+				if (p->holding_aoce) {
+					pri_aoc_e_send(p->pri->pri, p->call, &p->aoc_e);
+				}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+				pri_hangup(p->pri->pri, p->call, icause);
 			}
-			pri_hangup(p->pri->pri, p->call, icause);
 		}
-		if (res < 0)
-			ast_log(LOG_WARNING, "pri_disconnect failed\n");
+		sig_pri_span_devstate_changed(p->pri);
 		pri_rel(p->pri);
+		res = 0;
 	} else {
 		ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
 		res = -1;
 	}
 
-exit:
+#if defined(HAVE_PRI_AOC_EVENTS)
+	p->aoc_s_request_invoke_id_valid = 0;
+	p->holding_aoce = 0;
+	p->waiting_for_aoce = 0;
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
 	ast->tech_pvt = NULL;
 	return res;
 }
@@ -3338,9 +6882,11 @@ void sig_pri_extract_called_num_subaddr(struct sig_pri_chan *p, const char *rdes
 enum SIG_PRI_CALL_OPT_FLAGS {
 	OPT_KEYPAD =         (1 << 0),
 	OPT_REVERSE_CHARGE = (1 << 1),	/* Collect call */
+	OPT_AOC_REQUEST =    (1 << 2),	/* AOC Request */
 };
 enum SIG_PRI_CALL_OPT_ARGS {
 	OPT_ARG_KEYPAD = 0,
+	OPT_ARG_AOC_REQUEST,
 
 	/* note: this entry _MUST_ be the last one in the enum */
 	OPT_ARG_ARRAY_SIZE,
@@ -3349,6 +6895,7 @@ enum SIG_PRI_CALL_OPT_ARGS {
 AST_APP_OPTIONS(sig_pri_call_opts, BEGIN_OPTIONS
 	AST_APP_OPTION_ARG('K', OPT_KEYPAD, OPT_ARG_KEYPAD),
 	AST_APP_OPTION('R', OPT_REVERSE_CHARGE),
+	AST_APP_OPTION_ARG('A', OPT_AOC_REQUEST, OPT_ARG_AOC_REQUEST),
 END_OPTIONS);
 
 /*! \note Parsing must remain in sync with sig_pri_extract_called_num_subaddr(). */
@@ -3361,6 +6908,7 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 #ifdef SUPPORT_USERUSER
 	const char *useruser;
 #endif
+	int core_id;
 	int pridialplan;
 	int dp_strip;
 	int prilocaldialplan;
@@ -3378,7 +6926,9 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 	struct ast_flags opts;
 	char *opt_args[OPT_ARG_ARRAY_SIZE];
 
-	ast_log(LOG_DEBUG, "CALLING CID_NAME: %s CID_NUM:: %s\n", ast->cid.cid_name, ast->cid.cid_num);
+	ast_log(LOG_DEBUG, "CALLER NAME: %s NUM: %s\n",
+		S_COR(ast->connected.id.name.valid, ast->connected.id.name.str, ""),
+		S_COR(ast->connected.id.number.valid, ast->connected.id.number.str, ""));
 
 	if (!p->pri) {
 		ast_log(LOG_ERROR, "Could not find pri on channel %d\n", p->channel);
@@ -3437,9 +6987,22 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 	l = NULL;
 	n = NULL;
 	if (!p->hidecallerid) {
-		l = ast->connected.id.number;
+		if (ast->connected.id.number.valid) {
+			/* If we get to the end of this loop without breaking, there's no
+			 * calleridnum.  This is done instead of testing for "unknown" or
+			 * the thousands of other ways that the calleridnum could be
+			 * invalid. */
+			for (l = ast->connected.id.number.str; l && *l; l++) {
+				if (strchr("0123456789", *l)) {
+					l = ast->connected.id.number.str;
+					break;
+				}
+			}
+		} else {
+			l = NULL;
+		}
 		if (!p->hidecalleridname) {
-			n = ast->connected.id.name;
+			n = ast->connected.id.name.valid ? ast->connected.id.name.str : NULL;
 		}
 	}
 
@@ -3466,14 +7029,25 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 
 	sig_pri_set_digital(p, IS_DIGITAL(ast->transfercapability));	/* push up to parent for EC */
 
-	/* Should the picked channel be used exclusively? */
-	if (p->priexclusive || p->pri->nodetype == PRI_NETWORK) {
-		exclusive = 1;
-	} else {
-		exclusive = 0;
+#if defined(HAVE_PRI_CALL_WAITING)
+	if (p->is_call_waiting) {
+		/*
+		 * Indicate that this is a call waiting call.
+		 * i.e., Normal call but with no B channel.
+		 */
+		pri_sr_set_channel(sr, 0, 0, 1);
+	} else
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+	{
+		/* Should the picked channel be used exclusively? */
+		if (p->priexclusive || p->pri->nodetype == PRI_NETWORK) {
+			exclusive = 1;
+		} else {
+			exclusive = 0;
+		}
+		pri_sr_set_channel(sr, PVT_TO_CHANNEL(p), exclusive, 1);
 	}
 
-	pri_sr_set_channel(sr, PVT_TO_CHANNEL(p), exclusive, 1);
 	pri_sr_set_bearer(sr, p->digital ? PRI_TRANS_CAP_DIGITAL : ast->transfercapability,
 		(p->digital ? -1 : layer1));
 
@@ -3575,12 +7149,43 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 		pri_sr_set_called_subaddress(sr, &subaddress);
 	}
 #endif	/* defined(HAVE_PRI_SUBADDR) */
-
 #if defined(HAVE_PRI_REVERSE_CHARGE)
 	if (ast_test_flag(&opts, OPT_REVERSE_CHARGE)) {
 		pri_sr_set_reversecharge(sr, PRI_REVERSECHARGE_REQUESTED);
 	}
 #endif	/* defined(HAVE_PRI_REVERSE_CHARGE) */
+#if defined(HAVE_PRI_AOC_EVENTS)
+	if (ast_test_flag(&opts, OPT_AOC_REQUEST)
+		&& !ast_strlen_zero(opt_args[OPT_ARG_AOC_REQUEST])) {
+		if (strchr(opt_args[OPT_ARG_AOC_REQUEST], 's')) {
+			pri_sr_set_aoc_charging_request(sr, PRI_AOC_REQUEST_S);
+		}
+		if (strchr(opt_args[OPT_ARG_AOC_REQUEST], 'd')) {
+			pri_sr_set_aoc_charging_request(sr, PRI_AOC_REQUEST_D);
+		}
+		if (strchr(opt_args[OPT_ARG_AOC_REQUEST], 'e')) {
+			pri_sr_set_aoc_charging_request(sr, PRI_AOC_REQUEST_E);
+		}
+	}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+
+	/* Setup the user tag for party id's from this device for this call. */
+	if (p->pri->append_msn_to_user_tag) {
+		snprintf(p->user_tag, sizeof(p->user_tag), "%s_%s", p->pri->initial_user_tag,
+			p->pri->nodetype == PRI_NETWORK
+				? c + p->stripmsd + dp_strip
+				: S_COR(ast->connected.id.number.valid,
+					ast->connected.id.number.str, ""));
+	} else {
+		ast_copy_string(p->user_tag, p->pri->initial_user_tag, sizeof(p->user_tag));
+	}
+
+	/*
+	 * Replace the caller id tag from the channel creation
+	 * with the actual tag value.
+	 */
+	ast_free(ast->caller.id.tag);
+	ast->caller.id.tag = ast_strdup(p->user_tag);
 
 	ldp_strip = 0;
 	prilocaldialplan = p->pri->localdialplan - 1;
@@ -3656,7 +7261,7 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 		}
 	}
 	pri_sr_set_caller(sr, l ? (l + ldp_strip) : NULL, n, prilocaldialplan,
-		p->use_callingpres ? ast->connected.id.number_presentation : (l ? PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN : PRES_NUMBER_NOT_AVAILABLE));
+		p->use_callingpres ? ast->connected.id.number.presentation : (l ? PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN : PRES_NUMBER_NOT_AVAILABLE));
 
 #if defined(HAVE_PRI_SUBADDR)
 	if (ast->connected.id.subaddress.valid) {
@@ -3677,7 +7282,41 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 		pri_sr_set_useruser(sr, useruser);
 #endif
 
-	if (pri_setup(p->pri->pri, p->call, sr)) {
+#if defined(HAVE_PRI_CCSS)
+	if (ast_cc_is_recall(ast, &core_id, sig_pri_cc_type_name)) {
+		struct ast_cc_monitor *monitor;
+		char device_name[AST_CHANNEL_NAME];
+
+		/* This is a CC recall call. */
+		ast_channel_get_device_name(ast, device_name, sizeof(device_name));
+		monitor = ast_cc_get_monitor_by_recall_core_id(core_id, device_name);
+		if (monitor) {
+			struct sig_pri_cc_monitor_instance *instance;
+
+			instance = monitor->private_data;
+
+			/* If this fails then we have monitor instance ambiguity. */
+			ast_assert(p->pri == instance->pri);
+
+			if (pri_cc_call(p->pri->pri, instance->cc_id, p->call, sr)) {
+				/* The CC recall call failed for some reason. */
+				ast_log(LOG_WARNING, "Unable to setup CC recall call to device %s\n",
+					device_name);
+				ao2_ref(monitor, -1);
+				pri_rel(p->pri);
+				pri_sr_free(sr);
+				return -1;
+			}
+			ao2_ref(monitor, -1);
+		} else {
+			core_id = -1;
+		}
+	} else
+#endif	/* defined(HAVE_PRI_CCSS) */
+	{
+		core_id = -1;
+	}
+	if (core_id == -1 && pri_setup(p->pri->pri, p->call, sr)) {
 		ast_log(LOG_WARNING, "Unable to setup call to %s (using %s)\n",
 			c + p->stripmsd + dp_strip, dialplan2str(p->pri->dialplan));
 		pri_rel(p->pri);
@@ -3697,7 +7336,7 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 
 	switch (condition) {
 	case AST_CONTROL_BUSY:
-		if (p->priindication_oob) {
+		if (p->priindication_oob || p->no_b_channel) {
 			chan->hangupcause = AST_CAUSE_USER_BUSY;
 			chan->_softhangup |= AST_SOFTHANGUP_DEV;
 			res = 0;
@@ -3722,7 +7361,8 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 		if ((!p->alerting) && p->pri && !p->outgoing && (chan->_state != AST_STATE_UP)) {
 			if (p->pri->pri) {
 				if (!pri_grab(p, p->pri)) {
-					pri_acknowledge(p->pri->pri,p->call, PVT_TO_CHANNEL(p), !p->digital);
+					pri_acknowledge(p->pri->pri,p->call, PVT_TO_CHANNEL(p),
+						p->no_b_channel || p->digital ? 0 : 1);
 					pri_rel(p->pri);
 				} else {
 					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
@@ -3741,14 +7381,17 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 		if (!p->proceeding && p->pri && !p->outgoing) {
 			if (p->pri->pri) {
 				if (!pri_grab(p, p->pri)) {
-					pri_proceeding(p->pri->pri,p->call, PVT_TO_CHANNEL(p), !p->digital);
+					pri_proceeding(p->pri->pri,p->call, PVT_TO_CHANNEL(p),
+						p->no_b_channel || p->digital ? 0 : 1);
+					p->proceeding = 1;
+					if (!p->no_b_channel && !p->digital) {
+						sig_pri_set_dialing(p, 0);
+					}
 					pri_rel(p->pri);
 				} else {
 					ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
 				}
 			}
-			p->proceeding = 1;
-			sig_pri_set_dialing(p, 0);
 		}
 		/* don't continue in ast_indicate */
 		res = 0;
@@ -3756,7 +7399,7 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 	case AST_CONTROL_PROGRESS:
 		ast_debug(1,"Received AST_CONTROL_PROGRESS on %s\n",chan->name);
 		sig_pri_set_digital(p, 0);	/* Digital-only calls isn't allowing any inband progress messages */
-		if (!p->progress && p->pri && !p->outgoing) {
+		if (!p->progress && !p->alerting && p->pri && !p->outgoing && !p->no_b_channel) {
 			if (p->pri->pri) {
 				if (!pri_grab(p, p->pri)) {
 #ifdef HAVE_PRI_PROG_W_CAUSE
@@ -3776,7 +7419,7 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 		break;
 	case AST_CONTROL_CONGESTION:
 		chan->hangupcause = AST_CAUSE_CONGESTION;
-		if (p->priindication_oob) {
+		if (p->priindication_oob || p->no_b_channel) {
 			chan->hangupcause = AST_CAUSE_SWITCH_CONGESTION;
 			chan->_softhangup |= AST_SOFTHANGUP_DEV;
 			res = 0;
@@ -3798,24 +7441,31 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 		}
 		break;
 	case AST_CONTROL_HOLD:
-		if (p->pri && !strcasecmp(p->mohinterpret, "passthrough")) {
+		ast_copy_string(p->moh_suggested, S_OR(data, ""), sizeof(p->moh_suggested));
+		if (p->pri) {
 			if (!pri_grab(p, p->pri)) {
-				res = pri_notify(p->pri->pri, p->call, p->prioffset, PRI_NOTIFY_REMOTE_HOLD);
+				sig_pri_moh_fsm_event(chan, p, SIG_PRI_MOH_EVENT_HOLD);
 				pri_rel(p->pri);
 			} else {
 				ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
 			}
-		} else
+		} else {
+			/* Something is wrong here.  A PRI channel without the pri pointer? */
 			ast_moh_start(chan, data, p->mohinterpret);
+		}
 		break;
 	case AST_CONTROL_UNHOLD:
-		if (p->pri && !strcasecmp(p->mohinterpret, "passthrough")) {
+		if (p->pri) {
 			if (!pri_grab(p, p->pri)) {
-				res = pri_notify(p->pri->pri, p->call, p->prioffset, PRI_NOTIFY_REMOTE_RETRIEVAL);
+				sig_pri_moh_fsm_event(chan, p, SIG_PRI_MOH_EVENT_UNHOLD);
 				pri_rel(p->pri);
+			} else {
+				ast_log(LOG_WARNING, "Unable to grab PRI on span %d\n", p->pri->span);
 			}
-		} else
+		} else {
+			/* Something is wrong here.  A PRI channel without the pri pointer? */
 			ast_moh_stop(chan);
+		}
 		break;
 	case AST_CONTROL_SRCUPDATE:
 		res = 0;
@@ -3842,6 +7492,56 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 			pri_rel(p->pri);
 		}
 		break;
+	case AST_CONTROL_AOC:
+#if defined(HAVE_PRI_AOC_EVENTS)
+		{
+			struct ast_aoc_decoded *decoded
+				= ast_aoc_decode((struct ast_aoc_encoded *) data, datalen, chan);
+			ast_debug(1, "Received AST_CONTROL_AOC on %s\n", chan->name);
+			if (decoded && p->pri && !pri_grab(p, p->pri)) {
+				switch (ast_aoc_get_msg_type(decoded)) {
+				case AST_AOC_S:
+					if (p->pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_S) {
+						sig_pri_aoc_s_from_ast(p, decoded);
+					}
+					break;
+				case AST_AOC_D:
+					if (p->pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_D) {
+						sig_pri_aoc_d_from_ast(p, decoded);
+					}
+					break;
+				case AST_AOC_E:
+					if (p->pri->aoc_passthrough_flag & SIG_PRI_AOC_GRANT_E) {
+						sig_pri_aoc_e_from_ast(p, decoded);
+					}
+					/* if hangup was delayed for this AOC-E msg, waiting_for_aoc
+					 * will be set.  A hangup is already occuring via a timeout during
+					 * this delay.  Instead of waiting for that timeout to occur, go ahead
+					 * and initiate the softhangup since the delay is no longer necessary */
+					if (p->waiting_for_aoce) {
+						p->waiting_for_aoce = 0;
+						ast_log(LOG_DEBUG,
+							"Received final AOC-E msg, continue with hangup on %s\n",
+							chan->name);
+						ast_softhangup_nolock(chan, AST_SOFTHANGUP_DEV);
+					}
+					break;
+				case AST_AOC_REQUEST:
+					/* We do not pass through AOC requests, So unless this
+					 * is an AOC termination request it will be ignored */
+					if (ast_aoc_get_termination_request(decoded)) {
+						pri_hangup(p->pri->pri, p->call, -1);
+					}
+					break;
+				default:
+					break;
+				}
+				pri_rel(p->pri);
+			}
+			ast_aoc_destroy_decoded(decoded);
+		}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+		break;
 	}
 
 	return res;
@@ -3852,8 +7552,19 @@ int sig_pri_answer(struct sig_pri_chan *p, struct ast_channel *ast)
 	int res = 0;
 	/* Send a pri acknowledge */
 	if (!pri_grab(p, p->pri)) {
+#if defined(HAVE_PRI_AOC_EVENTS)
+		if (p->aoc_s_request_invoke_id_valid) {
+			/* if AOC-S was requested and the invoke id is still present on answer.  That means
+			 * no AOC-S rate list was provided, so send a NULL response which will indicate that
+			 * AOC-S is not available */
+			pri_aoc_s_request_response_send(p->pri->pri, p->call,
+				p->aoc_s_request_invoke_id, NULL);
+			p->aoc_s_request_invoke_id_valid = 0;
+		}
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
 		p->proceeding = 1;
 		sig_pri_set_dialing(p, 0);
+		sig_pri_open_media(p);
 		res = pri_answer(p->pri->pri, p->call, 0, !p->digital);
 		pri_rel(p->pri);
 	} else {
@@ -3863,20 +7574,116 @@ int sig_pri_answer(struct sig_pri_chan *p, struct ast_channel *ast)
 	return res;
 }
 
-int sig_pri_available(struct sig_pri_chan *p)
+/*!
+ * \internal
+ * \brief Simple check if the channel is available to use.
+ * \since 1.8
+ *
+ * \param pvt Private channel control structure.
+ *
+ * \retval 0 Interface not available.
+ * \retval 1 Interface is available.
+ */
+static int sig_pri_available_check(struct sig_pri_chan *pvt)
 {
-	/* If no owner and interface has a B channel then likely available */
-	if (!p->owner && !p->no_b_channel && p->pri) {
-		if (p->resetting || p->call
+	/*
+	 * If no owner, interface has a B channel, not resetting, not already with call,
+	 * not in alarm, and in-service then available.
+	 */
+	if (!pvt->owner && !pvt->no_b_channel && !pvt->resetting && !pvt->call
+		&& !pvt->inalarm) {
 #if defined(HAVE_PRI_SERVICE_MESSAGES)
-			|| p->service_status
-#endif	/* defined(HAVE_PRI_SERVICE_MESSAGES) */
-			) {
+		if (pvt->service_status) {
 			return 0;
 		}
+#endif	/* defined(HAVE_PRI_SERVICE_MESSAGES) */
+		return 1;
+	}
+	return 0;
+}
+
+#if defined(HAVE_PRI_CALL_WAITING)
+/*!
+ * \internal
+ * \brief Get an available call waiting interface.
+ * \since 1.8
+ *
+ * \param pri sig_pri PRI control structure.
+ *
+ * \retval cw Call waiting interface to use.
+ * \retval NULL if no call waiting interface available.
+ */
+static struct sig_pri_chan *sig_pri_cw_available(struct sig_pri_span *pri)
+{
+	struct sig_pri_chan *cw;
+	int idx;
+
+	cw = NULL;
+	ast_mutex_lock(&pri->lock);
+	if (pri->num_call_waiting_calls < pri->max_call_waiting_calls) {
+		if (!pri->num_call_waiting_calls) {
+			/*
+			 * There are no outstanding call waiting calls.  Check to see
+			 * if the span is in a congested state for the first call
+			 * waiting call.
+			 */
+			for (idx = 0; idx < pri->numchans; ++idx) {
+				if (pri->pvts[idx] && sig_pri_available_check(pri->pvts[idx])) {
+					/* There is another channel that is available on this span. */
+					ast_mutex_unlock(&pri->lock);
+					return cw;
+				}
+			}
+		}
+		idx = pri_find_empty_nobch(pri);
+		if (0 <= idx) {
+			/* Setup the call waiting interface to use. */
+			cw = pri->pvts[idx];
+			cw->is_call_waiting = 1;
+			sig_pri_init_config(cw, pri);
+			ast_atomic_fetchadd_int(&pri->num_call_waiting_calls, 1);
+		}
+	}
+	ast_mutex_unlock(&pri->lock);
+	return cw;
+}
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+
+int sig_pri_available(struct sig_pri_chan **pvt, int is_specific_channel)
+{
+	struct sig_pri_chan *p = *pvt;
+
+	if (!p->pri) {
+		/* Something is wrong here.  A PRI channel without the pri pointer? */
+		return 0;
+	}
+
+	if (
+#if defined(HAVE_PRI_CALL_WAITING)
+		/*
+		 * Only do call waiting calls if we have any
+		 * call waiting call outstanding.  We do not
+		 * want new calls to steal a B channel
+		 * freed for an earlier call waiting call.
+		 */
+		!p->pri->num_call_waiting_calls &&
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+		sig_pri_available_check(p)) {
 		return 1;
 	}
 
+#if defined(HAVE_PRI_CALL_WAITING)
+	if (!is_specific_channel) {
+		struct sig_pri_chan *cw;
+
+		cw = sig_pri_cw_available(p->pri);
+		if (cw) {
+			/* We have a call waiting interface to use instead. */
+			*pvt = cw;
+			return 1;
+		}
+	}
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
 	return 0;
 }
 
@@ -3904,14 +7711,251 @@ int sig_pri_digit_begin(struct sig_pri_chan *pvt, struct ast_channel *ast, char 
 	return 1;
 }
 
-int sig_pri_start_pri(struct sig_pri_pri *pri)
+#if defined(HAVE_PRI_MWI)
+/*!
+ * \internal
+ * \brief Send a MWI indication to the given span.
+ * \since 1.8
+ *
+ * \param pri Asterisk D channel control structure.
+ * \param mbox_number Mailbox number
+ * \param mbox_context Mailbox context
+ * \param num_messages Number of messages waiting.
+ *
+ * \return Nothing
+ */
+static void sig_pri_send_mwi_indication(struct sig_pri_span *pri, const char *mbox_number, const char *mbox_context, int num_messages)
+{
+	struct pri_party_id mailbox;
+
+	ast_debug(1, "Send MWI indication for %s@%s num_messages:%d\n", mbox_number,
+		mbox_context, num_messages);
+
+	memset(&mailbox, 0, sizeof(mailbox));
+	mailbox.number.valid = 1;
+	mailbox.number.presentation = PRES_ALLOWED_USER_NUMBER_NOT_SCREENED;
+	mailbox.number.plan = (PRI_TON_UNKNOWN << 4) | PRI_NPI_UNKNOWN;
+	ast_copy_string(mailbox.number.str, mbox_number, sizeof(mailbox.number.str));
+
+	ast_mutex_lock(&pri->lock);
+	pri_mwi_indicate(pri->pri, &mailbox, 1 /* speech */, num_messages, NULL, NULL, -1, 0);
+	ast_mutex_unlock(&pri->lock);
+}
+#endif	/* defined(HAVE_PRI_MWI) */
+
+#if defined(HAVE_PRI_MWI)
+/*!
+ * \internal
+ * \brief MWI subscription event callback.
+ * \since 1.8
+ *
+ * \param event the event being passed to the subscriber
+ * \param userdata the data provider in the call to ast_event_subscribe()
+ *
+ * \return Nothing
+ */
+static void sig_pri_mwi_event_cb(const struct ast_event *event, void *userdata)
+{
+	struct sig_pri_span *pri = userdata;
+	const char *mbox_context;
+	const char *mbox_number;
+	int num_messages;
+
+	mbox_number = ast_event_get_ie_str(event, AST_EVENT_IE_MAILBOX);
+	if (ast_strlen_zero(mbox_number)) {
+		return;
+	}
+	mbox_context = ast_event_get_ie_str(event, AST_EVENT_IE_CONTEXT);
+	if (ast_strlen_zero(mbox_context)) {
+		return;
+	}
+	num_messages = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
+	sig_pri_send_mwi_indication(pri, mbox_number, mbox_context, num_messages);
+}
+#endif	/* defined(HAVE_PRI_MWI) */
+
+#if defined(HAVE_PRI_MWI)
+/*!
+ * \internal
+ * \brief Send update MWI indications from the event cache.
+ * \since 1.8
+ *
+ * \param pri Asterisk D channel control structure.
+ *
+ * \return Nothing
+ */
+static void sig_pri_mwi_cache_update(struct sig_pri_span *pri)
+{
+	int idx;
+	int num_messages;
+	struct ast_event *event;
+
+	for (idx = 0; idx < ARRAY_LEN(pri->mbox); ++idx) {
+		if (!pri->mbox[idx].sub) {
+			/* There are no more mailboxes on this span. */
+			break;
+		}
+
+		event = ast_event_get_cached(AST_EVENT_MWI,
+			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, pri->mbox[idx].number,
+			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, pri->mbox[idx].context,
+			AST_EVENT_IE_END);
+		if (!event) {
+			/* No cached event for this mailbox. */
+			continue;
+		}
+		num_messages = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
+		sig_pri_send_mwi_indication(pri, pri->mbox[idx].number, pri->mbox[idx].context,
+			num_messages);
+		ast_event_destroy(event);
+	}
+}
+#endif	/* defined(HAVE_PRI_MWI) */
+
+/*!
+ * \brief Stop PRI span.
+ * \since 1.8
+ *
+ * \param pri Asterisk D channel control structure.
+ *
+ * \return Nothing
+ */
+void sig_pri_stop_pri(struct sig_pri_span *pri)
+{
+#if defined(HAVE_PRI_MWI)
+	int idx;
+#endif	/* defined(HAVE_PRI_MWI) */
+
+#if defined(HAVE_PRI_MWI)
+	for (idx = 0; idx < ARRAY_LEN(pri->mbox); ++idx) {
+		if (pri->mbox[idx].sub) {
+			pri->mbox[idx].sub = ast_event_unsubscribe(pri->mbox[idx].sub);
+		}
+	}
+#endif	/* defined(HAVE_PRI_MWI) */
+}
+
+/*!
+ * \internal
+ * \brief qsort comparison function.
+ * \since 1.8
+ *
+ * \param left Ptr to sig_pri_chan ptr to compare.
+ * \param right Ptr to sig_pri_chan ptr to compare.
+ *
+ * \retval <0 if left < right.
+ * \retval =0 if left == right.
+ * \retval >0 if left > right.
+ */
+static int sig_pri_cmp_pri_chans(const void *left, const void *right)
+{
+	const struct sig_pri_chan *pvt_left;
+	const struct sig_pri_chan *pvt_right;
+
+	pvt_left = *(struct sig_pri_chan **) left;
+	pvt_right = *(struct sig_pri_chan **) right;
+	if (!pvt_left) {
+		if (!pvt_right) {
+			return 0;
+		}
+		return 1;
+	}
+	if (!pvt_right) {
+		return -1;
+	}
+
+	return pvt_left->channel - pvt_right->channel;
+}
+
+/*!
+ * \internal
+ * \brief Sort the PRI B channel private pointer array.
+ * \since 1.8
+ *
+ * \param pri PRI Span controlling structure.
+ *
+ * \details
+ * Since the chan_dahdi.conf file can declare channels in any order, we need to sort
+ * the private channel pointer array.
+ *
+ * \return Nothing
+ */
+static void sig_pri_sort_pri_chans(struct sig_pri_span *pri)
+{
+	qsort(&pri->pvts, pri->numchans, sizeof(pri->pvts[0]), sig_pri_cmp_pri_chans);
+}
+
+int sig_pri_start_pri(struct sig_pri_span *pri)
 {
 	int x;
 	int i;
+#if defined(HAVE_PRI_MWI)
+	char *saveptr;
+	char *mbox_number;
+	char *mbox_context;
+	struct ast_str *mwi_description = ast_str_alloca(64);
+#endif	/* defined(HAVE_PRI_MWI) */
+
+#if defined(HAVE_PRI_MWI)
+	/* Prepare the mbox[] for use. */
+	for (i = 0; i < ARRAY_LEN(pri->mbox); ++i) {
+		if (pri->mbox[i].sub) {
+			pri->mbox[i].sub = ast_event_unsubscribe(pri->mbox[i].sub);
+		}
+	}
+#endif	/* defined(HAVE_PRI_MWI) */
 
 	ast_mutex_init(&pri->lock);
+	sig_pri_sort_pri_chans(pri);
 
-	for (i = 0; i < NUM_DCHANS; i++) {
+#if defined(HAVE_PRI_MWI)
+	/*
+	 * Split the mwi_mailboxes configuration string into the mbox[]:
+	 * mailbox_number[@context]{,mailbox_number[@context]}
+	 */
+	i = 0;
+	saveptr = pri->mwi_mailboxes;
+	while (i < ARRAY_LEN(pri->mbox)) {
+		mbox_number = strsep(&saveptr, ",");
+		if (!mbox_number) {
+			break;
+		}
+		/* Split the mailbox_number and context */
+		mbox_context = strchr(mbox_number, '@');
+		if (mbox_context) {
+			*mbox_context++ = '\0';
+			mbox_context = ast_strip(mbox_context);
+		}
+		mbox_number = ast_strip(mbox_number);
+		if (ast_strlen_zero(mbox_number)) {
+			/* There is no mailbox number.  Skip it. */
+			continue;
+		}
+		if (ast_strlen_zero(mbox_context)) {
+			/* There was no context so use the default. */
+			mbox_context = "default";
+		}
+
+		/* Fill the mbox[] element. */
+		ast_str_set(&mwi_description, -1, "%s span %d[%d] MWI mailbox %s@%s",
+			sig_pri_cc_type_name, pri->span, i, mbox_number, mbox_context);
+		pri->mbox[i].sub = ast_event_subscribe(AST_EVENT_MWI, sig_pri_mwi_event_cb,
+			ast_str_buffer(mwi_description), pri,
+			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mbox_number,
+			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, mbox_context,
+			AST_EVENT_IE_END);
+		if (!pri->mbox[i].sub) {
+			ast_log(LOG_ERROR, "%s span %d could not subscribe to MWI events for %s@%s.",
+				sig_pri_cc_type_name, pri->span, mbox_number, mbox_context);
+			continue;
+		}
+		pri->mbox[i].number = mbox_number;
+		pri->mbox[i].context = mbox_context;
+		++i;
+	}
+#endif	/* defined(HAVE_PRI_MWI) */
+
+	for (i = 0; i < SIG_PRI_NUM_DCHANS; i++) {
 		if (pri->fds[i] == -1) {
 			break;
 		}
@@ -3940,12 +7984,6 @@ int sig_pri_start_pri(struct sig_pri_pri *pri)
 #ifdef HAVE_PRI_INBANDDISCONNECT
 		pri_set_inbanddisconnect(pri->dchans[i], pri->inbanddisconnect);
 #endif
-#if defined(HAVE_PRI_CALL_HOLD)
-		pri_hold_enable(pri->dchans[i], 1);
-#endif	/* defined(HAVE_PRI_CALL_HOLD) */
-#if defined(HAVE_PRI_CALL_REROUTING)
-		pri_reroute_enable(pri->dchans[i], 1);
-#endif	/* defined(HAVE_PRI_CALL_REROUTING) */
 		/* Enslave to master if appropriate */
 		if (i)
 			pri_enslave(pri->dchans[0], pri->dchans[i]);
@@ -3956,7 +7994,7 @@ int sig_pri_start_pri(struct sig_pri_pri *pri)
 			ast_log(LOG_ERROR, "Unable to create PRI structure\n");
 			return -1;
 		}
-		pri_set_debug(pri->dchans[i], DEFAULT_PRI_DEBUG);
+		pri_set_debug(pri->dchans[i], SIG_PRI_DEBUG_DEFAULT);
 		pri_set_nsf(pri->dchans[i], pri->nsf);
 #ifdef PRI_GETSET_TIMERS
 		for (x = 0; x < PRI_MAX_TIMERS; x++) {
@@ -3965,11 +8003,41 @@ int sig_pri_start_pri(struct sig_pri_pri *pri)
 		}
 #endif
 	}
+
 	/* Assume primary is the one we use */
 	pri->pri = pri->dchans[0];
+
+#if defined(HAVE_PRI_CALL_HOLD)
+	pri_hold_enable(pri->pri, 1);
+#endif	/* defined(HAVE_PRI_CALL_HOLD) */
+#if defined(HAVE_PRI_CALL_REROUTING)
+	pri_reroute_enable(pri->pri, 1);
+#endif	/* defined(HAVE_PRI_CALL_REROUTING) */
+#if defined(HAVE_PRI_HANGUP_FIX)
+	pri_hangup_fix_enable(pri->pri, 1);
+#endif	/* defined(HAVE_PRI_HANGUP_FIX) */
+#if defined(HAVE_PRI_CCSS)
+	pri_cc_enable(pri->pri, 1);
+	pri_cc_recall_mode(pri->pri, pri->cc_ptmp_recall_mode);
+	pri_cc_retain_signaling_req(pri->pri, pri->cc_qsig_signaling_link_req);
+	pri_cc_retain_signaling_rsp(pri->pri, pri->cc_qsig_signaling_link_rsp);
+#endif	/* defined(HAVE_PRI_CCSS) */
+#if defined(HAVE_PRI_TRANSFER)
+	pri_transfer_enable(pri->pri, 1);
+#endif	/* defined(HAVE_PRI_TRANSFER) */
+#if defined(HAVE_PRI_AOC_EVENTS)
+	pri_aoc_events_enable(pri->pri, 1);
+#endif	/* defined(HAVE_PRI_AOC_EVENTS) */
+#if defined(HAVE_PRI_CALL_WAITING)
+	pri_connect_ack_enable(pri->pri, 1);
+#endif	/* defined(HAVE_PRI_CALL_WAITING) */
+#if defined(HAVE_PRI_MCID)
+	pri_mcid_enable(pri->pri, 1);
+#endif	/* defined(HAVE_PRI_MCID) */
+
 	pri->resetpos = -1;
 	if (ast_pthread_create_background(&pri->master, NULL, pri_dchannel, pri)) {
-		for (i = 0; i < NUM_DCHANS; i++) {
+		for (i = 0; i < SIG_PRI_NUM_DCHANS; i++) {
 			if (!pri->dchans[i])
 				break;
 			if (pri->fds[i] > 0)
@@ -3979,13 +8047,26 @@ int sig_pri_start_pri(struct sig_pri_pri *pri)
 		ast_log(LOG_ERROR, "Unable to spawn D-channel: %s\n", strerror(errno));
 		return -1;
 	}
+
+#if defined(HAVE_PRI_MWI)
+	/*
+	 * Send the initial MWI indications from the event cache for this span.
+	 *
+	 * If we were loaded after app_voicemail the event would already be in
+	 * the cache.  If we were loaded before app_voicemail the event would not
+	 * be in the cache yet and app_voicemail will send the event when it
+	 * gets loaded.
+	 */
+	sig_pri_mwi_cache_update(pri);
+#endif	/* defined(HAVE_PRI_MWI) */
+
 	return 0;
 }
 
 void sig_pri_chan_alarm_notify(struct sig_pri_chan *p, int noalarm)
 {
+	sig_pri_set_alarm(p, !noalarm);
 	if (!noalarm) {
-		p->inalarm = 1;
 		if (!p->pri || !p->pri->pri || (pri_get_timer(p->pri->pri, PRI_TIMER_T309) < 0)) {
 			/* T309 is not enabled : hangup calls when alarm occurs */
 			if (p->call) {
@@ -4001,14 +8082,12 @@ void sig_pri_chan_alarm_notify(struct sig_pri_chan *p, int noalarm)
 					ast_log(LOG_WARNING, "The PRI Call has not been destroyed\n");
 			}
 			if (p->owner)
-				ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
+				p->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 		}
-	} else {
-		p->inalarm = 0;
 	}
 }
 
-struct sig_pri_chan *sig_pri_chan_new(void *pvt_data, struct sig_pri_callback *callback, struct sig_pri_pri *pri, int logicalspan, int channo, int trunkgroup)
+struct sig_pri_chan *sig_pri_chan_new(void *pvt_data, struct sig_pri_callback *callback, struct sig_pri_span *pri, int logicalspan, int channo, int trunkgroup)
 {
 	struct sig_pri_chan *p;
 
@@ -4060,11 +8139,11 @@ static void build_status(char *s, size_t len, int status, int active)
 	s[len - 1] = '\0';
 }
 
-void sig_pri_cli_show_spans(int fd, int span, struct sig_pri_pri *pri)
+void sig_pri_cli_show_spans(int fd, int span, struct sig_pri_span *pri)
 {
 	char status[256];
 	int x;
-	for (x = 0; x < NUM_DCHANS; x++) {
+	for (x = 0; x < SIG_PRI_NUM_DCHANS; x++) {
 		if (pri->dchans[x]) {
 			build_status(status, sizeof(status), pri->dchanavail[x], pri->dchans[x] == pri->pri);
 			ast_cli(fd, "PRI span %d/%d: %s\n", span, x, status);
@@ -4072,12 +8151,12 @@ void sig_pri_cli_show_spans(int fd, int span, struct sig_pri_pri *pri)
 	}
 }
 
-void sig_pri_cli_show_span(int fd, int *dchannels, struct sig_pri_pri *pri)
+void sig_pri_cli_show_span(int fd, int *dchannels, struct sig_pri_span *pri)
 {
 	int x;
 	char status[256];
 
-	for (x = 0; x < NUM_DCHANS; x++) {
+	for (x = 0; x < SIG_PRI_NUM_DCHANS; x++) {
 		if (pri->dchans[x]) {
 #ifdef PRI_DUMP_INFO_STR
 			char *info_str = NULL;
@@ -4163,6 +8242,603 @@ void sig_pri_fixup(struct ast_channel *oldchan, struct ast_channel *newchan, str
 	if (pchan->owner == oldchan) {
 		pchan->owner = newchan;
 	}
+}
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief PRI CC agent initialization.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ * \param pvt_chan Original channel the agent will attempt to recall.
+ *
+ * \details
+ * This callback is called when the CC core is initialized.  Agents should allocate
+ * any private data necessary for the call and assign it to the private_data
+ * on the agent.  Additionally, if any ast_cc_agent_flags are pertinent to the
+ * specific agent type, they should be set in this function as well.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_cc_agent_init(struct ast_cc_agent *agent, struct sig_pri_chan *pvt_chan)
+{
+	struct sig_pri_cc_agent_prv *cc_pvt;
+
+	cc_pvt = ast_calloc(1, sizeof(*cc_pvt));
+	if (!cc_pvt) {
+		return -1;
+	}
+
+	ast_mutex_lock(&pvt_chan->pri->lock);
+	cc_pvt->pri = pvt_chan->pri;
+	cc_pvt->cc_id = pri_cc_available(pvt_chan->pri->pri, pvt_chan->call);
+	ast_mutex_unlock(&pvt_chan->pri->lock);
+	if (cc_pvt->cc_id == -1) {
+		ast_free(cc_pvt);
+		return -1;
+	}
+	agent->private_data = cc_pvt;
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Start the offer timer.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * This is called by the core when the caller hangs up after
+ * a call for which CC may be requested. The agent should
+ * begin the timer as configured.
+ *
+ * The primary reason why this functionality is left to
+ * the specific agent implementations is due to the differing
+ * use of schedulers throughout the code. Some channel drivers
+ * may already have a scheduler context they wish to use, and
+ * amongst those, some may use the ast_sched API while others
+ * may use the ast_sched_thread API, which are incompatible.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_cc_agent_start_offer_timer(struct ast_cc_agent *agent)
+{
+	/* libpri maintains it's own offer timer in the form of T_RETENTION. */
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Stop the offer timer.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * This callback is called by the CC core when the caller
+ * has requested CC.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_cc_agent_stop_offer_timer(struct ast_cc_agent *agent)
+{
+	/* libpri maintains it's own offer timer in the form of T_RETENTION. */
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Acknowledge CC request.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * When the core receives knowledge that a called
+ * party has accepted a CC request, it will call
+ * this callback.
+ *
+ * The duty of this is to accept a CC request from
+ * the caller by acknowledging receipt of that request.
+ *
+ * \return Nothing
+ */
+void sig_pri_cc_agent_req_ack(struct ast_cc_agent *agent)
+{
+	struct sig_pri_cc_agent_prv *cc_pvt;
+	int res;
+
+	cc_pvt = agent->private_data;
+	ast_mutex_lock(&cc_pvt->pri->lock);
+	if (cc_pvt->cc_request_response_pending) {
+		cc_pvt->cc_request_response_pending = 0;
+		res = pri_cc_req_rsp(cc_pvt->pri->pri, cc_pvt->cc_id, 0/* success */);
+	} else {
+		res = 0;
+	}
+	ast_mutex_unlock(&cc_pvt->pri->lock);
+	if (res) {
+		ast_cc_failed(agent->core_id, "%s agent failed to send the CC request ack.",
+			sig_pri_cc_type_name);
+	}
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Request the status of the agent's device.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * Asynchronous request for the status of any caller
+ * which may be a valid caller for the CC transaction.
+ * Status responses should be made using the
+ * ast_cc_status_response function.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_cc_agent_status_req(struct ast_cc_agent *agent)
+{
+	struct sig_pri_cc_agent_prv *cc_pvt;
+
+	cc_pvt = agent->private_data;
+	ast_mutex_lock(&cc_pvt->pri->lock);
+	pri_cc_status_req(cc_pvt->pri->pri, cc_pvt->cc_id);
+	ast_mutex_unlock(&cc_pvt->pri->lock);
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Request for an agent's phone to stop ringing.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * The usefulness of this is quite limited. The only specific
+ * known case for this is if Asterisk requests CC over an ISDN
+ * PTMP link as the TE side. If other phones are in the same
+ * recall group as the Asterisk server, and one of those phones
+ * picks up the recall notice, then Asterisk will receive a
+ * "stop ringing" notification from the NT side of the PTMP
+ * link. This indication needs to be passed to the phone
+ * on the other side of the Asterisk server which originally
+ * placed the call so that it will stop ringing. Since the
+ * phone may be of any type, it is necessary to have a callback
+ * that the core can know about.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_cc_agent_stop_ringing(struct ast_cc_agent *agent)
+{
+	struct sig_pri_cc_agent_prv *cc_pvt;
+
+	cc_pvt = agent->private_data;
+	ast_mutex_lock(&cc_pvt->pri->lock);
+	pri_cc_stop_alerting(cc_pvt->pri->pri, cc_pvt->cc_id);
+	ast_mutex_unlock(&cc_pvt->pri->lock);
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Let the caller know that the callee has become free
+ * but that the caller cannot attempt to call back because
+ * he is either busy or there is congestion on his line.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * This is something that really only affects a scenario where
+ * a phone places a call over ISDN PTMP to Asterisk, who then
+ * connects over PTMP again to the ISDN network. For most agent
+ * types, there is no need to implement this callback at all
+ * because they don't really need to actually do anything in
+ * this situation. If you're having trouble understanding what
+ * the purpose of this callback is, then you can be safe simply
+ * not implementing it.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_cc_agent_party_b_free(struct ast_cc_agent *agent)
+{
+	struct sig_pri_cc_agent_prv *cc_pvt;
+
+	cc_pvt = agent->private_data;
+	ast_mutex_lock(&cc_pvt->pri->lock);
+	pri_cc_b_free(cc_pvt->pri->pri, cc_pvt->cc_id);
+	ast_mutex_unlock(&cc_pvt->pri->lock);
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Begin monitoring a busy device.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * The core will call this callback if the callee becomes
+ * available but the caller has reported that he is busy.
+ * The agent should begin monitoring the caller's device.
+ * When the caller becomes available again, the agent should
+ * call ast_cc_agent_caller_available.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_cc_agent_start_monitoring(struct ast_cc_agent *agent)
+{
+	/* libpri already knows when and how it needs to monitor Party A. */
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Alert the caller that it is time to try recalling.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * The core will call this function when it receives notice
+ * that a monitored party has become available.
+ *
+ * The agent's job is to send a message to the caller to
+ * notify it of such a change. If the agent is able to
+ * discern that the caller is currently unavailable, then
+ * the agent should react by calling the ast_cc_caller_unavailable
+ * function.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_cc_agent_callee_available(struct ast_cc_agent *agent)
+{
+	struct sig_pri_cc_agent_prv *cc_pvt;
+
+	cc_pvt = agent->private_data;
+	ast_mutex_lock(&cc_pvt->pri->lock);
+	pri_cc_remote_user_free(cc_pvt->pri->pri, cc_pvt->cc_id);
+	ast_mutex_unlock(&cc_pvt->pri->lock);
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Destroy private data on the agent.
+ * \since 1.8
+ *
+ * \param agent CC core agent control.
+ *
+ * \details
+ * The core will call this function upon completion
+ * or failure of CC.
+ *
+ * \note
+ * The agent private_data pointer may be NULL if the agent
+ * constructor failed.
+ *
+ * \return Nothing
+ */
+void sig_pri_cc_agent_destructor(struct ast_cc_agent *agent)
+{
+	struct sig_pri_cc_agent_prv *cc_pvt;
+	int res;
+
+	cc_pvt = agent->private_data;
+	if (!cc_pvt) {
+		/* The agent constructor probably failed. */
+		return;
+	}
+	ast_mutex_lock(&cc_pvt->pri->lock);
+	res = -1;
+	if (cc_pvt->cc_request_response_pending) {
+		res = pri_cc_req_rsp(cc_pvt->pri->pri, cc_pvt->cc_id, 2/* short_term_denial */);
+	}
+	if (res) {
+		pri_cc_cancel(cc_pvt->pri->pri, cc_pvt->cc_id);
+	}
+	ast_mutex_unlock(&cc_pvt->pri->lock);
+	ast_free(cc_pvt);
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Return the hash value of the given CC monitor instance object.
+ * \since 1.8
+ *
+ * \param obj pointer to the (user-defined part) of an object.
+ * \param flags flags from ao2_callback().  Ignored at the moment.
+ *
+ * \retval core_id
+ */
+static int sig_pri_cc_monitor_instance_hash_fn(const void *obj, const int flags)
+{
+	const struct sig_pri_cc_monitor_instance *monitor_instance = obj;
+
+	return monitor_instance->core_id;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \internal
+ * \brief Compere the monitor instance core_id key value.
+ * \since 1.8
+ *
+ * \param obj pointer to the (user-defined part) of an object.
+ * \param arg callback argument from ao2_callback()
+ * \param flags flags from ao2_callback()
+ *
+ * \return values are a combination of enum _cb_results.
+ */
+static int sig_pri_cc_monitor_instance_cmp_fn(void *obj, void *arg, int flags)
+{
+	struct sig_pri_cc_monitor_instance *monitor_1 = obj;
+	struct sig_pri_cc_monitor_instance *monitor_2 = arg;
+
+	return monitor_1->core_id == monitor_2->core_id ? CMP_MATCH | CMP_STOP : 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Request CCSS.
+ * \since 1.8
+ *
+ * \param monitor CC core monitor control.
+ * \param available_timer_id Where to put the available timer scheduler id.
+ * Will never be NULL for a device monitor.
+ *
+ * \details
+ * Perform whatever steps are necessary in order to request CC.
+ * In addition, the monitor implementation is responsible for
+ * starting the available timer in this callback. The scheduler
+ * ID for the callback must be stored in the parent_link's child_avail_id
+ * field.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure.
+ */
+int sig_pri_cc_monitor_req_cc(struct ast_cc_monitor *monitor, int *available_timer_id)
+{
+	struct sig_pri_cc_monitor_instance *instance;
+	int cc_mode;
+	int res;
+
+	switch (monitor->service_offered) {
+	case AST_CC_CCBS:
+		cc_mode = 0;/* CCBS */
+		break;
+	case AST_CC_CCNR:
+		cc_mode = 1;/* CCNR */
+		break;
+	default:
+		/* CC service not supported by ISDN. */
+		return -1;
+	}
+
+	instance = monitor->private_data;
+
+	/* libpri handles it's own available timer. */
+	ast_mutex_lock(&instance->pri->lock);
+	res = pri_cc_req(instance->pri->pri, instance->cc_id, cc_mode);
+	ast_mutex_unlock(&instance->pri->lock);
+
+	return res;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Suspend monitoring.
+ * \since 1.8
+ *
+ * \param monitor CC core monitor control.
+ *
+ * \details
+ * Implementers must perform the necessary steps to suspend
+ * monitoring.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure.
+ */
+int sig_pri_cc_monitor_suspend(struct ast_cc_monitor *monitor)
+{
+	struct sig_pri_cc_monitor_instance *instance;
+
+	instance = monitor->private_data;
+	ast_mutex_lock(&instance->pri->lock);
+	pri_cc_status(instance->pri->pri, instance->cc_id, 1/* busy */);
+	ast_mutex_unlock(&instance->pri->lock);
+
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Unsuspend monitoring.
+ * \since 1.8
+ *
+ * \param monitor CC core monitor control.
+ *
+ * \details
+ * Perform the necessary steps to unsuspend monitoring.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure.
+ */
+int sig_pri_cc_monitor_unsuspend(struct ast_cc_monitor *monitor)
+{
+	struct sig_pri_cc_monitor_instance *instance;
+
+	instance = monitor->private_data;
+	ast_mutex_lock(&instance->pri->lock);
+	pri_cc_status(instance->pri->pri, instance->cc_id, 0/* free */);
+	ast_mutex_unlock(&instance->pri->lock);
+
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Status response to an ast_cc_monitor_status_request().
+ * \since 1.8
+ *
+ * \param monitor CC core monitor control.
+ * \param devstate Current status of a Party A device.
+ *
+ * \details
+ * Alert a monitor as to the status of the agent for which
+ * the monitor had previously requested a status request.
+ *
+ * \note Zero or more responses may come as a result.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure.
+ */
+int sig_pri_cc_monitor_status_rsp(struct ast_cc_monitor *monitor, enum ast_device_state devstate)
+{
+	struct sig_pri_cc_monitor_instance *instance;
+	int cc_status;
+
+	switch (devstate) {
+	case AST_DEVICE_UNKNOWN:
+	case AST_DEVICE_NOT_INUSE:
+		cc_status = 0;/* free */
+		break;
+	case AST_DEVICE_BUSY:
+	case AST_DEVICE_INUSE:
+		cc_status = 1;/* busy */
+		break;
+	default:
+		/* Don't know how to interpret this device state into free/busy status. */
+		return 0;
+	}
+	instance = monitor->private_data;
+	ast_mutex_lock(&instance->pri->lock);
+	pri_cc_status_req_rsp(instance->pri->pri, instance->cc_id, cc_status);
+	ast_mutex_unlock(&instance->pri->lock);
+
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Cancel the running available timer.
+ * \since 1.8
+ *
+ * \param monitor CC core monitor control.
+ * \param sched_id Available timer scheduler id to cancel.
+ * Will never be NULL for a device monitor.
+ *
+ * \details
+ * In most cases, this function will likely consist of just a
+ * call to AST_SCHED_DEL. It might have been possible to do this
+ * within the core, but unfortunately the mixture of sched_thread
+ * and sched usage in Asterisk prevents such usage.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure.
+ */
+int sig_pri_cc_monitor_cancel_available_timer(struct ast_cc_monitor *monitor, int *sched_id)
+{
+	/*
+	 * libpri maintains it's own available timer as one of:
+	 * T_CCBS2/T_CCBS5/T_CCBS6/QSIG_CCBS_T2
+	 * T_CCNR2/T_CCNR5/T_CCNR6/QSIG_CCNR_T2
+	 */
+	return 0;
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_CCSS)
+/*!
+ * \brief Destroy PRI private data on the monitor.
+ * \since 1.8
+ *
+ * \param monitor_pvt CC device monitor private data pointer.
+ *
+ * \details
+ * Implementers of this callback are responsible for destroying
+ * all heap-allocated data in the monitor's private_data pointer, including
+ * the private_data itself.
+ */
+void sig_pri_cc_monitor_destructor(void *monitor_pvt)
+{
+	struct sig_pri_cc_monitor_instance *instance;
+
+	instance = monitor_pvt;
+	if (!instance) {
+		return;
+	}
+	ao2_unlink(sig_pri_cc_monitors, instance);
+	ao2_ref(instance, -1);
+}
+#endif	/* defined(HAVE_PRI_CCSS) */
+
+/*!
+ * \brief Load the sig_pri submodule.
+ * \since 1.8
+ *
+ * \param cc_type_name CC type name to use when looking up agent/monitor.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int sig_pri_load(const char *cc_type_name)
+{
+#if defined(HAVE_PRI_CCSS)
+	sig_pri_cc_type_name = cc_type_name;
+	sig_pri_cc_monitors = ao2_container_alloc(37, sig_pri_cc_monitor_instance_hash_fn,
+		sig_pri_cc_monitor_instance_cmp_fn);
+	if (!sig_pri_cc_monitors) {
+		return -1;
+	}
+#endif	/* defined(HAVE_PRI_CCSS) */
+	return 0;
+}
+
+/*!
+ * \brief Unload the sig_pri submodule.
+ * \since 1.8
+ *
+ * \return Nothing
+ */
+void sig_pri_unload(void)
+{
+#if defined(HAVE_PRI_CCSS)
+	if (sig_pri_cc_monitors) {
+		ao2_ref(sig_pri_cc_monitors, -1);
+		sig_pri_cc_monitors = NULL;
+	}
+#endif	/* defined(HAVE_PRI_CCSS) */
 }
 
 #endif /* HAVE_PRI */

@@ -139,7 +139,6 @@ extern "C" {
 #define MAX_MUSICCLASS		80	/*!< Max length of the music class setting */
 
 #include "asterisk/frame.h"
-#include "asterisk/sched.h"
 #include "asterisk/chanvars.h"
 #include "asterisk/config.h"
 #include "asterisk/lock.h"
@@ -148,6 +147,10 @@ extern "C" {
 #include "asterisk/linkedlists.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/datastore.h"
+#include "asterisk/data.h"
+#include "asterisk/channelstate.h"
+#include "asterisk/ccss.h"
+#include "asterisk/framehook.h"
 
 #define DATASTORE_INHERIT_FOREVER	INT_MAX
 
@@ -184,6 +187,65 @@ struct ast_generator {
 	void (*digit)(struct ast_channel *chan, char digit);
 };
 
+/*! Party name character set enumeration values (values from Q.SIG) */
+enum AST_PARTY_CHAR_SET {
+	AST_PARTY_CHAR_SET_UNKNOWN = 0,
+	AST_PARTY_CHAR_SET_ISO8859_1 = 1,
+	AST_PARTY_CHAR_SET_WITHDRAWN = 2,/* ITU withdrew this enum value. */
+	AST_PARTY_CHAR_SET_ISO8859_2 = 3,
+	AST_PARTY_CHAR_SET_ISO8859_3 = 4,
+	AST_PARTY_CHAR_SET_ISO8859_4 = 5,
+	AST_PARTY_CHAR_SET_ISO8859_5 = 6,
+	AST_PARTY_CHAR_SET_ISO8859_7 = 7,
+	AST_PARTY_CHAR_SET_ISO10646_BMPSTRING = 8,
+	AST_PARTY_CHAR_SET_ISO10646_UTF_8STRING = 9,
+};
+
+/*!
+ * \since 1.8
+ * \brief Information needed to specify a name in a call.
+ * \note All string fields here are malloc'ed, so they need to be
+ * freed when the structure is deleted.
+ * \note NULL and "" must be considered equivalent.
+ */
+struct ast_party_name {
+	/*! \brief Subscriber name (Malloced) */
+	char *str;
+	/*!
+	 * \brief Character set the name is using.
+	 * \see enum AST_PARTY_CHAR_SET
+	 * \note
+	 * Set to AST_PARTY_CHAR_SET_ISO8859_1 if unsure what to use.
+	 * \todo Start using the party name character set value.  Not currently used.
+	 */
+	int char_set;
+	/*!
+	 * \brief Q.931 encoded presentation-indicator encoded field
+	 * \note Must tolerate the Q.931 screening-indicator field values being present.
+	 */
+	int presentation;
+	/*! \brief TRUE if the name information is valid/present */
+	unsigned char valid;
+};
+
+/*!
+ * \since 1.8
+ * \brief Information needed to specify a number in a call.
+ * \note All string fields here are malloc'ed, so they need to be
+ * freed when the structure is deleted.
+ * \note NULL and "" must be considered equivalent.
+ */
+struct ast_party_number {
+	/*! \brief Subscriber phone number (Malloced) */
+	char *str;
+	/*! \brief Q.931 Type-Of-Number and Numbering-Plan encoded fields */
+	int plan;
+	/*! \brief Q.931 presentation-indicator and screening-indicator encoded fields */
+	int presentation;
+	/*! \brief TRUE if the number information is valid/present */
+	unsigned char valid;
+};
+
 /*!
  * \since 1.8
  * \brief Information needed to specify a subaddress in a call.
@@ -216,94 +278,6 @@ struct ast_party_subaddress {
 };
 
 /*!
- * \brief Structure for all kinds of caller ID identifications.
- * \note All string fields here are malloc'ed, so they need to be
- * freed when the structure is deleted.
- * Also, NULL and "" must be considered equivalent.
- *
- * \note SIP and IAX2 has utf8 encoded Unicode caller ID names.
- * In some cases, we also have an alternative (RPID) E.164 number that can be used
- * as caller ID on numeric E.164 phone networks (DAHDI or SIP/IAX2 to PSTN gateway).
- *
- * \todo Implement settings for transliteration between UTF8 caller ID names in
- *       to Ascii Caller ID's (DAHDI). Östen Åsklund might be transliterated into
- *       Osten Asklund or Oesten Aasklund depending upon language and person...
- *       We need automatic routines for incoming calls and static settings for
- *       our own accounts.
- */
-struct ast_callerid {
-	/*!
-	 * \brief Malloc'd Dialed Number Identifier
-	 * (Field will eventually move to struct ast_channel.dialed.number)
-	 */
-	char *cid_dnid;
-
-	/*!
-	 * \brief Malloc'd Caller Number
-	 * (Field will eventually move to struct ast_channel.caller.id.number)
-	 */
-	char *cid_num;
-
-	/*!
-	 * \brief Malloc'd Caller Name (ASCII)
-	 * (Field will eventually move to struct ast_channel.caller.id.name)
-	 */
-	char *cid_name;
-
-	/*!
-	 * \brief Malloc'd Automatic Number Identification (ANI)
-	 * (Field will eventually move to struct ast_channel.caller.ani)
-	 */
-	char *cid_ani;
-
-	/*!
-	 * \brief Malloc'd Redirecting Directory Number Information Service (RDNIS)
-	 * (Field will eventually move to struct ast_channel.redirecting.from.number)
-	 */
-	char *cid_rdnis;
-
-	/*!
-	 * \brief Callerid Q.931 encoded number presentation/screening fields
-	 * (Field will eventually move to struct ast_channel.caller.id.number_presentation)
-	 */
-	int cid_pres;
-
-	/*!
-	 * \brief Callerid ANI 2 (Info digits)
-	 * (Field will eventually move to struct ast_channel.caller.ani2)
-	 */
-	int cid_ani2;
-
-	/*!
-	 * \brief Callerid Q.931 encoded type-of-number/numbering-plan fields
-	 * \note Currently this value is mostly just passed around the system.
-	 * The H.323 interfaces set the value from received messages and uses the value for sent messages.
-	 * The DAHDI PRI interfaces set the value from received messages but does not use it for sent messages.
-	 * You can read it and set it but only H.323 uses it.
-	 * (Field will eventually move to struct ast_channel.caller.id.number_type)
-	 */
-	int cid_ton;
-
-	/*!
-	 * \brief Callerid Transit Network Select
-	 * \note Currently this value is just passed around the system.
-	 * You can read it and set it but it is never used for anything.
-	 * (Field will eventually move to struct ast_channel.dialed.transit_network_select)
-	 */
-	int cid_tns;
-	/*!
-	 * \brief Caller id subaddress.
-	 * (Field will eventually move to struct ast_channel.caller.id.subaddress)
-	 */
-	struct ast_party_subaddress subaddress;
-	/*!
-	 * \brief Dialed/Called subaddress.
-	 * (Field will eventually move to struct ast_channel.dialed.subaddress)
-	 */
-	struct ast_party_subaddress dialed_subaddress;
-};
-
-/*!
  * \since 1.8
  * \brief Information needed to identify an endpoint in a call.
  * \note All string fields here are malloc'ed, so they need to be
@@ -311,20 +285,65 @@ struct ast_callerid {
  * \note NULL and "" must be considered equivalent.
  */
 struct ast_party_id {
-	/*! \brief Subscriber phone number (Malloced) */
-	char *number;
-
-	/*! \brief Subscriber name (Malloced) */
-	char *name;
-
+	/*! \brief Subscriber name */
+	struct ast_party_name name;
+	/*! \brief Subscriber phone number */
+	struct ast_party_number number;
 	/*! \brief Subscriber subaddress. */
 	struct ast_party_subaddress subaddress;
 
-	/*! \brief Q.931 encoded type-of-number/numbering-plan fields */
-	int number_type;
+	/*!
+	 * \brief User-set "tag"
+	 * \details
+	 * A user-settable field used to help associate some extrinsic information
+	 * about the channel or user of the channel to the party ID.  This information
+	 * is normally not transmitted over the wire and so is only useful within an
+	 * Asterisk environment.
+	 */
+	char *tag;
+};
 
-	/*! \brief Q.931 encoded number presentation/screening fields */
-	int number_presentation;
+/*!
+ * \since 1.8
+ * \brief Indicate what information in ast_party_id should be set.
+ */
+struct ast_set_party_id {
+	/*! TRUE if the ast_party_name information should be set. */
+	unsigned char name;
+	/*! TRUE if the ast_party_number information should be set. */
+	unsigned char number;
+	/*! TRUE if the ast_party_subaddress information should be set. */
+	unsigned char subaddress;
+};
+
+/*!
+ * \since 1.8
+ * \brief Dialed/Called Party information.
+ * \note Dialed Number Identifier (DNID)
+ * \note All string fields here are malloc'ed, so they need to be
+ * freed when the structure is deleted.
+ * \note NULL and "" must be considered equivalent.
+ */
+struct ast_party_dialed {
+	/*!
+	 * \brief Dialed/Called number
+	 * \note Done this way in case we ever really need to use ast_party_number.
+	 * We currently do not need all of the ast_party_number fields.
+	 */
+	struct {
+		/*! \brief Subscriber phone number (Malloced) */
+		char *str;
+		/*! \brief Q.931 Type-Of-Number and Numbering-Plan encoded fields */
+		int plan;
+	} number;
+	/*! \brief Dialed/Called subaddress */
+	struct ast_party_subaddress subaddress;
+	/*!
+	 * \brief Transit Network Select
+	 * \note Currently this value is just passed around the system.
+	 * You can read it and set it but it is never used for anything.
+	 */
+	int transit_network_select;
 };
 
 /*!
@@ -333,15 +352,42 @@ struct ast_party_id {
  * \note All string fields here are malloc'ed, so they need to be
  * freed when the structure is deleted.
  * \note NULL and "" must be considered equivalent.
+ *
+ * \note SIP and IAX2 has UTF8 encoded Unicode Caller ID names.
+ * In some cases, we also have an alternative (RPID) E.164 number that can
+ * be used as Caller ID on numeric E.164 phone networks (DAHDI or SIP/IAX2 to
+ * PSTN gateway).
+ *
+ * \todo Implement settings for transliteration between UTF8 Caller ID names in
+ *       to ASCII Caller ID's (DAHDI). Östen Åsklund might be transliterated into
+ *       Osten Asklund or Oesten Aasklund depending upon language and person...
+ *       We need automatic routines for incoming calls and static settings for
+ *       our own accounts.
  */
 struct ast_party_caller {
-	struct ast_party_id id;		/*! \brief Caller party ID */
+	/*! \brief Caller party ID */
+	struct ast_party_id id;
 
-	/*! \brief Automatic Number Identification (ANI) (Malloced) */
-	char *ani;
+	/*!
+	 * \brief Automatic Number Identification (ANI)
+	 * \note The name subcomponent is only likely to be used by SIP.
+	 * \note The subaddress subcomponent is not likely to be used.
+	 */
+	struct ast_party_id ani;
 
 	/*! \brief Automatic Number Identification 2 (Info Digits) */
 	int ani2;
+};
+
+/*!
+ * \since 1.8
+ * \brief Indicate what information in ast_party_caller should be set.
+ */
+struct ast_set_party_caller {
+	/*! What caller id information to set. */
+	struct ast_set_party_id id;
+	/*! What ANI id information to set. */
+	struct ast_set_party_id ani;
 };
 
 /*!
@@ -352,14 +398,15 @@ struct ast_party_caller {
  * \note NULL and "" must be considered equivalent.
  */
 struct ast_party_connected_line {
-	struct ast_party_id id;		/*! \brief Connected party ID */
+	/*! \brief Connected party ID */
+	struct ast_party_id id;
 
 	/*!
-	 * \brief Automatic Number Identification (ANI) (Malloced)
+	 * \brief Automatic Number Identification (ANI)
 	 * \note Not really part of connected line data but needed to
 	 * save the corresponding caller id value.
 	 */
-	char *ani;
+	struct ast_party_id ani;
 
 	/*!
 	 * \brief Automatic Number Identification 2 (Info Digits)
@@ -374,6 +421,17 @@ struct ast_party_connected_line {
 	 * for Normal-Answer and Call-transfer.
 	 */
 	int source;
+};
+
+/*!
+ * \since 1.8
+ * \brief Indicate what information in ast_party_connected_line should be set.
+ */
+struct ast_set_party_connected_line {
+	/*! What connected line id information to set. */
+	struct ast_set_party_id id;
+	/*! What ANI id information to set. */
+	struct ast_set_party_id ani;
 };
 
 /*!
@@ -398,6 +456,38 @@ struct ast_party_redirecting {
 	/*! \brief enum AST_REDIRECTING_REASON value for redirection */
 	int reason;
 };
+
+/*!
+ * \since 1.8
+ * \brief Indicate what information in ast_party_redirecting should be set.
+ */
+struct ast_set_party_redirecting {
+	/*! What redirecting-from id information to set. */
+	struct ast_set_party_id from;
+	/*! What redirecting-to id information to set. */
+	struct ast_set_party_id to;
+};
+
+/*! \brief Typedef for a custom read function */
+typedef int (*ast_acf_read_fn_t)(struct ast_channel *, const char *, char *, char *, size_t);
+
+/*! \brief Typedef for a custom read2 function */
+typedef int (*ast_acf_read2_fn_t)(struct ast_channel *, const char *, char *, struct ast_str **, ssize_t);
+
+/*! \brief Typedef for a custom write function */
+typedef int (*ast_acf_write_fn_t)(struct ast_channel *, const char *, char *, const char *);
+
+/*! \brief Structure to handle passing func_channel_write info to channels via setoption */
+typedef struct {
+	/*! \brief ast_chan_write_info_t version. Must be incremented if structure is changed */
+	#define AST_CHAN_WRITE_INFO_T_VERSION 1
+	uint32_t version;
+	ast_acf_write_fn_t write_fn;
+	struct ast_channel *chan;
+	const char *function;
+	char *data;
+	const char *value;
+} ast_chan_write_info_t;
 
 /*!
  * \brief
@@ -513,6 +603,29 @@ struct ast_channel_tech {
 
 	/*! \brief Get the unique identifier for the PVT, i.e. SIP call-ID for SIP */
 	const char * (* get_pvt_uniqueid)(struct ast_channel *chan);
+
+	/*! \brief Call a function with cc parameters as a function parameter
+	 *
+	 * \details
+	 * This is a highly specialized callback that is not likely to be needed in many
+	 * channel drivers. When dealing with a busy channel, for instance, most channel
+	 * drivers will successfully return a channel to the requester. Once called, the channel
+	 * can then queue a busy frame when it receives an appropriate message from the far end.
+	 * In such a case, the channel driver has the opportunity to also queue a CC frame.
+	 * The parameters for the CC channel can be retrieved from the channel structure.
+	 *
+	 * For other channel drivers, notably those that deal with "dumb" phones, the channel
+	 * driver will not return a channel when one is requested. In such a scenario, there is never
+	 * an opportunity for the channel driver to queue a CC frame since the channel is never
+	 * called. Furthermore, it is not possible to retrieve the CC configuration parameters
+	 * for the desired channel because no channel is ever allocated or returned to the
+	 * requester. In such a case, call completion may still be a viable option. What we do is
+	 * pass the same string that the requester used originally to request the channel to the
+	 * channel driver. The channel driver can then find any potential channels/devices that
+	 * match the input and return call the designated callback with the device's call completion
+	 * parameters as a parameter.
+	 */
+	int (* cc_callback)(struct ast_channel *inbound, const char *dest, ast_cc_callback_fn callback);
 };
 
 struct ast_epoll_data;
@@ -538,27 +651,6 @@ enum ast_channel_adsicpe {
 	AST_ADSI_AVAILABLE,
 	AST_ADSI_UNAVAILABLE,
 	AST_ADSI_OFFHOOKONLY,
-};
-
-/*!
- * \brief ast_channel states
- *
- * \note Bits 0-15 of state are reserved for the state (up/down) of the line
- *       Bits 16-32 of state are reserved for flags
- */
-enum ast_channel_state {
-	AST_STATE_DOWN,			/*!< Channel is down and available */
-	AST_STATE_RESERVED,		/*!< Channel is down, but reserved */
-	AST_STATE_OFFHOOK,		/*!< Channel is off hook */
-	AST_STATE_DIALING,		/*!< Digits (or equivalent) have been dialed */
-	AST_STATE_RING,			/*!< Line is ringing */
-	AST_STATE_RINGING,		/*!< Remote end is ringing */
-	AST_STATE_UP,			/*!< Line is up */
-	AST_STATE_BUSY,			/*!< Line is busy */
-	AST_STATE_DIALING_OFFHOOK,	/*!< Digits (or equivalent) have been dialed while offhook */
-	AST_STATE_PRERING,		/*!< Channel has detected an incoming call and is waiting for ring */
-
-	AST_STATE_MUTE = (1 << 16),	/*!< Do not transmit voice data */
 };
 
 /*!
@@ -651,7 +743,7 @@ struct ast_channel {
 	const char *blockproc;				/*!< Procedure causing blocking */
 	const char *appl;				/*!< Current application */
 	const char *data;				/*!< Data passed to current application */
-	struct sched_context *sched;			/*!< Schedule context */
+	struct ast_sched_context *sched;                /*!< Schedule context */
 	struct ast_filestream *stream;			/*!< Stream itself. */
 	struct ast_filestream *vstream;			/*!< Video Stream itself. */
 	int (*timingfunc)(const void *data);
@@ -660,6 +752,7 @@ struct ast_channel {
 	struct ast_trans_pvt *writetrans;		/*!< Write translation path */
 	struct ast_trans_pvt *readtrans;		/*!< Read translation path */
 	struct ast_audiohook_list *audiohooks;
+	struct ast_framehook_list *framehooks;
 	struct ast_cdr *cdr;				/*!< Call Detail Record */
 	struct ast_tone_zone *zone;			/*!< Tone zone as set in indications.conf or
 							 *   in the CHANNEL dialplan function */
@@ -687,11 +780,18 @@ struct ast_channel {
 	pthread_t blocker;				/*!< If anyone is blocking, this is them */
 
 	/*!
+	 * \brief Dialed/Called information.
+	 * \note Set on incoming channels to indicate the originally dialed party.
+	 * \note Dialed Number Identifier (DNID)
+	 */
+	struct ast_party_dialed dialed;
+
+	/*!
 	 * \brief Channel Caller ID information.
 	 * \note The caller id information is the caller id of this
 	 * channel when it is used to initiate a call.
 	 */
-	struct ast_callerid cid;
+	struct ast_party_caller caller;
 
 	/*!
 	 * \brief Channel Connected Line ID information.
@@ -700,12 +800,7 @@ struct ast_channel {
 	 */
 	struct ast_party_connected_line connected;
 
-	/*!
-	 * \brief Redirecting/Diversion information
-	 * \note Until struct ast_channel.cid.cid_rdnis is replaced
-	 * with ast_channel.redirecting.from.number, the
-	 * ast_channel.redirecting.from.number field is not used.
-	 */
+	/*! \brief Redirecting/Diversion information */
 	struct ast_party_redirecting redirecting;
 
 	struct ast_frame dtmff;				/*!< DTMF frame */
@@ -713,7 +808,6 @@ struct ast_channel {
 	ast_group_t callgroup;				/*!< Call group for call pickups */
 	ast_group_t pickupgroup;			/*!< Pickup group - which calls groups can be picked up? */
 	AST_LIST_HEAD_NOLOCK(, ast_frame) readq;
-	AST_LIST_ENTRY(ast_channel) chan_list;		/*!< For easy linking */
 	struct ast_jb jb;				/*!< The jitterbuffer state */
 	struct timeval dtmf_tv;				/*!< The time that an in process digit began, or the last digit ended */
 	AST_LIST_HEAD_NOLOCK(datastores, ast_datastore) datastores; /*!< Data stores on the channel */
@@ -746,10 +840,10 @@ struct ast_channel {
 	unsigned int flags;				/*!< channel flags of AST_FLAG_ type */
 	int alertpipe[2];
 	format_t nativeformats;         /*!< Kinds of data this channel can natively handle */
-	format_t readformat;            /*!< Requested read format */
-	format_t writeformat;           /*!< Requested write format */
-	format_t rawreadformat;         /*!< Raw read format */
-	format_t rawwriteformat;        /*!< Raw write format */
+	format_t readformat;            /*!< Requested read format (after translation) */
+	format_t writeformat;           /*!< Requested write format (after translation) */
+	format_t rawreadformat;         /*!< Raw read format (before translation) */
+	format_t rawwriteformat;        /*!< Raw write format (before translation) */
 	unsigned int emulate_dtmf_duration;		/*!< Number of ms left to emulate DTMF for */
 #ifdef HAVE_EPOLL
 	int epfd;
@@ -884,14 +978,42 @@ struct outgoing_helper {
 };
 
 enum {
-	/*! Soft hangup by device */
+	/*!
+	 * Soft hangup requested by device or other internal reason.
+	 * Actual hangup needed.
+	 */
 	AST_SOFTHANGUP_DEV =       (1 << 0),
-	/*! Soft hangup for async goto */
+	/*!
+	 * Used to break the normal frame flow so an async goto can be
+	 * done instead of actually hanging up.
+	 */
 	AST_SOFTHANGUP_ASYNCGOTO = (1 << 1),
+	/*!
+	 * Soft hangup requested by system shutdown.  Actual hangup
+	 * needed.
+	 */
 	AST_SOFTHANGUP_SHUTDOWN =  (1 << 2),
+	/*!
+	 * Used to break the normal frame flow after a timeout so an
+	 * implicit async goto can be done to the 'T' exten if it exists
+	 * instead of actually hanging up.  If the exten does not exist
+	 * then actually hangup.
+	 */
 	AST_SOFTHANGUP_TIMEOUT =   (1 << 3),
+	/*!
+	 * Soft hangup requested by application/channel-driver being
+	 * unloaded.  Actual hangup needed.
+	 */
 	AST_SOFTHANGUP_APPUNLOAD = (1 << 4),
+	/*!
+	 * Soft hangup requested by non-associated party.  Actual hangup
+	 * needed.
+	 */
 	AST_SOFTHANGUP_EXPLICIT =  (1 << 5),
+	/*!
+	 * Used to break a bridge so the channel can be spied upon
+	 * instead of actually hanging up.
+	 */
 	AST_SOFTHANGUP_UNBRIDGE =  (1 << 6),
 };
 
@@ -961,9 +1083,6 @@ int ast_channel_datastore_remove(struct ast_channel *chan, struct ast_datastore 
  * \retval NULL if not found
  */
 struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const struct ast_datastore_info *info, const char *uid);
-
-/*! \brief Change the state of a channel */
-int ast_setstate(struct ast_channel *chan, enum ast_channel_state);
 
 /*!
  * \brief Create a channel structure
@@ -1125,6 +1244,7 @@ struct ast_channel *ast_channel_release(struct ast_channel *chan);
  *
  * \param type type of channel to request
  * \param format requested channel format (codec)
+ * \param requestor channel asking for data
  * \param data data to pass to the channel requester
  * \param status status
  *
@@ -1143,6 +1263,7 @@ struct ast_channel *ast_request(const char *type, format_t format, const struct 
  *
  * \param type type of channel to request
  * \param format requested channel format
+ * \param requestor channel asking for data
  * \param data data to pass to the channel requester
  * \param timeout maximum amount of time to wait for an answer
  * \param reason why unsuccessful (if unsuccessful)
@@ -1160,6 +1281,7 @@ struct ast_channel *ast_request_and_dial(const char *type, format_t format, cons
  * by the low level module and attempt to place a call on it
  * \param type type of channel to request
  * \param format requested channel format
+ * \param requestor channel requesting data
  * \param data data to pass to the channel requester
  * \param timeout maximum amount of time to wait for an answer
  * \param reason why unsuccessful (if unsuccessful)
@@ -1278,6 +1400,7 @@ int ast_softhangup_nolock(struct ast_channel *chan, int reason);
  *
  * \param chan channel to set the field on
  * \param source a string describing the source of the hangup for this channel
+ * \param force
  *
  * \since 1.8
  *
@@ -1470,6 +1593,22 @@ int ast_indicate_data(struct ast_channel *chan, int condition, const void *data,
  * \retval the # of ms remaining otherwise
  */
 int ast_waitfor(struct ast_channel *chan, int ms);
+
+/*!
+ * \brief Should we keep this frame for later?
+ *
+ * There are functions such as ast_safe_sleep which will
+ * service a channel to ensure that it does not have a
+ * large backlog of queued frames. When this happens,
+ * we want to hold on to specific frame types and just drop
+ * others. This function will tell if the frame we just
+ * read should be held onto.
+ *
+ * \param frame The frame we just read
+ * \retval 1 frame should be kept
+ * \retval 0 frame should be dropped
+ */
+int ast_is_deferrable_frame(const struct ast_frame *frame);
 
 /*!
  * \brief Wait for a specified amount of time, looking for hangups
@@ -1763,6 +1902,52 @@ int ast_channel_bridge(struct ast_channel *c0,struct ast_channel *c1,
 int ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clone);
 
 /*!
+ * \brief Setup a masquerade to transfer a call.
+ * \since 1.8
+ *
+ * \param target_chan Target of the call transfer.  (Masquerade original channel)
+ * \param target_id New connected line information for the target channel.
+ * \param target_held TRUE if the target call is on hold.
+ * \param transferee_chan Transferee of the call transfer. (Masquerade clone channel)
+ * \param transferee_id New connected line information for the transferee channel.
+ * \param transferee_held TRUE if the transferee call is on hold.
+ *
+ * \details
+ * Party A - Transferee
+ * Party B - Transferer
+ * Party C - Target of transfer
+ *
+ * Party B transfers A to C.
+ *
+ * Party A is connected to bridged channel B1.
+ * Party B is connected to channels C1 and C2.
+ * Party C is connected to bridged channel B2.
+ *
+ * Party B -- C1 == B1 -- Party A
+ *               __/
+ *              /
+ * Party B -- C2 == B2 -- Party C
+ *
+ * Bridged channel B1 is masqueraded into channel C2.  Where B1
+ * is the masquerade clone channel and C2 is the masquerade
+ * original channel.
+ *
+ * \see ast_channel_masquerade()
+ *
+ * \note Has the same locking requirements as ast_channel_masquerade().
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int ast_channel_transfer_masquerade(
+	struct ast_channel *target_chan,
+	const struct ast_party_connected_line *target_id,
+	int target_held,
+	struct ast_channel *transferee_chan,
+	const struct ast_party_connected_line *transferee_id,
+	int transferee_held);
+
+/*!
  * \brief Gives the string form of a given cause code.
  *
  * \param state cause to get the description of
@@ -1879,11 +2064,41 @@ int ast_activate_generator(struct ast_channel *chan, struct ast_generator *gen, 
 void ast_deactivate_generator(struct ast_channel *chan);
 
 /*!
- * \brief Set caller ID number, name and ANI
+ * \brief Set caller ID number, name and ANI and generate AMI event.
  *
+ * \note Use ast_channel_set_caller() and ast_channel_set_caller_event() instead.
  * \note The channel does not need to be locked before calling this function.
  */
 void ast_set_callerid(struct ast_channel *chan, const char *cid_num, const char *cid_name, const char *cid_ani);
+
+/*!
+ * \brief Set the caller id information in the Asterisk channel
+ * \since 1.8
+ *
+ * \param chan Asterisk channel to set caller id information
+ * \param caller Caller id information
+ * \param update What caller information to update.  NULL if all.
+ *
+ * \return Nothing
+ *
+ * \note The channel does not need to be locked before calling this function.
+ */
+void ast_channel_set_caller(struct ast_channel *chan, const struct ast_party_caller *caller, const struct ast_set_party_caller *update);
+
+/*!
+ * \brief Set the caller id information in the Asterisk channel and generate an AMI event
+ * if the caller id name or number changed.
+ * \since 1.8
+ *
+ * \param chan Asterisk channel to set caller id information
+ * \param caller Caller id information
+ * \param update What caller information to update.  NULL if all.
+ *
+ * \return Nothing
+ *
+ * \note The channel does not need to be locked before calling this function.
+ */
+void ast_channel_set_caller_event(struct ast_channel *chan, const struct ast_party_caller *caller, const struct ast_set_party_caller *update);
 
 /*! Set the file descriptor on the channel */
 void ast_channel_set_fd(struct ast_channel *chan, int which, int fd);
@@ -1917,15 +2132,31 @@ int ast_autoservice_start(struct ast_channel *chan);
  * ast_autoservice_stop and the autoservice thread. It is important
  * that chan is not locked prior to this call
  *
+ * \param chan
  * \retval 0 success
  * \retval -1 error, or the channel has been hungup
  */
 int ast_autoservice_stop(struct ast_channel *chan);
 
 /*!
+ * \brief Ignore certain frame types
+ * \note Normally, we cache DTMF, IMAGE, HTML, TEXT, and CONTROL frames
+ * while a channel is in autoservice and queue them up when taken out of
+ * autoservice.  When this is not desireable, this API may be used to
+ * cause the channel to ignore those frametypes after the channel is put
+ * into autoservice, but before autoservice is stopped.
+ * \retval 0 success
+ * \retval -1 channel is not in autoservice
+ */
+int ast_autoservice_ignore(struct ast_channel *chan, enum ast_frame_type ftype);
+
+/*!
  * \brief Enable or disable timer ticks for a channel
  *
+ * \param c channel
  * \param rate number of timer ticks per second
+ * \param func callback function
+ * \param data
  *
  * \details
  * If timers are supported, force a scheduled expiration on the
@@ -2082,57 +2313,6 @@ static inline int ast_fdisset(struct pollfd *pfds, int fd, int maximum, int *sta
 			return pfds[x].revents;
 		}
 	return 0;
-}
-
-#ifndef HAVE_TIMERSUB
-static inline void timersub(struct timeval *tvend, struct timeval *tvstart, struct timeval *tvdiff)
-{
-	tvdiff->tv_sec = tvend->tv_sec - tvstart->tv_sec;
-	tvdiff->tv_usec = tvend->tv_usec - tvstart->tv_usec;
-	if (tvdiff->tv_usec < 0) {
-		tvdiff->tv_sec --;
-		tvdiff->tv_usec += 1000000;
-	}
-
-}
-#endif
-
-/*!
- * \brief Waits for activity on a group of channels
- * \param nfds the maximum number of file descriptors in the sets
- * \param rfds file descriptors to check for read availability
- * \param wfds file descriptors to check for write availability
- * \param efds file descriptors to check for exceptions (OOB data)
- * \param tvp timeout while waiting for events
- * \details
- * This is the same as a standard select(), except it guarantees the
- * behaviour where the passed struct timeval is updated with how much
- * time was not slept while waiting for the specified events
- */
-static inline int ast_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, struct timeval *tvp)
-{
-#ifdef __linux__
-	return select(nfds, rfds, wfds, efds, tvp);
-#else
-	if (tvp) {
-		struct timeval tv, tvstart, tvend, tvlen;
-		int res;
-
-		tv = *tvp;
-		gettimeofday(&tvstart, NULL);
-		res = select(nfds, rfds, wfds, efds, tvp);
-		gettimeofday(&tvend, NULL);
-		timersub(&tvend, &tvstart, &tvlen);
-		timersub(&tv, &tvlen, tvp);
-		if (tvp->tv_sec < 0 || (tvp->tv_sec == 0 && tvp->tv_usec < 0)) {
-			tvp->tv_sec = 0;
-			tvp->tv_usec = 0;
-		}
-		return res;
-	}
-	else
-		return select(nfds, rfds, wfds, efds, NULL);
-#endif
 }
 
 /*! \brief Retrieves the current T38 state of a channel */
@@ -2381,6 +2561,128 @@ void ast_channel_set_linkgroup(struct ast_channel *chan, struct ast_channel *pee
 
 
 /*!
+ * \brief Initialize the given name structure.
+ * \since 1.8
+ *
+ * \param init Name structure to initialize.
+ *
+ * \return Nothing
+ */
+void ast_party_name_init(struct ast_party_name *init);
+
+/*!
+ * \brief Copy the source party name information to the destination party name.
+ * \since 1.8
+ *
+ * \param dest Destination party name
+ * \param src Source party name
+ *
+ * \return Nothing
+ */
+void ast_party_name_copy(struct ast_party_name *dest, const struct ast_party_name *src);
+
+/*!
+ * \brief Initialize the given party name structure using the given guide
+ * for a set update operation.
+ * \since 1.8
+ *
+ * \details
+ * The initialization is needed to allow a set operation to know if a
+ * value needs to be updated.  Simple integers need the guide's original
+ * value in case the set operation is not trying to set a new value.
+ * String values are simply set to NULL pointers if they are not going
+ * to be updated.
+ *
+ * \param init Party name structure to initialize.
+ * \param guide Source party name to use as a guide in initializing.
+ *
+ * \return Nothing
+ */
+void ast_party_name_set_init(struct ast_party_name *init, const struct ast_party_name *guide);
+
+/*!
+ * \brief Set the source party name information into the destination party name.
+ * \since 1.8
+ *
+ * \param dest The name one wishes to update
+ * \param src The new name values to update the dest
+ *
+ * \return Nothing
+ */
+void ast_party_name_set(struct ast_party_name *dest, const struct ast_party_name *src);
+
+/*!
+ * \brief Destroy the party name contents
+ * \since 1.8
+ *
+ * \param doomed The party name to destroy.
+ *
+ * \return Nothing
+ */
+void ast_party_name_free(struct ast_party_name *doomed);
+
+/*!
+ * \brief Initialize the given number structure.
+ * \since 1.8
+ *
+ * \param init Number structure to initialize.
+ *
+ * \return Nothing
+ */
+void ast_party_number_init(struct ast_party_number *init);
+
+/*!
+ * \brief Copy the source party number information to the destination party number.
+ * \since 1.8
+ *
+ * \param dest Destination party number
+ * \param src Source party number
+ *
+ * \return Nothing
+ */
+void ast_party_number_copy(struct ast_party_number *dest, const struct ast_party_number *src);
+
+/*!
+ * \brief Initialize the given party number structure using the given guide
+ * for a set update operation.
+ * \since 1.8
+ *
+ * \details
+ * The initialization is needed to allow a set operation to know if a
+ * value needs to be updated.  Simple integers need the guide's original
+ * value in case the set operation is not trying to set a new value.
+ * String values are simply set to NULL pointers if they are not going
+ * to be updated.
+ *
+ * \param init Party number structure to initialize.
+ * \param guide Source party number to use as a guide in initializing.
+ *
+ * \return Nothing
+ */
+void ast_party_number_set_init(struct ast_party_number *init, const struct ast_party_number *guide);
+
+/*!
+ * \brief Set the source party number information into the destination party number.
+ * \since 1.8
+ *
+ * \param dest The number one wishes to update
+ * \param src The new number values to update the dest
+ *
+ * \return Nothing
+ */
+void ast_party_number_set(struct ast_party_number *dest, const struct ast_party_number *src);
+
+/*!
+ * \brief Destroy the party number contents
+ * \since 1.8
+ *
+ * \param doomed The party number to destroy.
+ *
+ * \return Nothing
+ */
+void ast_party_number_free(struct ast_party_number *doomed);
+
+/*!
  * \since 1.8
  * \brief Initialize the given subaddress structure.
  *
@@ -2403,7 +2705,7 @@ void ast_party_subaddress_copy(struct ast_party_subaddress *dest, const struct a
 
 /*!
  * \since 1.8
- * \brief Initialize the given party subadress structure using the given guide
+ * \brief Initialize the given party subaddress structure using the given guide
  * for a set update operation.
  *
  * \details
@@ -2413,7 +2715,7 @@ void ast_party_subaddress_copy(struct ast_party_subaddress *dest, const struct a
  * String values are simply set to NULL pointers if they are not going
  * to be updated.
  *
- * \param init Party Subaddress structure to initialize.
+ * \param init Party subaddress structure to initialize.
  * \param guide Source party subaddress to use as a guide in initializing.
  *
  * \return Nothing
@@ -2424,8 +2726,8 @@ void ast_party_subaddress_set_init(struct ast_party_subaddress *init, const stru
  * \since 1.8
  * \brief Set the source party subaddress information into the destination party subaddress.
  *
- * \param dest Destination party subaddress
- * \param src Source party subaddress
+ * \param dest The subaddress one wishes to update
+ * \param src The new subaddress values to update the dest
  *
  * \return Nothing
  */
@@ -2440,6 +2742,142 @@ void ast_party_subaddress_set(struct ast_party_subaddress *dest, const struct as
  * \return Nothing
  */
 void ast_party_subaddress_free(struct ast_party_subaddress *doomed);
+
+/*!
+ * \brief Initialize the given party id structure.
+ * \since 1.8
+ *
+ * \param init Party id structure to initialize.
+ *
+ * \return Nothing
+ */
+void ast_party_id_init(struct ast_party_id *init);
+
+/*!
+ * \brief Copy the source party id information to the destination party id.
+ * \since 1.8
+ *
+ * \param dest Destination party id
+ * \param src Source party id
+ *
+ * \return Nothing
+ */
+void ast_party_id_copy(struct ast_party_id *dest, const struct ast_party_id *src);
+
+/*!
+ * \brief Initialize the given party id structure using the given guide
+ * for a set update operation.
+ * \since 1.8
+ *
+ * \details
+ * The initialization is needed to allow a set operation to know if a
+ * value needs to be updated.  Simple integers need the guide's original
+ * value in case the set operation is not trying to set a new value.
+ * String values are simply set to NULL pointers if they are not going
+ * to be updated.
+ *
+ * \param init Party id structure to initialize.
+ * \param guide Source party id to use as a guide in initializing.
+ *
+ * \return Nothing
+ */
+void ast_party_id_set_init(struct ast_party_id *init, const struct ast_party_id *guide);
+
+/*!
+ * \brief Set the source party id information into the destination party id.
+ * \since 1.8
+ *
+ * \param dest The id one wishes to update
+ * \param src The new id values to update the dest
+ * \param update What id information to update.  NULL if all.
+ *
+ * \return Nothing
+ */
+void ast_party_id_set(struct ast_party_id *dest, const struct ast_party_id *src, const struct ast_set_party_id *update);
+
+/*!
+ * \brief Destroy the party id contents
+ * \since 1.8
+ *
+ * \param doomed The party id to destroy.
+ *
+ * \return Nothing
+ */
+void ast_party_id_free(struct ast_party_id *doomed);
+
+/*!
+ * \brief Determine the overall presentation value for the given party.
+ * \since 1.8
+ *
+ * \param id Party to determine the overall presentation value.
+ *
+ * \return Overall presentation value for the given party.
+ */
+int ast_party_id_presentation(const struct ast_party_id *id);
+
+/*!
+ * \brief Initialize the given dialed structure.
+ * \since 1.8
+ *
+ * \param init Dialed structure to initialize.
+ *
+ * \return Nothing
+ */
+void ast_party_dialed_init(struct ast_party_dialed *init);
+
+/*!
+ * \brief Copy the source dialed party information to the destination dialed party.
+ * \since 1.8
+ *
+ * \param dest Destination dialed party
+ * \param src Source dialed party
+ *
+ * \return Nothing
+ */
+void ast_party_dialed_copy(struct ast_party_dialed *dest, const struct ast_party_dialed *src);
+
+/*!
+ * \brief Initialize the given dialed structure using the given
+ * guide for a set update operation.
+ * \since 1.8
+ *
+ * \details
+ * The initialization is needed to allow a set operation to know if a
+ * value needs to be updated.  Simple integers need the guide's original
+ * value in case the set operation is not trying to set a new value.
+ * String values are simply set to NULL pointers if they are not going
+ * to be updated.
+ *
+ * \param init Caller structure to initialize.
+ * \param guide Source dialed to use as a guide in initializing.
+ *
+ * \return Nothing
+ */
+void ast_party_dialed_set_init(struct ast_party_dialed *init, const struct ast_party_dialed *guide);
+
+/*!
+ * \brief Set the dialed information based on another dialed source
+ * \since 1.8
+ *
+ * This is similar to ast_party_dialed_copy, except that NULL values for
+ * strings in the src parameter indicate not to update the corresponding dest values.
+ *
+ * \param dest The dialed one wishes to update
+ * \param src The new dialed values to update the dest
+ *
+ * \return Nada
+ */
+void ast_party_dialed_set(struct ast_party_dialed *dest, const struct ast_party_dialed *src);
+
+/*!
+ * \brief Destroy the dialed party contents
+ * \since 1.8
+ *
+ * \param doomed The dialed party to destroy.
+ *
+ * \return Nothing
+ */
+void ast_party_dialed_free(struct ast_party_dialed *doomed);
 
 /*!
  * \since 1.8
@@ -2460,7 +2898,51 @@ void ast_party_caller_init(struct ast_party_caller *init);
  *
  * \return Nothing
  */
-void ast_party_caller_copy(struct ast_callerid *dest, const struct ast_callerid *src);
+void ast_party_caller_copy(struct ast_party_caller *dest, const struct ast_party_caller *src);
+
+/*!
+ * \brief Initialize the given caller structure using the given
+ * guide for a set update operation.
+ * \since 1.8
+ *
+ * \details
+ * The initialization is needed to allow a set operation to know if a
+ * value needs to be updated.  Simple integers need the guide's original
+ * value in case the set operation is not trying to set a new value.
+ * String values are simply set to NULL pointers if they are not going
+ * to be updated.
+ *
+ * \param init Caller structure to initialize.
+ * \param guide Source caller to use as a guide in initializing.
+ *
+ * \return Nothing
+ */
+void ast_party_caller_set_init(struct ast_party_caller *init, const struct ast_party_caller *guide);
+
+/*!
+ * \brief Set the caller information based on another caller source
+ * \since 1.8
+ *
+ * This is similar to ast_party_caller_copy, except that NULL values for
+ * strings in the src parameter indicate not to update the corresponding dest values.
+ *
+ * \param dest The caller one wishes to update
+ * \param src The new caller values to update the dest
+ * \param update What caller information to update.  NULL if all.
+ *
+ * \return Nada
+ */
+void ast_party_caller_set(struct ast_party_caller *dest, const struct ast_party_caller *src, const struct ast_set_party_caller *update);
+
+/*!
+ * \brief Destroy the caller party contents
+ * \since 1.8
+ *
+ * \param doomed The caller party to destroy.
+ *
+ * \return Nothing
+ */
+void ast_party_caller_free(struct ast_party_caller *doomed);
 
 /*!
  * \since 1.8
@@ -2509,19 +2991,20 @@ void ast_party_connected_line_set_init(struct ast_party_connected_line *init, co
  * This is similar to ast_party_connected_line_copy, except that NULL values for
  * strings in the src parameter indicate not to update the corresponding dest values.
  *
- * \param src The source connected line to use as a guide to set the dest
  * \param dest The connected line one wishes to update
+ * \param src The new connected line values to update the dest
+ * \param update What connected line information to update.  NULL if all.
  *
- * \return Nada
+ * \return Nothing
  */
-void ast_party_connected_line_set(struct ast_party_connected_line *dest, const struct ast_party_connected_line *src);
+void ast_party_connected_line_set(struct ast_party_connected_line *dest, const struct ast_party_connected_line *src, const struct ast_set_party_connected_line *update);
 
 /*!
  * \since 1.8
  * \brief Collect the caller party information into a connected line structure.
  *
  * \param connected Collected caller information for the connected line
- * \param cid Caller information.
+ * \param caller Caller information.
  *
  * \return Nothing
  *
@@ -2529,7 +3012,7 @@ void ast_party_connected_line_set(struct ast_party_connected_line *dest, const s
  * \warning DO NOT call ast_party_connected_line_free() on the filled in
  * connected line structure!
  */
-void ast_party_connected_line_collect_caller(struct ast_party_connected_line *connected, struct ast_callerid *cid);
+void ast_party_connected_line_collect_caller(struct ast_party_connected_line *connected, struct ast_party_caller *caller);
 
 /*!
  * \since 1.8
@@ -2540,6 +3023,16 @@ void ast_party_connected_line_collect_caller(struct ast_party_connected_line *co
  * \return Nothing
  */
 void ast_party_connected_line_free(struct ast_party_connected_line *doomed);
+
+/*!
+ * \brief Initialize the given redirecting structure.
+ * \since 1.8
+ *
+ * \param init Redirecting structure to initialize.
+ *
+ * \return Nothing
+ */
+void ast_party_redirecting_init(struct ast_party_redirecting *init);
 
 /*!
  * \since 1.8
@@ -2572,6 +3065,21 @@ void ast_party_redirecting_copy(struct ast_party_redirecting *dest, const struct
 void ast_party_redirecting_set_init(struct ast_party_redirecting *init, const struct ast_party_redirecting *guide);
 
 /*!
+ * \brief Set the redirecting information based on another redirecting source
+ * \since 1.8
+ *
+ * This is similar to ast_party_redirecting_copy, except that NULL values for
+ * strings in the src parameter indicate not to update the corresponding dest values.
+ *
+ * \param dest The redirecting one wishes to update
+ * \param src The new redirecting values to update the dest
+ * \param update What redirecting information to update.  NULL if all.
+ *
+ * \return Nothing
+ */
+void ast_party_redirecting_set(struct ast_party_redirecting *dest, const struct ast_party_redirecting *src, const struct ast_set_party_redirecting *update);
+
+/*!
  * \since 1.8
  * \brief Destroy the redirecting information contents
  *
@@ -2592,7 +3100,7 @@ void ast_party_redirecting_free(struct ast_party_redirecting *doomed);
  *
  * \note Assumes locks are already acquired
  */
-void ast_connected_line_copy_from_caller(struct ast_party_connected_line *dest, const struct ast_callerid *src);
+void ast_connected_line_copy_from_caller(struct ast_party_connected_line *dest, const struct ast_party_caller *src);
 
 /*!
  * \since 1.8
@@ -2605,7 +3113,7 @@ void ast_connected_line_copy_from_caller(struct ast_party_connected_line *dest, 
  *
  * \note Assumes locks are already acquired
  */
-void ast_connected_line_copy_to_caller(struct ast_callerid *dest, const struct ast_party_connected_line *src);
+void ast_connected_line_copy_to_caller(struct ast_party_caller *dest, const struct ast_party_connected_line *src);
 
 /*!
  * \since 1.8
@@ -2613,12 +3121,13 @@ void ast_connected_line_copy_to_caller(struct ast_callerid *dest, const struct a
  *
  * \param chan Asterisk channel to set connected line information
  * \param connected Connected line information
+ * \param update What connected line information to update.  NULL if all.
  *
  * \return Nothing
  *
  * \note The channel does not need to be locked before calling this function.
  */
-void ast_channel_set_connected_line(struct ast_channel *chan, const struct ast_party_connected_line *connected);
+void ast_channel_set_connected_line(struct ast_channel *chan, const struct ast_party_connected_line *connected, const struct ast_set_party_connected_line *update);
 
 /*!
  * \since 1.8
@@ -2627,11 +3136,12 @@ void ast_channel_set_connected_line(struct ast_channel *chan, const struct ast_p
  * \param data Buffer to fill with the frame data
  * \param datalen Size of the buffer to fill
  * \param connected Connected line information
+ * \param update What connected line information to build.  NULL if all.
  *
  * \retval -1 if error
  * \retval Amount of data buffer used
  */
-int ast_connected_line_build_data(unsigned char *data, size_t datalen, const struct ast_party_connected_line *connected);
+int ast_connected_line_build_data(unsigned char *data, size_t datalen, const struct ast_party_connected_line *connected, const struct ast_set_party_connected_line *update);
 
 /*!
  * \since 1.8
@@ -2658,10 +3168,11 @@ int ast_connected_line_parse_data(const unsigned char *data, size_t datalen, str
  *
  * \param chan Asterisk channel to indicate connected line information
  * \param connected Connected line information
+ * \param update What connected line information to update.  NULL if all.
  *
  * \return Nothing
  */
-void ast_channel_update_connected_line(struct ast_channel *chan, const struct ast_party_connected_line *connected);
+void ast_channel_update_connected_line(struct ast_channel *chan, const struct ast_party_connected_line *connected, const struct ast_set_party_connected_line *update);
 
 /*!
  * \since 1.8
@@ -2669,10 +3180,11 @@ void ast_channel_update_connected_line(struct ast_channel *chan, const struct as
  *
  * \param chan Asterisk channel to indicate connected line information
  * \param connected Connected line information
+ * \param update What connected line information to update.  NULL if all.
  *
  * \return Nothing
  */
-void ast_channel_queue_connected_line_update(struct ast_channel *chan, const struct ast_party_connected_line *connected);
+void ast_channel_queue_connected_line_update(struct ast_channel *chan, const struct ast_party_connected_line *connected, const struct ast_set_party_connected_line *update);
 
 /*!
  * \since 1.8
@@ -2680,12 +3192,13 @@ void ast_channel_queue_connected_line_update(struct ast_channel *chan, const str
  *
  * \param chan Asterisk channel to set redirecting id information
  * \param redirecting Redirecting id information
+ * \param update What redirecting information to update.  NULL if all.
  *
  * \return Nothing
  *
  * \note The channel does not need to be locked before calling this function.
  */
-void ast_channel_set_redirecting(struct ast_channel *chan, const struct ast_party_redirecting *redirecting);
+void ast_channel_set_redirecting(struct ast_channel *chan, const struct ast_party_redirecting *redirecting, const struct ast_set_party_redirecting *update);
 
 /*!
  * \since 1.8
@@ -2694,11 +3207,12 @@ void ast_channel_set_redirecting(struct ast_channel *chan, const struct ast_part
  * \param data Buffer to fill with the frame data
  * \param datalen Size of the buffer to fill
  * \param redirecting Redirecting id information
+ * \param update What redirecting information to build.  NULL if all.
  *
  * \retval -1 if error
  * \retval Amount of data buffer used
  */
-int ast_redirecting_build_data(unsigned char *data, size_t datalen, const struct ast_party_redirecting *redirecting);
+int ast_redirecting_build_data(unsigned char *data, size_t datalen, const struct ast_party_redirecting *redirecting, const struct ast_set_party_redirecting *update);
 
 /*!
  * \since 1.8
@@ -2724,10 +3238,11 @@ int ast_redirecting_parse_data(const unsigned char *data, size_t datalen, struct
  *
  * \param chan Asterisk channel to indicate redirecting id information
  * \param redirecting Redirecting id information
+ * \param update What redirecting information to update.  NULL if all.
  *
  * \return Nothing
  */
-void ast_channel_update_redirecting(struct ast_channel *chan, const struct ast_party_redirecting *redirecting);
+void ast_channel_update_redirecting(struct ast_channel *chan, const struct ast_party_redirecting *redirecting, const struct ast_set_party_redirecting *update);
 
 /*!
  * \since 1.8
@@ -2735,10 +3250,11 @@ void ast_channel_update_redirecting(struct ast_channel *chan, const struct ast_p
  *
  * \param chan Asterisk channel to indicate redirecting id information
  * \param redirecting Redirecting id information
+ * \param update What redirecting information to update.  NULL if all.
  *
  * \return Nothing
  */
-void ast_channel_queue_redirecting_update(struct ast_channel *chan, const struct ast_party_redirecting *redirecting);
+void ast_channel_queue_redirecting_update(struct ast_channel *chan, const struct ast_party_redirecting *redirecting, const struct ast_set_party_redirecting *update);
 
 /*!
  * \since 1.8
@@ -2768,6 +3284,146 @@ void ast_channel_queue_redirecting_update(struct ast_channel *chan, const struct
  * 	'0'
  */
 int ast_channel_connected_line_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const void *connected_info, int caller, int frame);
+
+/*!
+ * \brief Insert into an astdata tree, the channel structure.
+ * \param[in] tree The ast data tree.
+ * \param[in] chan The channel structure to add to tree.
+ * \param[in] add_bridged Add the bridged channel to the structure.
+ * \retval <0 on error.
+ * \retval 0 on success.
+ */
+int ast_channel_data_add_structure(struct ast_data *tree, struct ast_channel *chan, int add_bridged);
+
+/*!
+ * \brief Compare to channel structures using the data api.
+ * \param[in] tree The search tree generated by the data api.
+ * \param[in] chan The channel to compare.
+ * \param[in] structure_name The name of the node of the channel structure.
+ * \retval 0 The structure matches.
+ * \retval 1 The structure doesn't matches.
+ */
+int ast_channel_data_cmp_structure(const struct ast_data_search *tree, struct ast_channel *chan,
+	const char *structure_name);
+
+/*!
+ * \since 1.8
+ * \brief Run a redirecting interception macro and update a channel's redirecting information
+ *
+ * \details
+ * Whenever we want to update a channel's redirecting information, we may need to run
+ * a macro so that an administrator can manipulate the information before sending it
+ * out. This function both runs the macro and sends the update to the channel.
+ *
+ * \param autoservice_chan Channel to place into autoservice while the macro is running.
+ * It is perfectly safe for this to be NULL
+ * \param macro_chan The channel to run the macro on. Also the channel from which we
+ * determine which macro we need to run.
+ * \param redirecting_info Either an ast_party_redirecting or ast_frame pointer of type
+ * AST_CONTROL_REDIRECTING
+ * \param is_caller If true, then run REDIRECTING_CALLER_SEND_MACRO, otherwise run
+ * REDIRECTING_CALLEE_SEND_MACRO
+ * \param is_frame If true, then redirecting_info is an ast_frame pointer, otherwise it is an
+ * ast_party_redirecting pointer.
+ *
+ * \retval 0 Success
+ * \retval -1 Either the macro does not exist, or there was an error while attempting to
+ * run the macro
+ *
+ * \todo Have multiple return codes based on the MACRO_RESULT
+ * \todo Make constants so that caller and frame can be more expressive than just '1' and
+ * '0'
+ */
+int ast_channel_redirecting_macro(struct ast_channel *autoservice_chan, struct ast_channel *macro_chan, const void *redirecting_info, int is_caller, int is_frame);
+
+#include "asterisk/ccss.h"
+
+/*!
+ * \since 1.8
+ * \brief Set up datastore with CCSS parameters for a channel
+ *
+ * \note
+ * If base_params is NULL, the channel will get the default
+ * values for all CCSS parameters.
+ *
+ * \details
+ * This function makes use of datastore operations on the channel, so
+ * it is important to lock the channel before calling this function.
+ *
+ * \param chan The channel to create the datastore on
+ * \param base_params CCSS parameters we wish to copy into the channel
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_channel_cc_params_init(struct ast_channel *chan,
+		const struct ast_cc_config_params *base_params);
+
+/*!
+ * \since 1.8
+ * \brief Get the CCSS parameters from a channel
+ *
+ * \details
+ * This function makes use of datastore operations on the channel, so
+ * it is important to lock the channel before calling this function.
+ *
+ * \param chan Channel to retrieve parameters from
+ * \retval NULL Failure
+ * \retval non-NULL The parameters desired
+ */
+struct ast_cc_config_params *ast_channel_get_cc_config_params(struct ast_channel *chan);
+
+
+/*!
+ * \since 1.8
+ * \brief Get a device name given its channel structure
+ *
+ * \details
+ * A common practice in Asterisk is to determine the device being talked
+ * to by dissecting the channel name. For certain channel types, this is not
+ * accurate. For instance, an ISDN channel is named based on what B channel is
+ * used, not the device being communicated with.
+ *
+ * This function interfaces with a channel tech's queryoption callback to
+ * retrieve the name of the device being communicated with. If the channel does not
+ * implement this specific option, then the traditional method of using the channel
+ * name is used instead.
+ *
+ * \param chan The channel to retrieve the information from
+ * \param[out] device_name The buffer to place the device's name into
+ * \param name_buffer_length The allocated space for the device_name
+ * \return 0 always
+ */
+int ast_channel_get_device_name(struct ast_channel *chan, char *device_name, size_t name_buffer_length);
+
+/*!
+ * \since 1.8
+ * \brief Find the appropriate CC agent type to use given a channel
+ *
+ * \details
+ * During call completion, we will need to create a call completion agent structure. To
+ * figure out the type of agent to construct, we need to ask the channel driver for the
+ * appropriate type.
+ *
+ * Prior to adding this function, the call completion core attempted to figure this
+ * out for itself by stripping the technology off the channel's name. However, in the
+ * case of chan_dahdi, there are multiple agent types registered, and so simply searching
+ * for an agent type called "DAHDI" is not possible. In a case where multiple agent types
+ * are defined, the channel driver must have a queryoption callback defined in its
+ * channel_tech, and the queryoption callback must handle AST_OPTION_CC_AGENT_TYPE
+ *
+ * If a channel driver does not have a queryoption callback or if the queryoption callback
+ * does not handle AST_OPTION_CC_AGENT_TYPE, then the old behavior of using the technology
+ * portion of the channel name is used instead. This is perfectly suitable for channel drivers
+ * whose channel technologies are a one-to-one match with the agent types defined within.
+ *
+ * Note that this function is only called when the agent policy on a given channel is set
+ * to "native." Generic agents' type can be determined automatically by the core.
+ *
+ * \param chan The channel for which we wish to retrieve the agent type
+ * \param[out] agent_type The type of agent the channel driver wants us to use
+ * \param size The size of the buffer to write to
+ */
+int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, size_t size);
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif

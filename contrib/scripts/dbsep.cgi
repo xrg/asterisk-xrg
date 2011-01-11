@@ -36,8 +36,8 @@ while (<CFG>) {
 	chomp;
 	next if (m/^[#;]/);
 	next if (m/^\s*$/);
-	my ($name,$value) = split '=';
-	$cfg{lc($name)} = $value;
+	my ($name,@value) = split '=';
+	$cfg{lc($name)} = join('=', @value);
 }
 close CFG;
 
@@ -99,7 +99,7 @@ if ($mode eq 'single') {
 		}
 		$get{$name}++;
 	}
-	$sql = "SELECT " . join(",", cgi_to_where_clause($cgi, \%cfg, \%get)) . " FROM $table WHERE " . join(" AND ", @get);
+	$sql = "UPDATE $table SET " . join(",", cgi_to_where_clause($cgi, \%cfg, \%get)) . " WHERE " . join(" AND ", @get);
 	$dbh = DBI->connect($cfg{dsn}, $cfg{dbuser}, $cfg{dbpass});
 	$affected = $dbh->do($sql);
 	$dbh->disconnect();
@@ -239,7 +239,7 @@ sub cgi_to_where_clause {
 			push @param, "$name='$value'";
 		}
 	}
-	return join(" AND ", @param);
+	return @param;
 }
 
 sub throw_error {

@@ -277,6 +277,10 @@ static void *stream_monitor(void *data)
 		res = Pa_ReadStream(pvt->stream, buf, sizeof(buf) / sizeof(int16_t));
 		pthread_testcancel();
 
+		if (!pvt->owner) {
+			return NULL;
+		}
+
 		if (res == paNoError)
 			ast_queue_frame(pvt->owner, &f);
 	}
@@ -352,7 +356,10 @@ static int start_stream(struct console_pvt *pvt)
 
 	console_pvt_lock(pvt);
 
-	if (pvt->streamstate)
+	/* It is possible for console_hangup to be called before the
+	 * stream is started, if this is the case pvt->owner will be NULL
+	 * and start_stream should be aborted. */
+	if (pvt->streamstate || !pvt->owner)
 		goto return_unlock;
 
 	pvt->streamstate = 1;
@@ -559,7 +566,9 @@ static int console_call(struct ast_channel *c, char *dest, int timeout)
 	enum ast_control_frame_type ctrl;
 
 	ast_verb(1, V_BEGIN "Call to device '%s' on console from '%s' <%s>" V_END,
-		dest, c->cid.cid_name, c->cid.cid_num);
+		dest,
+		S_COR(c->caller.id.name.valid, c->caller.id.name.str, ""),
+		S_COR(c->caller.id.number.valid, c->caller.id.number.str, ""));
 
 	console_pvt_lock(pvt);
 
@@ -1146,7 +1155,7 @@ static char *cli_console_active(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "console {set|show} active [<device>]";
+		e->command = "console {set|show} active";
 		e->usage =
 			"Usage: console {set|show} active [<device>]\n"
 			"       Set or show the active console device for the Asterisk CLI.\n";
@@ -1189,7 +1198,7 @@ static char *cli_console_active(struct ast_cli_entry *e, int cmd, struct ast_cli
 		return CLI_SUCCESS;
 	}
 
-	if (!(pvt = find_pvt(a->argv[e->args]))) {
+	if (!(pvt = find_pvt(a->argv[e->args - 1]))) {
 		ast_cli(a->fd, "Could not find a device called '%s'.\n", a->argv[e->args]);
 		return CLI_FAILURE;
 	}
@@ -1512,8 +1521,9 @@ static int reload(void)
 	return load_config(1);
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Console Channel Driver",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Console Channel Driver",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,
+		.load_pri = AST_MODPRI_CHANNEL_DRIVER,
 );

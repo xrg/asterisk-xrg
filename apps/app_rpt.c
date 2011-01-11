@@ -1534,7 +1534,7 @@ struct        rpt_link *l;
                        l = l->next;
                        continue;
                }
-               /* dont send to self */
+               /* don't send to self */
                if (mylink && (l == mylink))
                {
                        l = l->next;
@@ -1895,7 +1895,7 @@ int	i,spos;
 	{
 		/* if is not a real link, ignore it */
 		if (l->name[0] == '0') continue;
-		/* dont count our stuff */
+		/* don't count our stuff */
 		if (l == mylink) continue;
 		if (mylink && (!strcmp(l->name,mylink->name))) continue;
 		/* figure out mode to report */
@@ -4375,7 +4375,7 @@ struct dahdi_params par;
 		wait_interval(myrpt, DLY_TELEM, mychannel);
 		l = myrpt->links.next;
 		haslink = 0;
-		/* dont report if a link for this one still on system */
+		/* don't report if a link for this one still on system */
 		if (l != &myrpt->links)
 		{
 			rpt_mutex_lock(&myrpt->lock);
@@ -5223,7 +5223,7 @@ char *v1, *v2;
 	{
 	    case UNKEY:
 		/* if any of the following are defined, go ahead and do it,
-		   otherwise, dont bother */
+		   otherwise, don't bother */
 		v1 = (char *) ast_variable_retrieve(myrpt->cfg, myrpt->name, 
 			"unlinkedct");
 		v2 = (char *) ast_variable_retrieve(myrpt->cfg, myrpt->name, 
@@ -5454,14 +5454,14 @@ struct ast_channel *mychannel,*genchannel;
 		if(instr){
 			ast_callerid_parse(instr, &name, &loc);
 			if(loc){
-				if(mychannel->cid.cid_num)
-					ast_free(mychannel->cid.cid_num);
-				mychannel->cid.cid_num = ast_strdup(loc);
+				mychannel->caller.id.number.valid = 1;
+				ast_free(mychannel->caller.id.number.str);
+				mychannel->caller.id.number.str = ast_strdup(loc);
 			}
 			if(name){
-				if(mychannel->cid.cid_name)
-					ast_free(mychannel->cid.cid_name);
-				mychannel->cid.cid_name = ast_strdup(name);
+				mychannel->caller.id.name.valid = 1;
+				ast_free(mychannel->caller.id.name.str);
+				mychannel->caller.id.name.str = ast_strdup(name);
 			}
 			ast_free(instr);
 		}
@@ -5808,9 +5808,9 @@ static int connect_link(struct rpt *myrpt, char* node, int mode, int perma)
 		if (debug > 3)
 			ast_log(LOG_NOTICE, "rpt (remote) initiating call to %s/%s on %s\n",
 		deststr, tele, l->chan->name);
-		if(l->chan->cid.cid_num)
-			ast_free(l->chan->cid.cid_num);
-		l->chan->cid.cid_num = ast_strdup(myrpt->name);
+		l->chan->caller.id.number.valid = 1;
+		ast_free(l->chan->caller.id.number.str);
+		l->chan->caller.id.number.str = ast_strdup(myrpt->name);
 		ast_call(l->chan,tele,999);
 	}
 	else {
@@ -6741,7 +6741,7 @@ struct	ast_frame wf;
 					l = l->next;
 					continue;
 				}
-				/* dont send back from where it came */
+				/* don't send back from where it came */
 				if ((l == mylink) || (!strcmp(l->name,mylink->name)))
 				{
 					l = l->next;
@@ -6772,7 +6772,7 @@ struct	ast_frame wf;
 					l = l->next;
 					continue;
 				}
-				/* dont send back from where it came */
+				/* don't send back from where it came */
 				if ((l == mylink) || (!strcmp(l->name,mylink->name)))
 				{
 					l = l->next;
@@ -6870,7 +6870,7 @@ struct	ast_frame wf;
 				l = l->next;
 				continue;
 			}
-			/* dont send back from where it came */
+			/* don't send back from where it came */
 			if ((l == mylink) || (!strcmp(l->name,mylink->name)))
 			{
 				l = l->next;
@@ -6897,7 +6897,7 @@ struct	ast_frame wf;
 				l = l->next;
 				continue;
 			}
-			/* dont send back from where it came */
+			/* don't send back from where it came */
 			if ((l == mylink) || (!strcmp(l->name,mylink->name)))
 			{
 				l = l->next;
@@ -10147,7 +10147,7 @@ int	ret,res = 0,src;
 	/* if decode not active */
 	if (myrpt->dtmfidx == -1)
 	{
-		/* if not lead-in digit, dont worry */
+		/* if not lead-in digit, don't worry */
 		if (c != myrpt->p.funcchar)
 		{
 			if (!myrpt->p.propagate_dtmf)
@@ -10388,9 +10388,9 @@ static int attempt_reconnect(struct rpt *myrpt, struct rpt_link *l)
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "rpt (attempt_reconnect) initiating call to %s/%s on %s\n",
 				deststr, tele, l->chan->name);
-		if(l->chan->cid.cid_num)
-			ast_free(l->chan->cid.cid_num);
-		l->chan->cid.cid_num = ast_strdup(myrpt->name);
+		l->chan->caller.id.number.valid = 1;
+		ast_free(l->chan->caller.id.number.str);
+		l->chan->caller.id.number.str = ast_strdup(myrpt->name);
                 ast_call(l->chan,tele,999); 
 
 	}
@@ -12990,7 +12990,7 @@ char *this,*val;
 	{
 		load_rpt_vars(i,1);
 
-		/* if is a remote, dont start one for it */
+		/* if is a remote, don't start one for it */
 		if (rpt_vars[i].remote)
 		{
 			if(retreive_memory(&rpt_vars[i],"init")){ /* Try to retreive initial memory channel */
@@ -13412,8 +13412,11 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 		}
 
 		if(option_verbose > 2) {
-			ast_verbose( VERBOSE_PREFIX_3 "Return Context: (%s,%s,%d) ID: %s\n", chan->context,chan->exten, chan->priority, chan->cid.cid_num);
-			if(!ast_exists_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num)) {
+			ast_verbose(VERBOSE_PREFIX_3 "Return Context: (%s,%s,%d) ID: %s\n",
+				chan->context, chan->exten, chan->priority,
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""));
+			if(!ast_exists_extension(chan, chan->context, chan->exten, chan->priority,
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 				ast_verbose( VERBOSE_PREFIX_3 "Warning: Return Context Invalid, call will return to default|s\n");
 			}
 		}
@@ -13443,7 +13446,8 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
         char hisip[100],nodeip[100],*val, *s, *s1, *s2, *s3, *b,*b1;
 
 		/* look at callerid to see what node this comes from */
-		if (!chan->cid.cid_num) /* if doesn't have caller id */
+		b = S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL);
+		if (!b) /* if doesn't have caller id */
 		{
 			ast_log(LOG_WARNING, "Does not have callerid on %s\n",tmp);
 			return -1;
@@ -13467,7 +13471,7 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			return -1;
 		}
 		
-		ast_callerid_parse(chan->cid.cid_num,&b,&b1);
+		b1 = ast_strdupa(b);
 		ast_shrink_phone_number(b1);
 		if (!strcmp(myrpt->name,b1))
 		{
@@ -13564,13 +13568,14 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			return -1;
 		}
 		/* look at callerid to see what node this comes from */
-		if (!chan->cid.cid_num) /* if doesn't have caller id */
+		b = S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL);
+		if (!b) /* if doesn't have caller id */
 		{
 			ast_log(LOG_WARNING, "Doesnt have callerid on %s\n",tmp);
 			return -1;
 		}
 
-		ast_callerid_parse(chan->cid.cid_num,&b,&b1);
+		b1 = ast_strdupa(b);
 		ast_shrink_phone_number(b1);
 		if (!strcmp(myrpt->name,b1))
 		{
@@ -14036,11 +14041,12 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 				ast_cli_command(nullfd,mycmd);
 		} else ast_cli_command(nullfd,mycmd);
 		/* look at callerid to see what node this comes from */
-		if (!chan->cid.cid_num) /* if doesn't have caller id */
+		b = S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL);
+		if (!b) /* if doesn't have caller id */
 		{
 			b1 = "0";
 		} else {
-			ast_callerid_parse(chan->cid.cid_num,&b,&b1);
+			b1 = ast_strdupa(b);
 			ast_shrink_phone_number(b1);
 		}
 		sprintf(mycmd,"CONNECT,%s",b1);
@@ -14337,7 +14343,7 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 			if (handle_remote_dtmf_digit(myrpt,c,&keyed,0) == -1) break;
 			continue;
 		} else rpt_mutex_unlock(&myrpt->lock);
-		if (who == chan) /* if it was a read from incomming */
+		if (who == chan) /* if it was a read from incoming */
 		{
 			f = ast_read(chan);
 			if (!f)
@@ -14546,11 +14552,12 @@ static int rpt_exec(struct ast_channel *chan, const char *data)
 		char mycmd[100],*b,*b1;
 
 		/* look at callerid to see what node this comes from */
-		if (!chan->cid.cid_num) /* if doesn't have caller id */
+		b = S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL);
+		if (!b) /* if doesn't have caller id */
 		{
 			b1 = "0";
 		} else {
-			ast_callerid_parse(chan->cid.cid_num,&b,&b1);
+			b1 = ast_strdupa(b);
 			ast_shrink_phone_number(b1);
 		}
 		sprintf(mycmd,"DISCONNECT,%s",b1);

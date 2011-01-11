@@ -260,6 +260,7 @@ static struct reload_classes {
 	{ "udptl",	ast_udptl_reload },
 	{ "indications", ast_indications_reload },
 	{ "cel",        ast_cel_engine_reload },
+	{ "plc",        ast_plc_reload },
 	{ NULL, 	NULL }
 };
 
@@ -413,6 +414,26 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 		return NULL;
 	}
 
+	/* This section is a workaround for a gcc 4.1 bug that has already been
+	 * fixed in later versions.  Unfortunately, some distributions, such as
+	 * RHEL/CentOS 5, distribute gcc 4.1, so we're stuck with having to deal
+	 * with this issue.  This basically ensures that optional_api modules are
+	 * loaded before any module which requires their functionality. */
+#if !defined(HAVE_ATTRIBUTE_weak_import) && !defined(HAVE_ATTRIBUTE_weakref)
+	if (!ast_strlen_zero(mod->info->nonoptreq)) {
+		/* Force any required dependencies to load */
+		char *each, *required_resource = ast_strdupa(mod->info->nonoptreq);
+		while ((each = strsep(&required_resource, ","))) {
+			each = ast_strip(each);
+
+			/* Is it already loaded? */
+			if (!find_resource(each, 0)) {
+				load_dynamic_module(each, global_symbols_only);
+			}
+		}
+	}
+#endif
+
 	while (!dlclose(lib));
 	resource_being_loaded = NULL;
 
@@ -466,7 +487,7 @@ void ast_module_shutdown(void)
 				continue;
 			}
 			AST_LIST_REMOVE_CURRENT(entry);
-			if (mod->info->unload) {
+			if (mod->flags.running && !mod->flags.declined && mod->info->unload) {
 				mod->info->unload();
 			}
 			AST_LIST_HEAD_DESTROY(&mod->users);
@@ -490,11 +511,13 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 	if (!(mod = find_resource(resource_name, 0))) {
 		AST_LIST_UNLOCK(&module_list);
 		ast_log(LOG_WARNING, "Unload failed, '%s' could not be found\n", resource_name);
-		return 0;
+		return -1;
 	}
 
-	if (!(mod->flags.running || mod->flags.declined))
+	if (!mod->flags.running || mod->flags.declined) {
+		ast_log(LOG_WARNING, "Unload failed, '%s' is not loaded.\n", resource_name);
 		error = 1;
+	}
 
 	if (!error && (mod->usecount > 0)) {
 		if (force)
@@ -833,7 +856,7 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 		return required ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_DECLINE;
 	}
 
-	if (!mod->lib && mod->info->backup_globals()) {
+	if (!mod->lib && mod->info->backup_globals && mod->info->backup_globals()) {
 		ast_log(LOG_WARNING, "Module '%s' was unable to backup its global data.\n", resource_name);
 		return required ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_DECLINE;
 	}
@@ -896,9 +919,9 @@ static int mod_load_cmp(void *a, void *b)
 	struct ast_module *a_mod = (struct ast_module *) a;
 	struct ast_module *b_mod = (struct ast_module *) b;
 	int res = -1;
-	/* if load_pri is not set, default is 255.  Lower is better*/
-	unsigned char a_pri = ast_test_flag(a_mod->info, AST_MODFLAG_LOAD_ORDER) ? a_mod->info->load_pri : 255;
-	unsigned char b_pri = ast_test_flag(b_mod->info, AST_MODFLAG_LOAD_ORDER) ? b_mod->info->load_pri : 255;
+	/* if load_pri is not set, default is 128.  Lower is better*/
+	unsigned char a_pri = ast_test_flag(a_mod->info, AST_MODFLAG_LOAD_ORDER) ? a_mod->info->load_pri : 128;
+	unsigned char b_pri = ast_test_flag(b_mod->info, AST_MODFLAG_LOAD_ORDER) ? b_mod->info->load_pri : 128;
 	if (a_pri == b_pri) {
 		res = 0;
 	} else if (a_pri < b_pri) {

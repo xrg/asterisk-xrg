@@ -15,12 +15,25 @@
 
 -include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/makeopts
 
-SOUNDS_DIR:=$(DESTDIR)$(ASTDATADIR)/sounds
-MOH_DIR:=$(DESTDIR)$(ASTDATADIR)/moh
-CORE_SOUNDS_VERSION:=1.4.17
-EXTRA_SOUNDS_VERSION:=1.4.10
+# Make doesn't tolerate spaces in pathnames well.  I hate to hardcode the OS X
+# path, but Make doesn't allow spaces as arguments, either.
+ifneq ($(findstring Application Support,$(ASTDATADIR)),)
+TMPDATADIR=/tmp/astdatadir
+PREFIXCMD=ln -sf "$(ASTDATADIR)/" /tmp/astdatadir
+else
+TMPDATADIR=$(ASTDATADIR)
+endif
+
+CMD_PREFIX?=@
+SOUNDS_DIR:=$(DESTDIR)$(TMPDATADIR)/sounds
+SOUNDS_CACHE_DIR?=
+MOH_DIR:=$(DESTDIR)$(TMPDATADIR)/moh
+CORE_SOUNDS_VERSION:=1.4.20
+EXTRA_SOUNDS_VERSION:=1.4.11
+MOH_VERSION:=2.03
 SOUNDS_URL:=http://downloads.asterisk.org/pub/telephony/sounds/releases
 MCS:=$(subst -EN-,-en-,$(MENUSELECT_CORE_SOUNDS))
+MCS:=$(subst -EN_AU-,-en_AU-,$(MCS))
 MCS:=$(subst -FR-,-fr-,$(MCS))
 MCS:=$(subst -ES-,-es-,$(MCS))
 MCS:=$(subst -WAV,-wav,$(MCS))
@@ -58,14 +71,83 @@ MM:=$(subst -G722,-g722,$(MM))
 MM:=$(subst -SLN16,-sln16,$(MM))
 MM:=$(subst -SIREN7,-siren7,$(MM))
 MM:=$(subst -SIREN14,-siren14,$(MM))
-MOH:=$(MM:MOH-%=asterisk-moh-%.tar.gz)
-MOH_TAGS:=$(MM:MOH-%=$(MOH_DIR)/.asterisk-moh-%)
+MOH:=$(MM:MOH-%=asterisk-moh-%-$(MOH_VERSION).tar.gz)
+MOH_TAGS:=$(MM:MOH-%=$(MOH_DIR)/.asterisk-moh-%-$(MOH_VERSION))
 # If "fetch" is used, --continue is not a valid option.
-ifneq ($(findstring wget,$(WGET)),)
-WGET_ARGS:=--continue $(WGET_EXTRA_ARGS)
+ifneq ($(findstring wget,$(DOWNLOAD)),)
+DOWNLOAD+=--continue $(WGET_EXTRA_ARGS)
 endif
 
-all: $(CORE_SOUNDS) $(EXTRA_SOUNDS) $(MOH)
+ifneq ($(SOUNDS_CACHE_DIR),)
+
+define sound_format_lang_rule
+$(1)/.asterisk-$(2)$(if $(3),-$(3),)-%: have_download
+	$(CMD_PREFIX)PACKAGE=$$(subst $(1)/.asterisk,asterisk,$$@).tar.gz; \
+	if test ! -f $$(SOUNDS_CACHE_DIR)/$$$${PACKAGE}; then \
+	  (cd $$(SOUNDS_CACHE_DIR); $$(DOWNLOAD) $$(SOUNDS_URL)/$$$${PACKAGE}); \
+	fi; \
+	if test ! -f $$(SOUNDS_CACHE_DIR)/$$$${PACKAGE}.sha1; then \
+	  (cd $$(SOUNDS_CACHE_DIR); $$(DOWNLOAD) $$(SOUNDS_URL)/$$$${PACKAGE}.sha1); \
+	fi; \
+	$(LN) -sf $$(SOUNDS_CACHE_DIR)/$$$${PACKAGE} .; \
+	$(LN) -sf $$(SOUNDS_CACHE_DIR)/$$$${PACKAGE}.sha1 .; \
+	$$(SHA1SUM) -c --status $$$${PACKAGE}.sha1 || \
+	  ( \
+	    rm -f $$(SOUNDS_CACHE_DIR)/$$$${PACKAGE} $$(SOUNDS_CACHE_DIR)/$$$${PACKAGE}.sha1 $$$${PACKAGE} $$$${PACKAGE}.sha1; \
+	    echo "Bad checksum: $$$${PACKAGE}" 1>&2; \
+	    exit 1; \
+	  ) || exit 1; \
+	rm -f $$(subst -$(4),,$$@)-*; \
+	(cd $(1)$(if $(3),/$(3),); cat $$(CURDIR)/$$$${PACKAGE} | gzip -d | tar xof -) && touch $$@
+endef
+
+define sound_download_rule
+asterisk-$(1)-%.tar.gz: have_download
+	$(CMD_PREFIX) \
+	if test ! -f $$(SOUNDS_CACHE_DIR)/$$@; then \
+	  (cd $$(SOUNDS_CACHE_DIR); $$(DOWNLOAD) $$(SOUNDS_URL)/$$@); \
+	fi; \
+	if test ! -f $$(SOUNDS_CACHE_DIR)/$$@.sha1; then \
+	  (cd $$(SOUNDS_CACHE_DIR); $$(DOWNLOAD) $$(SOUNDS_URL)/$$@.sha1); \
+	fi; \
+	$(LN) -sf $$(SOUNDS_CACHE_DIR)/$$@ .; \
+	$(LN) -sf $$(SOUNDS_CACHE_DIR)/$$@.sha1 .; \
+	$$(SHA1SUM) -c --status $$@.sha1 || \
+	  ( \
+	    rm -f $$(SOUNDS_CACHE_DIR)/$$@ $$(SOUNDS_CACHE_DIR)/$$@.sha1 $$@ $$@.sha1; \
+	    echo "Bad checksum: $$@" 1>&2; \
+	    exit 1; \
+	  ) || exit 1
+endef
+
+else
+
+define sound_format_lang_rule
+$(1)/.asterisk-$(2)$(if $(3),-$(3),)-%: have_download
+	$(CMD_PREFIX)PACKAGE=$$(subst $(1)/.asterisk,asterisk,$$@).tar.gz; \
+	if test ! -f $$$${PACKAGE}; then \
+	  $$(DOWNLOAD) $$(SOUNDS_URL)/$$$${PACKAGE} || exit 1; \
+	fi; \
+	rm -f $$(subst -$(4),,$$@)-*; \
+	(cd $(1)$(if $(3),/$(3),); cat $$(CURDIR)/$$$${PACKAGE} | gzip -d | tar xof -) && touch $$@
+endef
+
+define sound_download_rule
+asterisk-$(1)-%.tar.gz: have_download
+	$(CMD_PREFIX)if test ! -f $$@ && test ! -f $$(SOUNDS_DIR)/.$$(subst .tar.gz,,$$@); then \
+	  $$(DOWNLOAD) $$(SOUNDS_URL)/$$@; \
+	fi
+endef
+
+endif
+
+all: prefixcmd $(SOUNDS_CACHE_DIR) $(CORE_SOUNDS) $(EXTRA_SOUNDS) $(MOH)
+
+prefixcmd:
+	if [ -d /tmp/astdatadir ] ; then \
+		rm -rf /tmp/astdatadir ; \
+	fi
+	@$(PREFIXCMD)
 
 have_download:
 	@if test "$(DOWNLOAD)" = ":" ; then \
@@ -77,83 +159,41 @@ have_download:
 		echo "***                                            ***"; \
 		echo "*** Please install one of these, or remove any ***"; \
 		echo "*** extra sound package selections in          ***"; \
-		echo "*** menuselecct before installing Asterisk.    ***"; \
+		echo "*** menuselect before installing Asterisk.     ***"; \
 		echo "***                                            ***"; \
 		echo "**************************************************"; \
 		exit 1; \
 	fi
 
-$(SOUNDS_DIR)/.asterisk-core-sounds-en-%: have_download
-	@PACKAGE=$(subst $(SOUNDS_DIR)/.asterisk,asterisk,$@).tar.gz; \
-	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
-	if test ! -f $${PACKAGE}; then exit 1; fi; \
-	rm -f $(subst -$(CORE_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/en; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xof -) && \
-	touch $@
+$(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,en,$(CORE_SOUNDS_VERSION)))
 
-$(SOUNDS_DIR)/.asterisk-core-sounds-es-%: have_download
-	@PACKAGE=$(subst $(SOUNDS_DIR)/.asterisk,asterisk,$@).tar.gz; \
-	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
-	if test ! -f $${PACKAGE}; then exit 1; fi; \
-	rm -f $(subst -$(CORE_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/es; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xof -) && \
-	touch $@
+$(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,en_AU,$(CORE_SOUNDS_VERSION)))
 
-$(SOUNDS_DIR)/.asterisk-core-sounds-fr-%: have_download
-	@PACKAGE=$(subst $(SOUNDS_DIR)/.asterisk,asterisk,$@).tar.gz; \
-	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
-	if test ! -f $${PACKAGE}; then exit 1; fi; \
-	rm -f $(subst -$(CORE_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/fr; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xof -) && \
-	touch $@
+$(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,es,$(CORE_SOUNDS_VERSION)))
 
-$(SOUNDS_DIR)/.asterisk-extra-sounds-en-%: have_download
-	@PACKAGE=$(subst $(SOUNDS_DIR)/.asterisk,asterisk,$@).tar.gz; \
-	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
-	if test ! -f $${PACKAGE}; then exit 1; fi; \
-	rm -f $(subst -$(EXTRA_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/en; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xof -) && \
-	touch $@
+$(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,fr,$(CORE_SOUNDS_VERSION)))
 
-$(SOUNDS_DIR)/.asterisk-extra-sounds-es-%: have_download
-	@PACKAGE=$(subst $(SOUNDS_DIR)/.asterisk,asterisk,$@).tar.gz; \
-	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
-	if test ! -f $${PACKAGE}; then exit 1; fi; \
-	rm -f $(subst -$(EXTRA_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/es; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xof -) && \
-	touch $@
+$(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),extra-sounds,en,$(EXTRA_SOUNDS_VERSION)))
 
-$(SOUNDS_DIR)/.asterisk-extra-sounds-fr-%: have_download
-	@PACKAGE=$(subst $(SOUNDS_DIR)/.asterisk,asterisk,$@).tar.gz; \
-	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
-	if test ! -f $${PACKAGE}; then exit 1; fi; \
-	rm -f $(subst -$(EXTRA_SOUNDS_VERSION),,$@)-* && \
-	(cd $(SOUNDS_DIR)/fr; cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xof -) && \
-	touch $@
+$(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),extra-sounds,es,$(EXTRA_SOUNDS_VERSION)))
 
-$(MOH_DIR)/.asterisk-moh-%: have_download
-	@PACKAGE=$(subst $(MOH_DIR)/.asterisk,asterisk,$@).tar.gz; \
-	if test ! -f $${PACKAGE}; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$${PACKAGE}; fi; \
-	if test ! -f $${PACKAGE}; then exit 1; fi; \
-	(cd $(MOH_DIR); cat $(CURDIR)/$${PACKAGE} | gzip -d | tar xof -) && \
-	touch $@
+$(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),extra-sounds,fr,$(EXTRA_SOUNDS_VERSION)))
 
-asterisk-core-%.tar.gz: have_download
-	@if test ! -f $@ && test ! -f $(SOUNDS_DIR)/.$(subst .tar.gz,,$@) ; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@;fi
+$(eval $(call sound_format_lang_rule,$(MOH_DIR),moh,,$(MOH_VERSION)))
 
-asterisk-extra-%.tar.gz: have_download
-	@if test ! -f $@ && test ! -f $(SOUNDS_DIR)/.$(subst .tar.gz,,$@) ; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@;fi
+$(eval $(call sound_download_rule,core-sounds))
 
-asterisk-moh-%.tar.gz: have_download
-	@if test ! -f $@ && test ! -f $(MOH_DIR)/.$(subst .tar.gz,,$@) ; then $(DOWNLOAD) $(WGET_ARGS) $(SOUNDS_URL)/$@;fi
+$(eval $(call sound_download_rule,extra-sounds))
+
+$(eval $(call sound_download_rule,moh))
 
 dist-clean:
 	rm -f *.tar.gz
 
-$(SOUNDS_DIR)/en $(MOH_DIR) $(SOUNDS_DIR)/es $(SOUNDS_DIR)/fr:
+$(SOUNDS_DIR)/en $(MOH_DIR) $(SOUNDS_DIR)/en_AU $(SOUNDS_DIR)/es $(SOUNDS_DIR)/fr $(SOUNDS_CACHE_DIR):
 	mkdir -p $@
 
-install: $(SOUNDS_DIR)/en $(SOUNDS_DIR)/es $(SOUNDS_DIR)/fr $(MOH_DIR) $(CORE_SOUND_TAGS) $(EXTRA_SOUND_TAGS) $(MOH_TAGS)
+install: prefixcmd $(SOUNDS_CACHE_DIR) $(SOUNDS_DIR)/en $(SOUNDS_DIR)/en_AU $(SOUNDS_DIR)/es $(SOUNDS_DIR)/fr $(MOH_DIR) $(CORE_SOUND_TAGS) $(EXTRA_SOUND_TAGS) $(MOH_TAGS)
 
 uninstall:
 	rm -rf $(SOUNDS_DIR)
@@ -164,3 +204,6 @@ core_sounds_version:
 
 extra_sounds_version:
 	@echo $(EXTRA_SOUNDS_VERSION)
+
+moh_version:
+	@echo $(MOH_VERSION)

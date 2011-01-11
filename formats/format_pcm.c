@@ -19,7 +19,7 @@
 /*! \file
  *
  * \brief Flat, binary, ulaw PCM file format.
- * \arg File name extension: pcm, ulaw, ul, mu
+ * \arg File name extension: alaw, al, alw, pcm, ulaw, ul, mu, ulw, g722, au
  * 
  * \ingroup formats
  */
@@ -492,10 +492,10 @@ static int unload_module(void)
 		|| ast_format_unregister(alaw_f.name)
 		|| ast_format_unregister(au_f.name)
 		|| ast_format_unregister(g722_f.name);
-}	
+}
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Raw/Sun uLaw/ALaw 8KHz (PCM,PCMA,AU), G.722 16Khz",
 	.load = load_module,
 	.unload = unload_module,
-	.load_pri = 10,
+	.load_pri = AST_MODPRI_APP_DEPEND
 );

@@ -84,7 +84,7 @@ struct ast_timing_interface {
 /*!
  * \brief Register a set of timing functions.
  *
- * \param funcs An instance of the \c ast_timing_interfaces structure with pointers
+ * \param i An instance of the \c ast_timing_interfaces structure with pointers
  *        to the functions provided by the timing implementation.
  *
  * \retval NULL failure 
@@ -215,6 +215,16 @@ enum ast_timer_event ast_timer_get_event(const struct ast_timer *handle);
  * \since 1.6.1
  */
 unsigned int ast_timer_get_max_rate(const struct ast_timer *handle);
+
+/*!
+ * \brief Get name of timer in use
+ *
+ * \param handle timer handle returned by timer_open()
+ *
+ * \return name of timer
+ * \since 1.6.2
+ */
+const char *ast_timer_get_name(const struct ast_timer *handle);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

@@ -65,6 +65,7 @@ struct srv_entry {
 struct srv_context {
 	unsigned int have_weights:1;
 	struct srv_entry *prev;
+	unsigned int num_records;
 	AST_LIST_HEAD_NOLOCK(srv_entries, srv_entry) entries;
 };
 
@@ -221,6 +222,9 @@ int ast_srv_lookup(struct srv_context **context, const char *service, const char
 		(*context)->prev = AST_LIST_FIRST(&(*context)->entries);
 		*host = (*context)->prev->host;
 		*port = (*context)->prev->port;
+		AST_LIST_TRAVERSE(&(*context)->entries, cur, list) {
+			++((*context)->num_records);
+		}
 		return 0;
 	}
 
@@ -244,6 +248,7 @@ void ast_srv_cleanup(struct srv_context **context)
 {
 	const char *host;
 	unsigned short port;
+
 	while (!(ast_srv_lookup(context, NULL, &host, &port)));
 }
 
@@ -253,16 +258,19 @@ int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, co
 	struct srv_entry *current;
 	int ret;
 
-	if (chan && ast_autoservice_start(chan) < 0)
+	if (chan && ast_autoservice_start(chan) < 0) {
 		return -1;
+	}
 
 	ret = ast_search_dns(&context, service, C_IN, T_SRV, srv_callback);
 
-	if (context.have_weights)
+	if (context.have_weights) {
 		process_weights(&context);
+	}
 
-	if (chan)
+	if (chan) {
 		ret |= ast_autoservice_stop(chan);
+	}
 
 	/* TODO: there could be a "." entry in the returned list of
 	   answers... if so, this requires special handling */
@@ -281,8 +289,40 @@ int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, co
 		*port = -1;
 	}
 
-	while ((current = AST_LIST_REMOVE_HEAD(&context.entries, list)))
+	while ((current = AST_LIST_REMOVE_HEAD(&context.entries, list))) {
 		ast_free(current);
+	}
 
 	return ret;
+}
+
+unsigned int ast_srv_get_record_count(struct srv_context *context)
+{
+	return context->num_records;
+}
+
+int ast_srv_get_nth_record(struct srv_context *context, int record_num, const char **host,
+		unsigned short *port, unsigned short *priority, unsigned short *weight)
+{
+	int i = 1;
+	int res = -1;
+	struct srv_entry *entry;
+
+	if (record_num < 1 || record_num > context->num_records) {
+		return res;
+	}
+
+	AST_LIST_TRAVERSE(&context->entries, entry, list) {
+		if (i == record_num) {
+			*host = entry->host;
+			*port = entry->port;
+			*priority = entry->priority;
+			*weight = entry->weight;
+			res = 0;
+			break;
+		}
+		++i;
+	}
+
+	return res;
 }

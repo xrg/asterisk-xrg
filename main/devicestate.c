@@ -323,8 +323,10 @@ static enum ast_device_state _ast_device_state(const char *device, int check_cac
 	buf = ast_strdupa(device);
 	tech = strsep(&buf, "/");
 	if (!(number = buf)) {
-		if (!(provider = strsep(&tech, ":")))
+		provider = strsep(&tech, ":");
+		if (!tech) {
 			return AST_DEVICE_INVALID;
+		}
 		/* We have a provider */
 		number = tech;
 		tech = NULL;
@@ -605,7 +607,8 @@ static void process_collection(const char *device, struct change_collection *col
 
 	state = ast_devstate_aggregate_result(&agg);
 
-	ast_debug(1, "Aggregate devstate result is %d\n", state);
+	ast_debug(1, "Aggregate devstate result is '%s' for '%s'\n",
+		ast_devstate2str(state), device);
 
 	event = ast_event_get_cached(AST_EVENT_DEVICE_STATE,
 		AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, device,

@@ -28,6 +28,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/channel.h"
 #include "asterisk/rtp_engine.h"
 #include "asterisk/pbx.h"
+#include "asterisk/acl.h"
 
 #include "include/sip.h"
 #include "include/globals.h"
@@ -61,9 +62,9 @@ int sip_acf_channel_read(struct ast_channel *chan, const char *funcname, char *p
 	}
 
 	if (!strcasecmp(args.param, "peerip")) {
-		ast_copy_string(buf, p->sa.sin_addr.s_addr ? ast_inet_ntoa(p->sa.sin_addr) : "", buflen);
+		ast_copy_string(buf, ast_sockaddr_isnull(&p->sa) ? "" : ast_sockaddr_stringify_addr(&p->sa), buflen);
 	} else if (!strcasecmp(args.param, "recvip")) {
-		ast_copy_string(buf, p->recv.sin_addr.s_addr ? ast_inet_ntoa(p->recv.sin_addr) : "", buflen);
+		ast_copy_string(buf, ast_sockaddr_isnull(&p->recv) ? "" : ast_sockaddr_stringify_addr(&p->recv), buflen);
 	} else if (!strcasecmp(args.param, "from")) {
 		ast_copy_string(buf, p->from, buflen);
 	} else if (!strcasecmp(args.param, "uri")) {
@@ -75,21 +76,58 @@ int sip_acf_channel_read(struct ast_channel *chan, const char *funcname, char *p
 	} else if (!strcasecmp(args.param, "t38passthrough")) {
 		ast_copy_string(buf, (p->t38.state == T38_DISABLED) ? "0" : "1", buflen);
 	} else if (!strcasecmp(args.param, "rtpdest")) {
-		struct sockaddr_in sin;
+		struct ast_sockaddr addr;
+		struct ast_rtp_instance *stream;
 
 		if (ast_strlen_zero(args.type))
 			args.type = "audio";
 
 		if (!strcasecmp(args.type, "audio"))
-			ast_rtp_instance_get_remote_address(p->rtp, &sin);
+			stream = p->rtp;
 		else if (!strcasecmp(args.type, "video"))
-			ast_rtp_instance_get_remote_address(p->vrtp, &sin);
+			stream = p->vrtp;
 		else if (!strcasecmp(args.type, "text"))
-			ast_rtp_instance_get_remote_address(p->trtp, &sin);
+			stream = p->trtp;
 		else
 			return -1;
 
-		snprintf(buf, buflen, "%s:%d", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
+		/* Return 0 to suppress a console warning message */
+		if (!stream) {
+			return 0;
+		}
+
+		ast_rtp_instance_get_remote_address(stream, &addr);
+		snprintf(buf, buflen, "%s", ast_sockaddr_stringify(&addr));
+	} else if (!strcasecmp(args.param, "rtpsource")) {
+		struct ast_sockaddr sa;
+		struct ast_rtp_instance *stream;
+
+		if (ast_strlen_zero(args.type))
+			args.type = "audio";
+
+		if (!strcasecmp(args.type, "audio"))
+			stream = p->rtp;
+		else if (!strcasecmp(args.type, "video"))
+			stream = p->vrtp;
+		else if (!strcasecmp(args.type, "text"))
+			stream = p->trtp;
+		else
+			return -1;
+
+		/* Return 0 to suppress a console warning message */
+		if (!stream) {
+			return 0;
+		}
+
+		ast_rtp_instance_get_local_address(stream, &sa);
+
+		if (ast_sockaddr_isnull(&sa)) {
+			struct ast_sockaddr dest_sa;
+			ast_rtp_instance_get_remote_address(stream, &dest_sa);
+			ast_ouraddrfor(&dest_sa, &sa);
+		}
+
+		snprintf(buf, buflen, "%s", ast_sockaddr_stringify(&sa));
 	} else if (!strcasecmp(args.param, "rtpqos")) {
 		struct ast_rtp_instance *rtp = NULL;
 
@@ -129,8 +167,8 @@ int sip_acf_channel_read(struct ast_channel *chan, const char *funcname, char *p
 			} lookup[] = {
 				{ "txcount",               INT, { .i4 = &stats.txcount, }, },
 				{ "rxcount",               INT, { .i4 = &stats.rxcount, }, },
-				{ "txjitter",              INT, { .i4 = &stats.txjitter, }, },
-				{ "rxjitter",              INT, { .i4 = &stats.rxjitter, }, },
+				{ "txjitter",              DBL, { .d8 = &stats.txjitter, }, },
+				{ "rxjitter",              DBL, { .d8 = &stats.rxjitter, }, },
 				{ "remote_maxjitter",      DBL, { .d8 = &stats.remote_maxjitter, }, },
 				{ "remote_minjitter",      DBL, { .d8 = &stats.remote_minjitter, }, },
 				{ "remote_normdevjitter",  DBL, { .d8 = &stats.remote_normdevjitter, }, },
@@ -149,7 +187,7 @@ int sip_acf_channel_read(struct ast_channel *chan, const char *funcname, char *p
 				{ "local_minrxploss",      DBL, { .d8 = &stats.local_minrxploss, }, },
 				{ "local_normdevrxploss",  DBL, { .d8 = &stats.local_normdevrxploss, }, },
 				{ "local_stdevrxploss",    DBL, { .d8 = &stats.local_stdevrxploss, }, },
-				{ "rtt",                   INT, { .i4 = &stats.rtt, }, },
+				{ "rtt",                   DBL, { .d8 = &stats.rtt, }, },
 				{ "maxrtt",                DBL, { .d8 = &stats.maxrtt, }, },
 				{ "minrtt",                DBL, { .d8 = &stats.minrtt, }, },
 				{ "normdevrtt",            DBL, { .d8 = &stats.normdevrtt, }, },
@@ -176,6 +214,10 @@ int sip_acf_channel_read(struct ast_channel *chan, const char *funcname, char *p
 			ast_log(LOG_WARNING, "Unrecognized argument '%s' to %s\n", preparse, funcname);
 			return -1;
 		}
+	} else if (!strcasecmp(args.param, "secure_signaling")) {
+		snprintf(buf, buflen, "%s", p->socket.type == SIP_TRANSPORT_TLS ? "1" : "");
+	} else if (!strcasecmp(args.param, "secure_media")) {
+		snprintf(buf, buflen, "%s", p->srtp ? "1" : "");
 	} else {
 		res = -1;
 	}
@@ -183,7 +225,7 @@ int sip_acf_channel_read(struct ast_channel *chan, const char *funcname, char *p
 }
 
 #ifdef TEST_FRAMEWORK
-static int test_sip_rtpqos_1_new(struct ast_rtp_instance *instance, struct sched_context *sched, struct sockaddr_in *sin, void *data)
+static int test_sip_rtpqos_1_new(struct ast_rtp_instance *instance, struct ast_sched_context *sched, struct ast_sockaddr *addr, void *data)
 {
 	/* Needed to pass sanity checks */
 	ast_rtp_instance_set_data(instance, data);
@@ -226,7 +268,7 @@ AST_TEST_DEFINE(test_sip_rtpqos_1)
 		.write = test_sip_rtpqos_1_write,
 		.get_stat = test_sip_rtpqos_1_get_stat,
 	};
-	struct sockaddr_in sin = { .sin_port = 31337, .sin_addr = { 4 * 16777216 + 3 * 65536 + 2 * 256 + 1 } };
+	struct ast_sockaddr sa = { {0, } };
 	struct ast_rtp_instance_stats mine = { 0, };
 	struct sip_pvt *p = NULL;
 	struct ast_channel *chan = NULL;
@@ -241,8 +283,8 @@ AST_TEST_DEFINE(test_sip_rtpqos_1)
 	} lookup[] = {
 		{ "txcount",               INT, { .i4 = &mine.txcount, }, },
 		{ "rxcount",               INT, { .i4 = &mine.rxcount, }, },
-		{ "txjitter",              INT, { .i4 = &mine.txjitter, }, },
-		{ "rxjitter",              INT, { .i4 = &mine.rxjitter, }, },
+		{ "txjitter",              DBL, { .d8 = &mine.txjitter, }, },
+		{ "rxjitter",              DBL, { .d8 = &mine.rxjitter, }, },
 		{ "remote_maxjitter",      DBL, { .d8 = &mine.remote_maxjitter, }, },
 		{ "remote_minjitter",      DBL, { .d8 = &mine.remote_minjitter, }, },
 		{ "remote_normdevjitter",  DBL, { .d8 = &mine.remote_normdevjitter, }, },
@@ -261,7 +303,7 @@ AST_TEST_DEFINE(test_sip_rtpqos_1)
 		{ "local_minrxploss",      DBL, { .d8 = &mine.local_minrxploss, }, },
 		{ "local_normdevrxploss",  DBL, { .d8 = &mine.local_normdevrxploss, }, },
 		{ "local_stdevrxploss",    DBL, { .d8 = &mine.local_stdevrxploss, }, },
-		{ "rtt",                   INT, { .i4 = &mine.rtt, }, },
+		{ "rtt",                   DBL, { .d8 = &mine.rtt, }, },
 		{ "maxrtt",                DBL, { .d8 = &mine.maxrtt, }, },
 		{ "minrtt",                DBL, { .d8 = &mine.minrtt, }, },
 		{ "normdevrtt",            DBL, { .d8 = &mine.normdevrtt, }, },
@@ -274,7 +316,7 @@ AST_TEST_DEFINE(test_sip_rtpqos_1)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "test_sip_rtpqos";
-		info->category = "channels/chan_sip/";
+		info->category = "/channels/chan_sip/";
 		info->summary = "Test retrieval of SIP RTP QOS stats";
 		info->description =
 			"Verify values in the RTP instance structure can be accessed through the dialplan.";
@@ -289,11 +331,12 @@ AST_TEST_DEFINE(test_sip_rtpqos_1)
 		res = AST_TEST_NOT_RUN;
 		goto done;
 	}
+
 	if (!(p->rtp = ast_rtp_instance_new("test", sched, &bindaddr, &mine))) {
 		res = AST_TEST_NOT_RUN;
 		goto done;
 	}
-	ast_rtp_instance_set_remote_address(p->rtp, &sin);
+	ast_rtp_instance_set_remote_address(p->rtp, &sa);
 	if (!(chan = ast_dummy_channel_alloc())) {
 		res = AST_TEST_NOT_RUN;
 		goto done;

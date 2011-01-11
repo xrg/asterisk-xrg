@@ -500,6 +500,8 @@ static msg_t *build_setup (struct isdn_msg msgs[], struct misdn_bchannel *bc, in
 	int HEADER_LEN = nt?mISDNUSER_HEAD_SIZE:mISDN_HEADER_LEN;
 	SETUP_t *setup;
 	msg_t *msg =(msg_t*)create_l3msg(CC_SETUP | REQUEST, MT_SETUP,  bc?bc->l3_id:-1, sizeof(SETUP_t) ,nt);
+	int is_ptp;
+	enum FacFunction fac_type;
 
 	setup=(SETUP_t*)((msg->data+HEADER_LEN));
 
@@ -508,7 +510,8 @@ static msg_t *build_setup (struct isdn_msg msgs[], struct misdn_bchannel *bc, in
 	else
 		enc_ie_channel_id(&setup->CHANNEL_ID, msg, 1, bc->channel, nt,bc);
 
-	if (bc->fac_out.Function != Fac_None) {
+	fac_type = bc->fac_out.Function;
+	if (fac_type != Fac_None) {
 		enc_ie_facility(&setup->FACILITY, msg, &bc->fac_out, nt);
 	}
 
@@ -522,7 +525,20 @@ static msg_t *build_setup (struct isdn_msg msgs[], struct misdn_bchannel *bc, in
 	switch (bc->outgoing_colp) {
 	case 0:/* pass */
 	case 1:/* restricted */
-		if (bc->redirecting.from.number[0]) {
+		is_ptp = misdn_lib_is_ptp(bc->port);
+		if (bc->redirecting.from.number[0]
+			&& ((!is_ptp && nt)
+				|| (is_ptp
+#if defined(AST_MISDN_ENHANCEMENTS)
+					/*
+					 * There is no need to send out this ie when we are also sending
+					 * a Fac_DivertingLegInformation2 as well.  The
+					 * Fac_DivertingLegInformation2 supercedes the information in
+					 * this ie.
+					 */
+					&& fac_type != Fac_DivertingLegInformation2
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
+			))) {
 #if 1
 			/* ETSI and Q.952 do not define the screening field */
 			enc_ie_redir_nr(&setup->REDIR_NR, msg, bc->redirecting.from.number_type,
@@ -1282,6 +1298,13 @@ static void parse_facility (struct isdn_msg msgs[], msg_t *msg, struct misdn_bch
 	FACILITY_t *facility = (FACILITY_t*)(msg->data+HEADER_LEN);
 	Q931_info_t *qi = (Q931_info_t*)(msg->data+HEADER_LEN);
 	unsigned char *p = NULL;
+#if defined(AST_MISDN_ENHANCEMENTS)
+	int description_code;
+	int type;
+	int plan;
+	int present;
+	char number[sizeof(bc->redirecting.to.number)];
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
 #ifdef DEBUG
 	printf("Parsing FACILITY Msg\n");
@@ -1301,6 +1324,37 @@ static void parse_facility (struct isdn_msg msgs[], msg_t *msg, struct misdn_bch
 	if (decodeFac(p, &bc->fac_in)) {
 		cb_log(3, bc->port, "Decoding facility ie failed! Unrecognized facility message?\n");
 	}
+
+#if defined(AST_MISDN_ENHANCEMENTS)
+	dec_ie_notify(facility->NOTIFY, qi, &description_code, nt, bc);
+	if (description_code < 0) {
+		bc->notify_description_code = mISDN_NOTIFY_CODE_INVALID;
+	} else {
+		bc->notify_description_code = description_code;
+	}
+
+	dec_ie_redir_dn(facility->REDIR_DN, qi, &type, &plan, &present, number, sizeof(number), nt, bc);
+	if (0 <= type) {
+		bc->redirecting.to_changed = 1;
+
+		bc->redirecting.to.number_type = type;
+		bc->redirecting.to.number_plan = plan;
+		switch (present) {
+		default:
+		case 0:
+			bc->redirecting.to.presentation = 0;	/* presentation allowed */
+			break;
+		case 1:
+			bc->redirecting.to.presentation = 1;	/* presentation restricted */
+			break;
+		case 2:
+			bc->redirecting.to.presentation = 2;	/* Number not available */
+			break;
+		}
+		bc->redirecting.to.screening = 0;	/* Unscreened */
+		strcpy(bc->redirecting.to.number, number);
+	}
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 }
 
 static msg_t *build_facility (struct isdn_msg msgs[], struct misdn_bchannel *bc, int nt)
@@ -1324,6 +1378,12 @@ static msg_t *build_facility (struct isdn_msg msgs[], struct misdn_bchannel *bc,
 		 * Clear facility information
 		 */
 		bc->fac_out.Function = Fac_None;
+
+#if defined(AST_MISDN_ENHANCEMENTS)
+		/* Clear other one shot information. */
+		bc->notify_description_code = mISDN_NOTIFY_CODE_INVALID;
+		bc->redirecting.to_changed = 0;
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 		return NULL;
 	}
 
@@ -1350,6 +1410,27 @@ static msg_t *build_facility (struct isdn_msg msgs[], struct misdn_bchannel *bc,
 #endif
 		enc_ie_display(&facility->DISPLAY, msg, bc->display, nt,bc);
 	}
+
+#if defined(AST_MISDN_ENHANCEMENTS)
+	if (bc->notify_description_code != mISDN_NOTIFY_CODE_INVALID) {
+		enc_ie_notify(&facility->NOTIFY, msg, bc->notify_description_code, nt, bc);
+		bc->notify_description_code = mISDN_NOTIFY_CODE_INVALID;
+	}
+
+	if (bc->redirecting.to_changed) {
+		bc->redirecting.to_changed = 0;
+		switch (bc->outgoing_colp) {
+		case 0:/* pass */
+		case 1:/* restricted */
+			enc_ie_redir_dn(&facility->REDIR_DN, msg, bc->redirecting.to.number_type,
+				bc->redirecting.to.number_plan, bc->redirecting.to.presentation,
+				bc->redirecting.to.number, nt, bc);
+			break;
+		default:
+			break;
+		}
+	}
+#endif	/* defined(AST_MISDN_ENHANCEMENTS) */
 
 	return msg;
 }
@@ -1469,6 +1550,7 @@ static msg_t *build_notify (struct isdn_msg msgs[], struct misdn_bchannel *bc, i
 	notify = (NOTIFY_t *) (msg->data + HEADER_LEN);
 
 	enc_ie_notify(&notify->NOTIFY, msg, bc->notify_description_code, nt, bc);
+	bc->notify_description_code = mISDN_NOTIFY_CODE_INVALID;
 
 	if (bc->redirecting.to_changed) {
 		bc->redirecting.to_changed = 0;

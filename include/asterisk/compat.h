@@ -73,6 +73,10 @@
 #include "asterisk/poll-compat.h"
 #endif
 
+#ifndef HAVE_LLONG_MAX
+#define	LLONG_MAX	9223372036854775807LL
+#endif
+
 #ifndef HAVE_CLOSEFROM
 void closefrom(int lowfd);
 #endif
@@ -91,6 +95,10 @@ int getloadavg(double *list, int nelem);
 
 #ifndef HAVE_HTONLL
 uint64_t htonll(uint64_t host64);
+#endif
+
+#ifndef HAVE_MKDTEMP
+char *mkdtemp(char *template_s);
 #endif
 
 #ifndef HAVE_NTOHLL
@@ -127,6 +135,10 @@ int unsetenv(const char *name);
 
 #if !defined(HAVE_VASPRINTF) && !defined(__AST_DEBUG_MALLOC)
 int __attribute__((format(printf, 2, 0))) vasprintf(char **strp, const char *fmt, va_list ap);
+#endif
+
+#ifndef HAVE_TIMERSUB
+void timersub(struct timeval *tvend, struct timeval *tvstart, struct timeval *tvdiff);
 #endif
 
 #define	strlcat	__use__ast_str__functions_not__strlcat__

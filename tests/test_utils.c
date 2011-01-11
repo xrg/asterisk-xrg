@@ -35,6 +35,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 
 #include "asterisk/utils.h"
 #include "asterisk/test.h"
+#include "asterisk/crypto.h"
+#include "asterisk/adsi.h"
+#include "asterisk/agi.h"
+#include "asterisk/channel.h"
 #include "asterisk/module.h"
 
 AST_TEST_DEFINE(uri_encode_decode_test)
@@ -48,7 +52,7 @@ AST_TEST_DEFINE(uri_encode_decode_test)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "uri_encode_decode_test";
-		info->category = "main/utils/";
+		info->category = "/main/utils/";
 		info->summary = "encode and decode a hex escaped string";
 		info->description = "encode a string, verify encoded string matches what we expect.  Decode the encoded string, verify decoded string matches the original string.";
 		return AST_TEST_NOT_RUN;
@@ -114,7 +118,7 @@ AST_TEST_DEFINE(md5_test)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "md5_test";
-		info->category = "main/utils/";
+		info->category = "/main/utils/";
 		info->summary = "MD5 test";
 		info->description =
 			"This test exercises MD5 calculations."
@@ -159,7 +163,7 @@ AST_TEST_DEFINE(sha1_test)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "sha1_test";
-		info->category = "main/utils/";
+		info->category = "/main/utils/";
 		info->summary = "SHA1 test";
 		info->description =
 			"This test exercises SHA1 calculations."
@@ -204,7 +208,7 @@ AST_TEST_DEFINE(base64_test)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "base64_test";
-		info->category = "main/utils/";
+		info->category = "/main/utils/";
 		info->summary = "base64 test";
 		info->description = "This test exercises the base64 conversions.";
 		return AST_TEST_NOT_RUN;
@@ -236,6 +240,110 @@ AST_TEST_DEFINE(base64_test)
 	return res;
 }
 
+AST_TEST_DEFINE(crypto_loaded_test)
+{
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "crypto_loaded_test";
+		info->category = "/res/crypto/";
+		info->summary = "Crypto loaded into memory";
+		info->description = "Verifies whether the crypto functions overrode the stubs";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+#if 0 /* Not defined on Solaris */
+	ast_test_status_update(test,
+			       "address of __stub__ast_crypto_loaded is %p\n",
+			       __stub__ast_crypto_loaded);
+#ifndef HAVE_ATTRIBUTE_weak_import
+	ast_test_status_update(test,
+			       "address of __ref__ast_crypto_loaded is %p\n",
+			       __ref__ast_crypto_loaded);
+#endif
+	ast_test_status_update(test,
+			       "pointer to ast_crypto_loaded is %p\n",
+			       ast_crypto_loaded);
+#endif
+
+	return ast_crypto_loaded() ? AST_TEST_PASS : AST_TEST_FAIL;
+}
+
+AST_TEST_DEFINE(adsi_loaded_test)
+{
+	struct ast_channel c = { .adsicpe = AST_ADSI_AVAILABLE, };
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "adsi_loaded_test";
+		info->category = "/res/adsi/";
+		info->summary = "ADSI loaded into memory";
+		info->description = "Verifies whether the adsi functions overrode the stubs";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return ast_adsi_available(&c) ? AST_TEST_PASS : AST_TEST_FAIL;
+}
+
+static int handle_noop(struct ast_channel *chan, AGI *agi, int arg, const char * const argv[])
+{
+	ast_agi_send(agi->fd, chan, "200 result=0\n");
+	return RESULT_SUCCESS;
+}
+
+AST_TEST_DEFINE(agi_loaded_test)
+{
+	int res = AST_TEST_PASS;
+	struct agi_command noop_command =
+		{ { "testnoop", NULL }, handle_noop, NULL, NULL, 0 };
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "agi_loaded_test";
+		info->category = "/res/agi/";
+		info->summary = "AGI loaded into memory";
+		info->description = "Verifies whether the agi functions overrode the stubs";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+#if 0
+	ast_test_status_update(test,
+			       "address of __stub__ast_agi_register is %p\n",
+			       __stub__ast_agi_register);
+#ifndef HAVE_ATTRIBUTE_weak_import
+	ast_test_status_update(test,
+			       "address of __ref__ast_agi_register is %p\n",
+			       __ref__ast_agi_register);
+#endif
+	ast_test_status_update(test,
+			       "pointer to ast_agi_register is %p\n",
+			       ast_agi_register);
+#endif
+
+	if (ast_agi_register(ast_module_info->self, &noop_command) == AST_OPTIONAL_API_UNAVAILABLE) {
+		ast_test_status_update(test, "Unable to register testnoop command, because res_agi is not loaded.\n");
+		return AST_TEST_FAIL;
+	}
+
+#ifndef HAVE_NULLSAFE_PRINTF
+	/* Test for condition without actually crashing Asterisk */
+	if (noop_command.usage == NULL) {
+		ast_test_status_update(test, "AGI testnoop usage was not updated properly.\n");
+		res = AST_TEST_FAIL;
+	}
+	if (noop_command.syntax == NULL) {
+		ast_test_status_update(test, "AGI testnoop syntax was not updated properly.\n");
+		res = AST_TEST_FAIL;
+	}
+#endif
+
+	ast_agi_unregister(ast_module_info->self, &noop_command);
+	return res;
+}
 
 static int unload_module(void)
 {
@@ -243,6 +351,9 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(md5_test);
 	AST_TEST_UNREGISTER(sha1_test);
 	AST_TEST_UNREGISTER(base64_test);
+	AST_TEST_UNREGISTER(crypto_loaded_test);
+	AST_TEST_UNREGISTER(adsi_loaded_test);
+	AST_TEST_UNREGISTER(agi_loaded_test);
 	return 0;
 }
 
@@ -252,6 +363,9 @@ static int load_module(void)
 	AST_TEST_REGISTER(md5_test);
 	AST_TEST_REGISTER(sha1_test);
 	AST_TEST_REGISTER(base64_test);
+	AST_TEST_REGISTER(crypto_loaded_test);
+	AST_TEST_REGISTER(adsi_loaded_test);
+	AST_TEST_REGISTER(agi_loaded_test);
 	return AST_MODULE_LOAD_SUCCESS;
 }
 

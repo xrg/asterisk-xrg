@@ -13,8 +13,9 @@
  * maintain this copyright notice.
  *
  *****************************************************************************/
-#include <asterisk.h>
-#include <asterisk/lock.h>
+#include "asterisk.h"
+#include "asterisk/lock.h"
+#include "asterisk/poll-compat.h"
 
 #include "ooports.h" 
 #include "oochannels.h"
@@ -134,7 +135,7 @@ int ooCreateH245Connection(OOH323CallData *call)
          call->pH245Channel->sock = channelSocket;
          call->h245SessionState = OO_H245SESSION_ACTIVE;
 
-         OOTRACEINFO3("H245 connection creation succesful (%s, %s)\n",
+         OOTRACEINFO3("H245 connection creation successful (%s, %s)\n",
                       call->callType, call->callToken);
 
          /*Start terminal capability exchange and master slave determination */
@@ -143,13 +144,6 @@ int ooCreateH245Connection(OOH323CallData *call)
          {
             OOTRACEERR3("ERROR:Sending Terminal capability message (%s, %s)\n",
                          call->callType, call->callToken);
-            return ret;
-         }
-         ret = ooSendMasterSlaveDetermination(call);
-         if(ret != OO_OK)
-         {
-            OOTRACEERR3("ERROR:Sending Master-slave determination message "
-                        "(%s, %s)\n", call->callType, call->callToken);
             return ret;
          }
       }
@@ -300,7 +294,7 @@ int ooCreateH225Connection(OOH323CallData *call)
       {
          call->pH225Channel->sock = channelSocket;
 
-         OOTRACEINFO3("H2250 transmiter channel creation - succesful "
+         OOTRACEINFO3("H2250 transmiter channel creation - successful "
                       "(%s, %s)\n", call->callType, call->callToken);
 
          /* If multihomed, get ip from socket */
@@ -488,13 +482,6 @@ int ooAcceptH245Connection(OOH323CallData *call)
                    call->callType, call->callToken);
       return ret;
    }
-   ret = ooSendMasterSlaveDetermination(call);
-   if(ret != OO_OK)
-   {
-      OOTRACEERR3("ERROR:Sending Master-slave determination message "
-                  "(%s, %s)\n", call->callType, call->callToken);
-      return ret;
-   }   
    return OO_OK;
 }
 
@@ -981,7 +968,7 @@ int ooH2250Receive(OOH323CallData *call)
    ASN1OCTET message[MAXMSGLEN], message1[MAXMSGLEN];
    int len;
    Q931Message *pmsg;
-   OOCTXT *pctxt = call->pctxt;
+   OOCTXT *pctxt = call->msgctxt;
    
    struct timeval timeout;
 
@@ -1115,6 +1102,7 @@ int ooH2250Receive(OOH323CallData *call)
 
    initializePrintHandler(&printHandler, "Received H.2250 Message");
    setEventHandler (pctxt, &printHandler);
+   setPERBuffer (pctxt, message, len, TRUE);
    ret = ooQ931Decode (call, pmsg, len, message, 1);
    if(ret != OO_OK) {
       OOTRACEERR3("Error:Failed to decode received H.2250 message. (%s, %s)\n",
@@ -1980,22 +1968,12 @@ int ooStopMonitorCalls()
 
 OOBOOL ooChannelsIsConnectionOK(OOH323CallData *call, OOSOCKET sock)
 {
-   struct timeval to;
-   fd_set readfds;
-   int ret = 0, nfds=0; 
+   struct timeval to = { .tv_usec = 500 };
+   struct pollfd pfds = { .fd = sock, .events = POLLIN };
+   int ret = 0;
 
-   to.tv_sec = 0;
-   to.tv_usec = 500;
-   FD_ZERO(&readfds);
+   ret = ast_poll2(&pfds, 1, &to);
 
-   FD_SET(sock, &readfds);
-   if(nfds < (int)sock)
-      nfds = (int)sock;
-
-   nfds++;
-
-   ret = ooSocketSelect(nfds, &readfds, NULL, NULL, &to);
-      
    if(ret == -1)
    {
       OOTRACEERR3("Error in select ...broken pipe check(%s, %s)\n",
@@ -2003,9 +1981,8 @@ OOBOOL ooChannelsIsConnectionOK(OOH323CallData *call, OOSOCKET sock)
       return FALSE;
    }
 
-   if(FD_ISSET(sock, &readfds))
-   {
-      char buf[2];      
+   if (pfds.events & POLLIN) {
+      char buf[2];
       if(ooSocketRecvPeek(sock, (ASN1OCTET*) buf, 2) == 0)
       {
          OOTRACEWARN3("Broken pipe detected. (%s, %s)", call->callType, 

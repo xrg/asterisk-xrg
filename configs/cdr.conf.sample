@@ -29,6 +29,22 @@
 ; channel.)
 ;unanswered = no
 
+; Normally, CDR's are not closed out until after all extensions are finished
+; executing.  By enabling this option, the CDR will be ended before executing
+; the "h" extension so that CDR values such as "end" and "billsec" may be
+; retrieved inside of of this extension.  The default value is "no".
+;endbeforehexten=no
+
+; Normally, the 'billsec' field logged to the backends (text files or databases)
+; is simply the end time (hangup time) minus the answer time in seconds. Internally,
+; asterisk stores the time in terms of microseconds and seconds. By setting
+; initiatedseconds to 'yes', you can force asterisk to report any seconds
+; that were initiated (a sort of round up method). Technically, this is
+; when the microsecond part of the end time is greater than the microsecond
+; part of the answer time, then the billsec time is incremented one second.
+; The default value is "no".
+;initiatedseconds=no
+
 ; Define the CDR batch mode, where instead of posting the CDR at the end of
 ; every call, the data will be stored in a buffer to help alleviate load on the
 ; asterisk server.  Default is "no".
@@ -64,21 +80,6 @@
 ; submission of CDR data during asterisk shutdown, set this to "yes".  Default
 ; is "yes".
 ;safeshutdown=yes
-
-; Normally, CDR's are not closed out until after all extensions are finished
-; executing.  By enabling this option, the CDR will be ended before executing
-; the "h" extension so that CDR values such as "end" and "billsec" may be
-; retrieved inside of of this extension.
-;endbeforehexten=no
-
-; Normally, the 'billsec' field logged to the backends (text files or databases)
-; is simply the end time (hangup time) minus the answer time in seconds. Internally,
-; asterisk stores the time in terms of microseconds and seconds. By setting
-; initiatedseconds to 'yes', you can force asterisk to report any seconds
-; that were initiated (a sort of round up method). Technically, this is
-; when the microsecond part of the end time is greater than the microsecond
-; part of the answer time, then the billsec time is incremented one second.
-;initiatedseconds=no
 
 ;
 ;
@@ -153,6 +154,7 @@
 usegmtime=yes    ; log date/time in GMT.  Default is "no"
 loguniqueid=yes  ; log uniqueid.  Default is "no"
 loguserfield=yes ; log user field.  Default is "no"
+accountlogs=yes  ; create separate log file for each account code. Default is "yes"
 
 ;[radius]
 ;usegmtime=yes    ; log date/time in GMT

@@ -174,15 +174,6 @@ static const struct ast_option_types {
 	{ AST_DIAL_OPTION_MAX, NULL, NULL },                                      /*!< Terminator of list */
 };
 
-/*! \brief free the buffer if allocated, and set the pointer to the second arg */
-#define S_REPLACE(s, new_val) \
-	do {                      \
-		if (s) {              \
-			free(s);          \
-		}                     \
-		s = (new_val);        \
-	} while (0)
-
 /*! \brief Maximum number of channels we can watch at a time */
 #define AST_MAX_WATCHERS 256
 
@@ -275,12 +266,11 @@ static int begin_dial_channel(struct ast_dial_channel *channel, struct ast_chann
 		ast_channel_datastore_inherit(chan, channel->owner);
 
 		/* Copy over callerid information */
-		S_REPLACE(channel->owner->cid.cid_rdnis, ast_strdup(chan->cid.cid_rdnis));
 		ast_party_redirecting_copy(&channel->owner->redirecting, &chan->redirecting);
 
-		channel->owner->cid.cid_tns = chan->cid.cid_tns;
+		channel->owner->dialed.transit_network_select = chan->dialed.transit_network_select;
 
-		ast_connected_line_copy_from_caller(&channel->owner->connected, &chan->cid);
+		ast_connected_line_copy_from_caller(&channel->owner->connected, &chan->caller);
 
 		ast_string_field_set(channel->owner, language, chan->language);
 		ast_string_field_set(channel->owner, accountcode, chan->accountcode);
@@ -436,7 +426,9 @@ static void handle_frame(struct ast_dial *dial, struct ast_dial_channel *channel
 			break;
 		case AST_CONTROL_REDIRECTING:
 			ast_verb(3, "%s redirecting info has changed, passing it to %s\n", channel->owner->name, chan->name);
-			ast_indicate_data(chan, AST_CONTROL_REDIRECTING, fr->data.ptr, fr->datalen);
+			if (ast_channel_redirecting_macro(channel->owner, chan, fr, 1, 1)) {
+				ast_indicate_data(chan, AST_CONTROL_REDIRECTING, fr->data.ptr, fr->datalen);
+			}
 			break;
 		case AST_CONTROL_PROCEEDING:
 			ast_verb(3, "%s is proceeding, passing it to %s\n", channel->owner->name, chan->name);

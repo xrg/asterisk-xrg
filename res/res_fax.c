@@ -50,40 +50,152 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/config.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/res_fax.h"
 #include "asterisk/file.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/manager.h"
 #include "asterisk/dsp.h"
-#include "asterisk/res_fax.h"
+#include "asterisk/indications.h"
+#include "asterisk/ast_version.h"
+
+/*** DOCUMENTATION
+	<application name="ReceiveFax" language="en_US">
+		<synopsis>
+			Receive a FAX and save as a TIFF/F file.
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true" />
+			<parameter name="options">
+				<optionlist>
+					<option name="d">
+						<para>Enable FAX debugging.</para>
+					</option>
+					<option name="f">
+						<para>Allow audio fallback FAX transfer on T.38 capable channels.</para>
+					</option>
+					<option name="s">
+						<para>Send progress Manager events (overrides statusevents setting in res_fax.conf).</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+ 			<para>This application is provided by res_fax, which is a FAX technology agnostic module
+ 			that utilizes FAX technology resource modules to complete a FAX transmission.</para>
+ 			<para>Session arguments can be set by the FAXOPT function and to check results of the ReceiveFax() application.</para>
+		</description>
+		<see-also>
+			<ref type="function">FAXOPT</ref>
+		</see-also>
+	</application>
+	<application name="SendeFax" language="en_US">
+		<synopsis>
+			Sends a specified TIFF/F file as a FAX.
+		</synopsis>
+		<syntax>
+			<parameter name="filename" required="true" argsep="&amp;">
+				<argument name="filename2" multiple="true">
+					<para>TIFF file to send as a FAX.</para>
+				</argument>
+			</parameter>
+			<parameter name="options">
+				<optionlist>
+					<option name="d">
+						<para>Enable FAX debugging.</para>
+					</option>
+					<option name="f">
+						<para>Allow audio fallback FAX transfer on T.38 capable channels.</para>
+					</option>
+					<option name="s">
+						<para>Send progress Manager events (overrides statusevents setting in res_fax.conf).</para>
+					</option>
+					<option name="z">
+						<para>Initiate a T.38 reinvite on the channel if the remote end does not.</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+ 			<para>This application is provided by res_fax, which is a FAX technology agnostic module
+ 			that utilizes FAX technology resource modules to complete a FAX transmission.</para>
+ 			<para>Session arguments can be set by the FAXOPT function and to check results of the SendFax() application.</para>
+		</description>
+		<see-also>
+			<ref type="function">FAXOPT</ref>
+		</see-also>
+	</application>
+	<function name="FAXOPT" language="en_US">
+		<synopsis>
+			Gets/sets various pieces of information about a fax session.
+		</synopsis>
+		<syntax>
+			<parameter name="item" required="true">
+				<enumlist>
+					<enum name="ecm">
+						<para>R/W Error Correction Mode (ECM) enable with 'yes', disable with 'no'.</para>
+					</enum>
+					<enum name="error">
+						<para>R/O FAX transmission error code upon failure.</para>
+					</enum>
+					<enum name="filename">
+						<para>R/O Filename of the first file of the FAX transmission.</para>
+					</enum>
+					<enum name="filenames">
+						<para>R/O Filenames of all of the files in the FAX transmission (comma separated).</para>
+					</enum>
+					<enum name="headerinfo">
+						<para>R/W FAX header information.</para>
+					</enum>
+					<enum name="localstationid">
+						<para>R/W Local Station Identification.</para>
+					</enum>
+					<enum name="minrate">
+						<para>R/W Minimum transfer rate set before transmission.</para>
+					</enum>
+					<enum name="maxrate">
+						<para>R/W Maximum transfer rate set before transmission.</para>
+					</enum>
+					<enum name="modem">
+						<para>R/W Modem type (v17/v27/v29).</para>
+					</enum>
+					<enum name="pages">
+						<para>R/O Number of pages transferred.</para>
+					</enum>
+					<enum name="rate">
+						<para>R/O Negotiated transmission rate.</para>
+					</enum>
+					<enum name="remotestationid">
+						<para>R/O Remote Station Identification after transmission.</para>
+					</enum>
+					<enum name="resolution">
+						<para>R/O Negotiated image resolution after transmission.</para>
+					</enum>
+					<enum name="sessionid">
+						<para>R/O Session ID of the FAX transmission.</para>
+					</enum>
+					<enum name="status">
+						<para>R/O Result Status of the FAX transmission.</para>
+					</enum>
+					<enum name="statusstr">
+						<para>R/O Verbose Result Status of the FAX transmission.</para>
+					</enum>
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>FAXOPT can be used to override the settings for a FAX session listed in <filename>res_fax.conf</filename>,
+		   	it can also be used to retreive information about a FAX session that has finished eg. pages/status.</para>
+		</description>
+		<see-also>
+			<ref type="application">ReceiveFax</ref>
+			<ref type="application">SendFax</ref>
+		</see-also>
+	</function>
+***/
 
 static const char app_receivefax[] = "ReceiveFAX";
-static const char synopsis_receivefax[] = "Receive a FAX and save as a TIFF/F file.";
-static const char descrip_receivefax[] = "ReceiveFAX(filename[,options]):\n"
- " The ReceiveFAX() application receives a FAX as a TIFF/F file with specified filename.\n"
- " The application arguments are:\n"
- "    'd' - enables FAX debugging\n"
- "    'f' - allow audio fallback FAX transfer on T.38 capable channels\n"
- "    's' - send progress Manager events (overrides statusevents setting in res_fax.conf)\n"
- "\n"
- " Use the FAXOPT function to specify session arguments prior to calling ReceiveFAX()\n"
- " and use FAXOPT after ReceiveFAX completes to query result status for the session.\n"
- " The ReceiveFAX() is provided by res_fax, which is a FAX technology agnostic module\n"
- " that utilizes FAX technology resource modules to complete a FAX transmission.\n";
-
 static const char app_sendfax[] = "SendFAX";
-static const char synopsis_sendfax[] = "Sends a specified TIFF/F file as a FAX.";
-static const char descrip_sendfax[] = "SendFAX(filename[,options]):\n"
- " The SendFAX() application sends the specified TIFF/F file as a FAX.\n"
- " The application arguments are:\n"
- "    'd' - enables FAX debugging\n"
- "    'f' - allow audio fallback FAX transfer on T.38 capable channels\n"
- "    's' - send progress Manager events (overrides statusevents setting in res_fax.conf)\n"
- "\n"
- " Use the FAXOPT function to specify session arguments prior to calling SendFAX()\n"
- " and use FAXOPT after SendFAX completes to query result status for the session.\n"
- " The SendFAX() application is provided by res_fax, which is a FAX technology agnostic module\n"
- " that utilizes FAX technology resource modules to complete a FAX transmission.\n";
 
 struct debug_info_history {
 	unsigned int consec_frames;
@@ -97,6 +209,8 @@ struct ast_fax_debug_info {
 	struct ast_dsp *dsp;
 };
 
+static int fax_logger_level = -1;
+
 /*! \brief maximum buckets for res_fax ao2 containers */
 #define FAX_MAXBUCKETS 10
 
@@ -106,6 +220,8 @@ struct ast_fax_debug_info {
 static struct {
 	/*! The number of active FAX sessions */
 	int active_sessions;
+	/*! The number of reserved FAX sessions */
+	int reserved_sessions;
 	/*! active sessions are astobj2 objects */
 	struct ao2_container *container;
 	/*! Total number of Tx FAX attempts */
@@ -135,6 +251,7 @@ static AST_RWLIST_HEAD_STATIC(faxmodules, fax_module);
 static struct {
 	enum ast_fax_modems modems;
 	uint32_t statusevents:1;
+	uint32_t ecm:1;
 	unsigned int minrate;	
 	unsigned int maxrate;
 } general_options;
@@ -144,11 +261,12 @@ static const char *config = "res_fax.conf";
 static int global_fax_debug = 0;
 
 enum {
-	OPT_CALLEDMODE = (1 << 0),
-	OPT_CALLERMODE = (1 << 1),
-	OPT_DEBUG      = (1 << 2),
-	OPT_STATUS     = (1 << 3),
-	OPT_ALLOWAUDIO = (1 << 5),
+	OPT_CALLEDMODE  = (1 << 0),
+	OPT_CALLERMODE  = (1 << 1),
+	OPT_DEBUG       = (1 << 2),
+	OPT_STATUS      = (1 << 3),
+	OPT_ALLOWAUDIO  = (1 << 5),
+	OPT_REQUEST_T38 = (1 << 6),
 };
 
 AST_APP_OPTIONS(fax_exec_options, BEGIN_OPTIONS
@@ -157,6 +275,7 @@ AST_APP_OPTIONS(fax_exec_options, BEGIN_OPTIONS
 	AST_APP_OPTION('d', OPT_DEBUG),
 	AST_APP_OPTION('f', OPT_ALLOWAUDIO),
 	AST_APP_OPTION('s', OPT_STATUS),
+	AST_APP_OPTION('z', OPT_REQUEST_T38),
 END_OPTIONS);
 
 struct manager_event_info {
@@ -262,7 +381,10 @@ static struct ast_fax_session_details *session_details_new(void)
 
 	/* These options need to be set to the configured default and may be overridden by
  	 * SendFAX, ReceiveFAX, or FAXOPT */
-	d->option.ecm = AST_FAX_OPTFLAG_DEFAULT;
+	d->option.request_t38 = AST_FAX_OPTFLAG_FALSE;
+	d->option.send_cng = AST_FAX_OPTFLAG_FALSE;
+	d->option.send_ced = AST_FAX_OPTFLAG_FALSE;
+	d->option.ecm = general_options.ecm;
 	d->option.statusevents = general_options.statusevents;
 	d->modems = general_options.modems;
 	d->minrate = general_options.minrate;
@@ -377,6 +499,45 @@ static int ast_fax_modem_to_str(enum ast_fax_modems bits, char *tbuf, size_t buf
 	return 0;
 }
 
+static int check_modem_rate(enum ast_fax_modems modems, unsigned int rate)
+{
+	switch (rate) {
+	case 2400:
+		if (!(modems & (AST_FAX_MODEM_V27 | AST_FAX_MODEM_V34))) {
+			return 1;
+		}
+		break;
+	case 4800:
+		if (!(modems & (AST_FAX_MODEM_V27 | AST_FAX_MODEM_V34))) {
+			return 1;
+		}
+		break;
+	case 7200:
+	case 9600:
+		if (!(modems & (AST_FAX_MODEM_V17 | AST_FAX_MODEM_V29 | AST_FAX_MODEM_V34))) {
+			return 1;
+		}
+		break;
+	case 12000:
+	case 14400:
+		if (!(modems & (AST_FAX_MODEM_V17 | AST_FAX_MODEM_V34))) {
+			return 1;
+		}
+		break;
+	case 28800:
+	case 33600:
+		if (!(modems & AST_FAX_MODEM_V34)) {
+			return 1;
+		}
+		break;
+	default:
+		/* this should never happen */
+		return 1;
+	}
+
+	return 0;
+}
+
 /*! \brief register a FAX technology module */
 int ast_fax_tech_register(struct ast_fax_tech *tech)
 {
@@ -438,14 +599,23 @@ const char *ast_fax_state_to_str(enum ast_fax_state state)
 	}
 }
 
+void ast_fax_log(int level, const char *file, const int line, const char *function, const char *msg)
+{
+	if (fax_logger_level != -1) {
+		ast_log_dynamic_level(fax_logger_level, "%s", msg);
+	} else {
+		ast_log(level, file, line, function, "%s", msg);
+	}
+}
+
 /*! \brief convert a rate string to a rate */
-static int fax_rate_str_to_int(const char *ratestr)
+static unsigned int fax_rate_str_to_int(const char *ratestr)
 {
 	int rate;
 
 	if (sscanf(ratestr, "%d", &rate) != 1) {
 		ast_log(LOG_ERROR, "failed to sscanf '%s' to rate\n", ratestr);
-		return -1;
+		return 0;
 	}
 	switch (rate) {
 	case 2400:
@@ -459,7 +629,20 @@ static int fax_rate_str_to_int(const char *ratestr)
 		return rate;
 	default:
 		ast_log(LOG_WARNING, "ignoring invalid rate '%s'.  Valid options are {2400 | 4800 | 7200 | 9600 | 12000 | 14400 | 28800 | 33600}\n", ratestr);
-		return -1;
+		return 0;
+	}
+}
+
+static void fax_session_release(struct ast_fax_session *s)
+{
+	if (s->token) {
+		s->tech->release_token(s->token);
+		s->token = NULL;
+	}
+
+	if (s->reserved) {
+		ast_atomic_fetchadd_int(&faxregistry.reserved_sessions, -1);
+		s->reserved = 0;
 	}
 }
 
@@ -469,6 +652,7 @@ static void destroy_session(void *session)
 	struct ast_fax_session *s = session;
 
 	if (s->tech) {
+		fax_session_release(s);
 		if (s->tech_pvt) {
 			s->tech->destroy_session(s);
 		}
@@ -488,13 +672,16 @@ static void destroy_session(void *session)
 		ast_smoother_free(s->smoother);
 	}
 
-	ast_atomic_fetchadd_int(&faxregistry.active_sessions, -1);
+	if (s->active) {
+		ast_atomic_fetchadd_int(&faxregistry.active_sessions, -1);
+		s->active = 0;
+	}
 
 	ast_free(s->channame);
+	ast_free(s->chan_uniqueid);
 }
 
-/*! \brief create a FAX session */
-static struct ast_fax_session *fax_session_new(struct ast_fax_session_details *details, struct ast_channel *chan)
+static struct ast_fax_session *fax_session_reserve(struct ast_fax_session_details *details)
 {
 	struct ast_fax_session *s;
 	struct fax_module *faxmod;
@@ -503,7 +690,68 @@ static struct ast_fax_session *fax_session_new(struct ast_fax_session_details *d
 		return NULL;
 	}
 
+	s->state = AST_FAX_STATE_RESERVED;
+
+	/* locate a FAX technology module that can handle said requirements
+	 * Note: the requirements have not yet been finalized as T.38
+	 * negotiation has not yet occured. */
+	AST_RWLIST_RDLOCK(&faxmodules);
+	AST_RWLIST_TRAVERSE(&faxmodules, faxmod, list) {
+		if ((faxmod->tech->caps & details->caps) != details->caps) {
+			continue;
+		}
+		ast_debug(4, "Reserving a FAX session from '%s'.\n", faxmod->tech->description);
+		ast_module_ref(faxmod->tech->module);
+		s->tech = faxmod->tech;
+		break;
+	}
+	AST_RWLIST_UNLOCK(&faxmodules);
+
+	if (!faxmod) {
+		ast_log(LOG_ERROR, "Could not locate a FAX technology module with capabilities (0x%X)\n", details->caps);
+		ao2_ref(s, -1);
+		return NULL;
+	}
+
+	if (!s->tech->reserve_session) {
+		ast_debug(1, "Selected FAX technology module (%s) does not support reserving sessions.\n", s->tech->description);
+		return s;
+	}
+
+	if (!(s->token = s->tech->reserve_session(s))) {
+		ao2_ref(s, -1);
+		return NULL;
+	}
+
+	s->reserved = 1;
+	ast_atomic_fetchadd_int(&faxregistry.reserved_sessions, 1);
+
+	return s;
+}
+
+/*! \brief create a FAX session */
+static struct ast_fax_session *fax_session_new(struct ast_fax_session_details *details, struct ast_channel *chan, struct ast_fax_session *reserved)
+{
+	struct ast_fax_session *s = NULL;
+	struct fax_module *faxmod;
+
+	if (reserved) {
+		s = reserved;
+		ao2_ref(reserved, +1);
+
+		if (s->reserved) {
+			ast_atomic_fetchadd_int(&faxregistry.reserved_sessions, -1);
+			s->reserved = 0;
+		}
+	}
+
+	if (!s && !(s = ao2_alloc(sizeof(*s), destroy_session))) {
+		return NULL;
+	}
+
+	s->active = 1;
 	ast_atomic_fetchadd_int(&faxregistry.active_sessions, 1);
+	s->state = AST_FAX_STATE_UNINITIALIZED;
 
 	if (details->option.debug && (details->caps & AST_FAX_TECH_AUDIO)) {
 		if (!(s->debug_info = ast_calloc(1, sizeof(*(s->debug_info))))) {
@@ -523,42 +771,48 @@ static struct ast_fax_session *fax_session_new(struct ast_fax_session_details *d
 		ao2_ref(s, -1);
 		return NULL;
 	}
-	s->chan = chan;
-	s->details = details;
-	ao2_ref(s->details, 1);
-	s->state = AST_FAX_STATE_UNINITIALIZED;
 
-	details->id = s->id = ast_atomic_fetchadd_int(&faxregistry.nextsessionname, 1);
-
-	/* locate a FAX technology module that can handle said requirements */
-	AST_RWLIST_RDLOCK(&faxmodules);
-	AST_RWLIST_TRAVERSE(&faxmodules, faxmod, list) {
-		if ((faxmod->tech->caps & details->caps) != details->caps) {
-			continue;
-		}
-		ast_debug(4, "Requesting a new FAX session from '%s'.\n", faxmod->tech->description);
-		ast_module_ref(faxmod->tech->module);
-		s->tech = faxmod->tech;
-		break;
-	}
-	AST_RWLIST_UNLOCK(&faxmodules);
-
-	if (!faxmod) {
-		ast_log(LOG_ERROR, "Could not locate a FAX technology module with capabilities (0x%X)\n", details->caps);
+	if (!(s->chan_uniqueid = ast_strdup(chan->uniqueid))) {
 		ao2_ref(s, -1);
 		return NULL;
 	}
-	if (!(s->tech_pvt = s->tech->new_session(s, NULL))) {
+
+	s->chan = chan;
+	s->details = details;
+	ao2_ref(s->details, 1);
+
+	details->id = s->id = ast_atomic_fetchadd_int(&faxregistry.nextsessionname, 1);
+
+	if (!s->tech) {
+		/* locate a FAX technology module that can handle said requirements */
+		AST_RWLIST_RDLOCK(&faxmodules);
+		AST_RWLIST_TRAVERSE(&faxmodules, faxmod, list) {
+			if ((faxmod->tech->caps & details->caps) != details->caps) {
+				continue;
+			}
+			ast_debug(4, "Requesting a new FAX session from '%s'.\n", faxmod->tech->description);
+			ast_module_ref(faxmod->tech->module);
+			s->tech = faxmod->tech;
+			break;
+		}
+		AST_RWLIST_UNLOCK(&faxmodules);
+
+		if (!faxmod) {
+			ast_log(LOG_ERROR, "Could not locate a FAX technology module with capabilities (0x%X)\n", details->caps);
+			ao2_ref(s, -1);
+			return NULL;
+		}
+	}
+
+	if (!(s->tech_pvt = s->tech->new_session(s, s->token))) {
 		ast_log(LOG_ERROR, "FAX session failed to initialize.\n");
 		ao2_ref(s, -1);
-		ast_module_unref(faxmod->tech->module);
 		return NULL;
 	}
 	/* link the session to the session container */
 	if (!(ao2_link(faxregistry.container, s))) {
 		ast_log(LOG_ERROR, "failed to add FAX session '%d' to container.\n", s->id);
 		ao2_ref(s, -1);
-		ast_module_unref(faxmod->tech->module);
 		return NULL;
 	}
 	ast_debug(4, "channel '%s' using FAX session '%d'\n", s->channame, s->id);
@@ -573,11 +827,63 @@ static void get_manager_event_info(struct ast_channel *chan, struct manager_even
 	pbx_substitute_variables_helper(chan, "${CALLERID(num)}", info->cid, sizeof(info->cid));
 }
 
+
+/* \brief Generate a string of filenames using the given prefix and separator.
+ * \param details the fax session details
+ * \param prefix the prefix to each filename
+ * \param separator the separator between filenames
+ *
+ * This function generates a string of filenames from the given details
+ * structure and using the given prefix and separator.
+ *
+ * \retval NULL there was an error generating the string
+ * \return the string generated string
+ */
+static char *generate_filenames_string(struct ast_fax_session_details *details, char *prefix, char *separator)
+{
+	char *filenames, *c;
+	size_t size = 0;
+	int first = 1;
+	struct ast_fax_document *doc;
+
+	/* don't process empty lists */
+	if (AST_LIST_EMPTY(&details->documents)) {
+		return NULL;
+	}
+
+	/* Calculate the total length of all of the file names */
+	AST_LIST_TRAVERSE(&details->documents, doc, next) {
+		size += strlen(separator) + strlen(prefix) + strlen(doc->filename);
+	}
+	size += 1; /* add space for the terminating null */
+
+	if (!(filenames = ast_malloc(size))) {
+		return NULL;
+	}
+	c = filenames;
+
+	ast_build_string(&c, &size, "%s%s", prefix, AST_LIST_FIRST(&details->documents)->filename);
+	AST_LIST_TRAVERSE(&details->documents, doc, next) {
+		if (first) {
+			first = 0;
+			continue;
+		}
+
+		ast_build_string(&c, &size, "%s%s%s", separator, prefix, doc->filename);
+	}
+
+	return filenames;
+}
+
 /*! \brief send a FAX status manager event */
 static int report_fax_status(struct ast_channel *chan, struct ast_fax_session_details *details, const char *status)
 {
+	char *filenames = generate_filenames_string(details, "FileName: ", "\r\n");
+	if (!filenames) {
+		return 1;
+	}
+
 	ast_channel_lock(chan);
-	pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", status);
 	if (details->option.statusevents) {
 		struct manager_event_info info;
 
@@ -590,26 +896,57 @@ static int report_fax_status(struct ast_channel *chan, struct ast_fax_session_de
 			      "Exten: %s\r\n"
 			      "CallerID: %s\r\n"
 			      "LocalStationID: %s\r\n"
-			      "FileName: %s\r\n",
+			      "%s\r\n",
 			      status,
 			      chan->name,
 			      info.context,
 			      info.exten,
 			      info.cid,
 			      details->localstationid,
-			      AST_LIST_FIRST(&details->documents)->filename);
+			      filenames);
 	}
 	ast_channel_unlock(chan);
+	ast_free(filenames);
 
 	return 0;
 }
 
-#define GENERIC_FAX_EXEC_ERROR(fax, chan, reason)	\
+/*! \brief Set fax related channel variables. */
+static void set_channel_variables(struct ast_channel *chan, struct ast_fax_session_details *details)
+{
+	char buf[10];
+	pbx_builtin_setvar_helper(chan, "FAXSTATUS", S_OR(details->result, NULL));
+	pbx_builtin_setvar_helper(chan, "FAXERROR", S_OR(details->error, NULL));
+	pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", S_OR(details->resultstr, NULL));
+	pbx_builtin_setvar_helper(chan, "REMOTESTATIONID", S_OR(details->remotestationid, NULL));
+	pbx_builtin_setvar_helper(chan, "FAXBITRATE", S_OR(details->transfer_rate, NULL));
+	pbx_builtin_setvar_helper(chan, "FAXRESOLUTION", S_OR(details->resolution, NULL));
+
+	snprintf(buf, sizeof(buf), "%d", details->pages_transferred);
+	pbx_builtin_setvar_helper(chan, "FAXPAGES", buf);
+}
+
+#define GENERIC_FAX_EXEC_SET_VARS(fax, chan, errorstr, reason) \
 	do {	\
-		ast_log(LOG_ERROR, "channel '%s' FAX session '%d' failure, reason: '%s'\n", chan->name, fax->id, reason); \
-		pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", reason); \
-		if (ast_strlen_zero(fax->details->result)) ast_string_field_set(fax->details, result, "FAILED"); \
+		if (ast_strlen_zero(fax->details->result)) \
+			ast_string_field_set(fax->details, result, "FAILED"); \
+		if (ast_strlen_zero(fax->details->resultstr)) \
+			ast_string_field_set(fax->details, resultstr, reason); \
+		if (ast_strlen_zero(fax->details->error)) \
+			ast_string_field_set(fax->details, error, errorstr); \
+		set_channel_variables(chan, fax->details); \
+	} while (0)
+
+#define GENERIC_FAX_EXEC_ERROR_QUIET(fax, chan, errorstr, reason) \
+	do {	\
+		GENERIC_FAX_EXEC_SET_VARS(fax, chan, errorstr, reason); \
 		res = ms = -1; \
+	} while (0)
+
+#define GENERIC_FAX_EXEC_ERROR(fax, chan, errorstr, reason)	\
+	do {	\
+		ast_log(LOG_ERROR, "channel '%s' FAX session '%d' failure, reason: '%s' (%s)\n", chan->name, fax->id, reason, errorstr); \
+		GENERIC_FAX_EXEC_ERROR_QUIET(fax, chan, errorstr, reason); \
 	} while (0)
 
 static void t38_parameters_ast_to_fax(struct ast_fax_t38_parameters *dst, const struct ast_control_t38_parameters *src)
@@ -634,252 +971,126 @@ static void t38_parameters_fax_to_ast(struct ast_control_t38_parameters *dst, co
 	dst->transcoding_jbig = src->transcoding_jbig;
 }
 
+static int set_fax_t38_caps(struct ast_channel *chan, struct ast_fax_session_details *details)
+{
+	switch (ast_channel_get_t38_state(chan)) {
+	case T38_STATE_UNKNOWN:
+		details->caps |= AST_FAX_TECH_T38;
+		break;
+	case T38_STATE_UNAVAILABLE:
+		details->caps |= AST_FAX_TECH_AUDIO;
+		break;
+	case T38_STATE_NEGOTIATING: {
+		/* the other end already sent us a T.38 reinvite, so we need to prod the channel
+		 * driver into resending their parameters to us if it supports doing so... if
+		 * not, we can't proceed, because we can't create a proper reply without them.
+		 * if it does work, the channel driver will send an AST_CONTROL_T38_PARAMETERS
+		 * with a request of AST_T38_REQUEST_NEGOTIATE, which will be read by the function
+		 * that gets called after this one completes
+		 */
+		struct ast_control_t38_parameters parameters = { .request_response = AST_T38_REQUEST_PARMS, };
+		if (ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &parameters, sizeof(parameters)) != AST_T38_REQUEST_PARMS) {
+			ast_log(LOG_ERROR, "channel '%s' is in an unsupported T.38 negotiation state, cannot continue.\n", chan->name);
+			return -1;
+		}
+		details->caps |= AST_FAX_TECH_T38;
+		break;
+	}
+	default:
+		ast_log(LOG_ERROR, "channel '%s' is in an unsupported T.38 negotiation state, cannot continue.\n", chan->name);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int disable_t38(struct ast_channel *chan)
+{
+	int ms;
+	struct ast_frame *frame = NULL;
+	struct ast_control_t38_parameters t38_parameters = { .request_response = AST_T38_REQUEST_TERMINATE, };
+
+	ast_debug(1, "Shutting down T.38 on %s\n", chan->name);
+	if (ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters)) != 0) {
+		ast_debug(1, "error while disabling T.38 on channel '%s'\n", chan->name);
+		return -1;
+	}
+
+	/* wait up to five seconds for negotiation to complete */
+	ms = 5000;
+
+	while (ms > 0) {
+		ms = ast_waitfor(chan, ms);
+		if (ms < 0) {
+			ast_debug(1, "error while disabling T.38 on channel '%s'\n", chan->name);
+			return -1;
+		}
+
+		if (ms == 0) { /* all done, nothing happened */
+			ast_debug(1, "channel '%s' timed-out during T.38 shutdown\n", chan->name);
+			break;
+		}
+
+		if (!(frame = ast_read(chan))) {
+			return -1;
+		}
+		if ((frame->frametype == AST_FRAME_CONTROL) &&
+		    (frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
+		    (frame->datalen == sizeof(t38_parameters))) {
+			struct ast_control_t38_parameters *parameters = frame->data.ptr;
+
+			switch (parameters->request_response) {
+			case AST_T38_TERMINATED:
+				ast_debug(1, "Shut down T.38 on %s\n", chan->name);
+				break;
+			case AST_T38_REFUSED:
+				ast_log(LOG_WARNING, "channel '%s' refused to disable T.38\n", chan->name);
+				ast_frfree(frame);
+				return -1;
+			default:
+				ast_log(LOG_ERROR, "channel '%s' failed to disable T.38\n", chan->name);
+				ast_frfree(frame);
+				return -1;
+			}
+			ast_frfree(frame);
+			break;
+		}
+		ast_frfree(frame);
+	}
+
+	return 0;
+}
+
+static struct ast_control_t38_parameters our_t38_parameters = {
+	.version = 0,
+	.max_ifp = 400,
+	.rate = AST_T38_RATE_14400,
+	.rate_management = AST_T38_RATE_MANAGEMENT_TRANSFERRED_TCF,
+};
+
 /*! \brief this is the generic FAX session handling function */
-static int generic_fax_exec(struct ast_channel *chan, struct ast_fax_session_details *details)
+static int generic_fax_exec(struct ast_channel *chan, struct ast_fax_session_details *details, struct ast_fax_session *reserved)
 {
 	int ms;
 	int timeout = RES_FAX_TIMEOUT;
 	int res = 0, chancount;
 	unsigned int expected_frametype = -1;
 	union ast_frame_subclass expected_framesubclass = { .integer = -1 };
-	char tbuf[10];
-	unsigned int t38negotiated = 0;
-	enum ast_t38_state t38_state;
+	unsigned int t38negotiated = (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED);
 	struct ast_control_t38_parameters t38_parameters;
-	int send_cng = -1;
-	unsigned int disable_t38 = 0;
 	const char *tempvar;
 	struct ast_fax_session *fax = NULL;
 	struct ast_frame *frame = NULL;
 	struct ast_channel *c = chan;
 	unsigned int orig_write_format = 0, orig_read_format = 0;
-	unsigned int request_t38 = 0;
-
-	details->our_t38_parameters.version = 0;
-	details->our_t38_parameters.max_ifp = 400;
-	details->our_t38_parameters.rate = AST_T38_RATE_14400;
-	details->our_t38_parameters.rate_management = AST_T38_RATE_MANAGEMENT_TRANSFERRED_TCF;
 
 	chancount = 1;
 
-	/* generate 3 seconds of CED if we are in receive mode */
-	if (details->caps & AST_FAX_TECH_RECEIVE) {
-		ms = 3000;
-		if (ast_tonepair_start(chan, 2100, 0, ms, 0)) {
-			ast_log(LOG_ERROR, "error generating CED tone on %s\n", chan->name);
-			return -1;
-		}
-
-		do {
-			ms = ast_waitfor(chan, ms);
-			if (ms < 0) {
-				ast_log(LOG_ERROR, "error while generating CED tone on %s\n", chan->name);
-				ast_tonepair_stop(chan);
-				return -1;
-			}
-
-			if (ms == 0) { /* all done, nothing happened */
-				break;
-			}
-
-			if (!(frame = ast_read(chan))) {
-				ast_log(LOG_ERROR, "error reading frame while generating CED tone on %s\n", chan->name);
-				ast_tonepair_stop(chan);
-				return -1;
-			}
-
-			if ((frame->frametype == AST_FRAME_CONTROL) &&
-					(frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
-					(frame->datalen == sizeof(t38_parameters))) {
-				struct ast_control_t38_parameters *parameters = frame->data.ptr;
-
-				switch (parameters->request_response) {
-				case AST_T38_REQUEST_NEGOTIATE:
-					/* the other end has requested a switch to T.38, so reply that we are willing, if we can
-					 * do T.38 as well
-					 */
-					t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
-					t38_parameters.request_response = (details->caps & AST_FAX_TECH_T38) ? AST_T38_NEGOTIATED : AST_T38_REFUSED;
-					ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
-					break;
-				case AST_T38_NEGOTIATED:
-					ast_log(LOG_NOTICE, "Negotiated T.38 for receive on %s\n", chan->name);
-					t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
-					details->caps &= ~AST_FAX_TECH_AUDIO;
-					report_fax_status(chan, details, "T.38 Negotiated");
-					t38negotiated = 1;
-					ms = 0;
-					break;
-				default:
-					break;
-				}
-			}
-			ast_frfree(frame);
-		} while (ms > 0);
-		ast_tonepair_stop(chan);
-	}
-
-	switch ((t38_state = ast_channel_get_t38_state(chan))) {
-	case T38_STATE_UNKNOWN:
-		if (details->caps & AST_FAX_TECH_SEND) {
-			if (details->option.allow_audio) {
-				details->caps |= AST_FAX_TECH_AUDIO;
-			} else {
-				/* we are going to send CNG to attempt to stimulate the receiver
-				 * into switching to T.38, since audio mode is not allowed
-				 */
-				send_cng = 0;
-			}
-		} else {
-			/* we *always* request a switch to T.38 if allowed; if audio is also
-			 * allowed, then we will allow the switch to happen later if needed
-			 */
-			if (details->option.allow_audio) {
-				details->caps |= AST_FAX_TECH_AUDIO;
-			}
-			request_t38 = 1;
-		}
-		details->caps |= AST_FAX_TECH_T38;
-		break;
-	case T38_STATE_UNAVAILABLE:
-		details->caps |= AST_FAX_TECH_AUDIO;
-		break;
-	default:
-		ast_log(LOG_ERROR, "channel '%s' is in an unsupported T.38 negotiation state, cannot continue.\n", chan->name);
-		return -1;
-	}
-
-	if (request_t38) {
-		/* wait up to five seconds for negotiation to complete */
-		timeout = 5000;
-
-		/* set parameters based on the session's parameters */
-		t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
-		t38_parameters.request_response = AST_T38_REQUEST_NEGOTIATE;
-		if ((ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters)) != 0)) {
-			res = -1;
-			goto t38done;
-		}
-
-		ast_log(LOG_NOTICE, "Negotiating T.38 for %s on %s\n", (details->caps & AST_FAX_TECH_SEND) ? "send" : "receive", chan->name);
-	} else if (!details->option.allow_audio) {
-		/* wait up to sixty seconds for negotiation to complete */
-		timeout = 60000;
-
-		ast_log(LOG_NOTICE, "Waiting for T.38 negotiation for %s on %s\n", (details->caps & AST_FAX_TECH_SEND) ? "send" : "receive", chan->name);
-	}
-
-	if (request_t38 || !details->option.allow_audio) {
-		struct ast_silence_generator *silence_gen = NULL;
-
-		if (send_cng != -1) {
-			silence_gen = ast_channel_start_silence_generator(chan);
-		}
-
-		while (timeout > 0) {
-			if (send_cng > 3000) {
-				ast_channel_stop_silence_generator(chan, silence_gen);
-				silence_gen = NULL;
-				ast_tonepair_start(chan, 1100, 0, 500, 0);
-				send_cng = 0;
-			} else if (!chan->generator && (send_cng != -1)) {
-				/* The CNG tone is done so restart silence generation. */
-				silence_gen = ast_channel_start_silence_generator(chan);
-			}
-			/* this timeout *MUST* be 500ms, in order to keep the spacing
-			 * of CNG tones correct when this loop is sending them
-			 */
-			ms = ast_waitfor(chan, 500);
-			if (ms < 0) {
-				ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", chan->name);
-				res = -1;
-				break;
-			}
-			if (send_cng != -1) {
-				send_cng += 500 - ms;
-			}
-			if (!ms) {
-				/* nothing happened */
-				if (timeout > 0) {
-					timeout -= 500;
-					continue;
-				} else {
-					ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 negotiation.\n", chan->name);
-					res = -1;
-					break;
-				}
-			}
-			if (!(frame = ast_read(chan))) {
-				if (silence_gen) {
-					ast_channel_stop_silence_generator(chan, silence_gen);
-					silence_gen = NULL;
-				}
-				return -1;
-			}
-			if ((frame->frametype == AST_FRAME_CONTROL) &&
-			    (frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
-			    (frame->datalen == sizeof(t38_parameters))) {
-				struct ast_control_t38_parameters *parameters = frame->data.ptr;
-				int stop = 1;
-				
-				switch (parameters->request_response) {
-				case AST_T38_REQUEST_NEGOTIATE:
-					t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
-					t38_parameters.request_response = AST_T38_NEGOTIATED;
-					ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
-					stop = 0;
-					break;
-				case AST_T38_NEGOTIATED:
-					ast_log(LOG_NOTICE, "Negotiated T.38 for %s on %s\n", (details->caps & AST_FAX_TECH_SEND) ? "send" : "receive", chan->name);
-					t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
-					details->caps &= ~AST_FAX_TECH_AUDIO;
-					t38negotiated = 1;
-					disable_t38 = 1;
-					break;
-				case AST_T38_REFUSED:
-					ast_log(LOG_WARNING, "channel '%s' refused to negotiate T.38\n", chan->name);
-					res = -1;
-					break;
-				default:
-					ast_log(LOG_ERROR, "channel '%s' failed to negotiate T.38\n", chan->name);
-					res = -1;
-					break;
-				}
-				if (stop) {
-					ast_frfree(frame);
-					break;
-				}
-			}
-			ast_frfree(frame);
-		}
-
-		if (silence_gen) {
-			ast_channel_stop_silence_generator(chan, silence_gen);
-			silence_gen = NULL;
-		}
-	}
-
-t38done:
-	/* if any failures occurred during T.38 negotiation, handle them here */
-	if (res) {
-		/* if audio is allowed, then drop the T.38 session requirement
-		 * and proceed, otherwise the request has failed
-		 */
-		if (details->option.allow_audio) {
-			details->caps &= ~AST_FAX_TECH_T38;
-			res = 0;
-		} else {
-			ast_log(LOG_WARNING, "Audio FAX not allowed on channel '%s' and T.38 negotiation failed; aborting.\n", chan->name);
-			return -1;
-		}
-	}
-
 	/* create the FAX session */
-	if (!(fax = fax_session_new(details, chan))) {
+	if (!(fax = fax_session_new(details, chan, reserved))) {
 		ast_log(LOG_ERROR, "Can't create a FAX session, FAX attempt failed.\n");
 		report_fax_status(chan, details, "No Available Resource");
-		chancount = -1;
-		goto disable_t38;
+		return -1;
 	}
 
 	ast_channel_lock(chan);
@@ -933,19 +1144,25 @@ t38done:
 	if (fax->debug_info) {
 		fax->debug_info->base_tv = ast_tvnow();
 	}
+
+	/* reset our result fields just in case the fax tech driver wants to
+	 * set custom error messages */
+	ast_string_field_set(details, result, "");
+	ast_string_field_set(details, resultstr, "");
+	ast_string_field_set(details, error, "");
+	set_channel_variables(chan, details);
+
 	if (fax->tech->start_session(fax) < 0) {
-		GENERIC_FAX_EXEC_ERROR(fax, chan, "failed to start FAX session");
+		GENERIC_FAX_EXEC_ERROR(fax, chan, "INIT_ERROR", "failed to start FAX session");
 	}
 
-	pbx_builtin_setvar_helper(chan, "FAXSTATUS", NULL);
-	pbx_builtin_setvar_helper(chan, "FAXERROR", NULL);
 	report_fax_status(chan, details, "FAX Transmission In Progress");
 
 	ast_debug(5, "channel %s will wait on FAX fd %d\n", chan->name, fax->fd);
 
 	/* handle frames for the session */
 	ms = 1000;
-	while ((ms > -1) && (timeout > 0)) {
+	while ((res > -1) && (ms > -1) && (timeout > 0)) {
 		struct ast_channel *ready_chan;
 		int ofd, exception;
 
@@ -958,7 +1175,8 @@ t38done:
  				 * FAX session complete before we exit the application.  if needed,
  				 * send the FAX stack silence so the modems can finish their session without
  				 * any problems */
-				ast_log(LOG_NOTICE, "Channel '%s' did not return a frame; probably hung up.\n", chan->name);
+				ast_debug(1, "Channel '%s' did not return a frame; probably hung up.\n", chan->name);
+				GENERIC_FAX_EXEC_SET_VARS(fax, chan, "HANGUP", "remote channel hungup");
 				c = NULL;
 				chancount = 0;
 				timeout -= (1000 - ms);
@@ -1012,7 +1230,7 @@ t38done:
 				if (fax->smoother) {
 					/* push the frame into a smoother */
 					if (ast_smoother_feed(fax->smoother, frame) < 0) {
-						GENERIC_FAX_EXEC_ERROR(fax, chan, "Failed to feed the smoother");
+						GENERIC_FAX_EXEC_ERROR(fax, chan, "UNKNOWN", "Failed to feed the smoother");
 					}
 					while ((f = ast_smoother_read(fax->smoother)) && (f->data.ptr)) {
 						if (fax->debug_info) {
@@ -1052,9 +1270,12 @@ t38done:
 			if (ms && (ofd < 0)) {
 				if ((errno == 0) || (errno == EINTR)) {
 					timeout -= (1000 - ms);
+					if (timeout <= 0)
+						GENERIC_FAX_EXEC_ERROR(fax, chan, "TIMEOUT", "fax session timed-out");
 					continue;
 				} else {
 					ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", chan->name);
+					GENERIC_FAX_EXEC_ERROR(fax, chan, "UNKNOWN", "error polling data");
 					res = ms;
 					break;
 				}
@@ -1062,10 +1283,12 @@ t38done:
 				/* nothing happened */
 				if (timeout > 0) {
 					timeout -= 1000;
+					if (timeout <= 0)
+						GENERIC_FAX_EXEC_ERROR(fax, chan, "TIMEOUT", "fax session timed-out");
 					continue;
 				} else {
 					ast_log(LOG_WARNING, "channel '%s' timed-out during the FAX transmission.\n", chan->name);
-					GENERIC_FAX_EXEC_ERROR(fax, chan, "fax session timed-out");
+					GENERIC_FAX_EXEC_ERROR(fax, chan, "TIMEOUT", "fax session timed-out");
 					break;
 				}
 			}
@@ -1073,15 +1296,7 @@ t38done:
 	}
 	ast_debug(3, "channel '%s' - event loop stopped { timeout: %d, ms: %d, res: %d }\n", chan->name, timeout, ms, res);
 
-	pbx_builtin_setvar_helper(chan, "FAXSTATUS", details->result);
-	pbx_builtin_setvar_helper(chan, "FAXERROR", details->error);
-	pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", details->resultstr);
-	pbx_builtin_setvar_helper(chan, "REMOTESTATIONID", details->remotestationid);
-	pbx_builtin_setvar_helper(chan, "FAXBITRATE", details->transfer_rate);
-	pbx_builtin_setvar_helper(chan, "FAXRESOLUTION", details->resolution);
-
-	snprintf(tbuf, sizeof(tbuf), "%d", details->pages_transferred);
-	pbx_builtin_setvar_helper(chan, "FAXPAGES", tbuf);
+	set_channel_variables(chan, details);
 
 	ast_atomic_fetchadd_int(&faxregistry.fax_complete, 1);
 	if (!strcasecmp(details->result, "FAILED")) {
@@ -1107,70 +1322,169 @@ t38done:
 		}
 	}
 
-disable_t38:
-	if (disable_t38 &&
-	    (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED)) {
-		struct ast_control_t38_parameters t38_parameters = { .request_response = AST_T38_REQUEST_TERMINATE, };
-
-		if (ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters)) == 0) {
-			/* wait up to five seconds for negotiation to complete */
-			unsigned int timeout = 5000;
-			int ms;
-			
-			ast_debug(1, "Shutting down T.38 on %s\n", chan->name);
-			while (timeout > 0) {
-				ms = ast_waitfor(chan, 1000);
-				if (ms < 0) {
-					ast_log(LOG_WARNING, "something bad happened while channel '%s' was polling.\n", chan->name);
-					return -1;
-				}
-				if (!ms) {
-					/* nothing happened */
-					if (timeout > 0) {
-						timeout -= 1000;
-						continue;
-					} else {
-						ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 shutdown.\n", chan->name);
-						break;
-					}
-				}
-				if (!(frame = ast_read(chan))) {
-					return -1;
-				}
-				if ((frame->frametype == AST_FRAME_CONTROL) &&
-				    (frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
-				    (frame->datalen == sizeof(t38_parameters))) {
-					struct ast_control_t38_parameters *parameters = frame->data.ptr;
-					
-					switch (parameters->request_response) {
-					case AST_T38_TERMINATED:
-						ast_debug(1, "Shut down T.38 on %s\n", chan->name);
-						break;
-					case AST_T38_REFUSED:
-						ast_log(LOG_WARNING, "channel '%s' refused to disable T.38\n", chan->name);
-						break;
-					default:
-						ast_log(LOG_ERROR, "channel '%s' failed to disable T.38\n", chan->name);
-						break;
-					}
-					ast_frfree(frame);
-					break;
-				}
-				ast_frfree(frame);
-			}
-		}
-	}
-
 	/* return the chancount so the calling function can determine if the channel hungup during this FAX session or not */
 	return chancount;
+}
+
+static int receivefax_t38_init(struct ast_channel *chan, struct ast_fax_session_details *details)
+{
+	int ms;
+	struct ast_frame *frame = NULL;
+	struct ast_control_t38_parameters t38_parameters;
+
+	t38_parameters_ast_to_fax(&details->our_t38_parameters, &our_t38_parameters);
+
+	/* don't send any audio if we've already received a T.38 reinvite */
+	if (ast_channel_get_t38_state(chan) != T38_STATE_NEGOTIATING) {
+		/* generate 3 seconds of CED */
+		if (ast_playtones_start(chan, 1024, "!2100/3000", 1)) {
+			ast_log(LOG_ERROR, "error generating CED tone on %s\n", chan->name);
+			return -1;
+		}
+
+		ms = 3000;
+		while (ms > 0) {
+			ms = ast_waitfor(chan, ms);
+			if (ms < 0) {
+				ast_log(LOG_ERROR, "error while generating CED tone on %s\n", chan->name);
+				ast_playtones_stop(chan);
+				return -1;
+			}
+
+			if (ms == 0) { /* all done, nothing happened */
+				break;
+			}
+
+			if (!(frame = ast_read(chan))) {
+				ast_log(LOG_ERROR, "error reading frame while generating CED tone on %s\n", chan->name);
+				ast_playtones_stop(chan);
+				return -1;
+			}
+
+			if ((frame->frametype == AST_FRAME_CONTROL) &&
+			    (frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
+			    (frame->datalen == sizeof(t38_parameters))) {
+				struct ast_control_t38_parameters *parameters = frame->data.ptr;
+
+				switch (parameters->request_response) {
+				case AST_T38_REQUEST_NEGOTIATE:
+					/* the other end has requested a switch to T.38, so reply that we are willing, if we can
+					 * do T.38 as well
+					 */
+					t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
+					t38_parameters.request_response = (details->caps & AST_FAX_TECH_T38) ? AST_T38_NEGOTIATED : AST_T38_REFUSED;
+					ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
+					ast_playtones_stop(chan);
+					break;
+				case AST_T38_NEGOTIATED:
+					ast_debug(1, "Negotiated T.38 for receive on %s\n", chan->name);
+					t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
+					details->caps &= ~AST_FAX_TECH_AUDIO;
+					report_fax_status(chan, details, "T.38 Negotiated");
+					break;
+				default:
+					break;
+				}
+			}
+			ast_frfree(frame);
+		}
+
+		ast_playtones_stop(chan);
+	}
+
+	/* if T.38 was negotiated, we are done initializing */
+	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+		return 0;
+	}
+
+	/* request T.38 */
+	ast_debug(1, "Negotiating T.38 for receive on %s\n", chan->name);
+
+	/* wait up to five seconds for negotiation to complete */
+	ms = 5000;
+
+	/* set parameters based on the session's parameters */
+	t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
+	t38_parameters.request_response = AST_T38_REQUEST_NEGOTIATE;
+	if ((ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters)) != 0)) {
+		return -1;
+	}
+
+	while (ms > 0) {
+		ms = ast_waitfor(chan, ms);
+		if (ms < 0) {
+			ast_log(LOG_WARNING, "error on '%s' while waiting for T.38 negotiation.\n", chan->name);
+			return -1;
+		}
+
+		if (ms == 0) { /* all done, nothing happened */
+			ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 negotiation.\n", chan->name);
+			details->caps &= ~AST_FAX_TECH_T38;
+			break;
+		}
+
+		if (!(frame = ast_read(chan))) {
+			ast_log(LOG_WARNING, "error on '%s' while waiting for T.38 negotiation.\n", chan->name);
+			return -1;
+		}
+
+		if ((frame->frametype == AST_FRAME_CONTROL) &&
+				(frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
+				(frame->datalen == sizeof(t38_parameters))) {
+			struct ast_control_t38_parameters *parameters = frame->data.ptr;
+
+			switch (parameters->request_response) {
+			case AST_T38_REQUEST_NEGOTIATE:
+				t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
+				t38_parameters.request_response = AST_T38_NEGOTIATED;
+				ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
+				break;
+			case AST_T38_NEGOTIATED:
+				ast_debug(1, "Negotiated T.38 for receive on %s\n", chan->name);
+				t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
+				details->caps &= ~AST_FAX_TECH_AUDIO;
+				report_fax_status(chan, details, "T.38 Negotiated");
+				ms = 0;
+				break;
+			case AST_T38_REFUSED:
+				ast_log(LOG_WARNING, "channel '%s' refused to negotiate T.38\n", chan->name);
+				details->caps &= ~AST_FAX_TECH_T38;
+				ms = 0;
+				break;
+			default:
+				ast_log(LOG_ERROR, "channel '%s' failed to negotiate T.38\n", chan->name);
+				details->caps &= ~AST_FAX_TECH_T38;
+				ms = 0;
+				break;
+			}
+		}
+		ast_frfree(frame);
+	}
+
+	/* if T.38 was negotiated, we are done initializing */
+	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+		return 0;
+	}
+
+	/* if we made it here, then T.38 failed, check the 'f' flag */
+	if (details->option.allow_audio != AST_FAX_OPTFLAG_TRUE) {
+		ast_log(LOG_WARNING, "Audio FAX not allowed on channel '%s' and T.38 negotiation failed; aborting.\n", chan->name);
+		return -1;
+	}
+
+	/* ok, audio fallback is allowed */
+	details->caps |= AST_FAX_TECH_AUDIO;
+
+	return 0;
 }
 
 /*! \brief initiate a receive FAX session */
 static int receivefax_exec(struct ast_channel *chan, const char *data)
 {
-	char *parse;
+	char *parse, modems[128] = "";
 	int channel_alive;
 	struct ast_fax_session_details *details;
+	struct ast_fax_session *s;
 	struct ast_fax_document *doc;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(filename);
@@ -1179,58 +1493,103 @@ static int receivefax_exec(struct ast_channel *chan, const char *data)
 	struct ast_flags opts = { 0, };
 	struct manager_event_info info;
 
-	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "%s requires an argument (filename[,options])\n", app_receivefax);
-		return -1;
-	}
-	parse = ast_strdupa(data);
-	AST_STANDARD_APP_ARGS(args, parse);
-	
 	/* initialize output channel variables */
 	pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
-	pbx_builtin_setvar_helper(chan, "FAXERROR", "Application Problems");
-	pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", "Invalid application arguments.");
 	pbx_builtin_setvar_helper(chan, "REMOTESTATIONID", NULL);
 	pbx_builtin_setvar_helper(chan, "FAXPAGES", "0");
 	pbx_builtin_setvar_helper(chan, "FAXBITRATE", NULL);
 	pbx_builtin_setvar_helper(chan, "FAXRESOLUTION", NULL);
 
+	/* Get a FAX session details structure from the channel's FAX datastore and create one if
+	 * it does not already exist. */
+	if (!(details = find_or_create_details(chan))) {
+		pbx_builtin_setvar_helper(chan, "FAXERROR", "MEMORY_ERROR");
+		pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", "error allocating memory");
+		ast_log(LOG_ERROR, "System cannot provide memory for session requirements.\n");
+		return -1;
+	}
+
+	ast_string_field_set(details, result, "FAILED");
+	ast_string_field_set(details, resultstr, "error starting fax session");
+	ast_string_field_set(details, error, "INIT_ERROR");
+	set_channel_variables(chan, details);
+
+	if (details->maxrate < details->minrate) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "maxrate is less than minrate");
+		set_channel_variables(chan, details);
+		ast_log(LOG_ERROR, "maxrate %d is less than minrate %d\n", details->maxrate, details->minrate);
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	if (check_modem_rate(details->modems, details->minrate)) {
+		ast_fax_modem_to_str(details->modems, modems, sizeof(modems));
+		ast_log(LOG_ERROR, "'modems' setting '%s' is incompatible with 'minrate' setting %d\n", modems, details->minrate);
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "incompatible 'modems' and 'minrate' settings");
+		set_channel_variables(chan, details);
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	if (check_modem_rate(details->modems, details->maxrate)) {
+		ast_fax_modem_to_str(details->modems, modems, sizeof(modems));
+		ast_log(LOG_ERROR, "'modems' setting '%s' is incompatible with 'maxrate' setting %d\n", modems, details->maxrate);
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "incompatible 'modems' and 'maxrate' settings");
+		set_channel_variables(chan, details);
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	if (ast_strlen_zero(data)) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "invalid arguments");
+		set_channel_variables(chan, details);
+		ast_log(LOG_WARNING, "%s requires an argument (filename[,options])\n", app_receivefax);
+		ao2_ref(details, -1);
+		return -1;
+	}
+	parse = ast_strdupa(data);
+	AST_STANDARD_APP_ARGS(args, parse);
+
 	if (!ast_strlen_zero(args.options) &&
 	    ast_app_parse_options(fax_exec_options, &opts, NULL, args.options)) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "invalid arguments");
+		set_channel_variables(chan, details);
+		ao2_ref(details, -1);
 		return -1;
 	}
 	if (ast_strlen_zero(args.filename)) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "invalid arguments");
+		set_channel_variables(chan, details);
 		ast_log(LOG_WARNING, "%s requires an argument (filename[,options])\n", app_receivefax);
+		ao2_ref(details, -1);
 		return -1;
 	}
 
 	/* check for unsupported FAX application options */
 	if (ast_test_flag(&opts, OPT_CALLERMODE) || ast_test_flag(&opts, OPT_CALLEDMODE)) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "invalid arguments");
+		set_channel_variables(chan, details);
 		ast_log(LOG_WARNING, "%s does not support polling\n", app_receivefax);
+		ao2_ref(details, -1);
 		return -1;
 	}
 	
-	/* make sure the channel is up */
-	if (chan->_state != AST_STATE_UP) {
-		if (ast_answer(chan)) {
-			ast_log(LOG_WARNING, "Channel '%s' failed answer attempt.\n", chan->name);
-			return -1;
-		}
-	}
-
 	ast_atomic_fetchadd_int(&faxregistry.fax_rx_attempts, 1);
 
 	pbx_builtin_setvar_helper(chan, "FAXERROR", "Channel Problems");
 	pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", "Error before FAX transmission started.");
 
-	/* Get a FAX session details structure from the channel's FAX datastore and create one if
- 	 * it does not already exist. */
-	if (!(details = find_or_create_details(chan))) {
-		ast_log(LOG_ERROR, "System cannot provide memory for session requirements.\n");
-		return -1;
-	}
-
 	if (!(doc = ast_calloc(1, sizeof(*doc) + strlen(args.filename) + 1))) {
+		ast_string_field_set(details, error, "MEMORY_ERROR");
+		ast_string_field_set(details, resultstr, "error allocating memory");
+		set_channel_variables(chan, details);
 		ast_log(LOG_ERROR, "System cannot provide memory for session requirements.\n");
 		ao2_ref(details, -1);
 		return -1;
@@ -1258,10 +1617,59 @@ static int receivefax_exec(struct ast_channel *chan, const char *data)
 		details->option.allow_audio = AST_FAX_OPTFLAG_TRUE;
 	}
 
-	if ((channel_alive = generic_fax_exec(chan, details)) < 0) {
+	if (!(s = fax_session_reserve(details))) {
+		ast_string_field_set(details, resultstr, "error reserving fax session");
+		set_channel_variables(chan, details);
+		ast_log(LOG_ERROR, "Unable to reserve FAX session.\n");
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	/* make sure the channel is up */
+	if (chan->_state != AST_STATE_UP) {
+		if (ast_answer(chan)) {
+			ast_string_field_set(details, resultstr, "error answering channel");
+			set_channel_variables(chan, details);
+			ast_log(LOG_WARNING, "Channel '%s' failed answer attempt.\n", chan->name);
+			ao2_ref(s, -1);
+			ao2_ref(details, -1);
+			return -1;
+		}
+	}
+
+	if (set_fax_t38_caps(chan, details)) {
+		ast_string_field_set(details, error, "T38_NEG_ERROR");
+		ast_string_field_set(details, resultstr, "error negotiating T.38");
+		set_channel_variables(chan, details);
+		ao2_ref(s, -1);
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	if (details->caps & AST_FAX_TECH_T38) {
+		if (receivefax_t38_init(chan, details)) {
+			ast_string_field_set(details, error, "T38_NEG_ERROR");
+			ast_string_field_set(details, resultstr, "error negotiating T.38");
+			set_channel_variables(chan, details);
+			ao2_ref(s, -1);
+			ao2_ref(details, -1);
+			ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", chan->name);
+			return -1;
+		}
+	} else {
+		details->option.send_ced = 1;
+	}
+
+	if ((channel_alive = generic_fax_exec(chan, details, s)) < 0) {
 		ast_atomic_fetchadd_int(&faxregistry.fax_failures, 1);
 	}
-	
+
+	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+		if (disable_t38(chan)) {
+			ast_debug(1, "error disabling T.38 mode on %s\n", chan->name);
+		}
+	}
+
 	/* send out the AMI completion event */
 	ast_channel_lock(chan);
 
@@ -1290,93 +1698,379 @@ static int receivefax_exec(struct ast_channel *chan, const char *data)
 		      args.filename);
 	ast_channel_unlock(chan);
 
+	ao2_ref(s, -1);
 	ao2_ref(details, -1);
 
 	/* If the channel hungup return -1; otherwise, return 0 to continue in the dialplan */
 	return (!channel_alive) ? -1 : 0;
 }
 
+static int sendfax_t38_init(struct ast_channel *chan, struct ast_fax_session_details *details)
+{
+	int ms;
+	struct ast_frame *frame = NULL;
+	struct ast_control_t38_parameters t38_parameters;
+
+	t38_parameters_ast_to_fax(&details->our_t38_parameters, &our_t38_parameters);
+
+	/* send CNG tone while listening for the receiver to initiate a switch
+	 * to T.38 mode; if they do, stop sending the CNG tone and proceed with
+	 * the switch.
+	 *
+	 * 10500 is enough time for 3 CNG tones
+	 */
+	ms = 10500;
+
+	/* don't send any audio if we've already received a T.38 reinvite */
+	if (ast_channel_get_t38_state(chan) != T38_STATE_NEGOTIATING) {
+		if (ast_playtones_start(chan, 1024, "!1100/500,!0/3000,!1100/500,!0/3000,!1100/500,!0/3000", 1)) {
+			ast_log(LOG_ERROR, "error generating CNG tone on %s\n", chan->name);
+			return -1;
+		}
+	}
+
+	while (ms > 0) {
+		ms = ast_waitfor(chan, ms);
+		if (ms < 0) {
+			ast_log(LOG_ERROR, "error while generating CNG tone on %s\n", chan->name);
+			ast_playtones_stop(chan);
+			return -1;
+		}
+
+		if (ms == 0) { /* all done, nothing happened */
+			break;
+		}
+
+		if (!(frame = ast_read(chan))) {
+			ast_log(LOG_ERROR, "error reading frame while generating CNG tone on %s\n", chan->name);
+			ast_playtones_stop(chan);
+			return -1;
+		}
+
+		if ((frame->frametype == AST_FRAME_CONTROL) &&
+				(frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
+				(frame->datalen == sizeof(t38_parameters))) {
+			struct ast_control_t38_parameters *parameters = frame->data.ptr;
+
+			switch (parameters->request_response) {
+			case AST_T38_REQUEST_NEGOTIATE:
+				/* the other end has requested a switch to T.38, so reply that we are willing, if we can
+				 * do T.38 as well
+				 */
+				t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
+				t38_parameters.request_response = (details->caps & AST_FAX_TECH_T38) ? AST_T38_NEGOTIATED : AST_T38_REFUSED;
+				ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
+				ast_playtones_stop(chan);
+				break;
+			case AST_T38_NEGOTIATED:
+				ast_debug(1, "Negotiated T.38 for send on %s\n", chan->name);
+				t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
+				details->caps &= ~AST_FAX_TECH_AUDIO;
+				report_fax_status(chan, details, "T.38 Negotiated");
+				ms = 0;
+				break;
+			default:
+				break;
+			}
+		}
+		ast_frfree(frame);
+	}
+
+	ast_playtones_stop(chan);
+
+	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+		return 0;
+	}
+
+	/* T.38 negotiation did not happen, initiate a switch if requested */
+	if (details->option.request_t38 == AST_FAX_OPTFLAG_TRUE) {
+		ast_debug(1, "Negotiating T.38 for send on %s\n", chan->name);
+
+		/* wait up to five seconds for negotiation to complete */
+		ms = 5000;
+
+		/* set parameters based on the session's parameters */
+		t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
+		t38_parameters.request_response = AST_T38_REQUEST_NEGOTIATE;
+		if ((ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters)) != 0)) {
+			return -1;
+		}
+
+		while (ms > 0) {
+			ms = ast_waitfor(chan, ms);
+			if (ms < 0) {
+				ast_log(LOG_WARNING, "error on '%s' while waiting for T.38 negotiation.\n", chan->name);
+				return -1;
+			}
+
+			if (ms == 0) { /* all done, nothing happened */
+				ast_log(LOG_WARNING, "channel '%s' timed-out during the T.38 negotiation.\n", chan->name);
+				details->caps &= ~AST_FAX_TECH_T38;
+				break;
+			}
+
+			if (!(frame = ast_read(chan))) {
+				ast_log(LOG_WARNING, "error on '%s' while waiting for T.38 negotiation.\n", chan->name);
+				return -1;
+			}
+
+			if ((frame->frametype == AST_FRAME_CONTROL) &&
+					(frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
+					(frame->datalen == sizeof(t38_parameters))) {
+				struct ast_control_t38_parameters *parameters = frame->data.ptr;
+
+				switch (parameters->request_response) {
+				case AST_T38_REQUEST_NEGOTIATE:
+					t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
+					t38_parameters.request_response = AST_T38_NEGOTIATED;
+					ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
+					break;
+				case AST_T38_NEGOTIATED:
+					ast_debug(1, "Negotiated T.38 for receive on %s\n", chan->name);
+					t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
+					details->caps &= ~AST_FAX_TECH_AUDIO;
+					report_fax_status(chan, details, "T.38 Negotiated");
+					ms = 0;
+					break;
+				case AST_T38_REFUSED:
+					ast_log(LOG_WARNING, "channel '%s' refused to negotiate T.38\n", chan->name);
+					details->caps &= ~AST_FAX_TECH_T38;
+					ms = 0;
+					break;
+				default:
+					ast_log(LOG_ERROR, "channel '%s' failed to negotiate T.38\n", chan->name);
+					details->caps &= ~AST_FAX_TECH_T38;
+					ms = 0;
+					break;
+				}
+			}
+			ast_frfree(frame);
+		}
+
+		/* if T.38 was negotiated, we are done initializing */
+		if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+			return 0;
+		}
+
+		/* send one more CNG tone to get audio going again for some
+		 * carriers if we are going to fall back to audio mode */
+		if (details->option.allow_audio == AST_FAX_OPTFLAG_TRUE) {
+			if (ast_playtones_start(chan, 1024, "!1100/500,!0/3000", 1)) {
+				ast_log(LOG_ERROR, "error generating second CNG tone on %s\n", chan->name);
+				return -1;
+			}
+
+			ms = 3500;
+			while (ms > 0) {
+				ms = ast_waitfor(chan, ms);
+				if (ms < 0) {
+					ast_log(LOG_ERROR, "error while generating second CNG tone on %s\n", chan->name);
+					ast_playtones_stop(chan);
+					return -1;
+				}
+
+				if (ms == 0) { /* all done, nothing happened */
+					break;
+				}
+
+				if (!(frame = ast_read(chan))) {
+					ast_log(LOG_ERROR, "error reading frame while generating second CNG tone on %s\n", chan->name);
+					ast_playtones_stop(chan);
+					return -1;
+				}
+
+				if ((frame->frametype == AST_FRAME_CONTROL) &&
+						(frame->subclass.integer == AST_CONTROL_T38_PARAMETERS) &&
+						(frame->datalen == sizeof(t38_parameters))) {
+					struct ast_control_t38_parameters *parameters = frame->data.ptr;
+
+					switch (parameters->request_response) {
+					case AST_T38_REQUEST_NEGOTIATE:
+						/* the other end has requested a switch to T.38, so reply that we are willing, if we can
+						 * do T.38 as well
+						 */
+						t38_parameters_fax_to_ast(&t38_parameters, &details->our_t38_parameters);
+						t38_parameters.request_response = (details->caps & AST_FAX_TECH_T38) ? AST_T38_NEGOTIATED : AST_T38_REFUSED;
+						ast_indicate_data(chan, AST_CONTROL_T38_PARAMETERS, &t38_parameters, sizeof(t38_parameters));
+						ast_playtones_stop(chan);
+						break;
+					case AST_T38_NEGOTIATED:
+						ast_debug(1, "Negotiated T.38 for send on %s\n", chan->name);
+						t38_parameters_ast_to_fax(&details->their_t38_parameters, parameters);
+						details->caps &= ~AST_FAX_TECH_AUDIO;
+						report_fax_status(chan, details, "T.38 Negotiated");
+						ms = 0;
+						break;
+					default:
+						break;
+					}
+				}
+				ast_frfree(frame);
+			}
+
+			ast_playtones_stop(chan);
+
+			/* if T.38 was negotiated, we are done initializing */
+			if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+				return 0;
+			}
+		}
+	}
+
+	/* if we made it here, then T.38 failed, check the 'f' flag */
+	if (details->option.allow_audio == AST_FAX_OPTFLAG_FALSE) {
+		ast_log(LOG_WARNING, "Audio FAX not allowed on channel '%s' and T.38 negotiation failed; aborting.\n", chan->name);
+		return -1;
+	}
+
+	/* ok, audio fallback is allowed */
+	details->caps |= AST_FAX_TECH_AUDIO;
+
+	return 0;
+}
+
+
 /*! \brief initiate a send FAX session */
 static int sendfax_exec(struct ast_channel *chan, const char *data)
 {
-	char *parse;
-	int channel_alive;
+	char *parse, *filenames, *c, modems[128] = "";
+	int channel_alive, file_count;
 	struct ast_fax_session_details *details;
+	struct ast_fax_session *s;
 	struct ast_fax_document *doc;
 	AST_DECLARE_APP_ARGS(args,
-		AST_APP_ARG(filename);
+		AST_APP_ARG(filenames);
 		AST_APP_ARG(options);
 	);
 	struct ast_flags opts = { 0, };
 	struct manager_event_info info;
 
-	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "%s requires an argument (filename[,options])\n", app_sendfax);
-		return -1;
-	}
-	parse = ast_strdupa(data);
-	AST_STANDARD_APP_ARGS(args, parse);
-
 	/* initialize output channel variables */
 	pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
-	pbx_builtin_setvar_helper(chan, "FAXERROR", "Application Problems");
-	pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", "Invalid application arguments.");
 	pbx_builtin_setvar_helper(chan, "REMOTESTATIONID", NULL);
 	pbx_builtin_setvar_helper(chan, "FAXPAGES", "0");
 	pbx_builtin_setvar_helper(chan, "FAXBITRATE", NULL);
 	pbx_builtin_setvar_helper(chan, "FAXRESOLUTION", NULL);
 
-	if (!ast_strlen_zero(args.options) &&
-	    ast_app_parse_options(fax_exec_options, &opts, NULL, args.options)) {
+	/* Get a requirement structure and set it.  This structure is used
+	 * to tell the FAX technology module about the higher level FAX session */
+	if (!(details = find_or_create_details(chan))) {
+		pbx_builtin_setvar_helper(chan, "FAXERROR", "MEMORY_ERROR");
+		pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", "error allocating memory");
+		ast_log(LOG_ERROR, "System cannot provide memory for session requirements.\n");
 		return -1;
 	}
-	if (ast_strlen_zero(args.filename)) {
-		ast_log(LOG_WARNING, "%s requires an argument (filename[,options])\n", app_sendfax);
+
+	ast_string_field_set(details, result, "FAILED");
+	ast_string_field_set(details, resultstr, "error starting fax session");
+	ast_string_field_set(details, error, "INIT_ERROR");
+	set_channel_variables(chan, details);
+
+	if (details->maxrate < details->minrate) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "maxrate is less than minrate");
+		set_channel_variables(chan, details);
+		ast_log(LOG_ERROR, "maxrate %d is less than minrate %d\n", details->maxrate, details->minrate);
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	if (check_modem_rate(details->modems, details->minrate)) {
+		ast_fax_modem_to_str(details->modems, modems, sizeof(modems));
+		ast_log(LOG_ERROR, "'modems' setting '%s' is incompatible with 'minrate' setting %d\n", modems, details->minrate);
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "incompatible 'modems' and 'minrate' settings");
+		set_channel_variables(chan, details);
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	if (check_modem_rate(details->modems, details->maxrate)) {
+		ast_fax_modem_to_str(details->modems, modems, sizeof(modems));
+		ast_log(LOG_ERROR, "'modems' setting '%s' is incompatible with 'maxrate' setting %d\n", modems, details->maxrate);
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "incompatible 'modems' and 'maxrate' settings");
+		set_channel_variables(chan, details);
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	if (ast_strlen_zero(data)) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "invalid arguments");
+		set_channel_variables(chan, details);
+		ast_log(LOG_WARNING, "%s requires an argument (filename[&filename[&filename]][,options])\n", app_sendfax);
+		ao2_ref(details, -1);
+		return -1;
+	}
+	parse = ast_strdupa(data);
+	AST_STANDARD_APP_ARGS(args, parse);
+
+
+	if (!ast_strlen_zero(args.options) &&
+	    ast_app_parse_options(fax_exec_options, &opts, NULL, args.options)) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "invalid arguments");
+		set_channel_variables(chan, details);
+		ao2_ref(details, -1);
+		return -1;
+	}
+	if (ast_strlen_zero(args.filenames)) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "invalid arguments");
+		set_channel_variables(chan, details);
+		ast_log(LOG_WARNING, "%s requires an argument (filename[&filename[&filename]],options])\n", app_sendfax);
+		ao2_ref(details, -1);
 		return -1;
 	}
 	
 	/* check for unsupported FAX application options */
 	if (ast_test_flag(&opts, OPT_CALLERMODE) || ast_test_flag(&opts, OPT_CALLEDMODE)) {
+		ast_string_field_set(details, error, "INVALID_ARGUMENTS");
+		ast_string_field_set(details, resultstr, "invalid arguments");
+		set_channel_variables(chan, details);
 		ast_log(LOG_WARNING, "%s does not support polling\n", app_sendfax);
-		return -1;
-	}
-
-	if (access(args.filename, (F_OK | R_OK)) < 0) {
-		ast_log(LOG_ERROR, "access failure.  Verify '%s' exists and check permissions.\n", args.filename);
-		return -1;
-	}
-	
-	/* make sure the channel is up */
-	if (chan->_state != AST_STATE_UP) {
-		if (ast_answer(chan)) {
-			ast_log(LOG_WARNING, "Channel '%s' failed answer attempt.\n", chan->name);
-			return -1;
-		}
-	}
-
-	ast_atomic_fetchadd_int(&faxregistry.fax_tx_attempts, 1);
-	
-	pbx_builtin_setvar_helper(chan, "FAXERROR", "Channel Problems");
-	pbx_builtin_setvar_helper(chan, "FAXSTATUSSTRING", "Error before FAX transmission started.");
-
-	/* Get a requirement structure and set it.  This structure is used
-	 * to tell the FAX technology module about the higher level FAX session */
-	if (!(details = find_or_create_details(chan))) {
-		ast_log(LOG_ERROR, "System cannot provide memory for session requirements.\n");
-		return -1;
-	}
-
-	if (!(doc = ast_calloc(1, sizeof(*doc) + strlen(args.filename) + 1))) {
-		ast_log(LOG_ERROR, "System cannot provide memory for session requirements.\n");
 		ao2_ref(details, -1);
 		return -1;
 	}
 
-	strcpy(doc->filename, args.filename);
-	AST_LIST_INSERT_TAIL(&details->documents, doc, next);
+	ast_atomic_fetchadd_int(&faxregistry.fax_tx_attempts, 1);
 
-	ast_verb(3, "Channel '%s' sending FAX '%s'\n", chan->name, args.filename);
-	
+	file_count = 0;
+	filenames = args.filenames;
+	while ((c = strsep(&filenames, "&"))) {
+		if (access(c, (F_OK | R_OK)) < 0) {
+			ast_string_field_set(details, error, "FILE_ERROR");
+			ast_string_field_set(details, resultstr, "error reading file");
+			set_channel_variables(chan, details);
+			ast_log(LOG_ERROR, "access failure.  Verify '%s' exists and check permissions.\n", args.filenames);
+			ao2_ref(details, -1);
+			return -1;
+		}
+
+		if (!(doc = ast_calloc(1, sizeof(*doc) + strlen(c) + 1))) {
+			ast_string_field_set(details, error, "MEMORY_ERROR");
+			ast_string_field_set(details, resultstr, "error allocating memory");
+			set_channel_variables(chan, details);
+			ast_log(LOG_ERROR, "System cannot provide memory for session requirements.\n");
+			ao2_ref(details, -1);
+			return -1;
+		}
+
+		strcpy(doc->filename, c);
+		AST_LIST_INSERT_TAIL(&details->documents, doc, next);
+		file_count++;
+	}
+
+	if (file_count > 1) {
+		details->caps |= AST_FAX_TECH_MULTI_DOC;
+	}
+
+	ast_verb(3, "Channel '%s' sending FAX:\n", chan->name);
+	AST_LIST_TRAVERSE(&details->documents, doc, next) {
+		ast_verb(3, "   %s\n", doc->filename);
+	}
+
 	details->caps = AST_FAX_TECH_SEND;
 
 	/* check for debug */
@@ -1394,10 +2088,70 @@ static int sendfax_exec(struct ast_channel *chan, const char *data)
 		details->option.allow_audio = AST_FAX_OPTFLAG_TRUE;
 	}
 
-	if ((channel_alive = generic_fax_exec(chan, details)) < 0) {
+	if (ast_test_flag(&opts, OPT_REQUEST_T38)) {
+		details->option.request_t38 = AST_FAX_OPTFLAG_TRUE;
+	}
+
+	if (!(s = fax_session_reserve(details))) {
+		ast_string_field_set(details, resultstr, "error reserving fax session");
+		set_channel_variables(chan, details);
+		ast_log(LOG_ERROR, "Unable to reserve FAX session.\n");
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	/* make sure the channel is up */
+	if (chan->_state != AST_STATE_UP) {
+		if (ast_answer(chan)) {
+			ast_string_field_set(details, resultstr, "error answering channel");
+			set_channel_variables(chan, details);
+			ast_log(LOG_WARNING, "Channel '%s' failed answer attempt.\n", chan->name);
+			ao2_ref(s, -1);
+			ao2_ref(details, -1);
+			return -1;
+		}
+	}
+
+	if (set_fax_t38_caps(chan, details)) {
+		ast_string_field_set(details, error, "T38_NEG_ERROR");
+		ast_string_field_set(details, resultstr, "error negotiating T.38");
+		set_channel_variables(chan, details);
+		ao2_ref(s, -1);
+		ao2_ref(details, -1);
+		return -1;
+	}
+
+	if (details->caps & AST_FAX_TECH_T38) {
+		if (sendfax_t38_init(chan, details)) {
+			ast_string_field_set(details, error, "T38_NEG_ERROR");
+			ast_string_field_set(details, resultstr, "error negotiating T.38");
+			set_channel_variables(chan, details);
+			ao2_ref(s, -1);
+			ao2_ref(details, -1);
+			ast_log(LOG_ERROR, "error initializing channel '%s' in T.38 mode\n", chan->name);
+			return -1;
+		}
+	} else {
+		details->option.send_cng = 1;
+	}
+
+	if ((channel_alive = generic_fax_exec(chan, details, s)) < 0) {
 		ast_atomic_fetchadd_int(&faxregistry.fax_failures, 1);
 	}
-	
+
+	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+		if (disable_t38(chan)) {
+			ast_debug(1, "error disabling T.38 mode on %s\n", chan->name);
+		}
+	}
+
+	if (!(filenames = generate_filenames_string(details, "FileName: ", "\r\n"))) {
+		ast_log(LOG_ERROR, "Error generating SendFAX manager event\n");
+		ao2_ref(s, -1);
+		ao2_ref(details, -1);
+		return (!channel_alive) ? -1 : 0;
+	}
+
 	/* send out the AMI completion event */
 	ast_channel_lock(chan);
 	get_manager_event_info(chan, &info);
@@ -1412,7 +2166,7 @@ static int sendfax_exec(struct ast_channel *chan, const char *data)
 		      "PagesTransferred: %s\r\n"
 		      "Resolution: %s\r\n"
 		      "TransferRate: %s\r\n"
-		      "FileName: %s\r\n",
+		      "%s\r\n",
 		      chan->name,
 		      info.context,
 		      info.exten,
@@ -1422,9 +2176,12 @@ static int sendfax_exec(struct ast_channel *chan, const char *data)
 		      pbx_builtin_getvar_helper(chan, "FAXPAGES"),
 		      pbx_builtin_getvar_helper(chan, "FAXRESOLUTION"),
 		      pbx_builtin_getvar_helper(chan, "FAXBITRATE"),
-		      args.filename);
+		      filenames);
 	ast_channel_unlock(chan);
 
+	ast_free(filenames);
+
+	ao2_ref(s, -1);
 	ao2_ref(details, -1);
 
 	/* If the channel hungup return -1; otherwise, return 0 to continue in the dialplan */
@@ -1447,8 +2204,8 @@ static int session_cmp_cb(void *obj, void *arg, int flags)
 	return (lhs->id == rhs->id) ? CMP_MATCH | CMP_STOP : 0;
 }
 
-/*! \brief FAX session tab completion */
-static char *fax_session_tab_complete(struct ast_cli_args *a) 
+/*! \brief fax session tab completion */
+static char *fax_session_tab_complete(struct ast_cli_args *a)
 {
 	int tklen;
 	int wordnum = 0;
@@ -1476,6 +2233,37 @@ static char *fax_session_tab_complete(struct ast_cli_args *a)
 		ao2_iterator_destroy(&i);
 	}
 	return name;
+}
+
+static char *cli_fax_show_version(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct fax_module *fax;
+
+	switch(cmd) {
+	case CLI_INIT:
+		e->command = "fax show version";
+		e->usage =
+			"Usage: fax show version\n"
+			"       Show versions of FAX For Asterisk components.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3) {
+		return CLI_SHOWUSAGE;
+	}
+
+	ast_cli(a->fd, "FAX For Asterisk Components:\n");
+	ast_cli(a->fd, "\tApplications: %s\n", ast_get_version());
+	AST_RWLIST_RDLOCK(&faxmodules);
+	AST_RWLIST_TRAVERSE(&faxmodules, fax, list) {
+		ast_cli(a->fd, "\t%s: %s\n", fax->tech->description, fax->tech->version);
+	}
+	AST_RWLIST_UNLOCK(&faxmodules);
+	ast_cli(a->fd, "\n");
+
+	return CLI_SUCCESS;
 }
 
 /*! \brief enable FAX debugging */
@@ -1543,7 +2331,42 @@ static char *cli_fax_show_capabilities(struct ast_cli_entry *e, int cmd, struct 
 	return CLI_SUCCESS;
 }
 
-/*! \brief display details of a specified FAX session */
+/*! \brief display global defaults and settings */
+static char *cli_fax_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct fax_module *fax;
+	char modems[128] = "";
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "fax show settings";
+		e->usage =
+			"Usage: fax show settings\n"
+			"       Show the global settings and defaults of both the FAX core and technology modules\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_cli(a->fd, "FAX For Asterisk Settings:\n");
+	ast_cli(a->fd, "\tECM: %s\n", general_options.ecm ? "Enabled" : "Disabled");
+	ast_cli(a->fd, "\tStatus Events: %s\n",  general_options.statusevents ? "On" : "Off");
+	ast_cli(a->fd, "\tMinimum Bit Rate: %d\n", general_options.minrate);
+	ast_cli(a->fd, "\tMaximum Bit Rate: %d\n", general_options.maxrate);
+	ast_fax_modem_to_str(general_options.modems, modems, sizeof(modems));
+	ast_cli(a->fd, "\tModem Modulations Allowed: %s\n", modems);
+	ast_cli(a->fd, "\n\nFAX Technology Modules:\n\n");
+	AST_RWLIST_RDLOCK(&faxmodules);
+	AST_RWLIST_TRAVERSE(&faxmodules, fax, list) {
+		ast_cli(a->fd, "%s (%s) Settings:\n", fax->tech->type, fax->tech->description);
+		fax->tech->cli_show_settings(a->fd);
+	}
+	AST_RWLIST_UNLOCK(&faxmodules);
+
+	return CLI_SUCCESS;
+}
+
+/*! \brief display details of a specified fax session */
 static char *cli_fax_show_session(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ast_fax_session *s, tmp;
@@ -1597,6 +2420,7 @@ static char *cli_fax_show_stats(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	ast_cli(a->fd, "\nFAX Statistics:\n---------------\n\n");
 	ast_cli(a->fd, "%-20.20s : %d\n", "Current Sessions", faxregistry.active_sessions);
+	ast_cli(a->fd, "%-20.20s : %d\n", "Reserved Sessions", faxregistry.reserved_sessions);
 	ast_cli(a->fd, "%-20.20s : %d\n", "Transmit Attempts", faxregistry.fax_tx_attempts);
 	ast_cli(a->fd, "%-20.20s : %d\n", "Receive Attempts", faxregistry.fax_rx_attempts);
 	ast_cli(a->fd, "%-20.20s : %d\n", "Completed FAXes", faxregistry.fax_complete);
@@ -1617,6 +2441,7 @@ static char *cli_fax_show_sessions(struct ast_cli_entry *e, int cmd, struct ast_
 	struct ast_fax_session *s;
 	struct ao2_iterator i;
 	int session_count;
+	char *filenames;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -1630,14 +2455,29 @@ static char *cli_fax_show_sessions(struct ast_cli_entry *e, int cmd, struct ast_
 	}
 
 	ast_cli(a->fd, "\nCurrent FAX Sessions:\n\n");
-	ast_cli(a->fd, "%-20.20s %-10.10s %-10.10s %-10.10s %-15.15s %-30.30s\n",
-		"Channel", "ID", "Type", "Operation", "State", "File");
+	ast_cli(a->fd, "%-20.20s %-10.10s %-10.10s %-5.5s %-10.10s %-15.15s %-30.30s\n",
+		"Channel", "Tech", "FAXID", "Type", "Operation", "State", "File(s)");
 	i = ao2_iterator_init(faxregistry.container, 0);
 	while ((s = ao2_iterator_next(&i))) {
 		ao2_lock(s);
-		ast_cli(a->fd, "%-20.20s %-10d %-10.10s %-10.10s %-15.15s %-30.30s\n",
-			s->channame, s->id, s->tech->type, (s->details->caps & AST_FAX_TECH_SEND) ? "send" : "receive",
-			ast_fax_state_to_str(s->state), AST_LIST_FIRST(&s->details->documents)->filename);
+
+		if (!(filenames = generate_filenames_string(s->details, "", ", "))) {
+			ast_log(LOG_ERROR, "error printing filenames for 'fax show sessions' command");
+			ao2_unlock(s);
+			ao2_ref(s, -1);
+			if (ao2_iterator_destroy != NULL) {
+				ao2_iterator_destroy(&i);
+			}
+			return CLI_FAILURE;
+		}
+
+		ast_cli(a->fd, "%-20.20s %-10.10s %-10d %-5.5s %-10.10s %-15.15s %-30s\n",
+			s->channame, s->tech->type, s->id,
+			(s->details->caps & AST_FAX_TECH_AUDIO) ? "G.711" : "T.38",
+			(s->details->caps & AST_FAX_TECH_SEND) ? "send" : "receive",
+			ast_fax_state_to_str(s->state), filenames);
+
+		ast_free(filenames);
 		ao2_unlock(s);
 		ao2_ref(s, -1);
 	}
@@ -1651,8 +2491,10 @@ static char *cli_fax_show_sessions(struct ast_cli_entry *e, int cmd, struct ast_
 }
 
 static struct ast_cli_entry fax_cli[] = {
+	AST_CLI_DEFINE(cli_fax_show_version, "Show versions of FAX For Asterisk components"),
 	AST_CLI_DEFINE(cli_fax_set_debug, "Enable/Disable FAX debugging on new FAX sessions"),
 	AST_CLI_DEFINE(cli_fax_show_capabilities, "Show the capabilities of the registered FAX technology modules"),
+	AST_CLI_DEFINE(cli_fax_show_settings, "Show the global settings and defaults of both the FAX core and technology modules"),
 	AST_CLI_DEFINE(cli_fax_show_session, "Show the status of the named FAX sessions"),
 	AST_CLI_DEFINE(cli_fax_show_sessions, "Show the current FAX sessions"),
 	AST_CLI_DEFINE(cli_fax_show_stats, "Summarize FAX session history"),
@@ -1664,12 +2506,14 @@ static int set_config(const char *config_file)
 	struct ast_config *cfg;
 	struct ast_variable *v;
 	struct ast_flags config_flags = { 0 };
+	char modems[128] = "";
 
 	/* set defaults */	
 	general_options.minrate = RES_FAX_MINRATE;
 	general_options.maxrate = RES_FAX_MAXRATE;	
 	general_options.statusevents = RES_FAX_STATUSEVENTS;
 	general_options.modems = RES_FAX_MODEM;
+	general_options.ecm = AST_FAX_OPTFLAG_TRUE;
 
 	/* read configuration */
 	if (!(cfg = ast_config_load2(config_file, "res_fax", config_flags))) {
@@ -1687,14 +2531,14 @@ static int set_config(const char *config_file)
 
 		if (!strcasecmp(v->name, "minrate")) {
 			ast_debug(3, "reading minrate '%s' from configuration file\n", v->value);
-			if ((rate = fax_rate_str_to_int(v->value)) == -1) {
+			if ((rate = fax_rate_str_to_int(v->value)) == 0) {
 				ast_config_destroy(cfg);
 				return -1;
 			}
 			general_options.minrate = rate;
 		} else if (!strcasecmp(v->name, "maxrate")) {
 			ast_debug(3, "reading maxrate '%s' from configuration file\n", v->value);
-			if ((rate = fax_rate_str_to_int(v->value)) == -1) {
+			if ((rate = fax_rate_str_to_int(v->value)) == 0) {
 				ast_config_destroy(cfg);
 				return -1;
 			}
@@ -1702,6 +2546,9 @@ static int set_config(const char *config_file)
 		} else if (!strcasecmp(v->name, "statusevents")) {
 			ast_debug(3, "reading statusevents '%s' from configuration file\n", v->value);
 			general_options.statusevents = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "ecm")) {
+			ast_debug(3, "reading ecm '%s' from configuration file\n", v->value);
+			general_options.ecm = ast_true(v->value);
 		} else if ((!strcasecmp(v->name, "modem")) || (!strcasecmp(v->name, "modems"))) {
 			general_options.modems = 0;
 			update_modem_bits(&general_options.modems, v->value);
@@ -1709,6 +2556,23 @@ static int set_config(const char *config_file)
 	}
 
 	ast_config_destroy(cfg);
+
+	if (general_options.maxrate < general_options.minrate) {
+		ast_log(LOG_ERROR, "maxrate %d is less than minrate %d\n", general_options.maxrate, general_options.minrate);
+		return -1;
+	}
+
+	if (check_modem_rate(general_options.modems, general_options.minrate)) {
+		ast_fax_modem_to_str(general_options.modems, modems, sizeof(modems));
+		ast_log(LOG_ERROR, "'modems' setting '%s' is incompatible with 'minrate' setting %d\n", modems, general_options.minrate);
+		return -1;
+	}
+
+	if (check_modem_rate(general_options.modems, general_options.maxrate)) {
+		ast_fax_modem_to_str(general_options.modems, modems, sizeof(modems));
+		ast_log(LOG_ERROR, "'modems' setting '%s' is incompatible with 'maxrate' setting %d\n", modems, general_options.maxrate);
+		return -1;
+	}
 
 	return 0;
 }
@@ -1718,6 +2582,7 @@ static int acf_faxopt_read(struct ast_channel *chan, const char *cmd, char *data
 {
 	struct ast_fax_session_details *details = find_details(chan);
 	int res = 0;
+	char *filenames;
 
 	if (!details) {
 		ast_log(LOG_ERROR, "channel '%s' can't read FAXOPT(%s) because it has never been written.\n", chan->name, data);
@@ -1728,7 +2593,23 @@ static int acf_faxopt_read(struct ast_channel *chan, const char *cmd, char *data
 	} else if (!strcasecmp(data, "error")) {
 		ast_copy_string(buf, details->error, len);
 	} else if (!strcasecmp(data, "filename")) {
-		ast_copy_string(buf, AST_LIST_FIRST(&details->documents)->filename, len);
+		if (AST_LIST_EMPTY(&details->documents)) {
+			ast_log(LOG_ERROR, "channel '%s' can't read FAXOPT(%s) because it has never been written.\n", chan->name, data);
+			res = -1;
+		} else {
+			ast_copy_string(buf, AST_LIST_FIRST(&details->documents)->filename, len);
+		}
+	} else if (!strcasecmp(data, "filenames")) {
+		if (AST_LIST_EMPTY(&details->documents)) {
+			ast_log(LOG_ERROR, "channel '%s' can't read FAXOPT(%s) because it has never been written.\n", chan->name, data);
+			res = -1;
+		} else if ((filenames = generate_filenames_string(details, "", ","))) {
+			ast_copy_string(buf, filenames, len);
+			ast_free(filenames);
+		} else {
+			ast_log(LOG_ERROR, "channel '%s' can't read FAXOPT(%s), there was an error generating the filenames list.\n", chan->name, data);
+			res = -1;
+		}
 	} else if (!strcasecmp(data, "headerinfo")) {
 		ast_copy_string(buf, details->headerinfo, len);
 	} else if (!strcasecmp(data, "localstationid")) {
@@ -1775,15 +2656,28 @@ static int acf_faxopt_write(struct ast_channel *chan, const char *cmd, char *dat
 	ast_debug(3, "channel '%s' setting FAXOPT(%s) to '%s'\n", chan->name, data, value);
 
 	if (!strcasecmp(data, "ecm")) {
-		details->option.ecm = ast_true(value) ? 1 : 0;
+		const char *val = ast_skip_blanks(value);
+		if (ast_true(val)) {
+			details->option.ecm = AST_FAX_OPTFLAG_TRUE;
+		} else if (ast_false(val)) {
+			details->option.ecm = AST_FAX_OPTFLAG_FALSE;
+		} else {
+			ast_log(LOG_WARNING, "Unsupported value '%s' passed to FAXOPT(ecm).\n", value);
+		}
 	} else if (!strcasecmp(data, "headerinfo")) {
 		ast_string_field_set(details, headerinfo, value);
 	} else if (!strcasecmp(data, "localstationid")) {
 		ast_string_field_set(details, localstationid, value);
 	} else if (!strcasecmp(data, "maxrate")) {
 		details->maxrate = fax_rate_str_to_int(value);
+		if (!details->maxrate) {
+			details->maxrate = ast_fax_maxrate();
+		}
 	} else if (!strcasecmp(data, "minrate")) {
 		details->minrate = fax_rate_str_to_int(value);
+		if (!details->minrate) {
+			details->minrate = ast_fax_minrate();
+		}
 	} else if ((!strcasecmp(data, "modem")) || (!strcasecmp(data, "modems"))) {
 		update_modem_bits(&details->modems, value);
 	} else {
@@ -1799,34 +2693,6 @@ static int acf_faxopt_write(struct ast_channel *chan, const char *cmd, char *dat
 /*! \brief FAXOPT dialplan function */
 struct ast_custom_function acf_faxopt = {
 	.name = "FAXOPT",
-	.synopsis = "Set options for use with the SendFAX and ReceiveFAX functions, or read options after a FAX transmission completes",
-	.syntax = 
-"FAXOPT(<option>)\n"
-"  To write an option:\n"
-"     exten => blah,n,Set(FAXOPT(minrate)=4800)\n"
-"  To read an option:\n"
-"     exten => blah,n,NoOp(result: ${FAXOPT(status)})",
-	.desc =
-"The following table outlines the <options> that can be used with FAXOPT\n\n"
-"  OPTION             TYPE     DESCRIPTION\n"
-"  ------             ----     -----------\n"
-"  ecm                 RW      Specify Error Correction Mode (ECM) with 'yes', disable with 'no'.\n"
-"  error               RO      Read the FAX transmission error upon failure.\n"
-"  filename            RO      Read the filename of the FAX transmission.\n"
-"  headerinfo          RW      Specify or read the FAX header.\n"
-"  localstationid      RW      Specify or read the local station identification\n"
-"  maxrate             RW      Specify or read the maximum transfer rate before transmission\n"
-"  minrate             RW      Specify or read the minimum transfer rate before transmission\n"
-"  modem               RW      Specify or read the FAX modem\n"
-"  pages               RO      Read the number of pages transferred\n"
-"  rate                RO      Read the negotiated transmission rate\n"
-"  remotestationid     RO      Read the remote station identification after the transmission\n"
-"  resolution          RO      Read the negotiated image resolution after the transmission\n"
-"  sessionid           RO      Read the session ID of the FAX transmission\n"
-"  status              RO      Read the result status of the FAX transmission\n"
-"  statusstr           RO      Read a verbose result status of the FAX transmission\n"
-"\n  RO : Read Only\n  RW : Read/Write\n  WO : Write Only\n"
-"",
 	.read = acf_faxopt_read,
 	.write = acf_faxopt_write,
 };
@@ -1848,6 +2714,10 @@ static int unload_module(void)
 		ast_log(LOG_WARNING, "failed to unregister '%s'\n", app_receivefax);
 	}
 
+	if (fax_logger_level != -1) {
+		ast_logger_unregister_level("FAX");
+	}
+
 	ao2_ref(faxregistry.container, -1);
 
 	return 0;
@@ -1860,6 +2730,7 @@ static int load_module(void)
 
 	/* initialize the registry */
 	faxregistry.active_sessions = 0;
+	faxregistry.reserved_sessions = 0;
 	if (!(faxregistry.container = ao2_container_alloc(FAX_MAXBUCKETS, session_hash_cb, session_cmp_cb))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
@@ -1871,12 +2742,12 @@ static int load_module(void)
 	}
 
 	/* register CLI operations and applications */
-	if (ast_register_application(app_sendfax, sendfax_exec, synopsis_sendfax, descrip_sendfax) < 0) {
+	if (ast_register_application_xml(app_sendfax, sendfax_exec) < 0) {
 		ast_log(LOG_WARNING, "failed to register '%s'.\n", app_sendfax);
 		ao2_ref(faxregistry.container, -1);
 		return AST_MODULE_LOAD_DECLINE;
 	}
-	if (ast_register_application(app_receivefax, receivefax_exec, synopsis_receivefax, descrip_receivefax) < 0) {
+	if (ast_register_application_xml(app_receivefax, receivefax_exec) < 0) {
 		ast_log(LOG_WARNING, "failed to register '%s'.\n", app_receivefax);
 		ast_unregister_application(app_sendfax);
 		ao2_ref(faxregistry.container, -1);
@@ -1884,12 +2755,14 @@ static int load_module(void)
 	}
 	ast_cli_register_multiple(fax_cli, ARRAY_LEN(fax_cli));
 	res = ast_custom_function_register(&acf_faxopt);	
+	fax_logger_level = ast_logger_register_level("FAX");
 
 	return res;
 }
 
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Generic FAX Applications",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS | AST_MODFLAG_LOAD_ORDER, "Generic FAX Applications",
 		.load = load_module,
 		.unload = unload_module,
+		.load_pri = AST_MODPRI_APP_DEPEND,
 	       );

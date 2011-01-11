@@ -169,7 +169,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>This application is used to listen to the audio from an Asterisk channel. This includes the audio 
-			coming in and "out of the channel being spied on. If the <literal>chanprefix</literal> parameter is specified,
+			coming in and out of the channel being spied on. If the <literal>chanprefix</literal> parameter is specified,
 			only channels beginning with this string will be spied upon.</para>
 			<para>While spying, the following actions may be performed:</para>
 			<para> - Dialing <literal>#</literal> cycles the volume level.</para>
@@ -927,7 +927,7 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 				}
 				if (!ast_test_flag(flags, OPTION_NAME) || res < 0) {
 					if (!ast_test_flag(flags, OPTION_NOTECH)) {
-						if (ast_fileexists(peer_name, NULL, NULL) != -1) {
+						if (ast_fileexists(peer_name, NULL, NULL) > 0) {
 							res = ast_streamfile(chan, peer_name, chan->language);
 							if (!res) {
 								res = ast_waitstream(chan, "");

@@ -23,6 +23,7 @@
 #ifndef _ASTERISK_PBX_H
 #define _ASTERISK_PBX_H
 
+#include "asterisk/channel.h"
 #include "asterisk/sched.h"
 #include "asterisk/devicestate.h"
 #include "asterisk/chanvars.h"
@@ -89,7 +90,7 @@ struct ast_custom_function {
 	);
 	enum ast_doc_src docsrc;		/*!< Where the documentation come from */
 	/*! Read function, if read is supported */
-	int (*read)(struct ast_channel *, const char *, char *, char *, size_t);
+	ast_acf_read_fn_t read;		/*!< Read function, if read is supported */
 	/*! Read function, if read is supported.  Note: only one of read or read2
 	 * needs to be implemented.  In new code, read2 should be implemented as
 	 * the way forward, but they should return identical results, within the
@@ -97,11 +98,11 @@ struct ast_custom_function {
 	 * read function is handed a 16-byte buffer, and the result is 17 bytes
 	 * long, then the first 15 bytes (remember NULL terminator) should be
 	 * the same for both the read and the read2 methods. */
-	int (*read2)(struct ast_channel *, const char *, char *, struct ast_str **, ssize_t);
+	ast_acf_read2_fn_t read2;
 	/*! If no read2 function is provided, what maximum size? */
 	size_t read_max;
 	/*! Write function, if write is supported */
-	int (*write)(struct ast_channel *, const char *, char *, const char *);
+	ast_acf_write_fn_t write;	/*!< Write function, if write is supported */
 	struct ast_module *mod;         /*!< Module this custom function belongs to */
 	AST_RWLIST_ENTRY(ast_custom_function) acflist;
 };
@@ -380,7 +381,7 @@ int ast_add_extension2(struct ast_context *con, int replace, const char *extensi
 /*!
  * \brief Map devstate to an extension state.
  *
- * \param[in] device state
+ * \param[in] devstate device state
  *
  * \return the extension state mapping.
  */
@@ -725,8 +726,6 @@ int ast_context_remove_switch2(struct ast_context *con, const char *sw,
  * \param context context to remove extension from
  * \param extension which extension to remove
  * \param priority priority of extension to remove (0 to remove all)
- * \param callerid NULL to remove all; non-NULL to match a single record per priority
- * \param matchcid non-zero to match callerid element (if non-NULL); 0 to match default case
  * \param registrar registrar of the extension
  *
  * This function removes an extension from a given context.
@@ -1221,14 +1220,6 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 									 struct ast_context *bypass, struct pbx_find_info *q,
 									 const char *context, const char *exten, int priority,
 									 const char *label, const char *callerid, enum ext_match_t action);
-
-
-/* every time a write lock is obtained for contexts,
-   a counter is incremented. You can check this via the
-   following func */
-
-int ast_wrlock_contexts_version(void);
-
 
 /*! \brief hashtable functions for contexts */
 /*! @{ */

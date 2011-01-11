@@ -136,6 +136,7 @@ int ast_app_run_macro(struct ast_channel *autoservice_chan, struct ast_channel
 
 /*!
  * \brief Set voicemail function callbacks
+ * \param[in] has_voicemail_func set function pointer
  * \param[in] inboxcount2_func set function pointer
  * \param[in] sayname_func set function pointer
  * \param[in] inboxcount_func set function pointer
@@ -512,8 +513,7 @@ struct ast_app_option {
 
   	... do any argument parsing here ...
 
-	if (ast_parseoptions(my_app_options, &opts, opt_args, options)) {
-		ast_module_user_remove(u);
+	if (ast_app_parse_options(my_app_options, &opts, opt_args, options)) {
 		return -1;
 	}
   }

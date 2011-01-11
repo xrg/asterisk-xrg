@@ -181,18 +181,18 @@ void ast_console_toggle_loglevel(int fd, int level, int state);
 #define NUMLOGLEVELS 6
 
 /*!
- * \brief Get the debug level for a file
- * \param file the filename
+ * \brief Get the debug level for a module
+ * \param module the name of module
  * \return the debug level
  */
-unsigned int ast_debug_get_by_file(const char *file);
+unsigned int ast_debug_get_by_module(const char *module);
 
 /*!
- * \brief Get the debug level for a file
- * \param file the filename
- * \return the debug level
+ * \brief Get the verbose level for a module
+ * \param module the name of module
+ * \return the verbose level
  */
-unsigned int ast_verbose_get_by_file(const char *file);
+unsigned int ast_verbose_get_by_module(const char *module);
 
 /*!
  * \brief Register a new logger level
@@ -231,11 +231,11 @@ void ast_logger_unregister_level(const char *name);
  *        to get logged
  */
 #define ast_debug(level, ...) do {       \
-	if (option_debug >= (level) || (ast_opt_dbg_file && ast_debug_get_by_file(__FILE__) >= (level)) ) \
+	if (option_debug >= (level) || (ast_opt_dbg_module && ast_debug_get_by_module(AST_MODULE) >= (level)) ) \
 		ast_log(AST_LOG_DEBUG, __VA_ARGS__); \
 } while (0)
 
-#define VERBOSITY_ATLEAST(level) (option_verbose >= (level) || (ast_opt_verb_file && ast_verbose_get_by_file(__FILE__) >= (level)))
+#define VERBOSITY_ATLEAST(level) (option_verbose >= (level) || (ast_opt_verb_module && ast_verbose_get_by_module(AST_MODULE) >= (level)))
 
 #define ast_verb(level, ...) do { \
 	if (VERBOSITY_ATLEAST((level)) ) { \
@@ -295,6 +295,16 @@ int ast_bt_get_addresses(struct ast_bt *bt);
  * \since 1.6.1
  */
 void *ast_bt_destroy(struct ast_bt *bt);
+
+/* \brief Retrieve symbols for a set of backtrace addresses
+ *
+ * \param addresses A list of addresses, such as the ->addresses structure element of struct ast_bt.
+ * \param num_frames Number of addresses in the addresses list
+ * \retval NULL Unable to allocate memory
+ * \return List of strings
+ * \since 1.6.2.16
+ */
+char **ast_bt_get_symbols(void **addresses, size_t num_frames);
 
 #endif /* HAVE_BKTR */
 #endif /* _LOGGER_BACKTRACE_H */

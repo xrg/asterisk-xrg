@@ -33,13 +33,15 @@
 /*! \brief capabilities for res_fax to locate a fax technology module */
 enum ast_fax_capabilities {
 	/*! SendFax is supported */
-	AST_FAX_TECH_SEND    = (1 << 0),
+	AST_FAX_TECH_SEND      = (1 << 0),
 	/*! ReceiveFax is supported */
-	AST_FAX_TECH_RECEIVE = (1 << 1),
+	AST_FAX_TECH_RECEIVE   = (1 << 1),
 	/*! Audio FAX session supported */
-	AST_FAX_TECH_AUDIO   = (1 << 2),
+	AST_FAX_TECH_AUDIO     = (1 << 2),
 	/*! T.38 FAX session supported */
-	AST_FAX_TECH_T38     = (1 << 3),
+	AST_FAX_TECH_T38       = (1 << 3),
+	/*! sending mulitple documents supported */
+	AST_FAX_TECH_MULTI_DOC = (1 << 4),
 };
 
 /*! \brief fax modem capabilities */
@@ -56,8 +58,10 @@ enum ast_fax_modems {
 
 /*! \brief current state of a fax session */
 enum ast_fax_state {
+	/*! reserved state */
+	AST_FAX_STATE_RESERVED = 0,
 	/*! uninitialized state */
-	AST_FAX_STATE_UNINITIALIZED = 0,
+	AST_FAX_STATE_UNINITIALIZED,
 	/*! initialized state */
 	AST_FAX_STATE_INITIALIZED,
 	/*! fax resources open state */
@@ -139,13 +143,19 @@ struct ast_fax_session_details {
 			/*! flag to send debug manager events */
 			uint32_t debug:2;
 			/*! flag indicating the use of Error Correction Mode (ECM) */
-			uint32_t ecm:2;
+			uint32_t ecm:1;
 			/*! flag indicating the sending of status manager events */
 			uint32_t statusevents:2;
 			/*! allow audio mode FAX on T.38-capable channels */
 			uint32_t allow_audio:2;
 			/*! indicating the session switched to T38 */
 			uint32_t switch_to_t38:1;
+			/*! flag indicating whether CED should be sent (for receive mode) */
+			uint32_t send_ced:1;
+			/*! flag indicating whether CNG should be sent (for send mode) */
+			uint32_t send_cng:1;
+			/*! send a T.38 reinvite */
+			uint32_t request_t38:1;
 		};
 	} option;
 	/*! override the minimum transmission rate with a channel variable */
@@ -160,7 +170,8 @@ struct ast_fax_session_details {
 
 struct ast_fax_tech;
 struct ast_fax_debug_info;
-	
+struct ast_fax_tech_token;
+
 /*! \brief The data required to handle a fax session */
 struct ast_fax_session {
 	/*! session id */
@@ -175,21 +186,27 @@ struct ast_fax_session {
 	unsigned long frames_sent;
 	/*! the fax technology callbacks */
 	const struct ast_fax_tech *tech;
+	/*! the token used to reserve this session */
+	struct ast_fax_tech_token *token;
 	/*! private implementation pointer */
 	void *tech_pvt;
 	/*! fax state */
 	enum ast_fax_state state;
 	/*! name of the Asterisk channel using the fax session */
 	char *channame;
+	/*! unique ID of the Asterisk channel using the fax session */
+	char *chan_uniqueid;
 	/*! Asterisk channel using the fax session */
 	struct ast_channel *chan;
 	/*! fax debugging structure */
 	struct ast_fax_debug_info *debug_info;
 	/*! used to take variable-sized frames in and output frames of an expected size to the fax stack */
 	struct ast_smoother *smoother;
-};
 
-struct ast_fax_tech_token;
+	/*! some flags to track the stat counters for this session */
+	unsigned int reserved:1;
+	unsigned int active:1;
+};
 
 /*! \brief used to register a FAX technology module with res_fax */
 struct ast_fax_tech {
@@ -229,8 +246,18 @@ struct ast_fax_tech {
 	char * (* const cli_show_session)(struct ast_fax_session *, int);
 	/*! displays statistics from the fax technology module */
 	char * (* const cli_show_stats)(int);
+	/*! displays settings from the fax technology module */
+	char * (* const cli_show_settings)(int);
 };
-  
+
+/*! \brief used by res_fax to reserve a FAX session */
+struct ast_fax_tech_token {
+	/*! the fax technology callbacks */
+	const struct ast_fax_tech *tech;
+	/*! private implementation pointer */
+	void *tech_pvt;
+};
+
 /*! \brief register a fax technology */
 int ast_fax_tech_register(struct ast_fax_tech *tech);
 
@@ -245,5 +272,16 @@ unsigned int ast_fax_maxrate(void);
 
 /*! \brief convert an ast_fax_state to a string */
 const char *ast_fax_state_to_str(enum ast_fax_state state);
+
+/*!
+ * \brief Log message at FAX or recommended level
+ *
+ * The first four parameters can be represented with Asterisk's
+ * LOG_* levels. In other words, this function may be called
+ * like
+ *
+ * ast_fax_log(LOG_DEBUG, msg);
+ */
+void ast_fax_log(int level, const char *file, const int line, const char *function, const char *msg);
 
 #endif

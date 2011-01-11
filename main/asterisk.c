@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2008, Digium, Inc.
+ * Copyright (C) 1999 - 2010, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -140,7 +140,9 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/buildinfo.h"
 #include "asterisk/xmldoc.h"
 #include "asterisk/poll-compat.h"
+#include "asterisk/ccss.h"
 #include "asterisk/test.h"
+#include "asterisk/aoc.h"
 
 #include "../defaults.h"
 
@@ -270,10 +272,13 @@ static char ast_config_AST_CTL_OWNER[PATH_MAX] = "\0";
 static char ast_config_AST_CTL_GROUP[PATH_MAX] = "\0";
 static char ast_config_AST_CTL[PATH_MAX] = "asterisk.ctl";
 
+extern unsigned int ast_FD_SETSIZE;
+
 static char *_argv[256];
 static int shuttingdown;
 static int restartnow;
 static pthread_t consolethread = AST_PTHREADT_NULL;
+static pthread_t mon_sig_flags;
 static int canary_pid = 0;
 static char canary_filename[128];
 
@@ -374,6 +379,7 @@ struct thread_list_t {
 	AST_RWLIST_ENTRY(thread_list_t) list;
 	char *name;
 	pthread_t id;
+	int lwp;
 };
 
 static AST_RWLIST_HEAD_STATIC(thread_list, thread_list_t);
@@ -385,6 +391,7 @@ void ast_register_thread(char *name)
 	if (!new)
 		return;
 	new->id = pthread_self();
+	new->lwp = ast_get_tid();
 	new->name = name; /* steal the allocated memory for the thread name */
 	AST_RWLIST_WRLOCK(&thread_list);
 	AST_RWLIST_INSERT_HEAD(&thread_list, new, list);
@@ -465,6 +472,7 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 	ast_cli(a->fd, "  Transcode via SLIN:          %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSCODE_VIA_SLIN) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Internal timing:             %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Transmit silence during rec: %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSMIT_SILENCE) ? "Enabled" : "Disabled");
+	ast_cli(a->fd, "  Generic PLC:                 %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_GENERIC_PLC) ? "Enabled" : "Disabled");
 
 	ast_cli(a->fd, "\n* Subsystems\n");
 	ast_cli(a->fd, "  -------------\n");
@@ -482,6 +490,13 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 	ast_cli(a->fd, "  Module directory:            %s\n", ast_config_AST_MODULE_DIR);
 	ast_cli(a->fd, "  Spool directory:             %s\n", ast_config_AST_SPOOL_DIR);
 	ast_cli(a->fd, "  Log directory:               %s\n", ast_config_AST_LOG_DIR);
+	ast_cli(a->fd, "  Run/Sockets directory:       %s\n", ast_config_AST_RUN_DIR);
+	ast_cli(a->fd, "  PID file:                    %s\n", ast_config_AST_PID);
+	ast_cli(a->fd, "  VarLib directory:            %s\n", ast_config_AST_VAR_DIR);
+	ast_cli(a->fd, "  Data directory:              %s\n", ast_config_AST_DATA_DIR);
+	ast_cli(a->fd, "  ASTDB:                       %s\n", ast_config_AST_DB);
+	ast_cli(a->fd, "  IAX2 Keys directory:         %s\n", ast_config_AST_KEY_DIR);
+	ast_cli(a->fd, "  AGI Scripts directory:       %s\n", ast_config_AST_AGI_DIR);
 	ast_cli(a->fd, "\n\n");
 	return CLI_SUCCESS;
 }
@@ -503,7 +518,7 @@ static char *handle_show_threads(struct ast_cli_entry *e, int cmd, struct ast_cl
 
 	AST_RWLIST_RDLOCK(&thread_list);
 	AST_RWLIST_TRAVERSE(&thread_list, cur, list) {
-		ast_cli(a->fd, "%p %s\n", (void *)cur->id, cur->name);
+		ast_cli(a->fd, "%p %d %s\n", (void *)cur->id, cur->lwp, cur->name);
 		count++;
 	}
         AST_RWLIST_UNLOCK(&thread_list);
@@ -560,13 +575,15 @@ static int swapmode(int *used, int *total)
 /*! \brief Give an overview of system statistics */
 static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	int64_t physmem, freeram;
-	int totalswap = 0, freeswap = 0, nprocs = 0;
+	uint64_t physmem, freeram;
+	uint64_t freeswap = 0;
+	int totalswap = 0;
+	int nprocs = 0;
 	long uptime = 0;
 #if defined(HAVE_SYSINFO)
 	struct sysinfo sys_info;
 	sysinfo(&sys_info);
-	uptime = sys_info.uptime/3600;
+	uptime = sys_info.uptime / 3600;
 	physmem = sys_info.totalram * sys_info.mem_unit;
 	freeram = (sys_info.freeram * sys_info.mem_unit) / 1024;
 	totalswap = (sys_info.totalswap * sys_info.mem_unit) / 1024;
@@ -615,7 +632,7 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 	sysctl(mib, 2, &vmtotal, &len, NULL, 0);
 	freeram = (vmtotal.t_free << pageshift);
 	/* generate swap usage and totals */
-	swapmode(&usedswap, &totalswap); 
+	swapmode(&usedswap, &totalswap);
 	freeswap = (totalswap - usedswap);
 	/* grab number of processes */
 #if defined(__OpenBSD__)
@@ -639,14 +656,16 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 
 	ast_cli(a->fd, "\nSystem Statistics\n");
 	ast_cli(a->fd, "-----------------\n");
-	ast_cli(a->fd, "  System Uptime:             %ld hours\n", uptime);
-	ast_cli(a->fd, "  Total RAM:                 %ld KiB\n", (long)physmem/1024);
-	ast_cli(a->fd, "  Free RAM:                  %ld KiB\n", (long)freeram);
+	ast_cli(a->fd, "  System Uptime:             %lu hours\n", uptime);
+	ast_cli(a->fd, "  Total RAM:                 %" PRIu64 " KiB\n", physmem / 1024);
+	ast_cli(a->fd, "  Free RAM:                  %" PRIu64 " KiB\n", freeram);
 #if defined(HAVE_SYSINFO)
-	ast_cli(a->fd, "  Buffer RAM:                %ld KiB\n", (sys_info.bufferram * sys_info.mem_unit)/1024);
+	ast_cli(a->fd, "  Buffer RAM:                %" PRIu64 " KiB\n", ((uint64_t) sys_info.bufferram * sys_info.mem_unit) / 1024);
 #endif
-	ast_cli(a->fd, "  Total Swap Space:          %ld KiB\n", (long)totalswap);
-	ast_cli(a->fd, "  Free Swap Space:           %ld KiB\n\n", (long)freeswap);
+#if defined (HAVE_SYSCTL) && defined(HAVE_SWAPCTL)
+	ast_cli(a->fd, "  Total Swap Space:          %u KiB\n", totalswap);
+	ast_cli(a->fd, "  Free Swap Space:           %" PRIu64 " KiB\n\n", freeswap);
+#endif
 	ast_cli(a->fd, "  Number of Processes:       %d \n\n", nprocs);
 	return CLI_SUCCESS;
 }
@@ -960,16 +979,25 @@ static int fdprint(int fd, const char *s)
 }
 
 /*! \brief NULL handler so we can collect the child exit status */
-static void null_sig_handler(int sig)
+static void _null_sig_handler(int sig)
 {
 
 }
+
+static struct sigaction null_sig_handler = {
+	.sa_handler = _null_sig_handler,
+	.sa_flags = SA_RESTART,
+};
+
+static struct sigaction ignore_sig_handler = {
+	.sa_handler = SIG_IGN,
+};
 
 AST_MUTEX_DEFINE_STATIC(safe_system_lock);
 /*! \brief Keep track of how many threads are currently trying to wait*() on
  *  a child process */
 static unsigned int safe_system_level = 0;
-static void *safe_system_prev_handler;
+static struct sigaction safe_system_prev_handler;
 
 void ast_replace_sigchld(void)
 {
@@ -979,8 +1007,9 @@ void ast_replace_sigchld(void)
 	level = safe_system_level++;
 
 	/* only replace the handler if it has not already been done */
-	if (level == 0)
-		safe_system_prev_handler = signal(SIGCHLD, null_sig_handler);
+	if (level == 0) {
+		sigaction(SIGCHLD, &null_sig_handler, &safe_system_prev_handler);
+	}
 
 	ast_mutex_unlock(&safe_system_lock);
 }
@@ -993,8 +1022,9 @@ void ast_unreplace_sigchld(void)
 	level = --safe_system_level;
 
 	/* only restore the handler if we are the last one */
-	if (level == 0)
-		signal(SIGCHLD, safe_system_prev_handler);
+	if (level == 0) {
+		sigaction(SIGCHLD, &safe_system_prev_handler, NULL);
+	}
 
 	ast_mutex_unlock(&safe_system_lock);
 }
@@ -1174,12 +1204,18 @@ static int read_credentials(int fd, char *buffer, size_t size, struct console *c
 		return result;
 	}
 
-#if defined(SO_PEERCRED)
+#if defined(SO_PEERCRED) && (defined(HAVE_STRUCT_UCRED_UID) || defined(HAVE_STRUCT_UCRED_CR_UID))
 	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len)) {
 		return result;
 	}
+#if defined(HAVE_STRUCT_UCRED_UID)
 	uid = cred.uid;
 	gid = cred.gid;
+#else /* defined(HAVE_STRUCT_UCRED_CR_UID) */
+	uid = cred.cr_uid;
+	gid = cred.cr_gid;
+#endif /* defined(HAVE_STRUCT_UCRED_UID) */
+
 #elif defined(HAVE_GETPEEREID)
 	if (getpeereid(fd, &uid, &gid)) {
 		return result;
@@ -1427,13 +1463,17 @@ static int ast_tryconnect(void)
  system call.  We don't actually need to do anything though.  
  Remember: Cannot EVER ast_log from within a signal handler 
  */
-static void urg_handler(int num)
+static void _urg_handler(int num)
 {
-	signal(num, urg_handler);
 	return;
 }
 
-static void hup_handler(int num)
+static struct sigaction urg_handler = {
+	.sa_handler = _urg_handler,
+	.sa_flags = SA_RESTART,
+};
+
+static void _hup_handler(int num)
 {
 	int a = 0;
 	if (option_verbose > 1) 
@@ -1446,10 +1486,14 @@ static void hup_handler(int num)
 			fprintf(stderr, "hup_handler: write() failed: %s\n", strerror(errno));
 		}
 	}
-	signal(num, hup_handler);
 }
 
-static void child_handler(int sig)
+static struct sigaction hup_handler = {
+	.sa_handler = _hup_handler,
+	.sa_flags = SA_RESTART,
+};
+
+static void _child_handler(int sig)
 {
 	/* Must not ever ast_log or ast_verbose within signal handler */
 	int n, status;
@@ -1461,8 +1505,12 @@ static void child_handler(int sig)
 		;
 	if (n == 0 && option_debug)	
 		printf("Huh?  Child handler, but nobody there?\n");
-	signal(sig, child_handler);
 }
+
+static struct sigaction child_handler = {
+	.sa_handler = _child_handler,
+	.sa_flags = SA_RESTART,
+};
 
 /*! \brief Set maximum open files */
 static void set_ulimit(int value)
@@ -1598,14 +1646,22 @@ static void quit_handler(int num, int niceness, int safeshutdown, int restart)
 			ast_module_shutdown();
 	}
 	if (ast_opt_console || (ast_opt_remote && !ast_opt_exec)) {
-		if (getenv("HOME")) 
+		pthread_t thisthread = pthread_self();
+		if (getenv("HOME")) {
 			snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
-		if (!ast_strlen_zero(filename))
+		}
+		if (!ast_strlen_zero(filename)) {
 			ast_el_write_history(filename);
-		if (el != NULL)
-			el_end(el);
-		if (el_hist != NULL)
-			history_end(el_hist);
+		}
+		if (consolethread == AST_PTHREADT_NULL || consolethread == thisthread || mon_sig_flags == thisthread) {
+			/* Only end if we are the consolethread or signal handler, otherwise there's a race with that thread. */
+			if (el != NULL) {
+				el_end(el);
+			}
+			if (el_hist != NULL) {
+				history_end(el_hist);
+			}
+		}
 	}
 	if (option_verbose)
 		ast_verbose("Executing last minute cleanups\n");
@@ -1662,7 +1718,7 @@ static void __quit_handler(int num)
 	sig_flags.need_quit = 1;
 	if (sig_alert_pipe[1] != -1) {
 		if (write(sig_alert_pipe[1], &a, sizeof(a)) < 0) {
-			fprintf(stderr, "hup_handler: write() failed: %s\n", strerror(errno));
+			fprintf(stderr, "quit_handler: write() failed: %s\n", strerror(errno));
 		}
 	}
 	/* There is no need to restore the signal handler here, since the app
@@ -2143,7 +2199,7 @@ static int ast_el_read_char(EditLine *editline, char *cp)
 
 			/* Write over the CLI prompt */
 			if (!ast_opt_exec && !lastpos) {
-				if (write(STDOUT_FILENO, "\r", 1) < 0) {
+				if (write(STDOUT_FILENO, "\r[0K", 5) < 0) {
 				}
 			}
 			if (write(STDOUT_FILENO, buf, res) < 0) {
@@ -2656,7 +2712,7 @@ static void ast_remotecontrol(char *data)
 		fds.fd = ast_consock;
 		fds.events = POLLIN;
 		fds.revents = 0;
-		while (ast_poll(&fds, 1, 500) > 0) {
+		while (ast_poll(&fds, 1, 60000) > 0) {
 			char buffer[512] = "", *curline = buffer, *nextline;
 			int not_written = 1;
 
@@ -2685,7 +2741,7 @@ static void ast_remotecontrol(char *data)
 				curline = nextline;
 			} while (!ast_strlen_zero(curline));
 
-			/* No non-verbose output in 500ms */
+			/* No non-verbose output in 60 seconds. */
 			if (not_written) {
 				break;
 			}
@@ -2789,7 +2845,7 @@ static void ast_readconfig(void)
 	struct ast_variable *v;
 	char *config = DEFAULT_CONFIG_FILE;
 	char hostname[MAXHOSTNAMELEN] = "";
-	struct ast_flags config_flags = { 0 };
+	struct ast_flags config_flags = { CONFIG_FLAG_NOREALTIME };
 	struct {
 		unsigned int dbdir:1;
 		unsigned int keydir:1;
@@ -2897,7 +2953,7 @@ static void ast_readconfig(void)
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_QUIET);
 		/* Run as console (-c at startup, implies nofork) */
 		} else if (!strcasecmp(v->name, "console")) {
-			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_CONSOLE);
+			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_NO_FORK | AST_OPT_FLAG_CONSOLE);
 		/* Run with high priority if the O/S permits (-p at startup) */
 		} else if (!strcasecmp(v->name, "highpriority")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_HIGH_PRIORITY);
@@ -3096,6 +3152,18 @@ static void run_startup_commands(void)
 	ast_config_destroy(cfg);
 }
 
+static void env_init(void)
+{
+	setenv("AST_SYSTEMNAME", ast_config_AST_SYSTEM_NAME, 1);
+	setenv("AST_BUILD_HOST", ast_build_hostname, 1);
+	setenv("AST_BUILD_DATE", ast_build_date, 1);
+	setenv("AST_BUILD_KERNEL", ast_build_kernel, 1);
+	setenv("AST_BUILD_MACHINE", ast_build_machine, 1);
+	setenv("AST_BUILD_OS", ast_build_os, 1);
+	setenv("AST_BUILD_USER", ast_build_user, 1);
+	setenv("AST_VERSION", ast_get_version(), 1);
+}
+
 int main(int argc, char *argv[])
 {
 	int c;
@@ -3107,11 +3175,12 @@ int main(int argc, char *argv[])
 	FILE *f;
 	sigset_t sigs;
 	int num;
-	int isroot = 1;
+	int isroot = 1, rundir_exists = 0;
 	char *buf;
 	const char *runuser = NULL, *rungroup = NULL;
 	char *remotesock = NULL;
-	int moduleresult; 		/*!< Result from the module load subsystem */
+	int moduleresult;         /*!< Result from the module load subsystem */
+	struct rlimit l;
 
 	/* Remember original args for restart */
 	if (argc > ARRAY_LEN(_argv) - 1) {
@@ -3140,6 +3209,7 @@ int main(int argc, char *argv[])
 	tdd_init();
 	ast_tps_init();
 	ast_fd_init();
+	ast_pbx_init();
 
 	if (getenv("HOME")) 
 		snprintf(filename, sizeof(filename), "%s/.asterisk_history", getenv("HOME"));
@@ -3282,6 +3352,7 @@ int main(int argc, char *argv[])
 	}
 
 	ast_readconfig();
+	env_init();
 
 	if (ast_opt_remote && remotesock != NULL)
 		ast_copy_string((char *) cfg_paths.socket_path, remotesock, sizeof(cfg_paths.socket_path));
@@ -3295,7 +3366,6 @@ int main(int argc, char *argv[])
 	}
 
 	if (ast_opt_dump_core) {
-		struct rlimit l;
 		memset(&l, 0, sizeof(l));
 		l.rlim_cur = RLIM_INFINITY;
 		l.rlim_max = RLIM_INFINITY;
@@ -3303,6 +3373,44 @@ int main(int argc, char *argv[])
 			ast_log(LOG_WARNING, "Unable to disable core size resource limit: %s\n", strerror(errno));
 		}
 	}
+
+	if (getrlimit(RLIMIT_NOFILE, &l)) {
+		ast_log(LOG_WARNING, "Unable to check file descriptor limit: %s\n", strerror(errno));
+	}
+
+#if !defined(CONFIGURE_RAN_AS_ROOT)
+	/* Check if select(2) will run with more file descriptors */
+	do {
+		int fd, fd2;
+		ast_fdset readers;
+		struct timeval tv = { 0, };
+
+		if (l.rlim_cur <= FD_SETSIZE) {
+			/* The limit of select()able FDs is irrelevant, because we'll never
+			 * open one that high. */
+			break;
+		}
+
+		if (!(fd = open("/dev/null", O_RDONLY))) {
+			ast_log(LOG_ERROR, "Cannot open a file descriptor at boot? %s\n", strerror(errno));
+			break; /* XXX Should we exit() here? XXX */
+		}
+
+		fd2 = (l.rlim_cur > sizeof(readers) * 8 ? sizeof(readers) * 8 : l.rlim_cur) - 1;
+		if (dup2(fd, fd2) < 0) {
+			ast_log(LOG_WARNING, "Cannot open maximum file descriptor %d at boot? %s\n", fd2, strerror(errno));
+			break;
+		}
+
+		FD_ZERO(&readers);
+		FD_SET(fd2, &readers);
+		if (ast_select(fd2 + 1, &readers, NULL, NULL, &tv) < 0) {
+			ast_log(LOG_WARNING, "Maximum select()able file descriptor is %d\n", FD_SETSIZE);
+		}
+	} while (0);
+#elif defined(HAVE_VARIABLE_FDSET)
+	ast_FD_SETSIZE = l.rlim_cur;
+#endif /* !defined(CONFIGURE_RAN_AS_ROOT) */
 
 	if ((!rungroup) && !ast_strlen_zero(ast_config_AST_RUN_GROUP))
 		rungroup = ast_config_AST_RUN_GROUP;
@@ -3312,12 +3420,16 @@ int main(int argc, char *argv[])
 	/* Must install this signal handler up here to ensure that if the canary
 	 * fails to execute that it doesn't kill the Asterisk process.
 	 */
-	signal(SIGCHLD, child_handler);
+	sigaction(SIGCHLD, &child_handler, NULL);
 
 	/* It's common on some platforms to clear /var/run at boot.  Create the
 	 * socket file directory before we drop privileges. */
-	if (mkdir(ast_config_AST_RUN_DIR, 0755) && errno != EEXIST) {
-		ast_log(LOG_WARNING, "Unable to create socket file directory.  Remote consoles will not be able to connect! (%s)\n", strerror(x));
+	if (mkdir(ast_config_AST_RUN_DIR, 0755)) {
+		if (errno == EEXIST) {
+			rundir_exists = 1;
+		} else {
+			ast_log(LOG_WARNING, "Unable to create socket file directory.  Remote consoles will not be able to connect! (%s)\n", strerror(x));
+		}
 	}
 
 #ifndef __CYGWIN__
@@ -3333,7 +3445,7 @@ int main(int argc, char *argv[])
 			ast_log(LOG_WARNING, "No such group '%s'!\n", rungroup);
 			exit(1);
 		}
-		if (chown(ast_config_AST_RUN_DIR, -1, gr->gr_gid)) {
+		if (!rundir_exists && chown(ast_config_AST_RUN_DIR, -1, gr->gr_gid)) {
 			ast_log(LOG_WARNING, "Unable to chgrp run directory to %d (%s)\n", (int) gr->gr_gid, rungroup);
 		}
 		if (setgid(gr->gr_gid)) {
@@ -3501,7 +3613,7 @@ int main(int argc, char *argv[])
 		} else
 			ast_log(LOG_WARNING, "Unable to open pid file '%s': %s\n", ast_config_AST_PID, strerror(errno));
 #else
-		ast_log(LOG_WARNING, "Mac OS X detected.  Use '/sbin/launchd -d' to launch with the nofork option.\n");
+		ast_log(LOG_WARNING, "Mac OS X detected.  Use 'launchctl load /Library/LaunchDaemon/org.asterisk.asterisk.plist'.\n");
 #endif
 	}
 #endif
@@ -3511,7 +3623,7 @@ int main(int argc, char *argv[])
 		snprintf(canary_filename, sizeof(canary_filename), "%s/alt.asterisk.canary.tweet.tweet.tweet", ast_config_AST_RUN_DIR);
 
 		/* Don't let the canary child kill Asterisk, if it dies immediately */
-		signal(SIGPIPE, SIG_IGN);
+		sigaction(SIGPIPE, &ignore_sig_handler, NULL);
 
 		canary_pid = fork();
 		if (canary_pid == 0) {
@@ -3523,7 +3635,7 @@ int main(int argc, char *argv[])
 
 			ast_close_fds_above_n(0);
 			ast_set_priority(0);
-			snprintf(ppid, sizeof(ppid), "%d", (int) getpid());
+			snprintf(ppid, sizeof(ppid), "%d", (int) ast_mainpid);
 
 			execlp("astcanary", "astcanary", canary_filename, ppid, (char *)NULL);
 
@@ -3557,6 +3669,8 @@ int main(int argc, char *argv[])
 	}
 #endif
 
+	ast_aoc_cli_init();
+
 	ast_makesocket();
 	sigemptyset(&sigs);
 	sigaddset(&sigs, SIGHUP);
@@ -3565,11 +3679,11 @@ int main(int argc, char *argv[])
 	sigaddset(&sigs, SIGPIPE);
 	sigaddset(&sigs, SIGWINCH);
 	pthread_sigmask(SIG_BLOCK, &sigs, NULL);
-	signal(SIGURG, urg_handler);
+	sigaction(SIGURG, &urg_handler, NULL);
 	signal(SIGINT, __quit_handler);
 	signal(SIGTERM, __quit_handler);
-	signal(SIGHUP, hup_handler);
-	signal(SIGPIPE, SIG_IGN);
+	sigaction(SIGHUP, &hup_handler, NULL);
+	sigaction(SIGPIPE, &ignore_sig_handler, NULL);
 
 	/* ensure that the random number generators are seeded with a different value every time
 	   Asterisk is started
@@ -3603,6 +3717,14 @@ int main(int argc, char *argv[])
 	ast_xmldoc_load_documentation();
 #endif
 
+	/* initialize the data retrieval API */
+	if (ast_data_init()) {
+		printf ("%s", term_quit());
+		exit(1);
+	}
+
+	ast_channels_init();
+
 	if ((moduleresult = load_modules(1))) {		/* Load modules, pre-load only */
 		printf("%s", term_quit());
 		exit(moduleresult == -2 ? 2 : 1);
@@ -3614,8 +3736,6 @@ int main(int argc, char *argv[])
 	}
 
 	ast_http_init();		/* Start the HTTP server, if needed */
-
-	ast_channels_init();
 
 	if (init_manager()) {
 		printf("%s", term_quit());
@@ -3677,6 +3797,11 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
+	if (ast_cc_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+
 	if ((moduleresult = load_modules(0))) {		/* Load modules */
 		printf("%s", term_quit());
 		exit(moduleresult == -2 ? 2 : 1);
@@ -3702,6 +3827,7 @@ int main(int argc, char *argv[])
 		sig_alert_pipe[0] = sig_alert_pipe[1] = -1;
 
 	ast_set_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED);
+	manager_event(EVENT_FLAG_SYSTEM, "FullyBooted", "Status: Fully Booted\r\n");
 
 	ast_process_pending_reloads();
 
@@ -3709,7 +3835,7 @@ int main(int argc, char *argv[])
 
 #ifdef __AST_DEBUG_MALLOC
 	__ast_mm_init();
-#endif	
+#endif
 
 	ast_lastreloadtime = ast_startuptime = ast_tvnow();
 	ast_cli_register_multiple(cli_asterisk, ARRAY_LEN(cli_asterisk));
@@ -3720,9 +3846,8 @@ int main(int argc, char *argv[])
 		/* Console stuff now... */
 		/* Register our quit function */
 		char title[256];
-		pthread_t dont_care;
 
-		ast_pthread_create_detached(&dont_care, NULL, monitor_sig_flags, NULL);
+		ast_pthread_create_detached(&mon_sig_flags, NULL, monitor_sig_flags, NULL);
 
 		set_icon("Asterisk");
 		snprintf(title, sizeof(title), "Asterisk Console on '%s' (pid %ld)", hostname, (long)ast_mainpid);

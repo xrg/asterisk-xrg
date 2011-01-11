@@ -95,7 +95,9 @@ struct ast_calendar_event {
 		AST_STRING_FIELD(organizer);
 		AST_STRING_FIELD(location);
 		AST_STRING_FIELD(uid);
+		AST_STRING_FIELD(categories);
 	);
+	int priority;        /*!< Priority of event */
 	struct ast_calendar *owner;   /*!< The calendar that owns this event */
 	time_t start;        /*!< Start of event (UTC) */
 	time_t end;          /*!< End of event (UTC) */
@@ -146,7 +148,7 @@ int ast_calendar_register(struct ast_calendar_tech *tech);
  * \param tech calendar technology to unregister
  *
  * \retval 0 success
- * \retva -1 failure
+ * \retval -1 failure
  */
 void ast_calendar_unregister(struct ast_calendar_tech *tech);
 

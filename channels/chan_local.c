@@ -48,10 +48,37 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/devicestate.h"
+#include "asterisk/astobj2.h"
+
+/*** DOCUMENTATION
+	<manager name="LocalOptimizeAway" language="en_US">
+		<synopsis>
+			Optimize away a local channel when possible.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Channel" required="true">
+				<para>The channel name to optimize away.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>A local channel created with "/n" will not automatically optimize away.
+			Calling this command on the local channel will clear that flag and allow
+			it to optimize away if it's bridged or when it becomes bridged.</para>
+		</description>
+	</manager>
+ ***/
 
 static const char tdesc[] = "Local Proxy Channel Driver";
 
 #define IS_OUTBOUND(a,b) (a == b->chan ? 1 : 0)
+
+/* right now we are treating the locals astobj2 container as a
+ * list.  If there is ever a reason to make this more efficient
+ * increasing the bucket size would help. */
+static const int BUCKET_SIZE = 1;
+
+static struct ao2_container *locals;
 
 static struct ast_jb_conf g_jb_conf = {
 	.flags = 0,
@@ -75,6 +102,8 @@ static int local_sendhtml(struct ast_channel *ast, int subclass, const char *dat
 static int local_sendtext(struct ast_channel *ast, const char *text);
 static int local_devicestate(void *data);
 static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct ast_channel *bridge);
+static int local_queryoption(struct ast_channel *ast, int option, void *data, int *datalen);
+static int local_setoption(struct ast_channel *chan, int option, void *data, int datalen);
 
 /* PBX interface structure for channel registration */
 static const struct ast_channel_tech local_tech = {
@@ -97,6 +126,8 @@ static const struct ast_channel_tech local_tech = {
 	.send_text = local_sendtext,
 	.devicestate = local_devicestate,
 	.bridged_channel = local_bridgedchannel,
+	.queryoption = local_queryoption,
+	.setoption = local_setoption,
 };
 
 /*! \brief the local pvt structure for all channels
@@ -107,7 +138,6 @@ static const struct ast_channel_tech local_tech = {
 
 */
 struct local_pvt {
-	ast_mutex_t lock;			/*!< Channel private lock */
 	unsigned int flags;                     /*!< Private flags */
 	char context[AST_MAX_CONTEXT];		/*!< Context to call */
 	char exten[AST_MAX_EXTENSION];		/*!< Extension to call */
@@ -117,18 +147,78 @@ struct local_pvt {
 	struct ast_channel *chan;		/*!< Outbound channel - PBX is run here */
 	struct ast_module_user *u_owner;	/*!< reference to keep the module loaded while in use */
 	struct ast_module_user *u_chan;		/*!< reference to keep the module loaded while in use */
-	AST_LIST_ENTRY(local_pvt) list;		/*!< Next entity */
 };
 
-#define LOCAL_GLARE_DETECT    (1 << 0) /*!< Detect glare on hangup */
-#define LOCAL_CANCEL_QUEUE    (1 << 1) /*!< Cancel queue */
-#define LOCAL_ALREADY_MASQED  (1 << 2) /*!< Already masqueraded */
-#define LOCAL_LAUNCHED_PBX    (1 << 3) /*!< PBX was launched */
-#define LOCAL_NO_OPTIMIZATION (1 << 4) /*!< Do not optimize using masquerading */
-#define LOCAL_BRIDGE          (1 << 5) /*!< Report back the "true" channel as being bridged to */
-#define LOCAL_MOH_PASSTHRU    (1 << 6) /*!< Pass through music on hold start/stop frames */
+#define LOCAL_ALREADY_MASQED  (1 << 0) /*!< Already masqueraded */
+#define LOCAL_LAUNCHED_PBX    (1 << 1) /*!< PBX was launched */
+#define LOCAL_NO_OPTIMIZATION (1 << 2) /*!< Do not optimize using masquerading */
+#define LOCAL_BRIDGE          (1 << 3) /*!< Report back the "true" channel as being bridged to */
+#define LOCAL_MOH_PASSTHRU    (1 << 4) /*!< Pass through music on hold start/stop frames */
 
-static AST_LIST_HEAD_STATIC(locals, local_pvt);
+static int local_setoption(struct ast_channel *chan, int option, void * data, int datalen)
+{
+	int res;
+	struct local_pvt *p;
+	struct ast_channel *otherchan;
+	ast_chan_write_info_t *write_info;
+
+	if (option != AST_OPTION_CHANNEL_WRITE) {
+		return -1;
+	}
+
+	write_info = data;
+
+	if (write_info->version != AST_CHAN_WRITE_INFO_T_VERSION) {
+		ast_log(LOG_ERROR, "The chan_write_info_t type has changed, and this channel hasn't been updated!\n");
+		return -1;
+	}
+
+
+startover:
+	ast_channel_lock(chan);
+
+	p = chan->tech_pvt;
+	if (!p) {
+		ast_channel_unlock(chan);
+		ast_log(LOG_WARNING, "Could not update other side of %s, local_pvt went away.\n", chan->name);
+		return -1;
+	}
+
+	while (ao2_trylock(p)) {
+		ast_channel_unlock(chan);
+		sched_yield();
+		ast_channel_lock(chan);
+		p = chan->tech_pvt;
+		if (!p) {
+			ast_channel_unlock(chan);
+			ast_log(LOG_WARNING, "Could not update other side of %s, local_pvt went away.\n", chan->name);
+			return -1;
+		}
+	}
+
+	otherchan = (write_info->chan == p->owner) ? p->chan : p->owner;
+
+	if (!otherchan || otherchan == write_info->chan) {
+		ao2_unlock(p);
+		ast_channel_unlock(chan);
+		ast_log(LOG_WARNING, "Could not update other side of %s, other side went away.\n", chan->name);
+		return 0;
+	}
+
+	if (ast_channel_trylock(otherchan)) {
+		ao2_unlock(p);
+		ast_channel_unlock(chan);
+		goto startover;
+	}
+
+	res = write_info->write_fn(otherchan, write_info->function, write_info->data, write_info->value);
+
+	ast_channel_unlock(otherchan);
+	ao2_unlock(p);
+	ast_channel_unlock(chan);
+
+	return res;
+}
 
 /*! \brief Adds devicestate to local channels */
 static int local_devicestate(void *data)
@@ -137,6 +227,7 @@ static int local_devicestate(void *data)
 	char *context = NULL, *opts = NULL;
 	int res;
 	struct local_pvt *lp;
+	struct ao2_iterator it;
 
 	if (!(context = strchr(exten, '@'))) {
 		ast_log(LOG_WARNING, "Someone used Local/%s somewhere without a @context. This is bad.\n", exten);
@@ -156,26 +247,19 @@ static int local_devicestate(void *data)
 		return AST_DEVICE_INVALID;
 	
 	res = AST_DEVICE_NOT_INUSE;
-	AST_LIST_LOCK(&locals);
-	AST_LIST_TRAVERSE(&locals, lp, list) {
+
+	it = ao2_iterator_init(locals, 0);
+	while ((lp = ao2_iterator_next(&it))) {
 		if (!strcmp(exten, lp->exten) && !strcmp(context, lp->context) && lp->owner) {
 			res = AST_DEVICE_INUSE;
+			ao2_ref(lp, -1);
 			break;
 		}
+		ao2_ref(lp, -1);
 	}
-	AST_LIST_UNLOCK(&locals);
+	ao2_iterator_destroy(&it);
 
 	return res;
-}
-
-/*!
- * \note Assumes the pvt is no longer in the pvts list
- */
-static struct local_pvt *local_pvt_destroy(struct local_pvt *pvt)
-{
-	ast_mutex_destroy(&pvt->lock);
-	ast_free(pvt);
-	return NULL;
 }
 
 /*! \brief Return the bridged channel of a Local channel */
@@ -190,7 +274,7 @@ static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct
 		return NULL;
 	}
 
-	ast_mutex_lock(&p->lock);
+	ao2_lock(p);
 
 	if (ast_test_flag(p, LOCAL_BRIDGE)) {
 		/* Find the opposite channel */
@@ -204,11 +288,75 @@ static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct
 		}
 	}
 
-	ast_mutex_unlock(&p->lock);
+	ao2_unlock(p);
 
 	return bridged;
 }
 
+static int local_queryoption(struct ast_channel *ast, int option, void *data, int *datalen)
+{
+	struct local_pvt *p = ast->tech_pvt;
+	struct ast_channel *chan, *bridged;
+	int res;
+
+	if (!p) {
+		return -1;
+	}
+
+	if (option != AST_OPTION_T38_STATE) {
+		/* AST_OPTION_T38_STATE is the only supported option at this time */
+		return -1;
+	}
+
+	ao2_lock(p);
+	chan = IS_OUTBOUND(ast, p) ? p->owner : p->chan;
+
+try_again:
+	if (!chan) {
+		ao2_unlock(p);
+		return -1;
+	}
+
+	if (ast_channel_trylock(chan)) {
+		ao2_unlock(p);
+		sched_yield();
+		ao2_lock(p);
+		chan = IS_OUTBOUND(ast, p) ? p->owner : p->chan;
+		goto try_again;
+	}
+
+	bridged = ast_bridged_channel(chan);
+	if (!bridged) {
+		/* can't query channel unless we are bridged */
+		ao2_unlock(p);
+		ast_channel_unlock(chan);
+		return -1;
+	}
+
+	if (ast_channel_trylock(bridged)) {
+		ast_channel_unlock(chan);
+		ao2_unlock(p);
+		sched_yield();
+		ao2_lock(p);
+		chan = IS_OUTBOUND(ast, p) ? p->owner : p->chan;
+		goto try_again;
+	}
+
+	res = ast_channel_queryoption(bridged, option, data, datalen, 0);
+	ao2_unlock(p);
+	ast_channel_unlock(chan);
+	ast_channel_unlock(bridged);
+	return res;
+}
+
+/*! \brief queue a frame on a to either the p->owner or p->chan
+ *
+ * \note the local_pvt MUST have it's ref count bumped before entering this function and
+ * decremented after this function is called.  This is a side effect of the deadlock
+ * avoidance that is necessary to lock 2 channels and a tech_pvt.  Without a ref counted
+ * local_pvt, it is impossible to guarantee it will not be destroyed by another thread
+ * during deadlock avoidance.
+ */
 static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_frame *f, 
 	struct ast_channel *us, int us_locked)
 {
@@ -226,35 +374,22 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		return 0;
 	}
 
-	/* Set glare detection */
-	ast_set_flag(p, LOCAL_GLARE_DETECT);
-
 	/* Ensure that we have both channels locked */
 	while (other && ast_channel_trylock(other)) {
-		ast_mutex_unlock(&p->lock);
+		int res;
+		if ((res = ao2_unlock(p))) {
+			ast_log(LOG_ERROR, "chan_local bug! '&p->lock' was not locked when entering local_queue_frame! (%s)\n", strerror(res));
+			return -1;
+		}
 		if (us && us_locked) {
 			do {
 				CHANNEL_DEADLOCK_AVOIDANCE(us);
-			} while (ast_mutex_trylock(&p->lock));
+			} while (ao2_trylock(p));
 		} else {
 			usleep(1);
-			ast_mutex_lock(&p->lock);
+			ao2_lock(p);
 		}
 		other = isoutbound ? p->owner : p->chan;
-	}
-
-	/* Since glare detection only occurs within this function, and because
-	 * a pvt flag cannot be set without having the pvt lock, this is the only
-	 * location where we could detect a cancelling of the queue. */
-	if (ast_test_flag(p, LOCAL_CANCEL_QUEUE)) {
-		/* We had a glare on the hangup.  Forget all this business,
-		return and destroy p.  */
-		ast_mutex_unlock(&p->lock);
-		p = local_pvt_destroy(p);
-		if (other) {
-			ast_channel_unlock(other);
-		}
-		return -1;
 	}
 
 	if (other) {
@@ -264,8 +399,6 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		ast_queue_frame(other, f);
 		ast_channel_unlock(other);
 	}
-
-	ast_clear_flag(p, LOCAL_GLARE_DETECT);
 
 	return 0;
 }
@@ -279,20 +412,26 @@ static int local_answer(struct ast_channel *ast)
 	if (!p)
 		return -1;
 
-	ast_mutex_lock(&p->lock);
+	ao2_lock(p);
+	ao2_ref(p, 1);
 	isoutbound = IS_OUTBOUND(ast, p);
 	if (isoutbound) {
 		/* Pass along answer since somebody answered us */
 		struct ast_frame answer = { AST_FRAME_CONTROL, { AST_CONTROL_ANSWER } };
 		res = local_queue_frame(p, isoutbound, &answer, ast, 1);
-	} else
+	} else {
 		ast_log(LOG_WARNING, "Huh?  Local is being asked to answer?\n");
-	if (!res)
-		ast_mutex_unlock(&p->lock);
+	}
+	ao2_unlock(p);
+	ao2_ref(p, -1);
 	return res;
 }
 
-static void check_bridge(struct local_pvt *p, int isoutbound)
+/*!
+ * \internal
+ * \note This function assumes that we're only called from the "outbound" local channel side
+ */
+static void check_bridge(struct local_pvt *p)
 {
 	struct ast_channel_monitor *tmp;
 	if (ast_test_flag(p, LOCAL_ALREADY_MASQED) || ast_test_flag(p, LOCAL_NO_OPTIMIZATION) || !p->chan || !p->owner || (p->chan->_bridge != ast_bridged_channel(p->chan)))
@@ -303,7 +442,7 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 	   frames on the owner channel (because they would be transferred to the
 	   outbound channel during the masquerade)
 	*/
-	if (isoutbound && p->chan->_bridge /* Not ast_bridged_channel!  Only go one step! */ && AST_LIST_EMPTY(&p->owner->readq)) {
+	if (p->chan->_bridge /* Not ast_bridged_channel!  Only go one step! */ && AST_LIST_EMPTY(&p->owner->readq)) {
 		/* Masquerade bridged channel into owner */
 		/* Lock everything we need, one by one, and give up if
 		   we can't get everything.  Remember, we'll get another
@@ -328,6 +467,38 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 							p->chan->audiohooks = p->owner->audiohooks;
 							p->owner->audiohooks = audiohooks_swapper;
 						}
+
+						/* If any Caller ID was set, preserve it after masquerade like above. We must check
+						 * to see if Caller ID was set because otherwise we'll mistakingly copy info not
+						 * set from the dialplan and will overwrite the real channel Caller ID. The reason
+						 * for this whole preswapping action is because the Caller ID is set on the channel
+						 * thread (which is the to be masqueraded away local channel) before both local
+						 * channels are optimized away.
+						 */
+						if (p->owner->caller.id.name.valid || p->owner->caller.id.number.valid
+							|| p->owner->caller.id.subaddress.valid || p->owner->caller.ani.name.valid
+							|| p->owner->caller.ani.number.valid || p->owner->caller.ani.subaddress.valid) {
+							struct ast_party_caller tmp;
+							tmp = p->owner->caller;
+							p->owner->caller = p->chan->_bridge->caller;
+							p->chan->_bridge->caller = tmp;
+						}
+						if (p->owner->redirecting.from.name.valid || p->owner->redirecting.from.number.valid
+							|| p->owner->redirecting.from.subaddress.valid || p->owner->redirecting.to.name.valid
+							|| p->owner->redirecting.to.number.valid || p->owner->redirecting.to.subaddress.valid) {
+							struct ast_party_redirecting tmp;
+							tmp = p->owner->redirecting;
+							p->owner->redirecting = p->chan->_bridge->redirecting;
+							p->chan->_bridge->redirecting = tmp;
+						}
+						if (p->owner->dialed.number.str || p->owner->dialed.subaddress.valid) {
+							struct ast_party_dialed tmp;
+							tmp = p->owner->dialed;
+							p->owner->dialed = p->chan->_bridge->dialed;
+							p->chan->_bridge->dialed = tmp;
+						}
+
+
 						ast_app_group_update(p->chan, p->owner);
 						ast_channel_masquerade(p->owner, p->chan->_bridge);
 						ast_set_flag(p, LOCAL_ALREADY_MASQED);
@@ -337,26 +508,6 @@ static void check_bridge(struct local_pvt *p, int isoutbound)
 				ast_channel_unlock(p->chan->_bridge);
 			}
 		}
-	/* We only allow masquerading in one 'direction'... it's important to preserve the state
-	   (group variables, etc.) that live on p->chan->_bridge (and were put there by the dialplan)
-	   when the local channels go away.
-	*/
-#if 0
-	} else if (!isoutbound && p->owner && p->owner->_bridge && p->chan && AST_LIST_EMPTY(&p->chan->readq)) {
-		/* Masquerade bridged channel into chan */
-		if (!ast_mutex_trylock(&(p->owner->_bridge)->lock)) {
-			if (!ast_check_hangup(p->owner->_bridge)) {
-				if (!ast_mutex_trylock(&p->chan->lock)) {
-					if (!ast_check_hangup(p->chan)) {
-						ast_channel_masquerade(p->chan, p->owner->_bridge);
-						ast_set_flag(p, LOCAL_ALREADY_MASQED);
-					}
-					ast_mutex_unlock(&p->chan->lock);
-				}
-			}
-			ast_mutex_unlock(&(p->owner->_bridge)->lock);
-		}
-#endif
 	}
 }
 
@@ -375,18 +526,20 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 		return -1;
 
 	/* Just queue for delivery to the other side */
-	ast_mutex_lock(&p->lock);
+	ao2_lock(p);
+	ao2_ref(p, 1); /* ref for local_queue_frame */
 	isoutbound = IS_OUTBOUND(ast, p);
-	if (f && (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO))
-		check_bridge(p, isoutbound);
+	if (isoutbound && f && (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO))
+		check_bridge(p);
 	if (!ast_test_flag(p, LOCAL_ALREADY_MASQED))
 		res = local_queue_frame(p, isoutbound, f, ast, 1);
 	else {
 		ast_debug(1, "Not posting to queue since already masked on '%s'\n", ast->name);
 		res = 0;
 	}
-	if (!res)
-		ast_mutex_unlock(&p->lock);
+	ao2_unlock(p);
+	ao2_ref(p, -1);
+
 	return res;
 }
 
@@ -397,18 +550,27 @@ static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 	if (!p)
 		return -1;
 
-	ast_mutex_lock(&p->lock);
+	ao2_lock(p);
 
 	if ((p->owner != oldchan) && (p->chan != oldchan)) {
 		ast_log(LOG_WARNING, "Old channel wasn't %p but was %p/%p\n", oldchan, p->owner, p->chan);
-		ast_mutex_unlock(&p->lock);
+		ao2_unlock(p);
 		return -1;
 	}
 	if (p->owner == oldchan)
 		p->owner = newchan;
 	else
 		p->chan = newchan;
-	ast_mutex_unlock(&p->lock);
+
+	/* Do not let a masquerade cause a Local channel to be bridged to itself! */
+	if (!ast_check_hangup(newchan) && (p->owner->_bridge == p->chan || p->chan->_bridge == p->owner)) {
+		ast_log(LOG_WARNING, "You can not bridge a Local channel to itself!\n");
+		ao2_unlock(p);
+		ast_queue_hangup(newchan);
+		return -1;
+	}
+
+	ao2_unlock(p);
 	return 0;
 }
 
@@ -421,6 +583,8 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 
 	if (!p)
 		return -1;
+
+	ao2_ref(p, 1); /* ref for local_queue_frame */
 
 	/* If this is an MOH hold or unhold, do it on the Local channel versus real channel */
 	if (!ast_test_flag(p, LOCAL_MOH_PASSTHRU) && condition == AST_CONTROL_HOLD) {
@@ -437,7 +601,7 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 		 * we need to transmit the collected connected line information instead of whatever
 		 * happens to be in this control frame. The same applies for redirecting information, which
 		 * is why it is handled here as well.*/
-		ast_mutex_lock(&p->lock);
+		ao2_lock(p);
 		isoutbound = IS_OUTBOUND(ast, p);
 		if (isoutbound) {
 			this_channel = p->chan;
@@ -449,29 +613,30 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 		if (the_other_channel) {
 			unsigned char frame_data[1024];
 			if (condition == AST_CONTROL_CONNECTED_LINE) {
-				f.datalen = ast_connected_line_build_data(frame_data, sizeof(frame_data), &this_channel->connected);
+				if (isoutbound) {
+					ast_connected_line_copy_to_caller(&the_other_channel->caller, &this_channel->connected);
+				}
+				f.datalen = ast_connected_line_build_data(frame_data, sizeof(frame_data), &this_channel->connected, NULL);
 			} else {
-				f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data), &this_channel->redirecting);
+				f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data), &this_channel->redirecting, NULL);
 			}
 			f.subclass.integer = condition;
 			f.data.ptr = frame_data;
-			if (!(res = local_queue_frame(p, isoutbound, &f, ast, 1))) {
-				ast_mutex_unlock(&p->lock);
-			}
-		} else {
-			ast_mutex_unlock(&p->lock);
+			res = local_queue_frame(p, isoutbound, &f, ast, 1);
 		}
+		ao2_unlock(p);
 	} else {
 		/* Queue up a frame representing the indication as a control frame */
-		ast_mutex_lock(&p->lock);
+		ao2_lock(p);
 		isoutbound = IS_OUTBOUND(ast, p);
 		f.subclass.integer = condition;
 		f.data.ptr = (void*)data;
 		f.datalen = datalen;
-		if (!(res = local_queue_frame(p, isoutbound, &f, ast, 1)))
-			ast_mutex_unlock(&p->lock);
+		res = local_queue_frame(p, isoutbound, &f, ast, 1);
+		ao2_unlock(p);
 	}
 
+	ao2_ref(p, -1);
 	return res;
 }
 
@@ -485,11 +650,13 @@ static int local_digit_begin(struct ast_channel *ast, char digit)
 	if (!p)
 		return -1;
 
-	ast_mutex_lock(&p->lock);
+	ao2_ref(p, 1); /* ref for local_queue_frame */
+	ao2_lock(p);
 	isoutbound = IS_OUTBOUND(ast, p);
 	f.subclass.integer = digit;
-	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
-		ast_mutex_unlock(&p->lock);
+	res = local_queue_frame(p, isoutbound, &f, ast, 0);
+	ao2_unlock(p);
+	ao2_ref(p, -1);
 
 	return res;
 }
@@ -504,12 +671,14 @@ static int local_digit_end(struct ast_channel *ast, char digit, unsigned int dur
 	if (!p)
 		return -1;
 
-	ast_mutex_lock(&p->lock);
+	ao2_ref(p, 1); /* ref for local_queue_frame */
+	ao2_lock(p);
 	isoutbound = IS_OUTBOUND(ast, p);
 	f.subclass.integer = digit;
 	f.len = duration;
-	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
-		ast_mutex_unlock(&p->lock);
+	res = local_queue_frame(p, isoutbound, &f, ast, 0);
+	ao2_unlock(p);
+	ao2_ref(p, -1);
 
 	return res;
 }
@@ -524,12 +693,14 @@ static int local_sendtext(struct ast_channel *ast, const char *text)
 	if (!p)
 		return -1;
 
-	ast_mutex_lock(&p->lock);
+	ao2_lock(p);
+	ao2_ref(p, 1); /* ref for local_queue_frame */
 	isoutbound = IS_OUTBOUND(ast, p);
 	f.data.ptr = (char *) text;
 	f.datalen = strlen(text) + 1;
-	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
-		ast_mutex_unlock(&p->lock);
+	res = local_queue_frame(p, isoutbound, &f, ast, 0);
+	ao2_unlock(p);
+	ao2_ref(p, -1);
 	return res;
 }
 
@@ -542,14 +713,17 @@ static int local_sendhtml(struct ast_channel *ast, int subclass, const char *dat
 
 	if (!p)
 		return -1;
-	
-	ast_mutex_lock(&p->lock);
+
+	ao2_lock(p);
+	ao2_ref(p, 1); /* ref for local_queue_frame */
 	isoutbound = IS_OUTBOUND(ast, p);
 	f.subclass.integer = subclass;
 	f.data.ptr = (char *)data;
 	f.datalen = datalen;
-	if (!(res = local_queue_frame(p, isoutbound, &f, ast, 0)))
-		ast_mutex_unlock(&p->lock);
+	res = local_queue_frame(p, isoutbound, &f, ast, 0);
+	ao2_unlock(p);
+	ao2_ref(p, -1);
+
 	return res;
 }
 
@@ -561,26 +735,43 @@ static int local_call(struct ast_channel *ast, char *dest, int timeout)
 	int res;
 	struct ast_var_t *varptr = NULL, *new;
 	size_t len, namelen;
+	char *reduced_dest = ast_strdupa(dest);
+	char *slash;
 
-	if (!p)
+	if (!p || p->owner != ast) {
 		return -1;
-
-	/* If you value your sanity, please don't look at this code */
-start_over:
-	while (ast_channel_trylock(p->chan)) {
-		ast_channel_unlock(p->owner);
-		usleep(1);
-		ast_channel_lock(p->owner);
 	}
 
-	/* p->owner and p->chan are locked now. Let's get p locked */
-	if (ast_mutex_trylock(&p->lock)) {
-		/* @#$&$@ */
-		ast_channel_unlock(p->chan);
-		ast_channel_unlock(p->owner);
-		usleep(1);
-		ast_channel_lock(p->owner);
-		goto start_over;
+	/* since we are letting go of channel locks that were locked coming into
+	 * this function, then we need to give the tech pvt a ref */
+	ao2_ref(p, 1);
+
+	while (ao2_trylock(p)) {
+		ast_channel_unlock(ast);
+		sched_yield();
+		ast_channel_lock(ast);
+	}
+	while ((p->chan && p->owner) && ast_channel_trylock(p->chan)) {
+		ao2_unlock(p);
+		if (p->owner) {
+			ast_channel_unlock(p->owner);
+		}
+		sched_yield();
+		if (p->owner) {
+			ast_channel_lock(p->owner);
+		}
+		ao2_lock(p);
+	}
+
+	if (!p->owner || !p->chan) {
+		/* someone went away during the locking madness.
+		 * time to bail. */
+		if (p->chan) {
+			ast_channel_unlock(p->chan);
+		}
+		ao2_unlock(p);
+		ao2_ref(p,-1);
+		return -1;
 	}
 
 	/*
@@ -590,38 +781,19 @@ start_over:
 	 * All these failure points just return -1. The individual strings will
 	 * be cleared when we destroy the channel.
 	 */
-	if (p->owner->cid.cid_rdnis) {
-		if (!(p->chan->cid.cid_rdnis = ast_strdup(p->owner->cid.cid_rdnis))) {
-			ast_mutex_unlock(&p->lock);
-			ast_channel_unlock(p->chan);
-			return -1;
-		}
-	}
 	ast_party_redirecting_copy(&p->chan->redirecting, &p->owner->redirecting);
 
-	if (p->owner->cid.cid_dnid) {
-		if (!(p->chan->cid.cid_dnid = ast_strdup(p->owner->cid.cid_dnid))) {
-			ast_mutex_unlock(&p->lock);
-			ast_channel_unlock(p->chan);
-			return -1;
-		}
-	}
-	p->chan->cid.cid_tns = p->owner->cid.cid_tns;
+	ast_party_dialed_copy(&p->chan->dialed, &p->owner->dialed);
 
-	ast_connected_line_copy_to_caller(&p->chan->cid, &p->owner->connected);
-	ast_connected_line_copy_from_caller(&p->chan->connected, &p->owner->cid);
+	ast_connected_line_copy_to_caller(&p->chan->caller, &p->owner->connected);
+	ast_connected_line_copy_from_caller(&p->chan->connected, &p->owner->caller);
 
 	ast_string_field_set(p->chan, language, p->owner->language);
 	ast_string_field_set(p->chan, accountcode, p->owner->accountcode);
 	ast_string_field_set(p->chan, musicclass, p->owner->musicclass);
 	ast_cdr_update(p->chan);
 
-	if (!ast_exists_extension(NULL, p->chan->context, p->chan->exten, 1, p->owner->cid.cid_num)) {
-		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n", p->chan->exten, p->chan->context);
-		ast_mutex_unlock(&p->lock);
-		ast_channel_unlock(p->chan);
-		return -1;
-	}
+	ast_channel_cc_params_init(p->chan, ast_channel_get_cc_config_params(p->owner));
 
 	/* Make sure we inherit the ANSWERED_ELSEWHERE flag if it's set on the queue/dial call request in the dialplan */
 	if (ast_test_flag(ast, AST_FLAG_ANSWERED_ELSEWHERE)) {
@@ -640,13 +812,31 @@ start_over:
 		}
 	}
 	ast_channel_datastore_inherit(p->owner, p->chan);
+	/* If the local channel has /n or /b on the end of it,
+	 * we need to lop that off for our argument to setting
+	 * up the CC_INTERFACES variable
+	 */
+	if ((slash = strrchr(reduced_dest, '/'))) {
+		*slash = '\0';
+	}
+	ast_set_cc_interfaces_chanvar(p->chan, reduced_dest);
+
+	if (!ast_exists_extension(p->chan, p->chan->context, p->chan->exten, 1,
+		S_COR(p->owner->caller.id.number.valid, p->owner->caller.id.number.str, NULL))) {
+		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n", p->chan->exten, p->chan->context);
+		ao2_unlock(p);
+		ast_channel_unlock(p->chan);
+		ao2_ref(p, -1);
+		return -1;
+	}
 
 	/* Start switch on sub channel */
 	if (!(res = ast_pbx_start(p->chan)))
 		ast_set_flag(p, LOCAL_LAUNCHED_PBX);
 
-	ast_mutex_unlock(&p->lock);
+	ao2_unlock(p);
 	ast_channel_unlock(p->chan);
+	ao2_ref(p, -1);
 	return res;
 }
 
@@ -657,12 +847,15 @@ static int local_hangup(struct ast_channel *ast)
 	int isoutbound;
 	struct ast_frame f = { AST_FRAME_CONTROL, { AST_CONTROL_HANGUP }, .data.uint32 = ast->hangupcause };
 	struct ast_channel *ochan = NULL;
-	int glaredetect = 0, res = 0;
 
 	if (!p)
 		return -1;
 
-	ast_mutex_lock(&p->lock);
+	/* we MUST give the tech_pvt a ref here since we are unlocking the
+	 * channel during deadlock avoidance. */
+	ao2_ref(p, 1);
+
+	ao2_lock(p);
 
 	isoutbound = IS_OUTBOUND(ast, p);
 
@@ -676,20 +869,30 @@ static int local_hangup(struct ast_channel *ast)
 		if ((status) && (p->owner)) {
 			/* Deadlock avoidance */
 			while (p->owner && ast_channel_trylock(p->owner)) {
-				ast_mutex_unlock(&p->lock);
-				if (ast) {
-					ast_channel_unlock(ast);
+				ao2_unlock(p);
+				if (p->chan) {
+					ast_channel_unlock(p->chan);
 				}
-				usleep(1);
-				if (ast) {
-					ast_channel_lock(ast);
+				sched_yield();
+				if (p->chan) {
+					ast_channel_lock(p->chan);
 				}
-				ast_mutex_lock(&p->lock);
+				ao2_lock(p);
 			}
 			if (p->owner) {
 				pbx_builtin_setvar_helper(p->owner, "CHANLOCALSTATUS", status);
 				ast_channel_unlock(p->owner);
 			}
+		}
+		if (!p->chan) {
+			/* chan was == to ast and was !NULL before deadlock avoidance started, if chan
+			 * is NULL now, then we should bail because that channel
+			 * hungup already. This is possible because we let go of the
+			 * lock given to the ast channel passed to this function during
+			 * deadlock avoidance. */
+			ao2_unlock(p);
+			ao2_ref(p, -1);
+			return 0;
 		}
 		p->chan = NULL;
 		ast_clear_flag(p, LOCAL_LAUNCHED_PBX);
@@ -697,44 +900,57 @@ static int local_hangup(struct ast_channel *ast)
 	} else {
 		ast_module_user_remove(p->u_owner);
 		while (p->chan && ast_channel_trylock(p->chan)) {
-			DEADLOCK_AVOIDANCE(&p->lock);
+				ao2_unlock(p);
+				if (p->owner) {
+					ast_channel_unlock(p->owner);
+				}
+				sched_yield();
+				if (p->owner) {
+					ast_channel_lock(p->owner);
+				}
+				ao2_lock(p);
 		}
-		p->owner = NULL;
 		if (p->chan) {
 			ast_queue_hangup(p->chan);
 			ast_channel_unlock(p->chan);
 		}
-	}
-	
-	ast->tech_pvt = NULL;
-	
-	if (!p->owner && !p->chan) {
-		/* Okay, done with the private part now, too. */
-		glaredetect = ast_test_flag(p, LOCAL_GLARE_DETECT);
-		/* If we have a queue holding, don't actually destroy p yet, but
-		   let local_queue do it. */
-		if (glaredetect)
-			ast_set_flag(p, LOCAL_CANCEL_QUEUE);
-		/* Remove from list */
-		AST_LIST_LOCK(&locals);
-		AST_LIST_REMOVE(&locals, p, list);
-		AST_LIST_UNLOCK(&locals);
-		ast_mutex_unlock(&p->lock);
-		/* And destroy */
-		if (!glaredetect) {
-			p = local_pvt_destroy(p);
+
+		if (!p->owner) {
+			/* owner was == to ast and was !NULL before deadlock avoidance started, if
+			 * owner is NULL now, then we should bail because that channel
+			 * hungup already. This is possible because we let go of the
+			 * lock given to the ast channel passed to this function during
+			 * deadlock avoidance. */
+			ao2_unlock(p);
+			ao2_ref(p, -1);
+			return 0;
 		}
+		p->owner = NULL;
+	}
+
+	ast->tech_pvt = NULL;
+
+	if (!p->owner && !p->chan) {
+		ao2_unlock(p);
+
+		/* Remove from list */
+		ao2_unlink(locals, p);
+		ao2_ref(p, -1);
 		return 0;
 	}
-	if (p->chan && !ast_test_flag(p, LOCAL_LAUNCHED_PBX))
+	if (p->chan && !ast_test_flag(p, LOCAL_LAUNCHED_PBX)) {
 		/* Need to actually hangup since there is no PBX */
 		ochan = p->chan;
-	else
-		res = local_queue_frame(p, isoutbound, &f, NULL, 1);
-	if (!res)
-		ast_mutex_unlock(&p->lock);
-	if (ochan)
+	} else {
+		local_queue_frame(p, isoutbound, &f, NULL, 1);
+	}
+
+	ao2_unlock(p);
+	if (ochan) {
 		ast_hangup(ochan);
+	}
+
+	ao2_ref(p, -1);
 	return 0;
 }
 
@@ -744,11 +960,11 @@ static struct local_pvt *local_alloc(const char *data, int format)
 	struct local_pvt *tmp = NULL;
 	char *c = NULL, *opts = NULL;
 
-	if (!(tmp = ast_calloc(1, sizeof(*tmp))))
+	if (!(tmp = ao2_alloc(sizeof(*tmp), NULL))) {
 		return NULL;
+	}
 
 	/* Initialize private structure information */
-	ast_mutex_init(&tmp->lock);
 	ast_copy_string(tmp->exten, data, sizeof(tmp->exten));
 
 	memcpy(&tmp->jb_conf, &g_jb_conf, sizeof(tmp->jb_conf));
@@ -792,14 +1008,11 @@ static struct local_pvt *local_alloc(const char *data, int format)
 	} else {
 #endif
 		/* Add to list */
-		AST_LIST_LOCK(&locals);
-		AST_LIST_INSERT_HEAD(&locals, tmp, list);
-		AST_LIST_UNLOCK(&locals);
+		ao2_link(locals, tmp);
 #if 0
 	}
 #endif
-	
-	return tmp;
+	return tmp; /* this is returned with a ref */
 }
 
 /*! \brief Start new local channel */
@@ -874,11 +1087,13 @@ static struct ast_channel *local_request(const char *type, format_t format, cons
 	/* Allocate a new private structure and then Asterisk channel */
 	if ((p = local_alloc(data, format))) {
 		if (!(chan = local_new(p, AST_STATE_DOWN, requestor ? requestor->linkedid : NULL))) {
-			AST_LIST_LOCK(&locals);
-			AST_LIST_REMOVE(&locals, p, list);
-			AST_LIST_UNLOCK(&locals);
-			p = local_pvt_destroy(p);
+			ao2_unlink(locals, p);
 		}
+		if (chan && ast_channel_cc_params_init(chan, requestor ? ast_channel_get_cc_config_params((struct ast_channel *)requestor) : NULL)) {
+			chan = ast_channel_release(chan);
+			ao2_unlink(locals, p);
+		}
+		ao2_ref(p, -1); /* kill the ref from the alloc */
 	}
 
 	return chan;
@@ -888,6 +1103,7 @@ static struct ast_channel *local_request(const char *type, format_t format, cons
 static char *locals_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct local_pvt *p = NULL;
+	struct ao2_iterator it;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -903,16 +1119,19 @@ static char *locals_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 	if (a->argc != 3)
 		return CLI_SHOWUSAGE;
 
-	AST_LIST_LOCK(&locals);
-	if (!AST_LIST_EMPTY(&locals)) {
-		AST_LIST_TRAVERSE(&locals, p, list) {
-			ast_mutex_lock(&p->lock);
-			ast_cli(a->fd, "%s -- %s@%s\n", p->owner ? p->owner->name : "<unowned>", p->exten, p->context);
-			ast_mutex_unlock(&p->lock);
-		}
-	} else
+	if (ao2_container_count(locals) == 0) {
 		ast_cli(a->fd, "No local channels in use\n");
-	AST_LIST_UNLOCK(&locals);
+		return RESULT_SUCCESS;
+	}
+
+	it = ao2_iterator_init(locals, 0);
+	while ((p = ao2_iterator_next(&it))) {
+		ao2_lock(p);
+		ast_cli(a->fd, "%s -- %s@%s\n", p->owner ? p->owner->name : "<unowned>", p->exten, p->context);
+		ao2_unlock(p);
+		ao2_ref(p, -1);
+	}
+	ao2_iterator_destroy(&it);
 
 	return CLI_SUCCESS;
 }
@@ -921,15 +1140,76 @@ static struct ast_cli_entry cli_local[] = {
 	AST_CLI_DEFINE(locals_show, "List status of local channels"),
 };
 
+static int manager_optimize_away(struct mansession *s, const struct message *m)
+{
+	const char *channel;
+	struct local_pvt *p, *tmp = NULL;
+	struct ast_channel *c;
+	int found = 0;
+	struct ao2_iterator it;
+
+	channel = astman_get_header(m, "Channel");
+
+	if (ast_strlen_zero(channel)) {
+		astman_send_error(s, m, "'Channel' not specified.");
+		return 0;
+	}
+
+	c = ast_channel_get_by_name(channel);
+	if (!c) {
+		astman_send_error(s, m, "Channel does not exist.");
+		return 0;
+	}
+
+	p = c->tech_pvt;
+	ast_channel_unref(c);
+	c = NULL;
+
+	it = ao2_iterator_init(locals, 0);
+	while ((tmp = ao2_iterator_next(&it))) {
+		if (tmp == p) {
+			ao2_lock(tmp);
+			found = 1;
+			ast_clear_flag(tmp, LOCAL_NO_OPTIMIZATION);
+			ao2_unlock(tmp);
+			ao2_ref(tmp, -1);
+			break;
+		}
+		ao2_ref(tmp, -1);
+	}
+	ao2_iterator_destroy(&it);
+
+	if (found) {
+		astman_send_ack(s, m, "Queued channel to be optimized away");
+	} else {
+		astman_send_error(s, m, "Unable to find channel");
+	}
+
+	return 0;
+}
+
+
+static int locals_cmp_cb(void *obj, void *arg, int flags)
+{
+	return (obj == arg) ? CMP_MATCH : 0;
+}
+
 /*! \brief Load module into PBX, register channel */
 static int load_module(void)
 {
+	if (!(locals = ao2_container_alloc(BUCKET_SIZE, NULL, locals_cmp_cb))) {
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
 	/* Make sure we can register our channel type */
 	if (ast_channel_register(&local_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel class 'Local'\n");
+		ao2_ref(locals, -1);
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_cli_register_multiple(cli_local, sizeof(cli_local) / sizeof(struct ast_cli_entry));
+	ast_manager_register_xml("LocalOptimizeAway", EVENT_FLAG_SYSTEM|EVENT_FLAG_CALL, manager_optimize_away);
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
@@ -937,22 +1217,28 @@ static int load_module(void)
 static int unload_module(void)
 {
 	struct local_pvt *p = NULL;
+	struct ao2_iterator it;
 
 	/* First, take us out of the channel loop */
 	ast_cli_unregister_multiple(cli_local, sizeof(cli_local) / sizeof(struct ast_cli_entry));
+	ast_manager_unregister("LocalOptimizeAway");
 	ast_channel_unregister(&local_tech);
-	if (!AST_LIST_LOCK(&locals)) {
-		/* Hangup all interfaces if they have an owner */
-		AST_LIST_TRAVERSE(&locals, p, list) {
-			if (p->owner)
-				ast_softhangup(p->owner, AST_SOFTHANGUP_APPUNLOAD);
+
+	it = ao2_iterator_init(locals, 0);
+	while ((p = ao2_iterator_next(&it))) {
+		if (p->owner) {
+			ast_softhangup(p->owner, AST_SOFTHANGUP_APPUNLOAD);
 		}
-		AST_LIST_UNLOCK(&locals);
-	} else {
-		ast_log(LOG_WARNING, "Unable to lock the monitor\n");
-		return -1;
-	}		
+		ao2_ref(p, -1);
+	}
+	ao2_iterator_destroy(&it);
+	ao2_ref(locals, -1);
+
 	return 0;
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Local Proxy Channel (Note: used internally by other modules)");
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Local Proxy Channel (Note: used internally by other modules)",
+		.load = load_module,
+		.unload = unload_module,
+		.load_pri = AST_MODPRI_CHANNEL_DRIVER,
+	);

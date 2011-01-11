@@ -32,6 +32,7 @@
  */
 /*** MODULEINFO
         <depend>chan_local</depend>
+        <depend>res_monitor</depend>
  ***/
 
 #include "asterisk.h"
@@ -67,6 +68,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/monitor.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/event.h"
+#include "asterisk/data.h"
 
 /*** DOCUMENTATION
 	<application name="AgentLogin" language="en_US">
@@ -159,10 +161,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="channel">
 						<para>The name of the active channel for the Agent (AgentLogin)</para>
 					</enum>
+					<enum name="fullchannel">
+						<para>The untruncated name of the active channel for the Agent (AgentLogin)</para>
+					</enum>
 				</enumlist>
 			</parameter>
 		</syntax>
-		<description />
+		<description></description>
 	</function>
 	<manager name="Agents" language="en_US">
 		<synopsis>
@@ -274,6 +279,19 @@ struct agent_pvt {
 	unsigned int flags;            /**< Flags show if settings were applied with channel vars */
 	AST_LIST_ENTRY(agent_pvt) list;	/**< Next Agent in the linked list. */
 };
+
+#define DATA_EXPORT_AGENT(MEMBER)				\
+	MEMBER(agent_pvt, autologoff, AST_DATA_INTEGER)		\
+	MEMBER(agent_pvt, ackcall, AST_DATA_BOOLEAN)		\
+	MEMBER(agent_pvt, deferlogoff, AST_DATA_BOOLEAN)	\
+	MEMBER(agent_pvt, wrapuptime, AST_DATA_MILLISECONDS)	\
+	MEMBER(agent_pvt, acknowledged, AST_DATA_BOOLEAN)	\
+	MEMBER(agent_pvt, name, AST_DATA_STRING)		\
+	MEMBER(agent_pvt, password, AST_DATA_PASSWORD)		\
+	MEMBER(agent_pvt, acceptdtmf, AST_DATA_CHARACTER)	\
+	MEMBER(agent_pvt, logincallerid, AST_DATA_STRING)
+
+AST_DATA_STRUCTURE(agent_pvt, DATA_EXPORT_AGENT);
 
 static AST_LIST_HEAD_STATIC(agents, agent_pvt);	/*!< Holds the list of agents (loaded form agents.conf). */
 
@@ -712,7 +730,12 @@ static int agent_indicate(struct ast_channel *ast, int condition, const void *da
 	ast_mutex_lock(&p->lock);
 	if (p->chan && !ast_check_hangup(p->chan)) {
 		while (ast_channel_trylock(p->chan)) {
-			ast_channel_unlock(ast);
+			int res;
+			if ((res = ast_channel_unlock(ast))) {
+				ast_log(LOG_ERROR, "chan_agent bug! Channel was not locked upon entry to agent_indicate: %s\n", strerror(res));
+				ast_mutex_unlock(&p->lock);
+				return -1;
+			}
 			usleep(1);
 			ast_channel_lock(ast);
 		}
@@ -1488,16 +1511,17 @@ static int action_agents(struct mansession *s, const struct message *m)
 		if (p->chan) {
 			loginChan = ast_strdupa(p->chan->name);
 			if (p->owner && p->owner->_bridge) {
-				talkingto = p->chan->cid.cid_num;
+				talkingto = S_COR(p->chan->caller.id.number.valid,
+					p->chan->caller.id.number.str, "n/a");
 				if (ast_bridged_channel(p->owner))
 					talkingtoChan = ast_strdupa(ast_bridged_channel(p->owner)->name);
 				else
 					talkingtoChan = "n/a";
-        			status = "AGENT_ONCALL";
+				status = "AGENT_ONCALL";
 			} else {
 				talkingto = "n/a";
 				talkingtoChan = "n/a";
-        			status = "AGENT_IDLE";
+				status = "AGENT_IDLE";
 			}
 		} else {
 			loginChan = "n/a";
@@ -2147,10 +2171,12 @@ static int agentmonitoroutgoing_exec(struct ast_channel *chan, const char *data)
 		if (strchr(data, 'c'))
 			changeoutgoing = 1;
 	}
-	if (chan->cid.cid_num) {
+	if (chan->caller.id.number.valid
+		&& !ast_strlen_zero(chan->caller.id.number.str)) {
 		const char *tmp;
 		char agentvar[AST_MAX_BUF];
-		snprintf(agentvar, sizeof(agentvar), "%s_%s", GETAGENTBYCALLERID, chan->cid.cid_num);
+		snprintf(agentvar, sizeof(agentvar), "%s_%s", GETAGENTBYCALLERID,
+			chan->caller.id.number.str);
 		if ((tmp = pbx_builtin_getvar_helper(NULL, agentvar))) {
 			struct agent_pvt *p;
 			ast_copy_string(agent, tmp, sizeof(agent));
@@ -2286,10 +2312,18 @@ static int function_agent(struct ast_channel *chan, const char *cmd, char *data,
 		ast_copy_string(buf, agent->moh, len);
 	else if (!strcasecmp(args.item, "channel")) {
 		if (agent->chan) {
+			ast_channel_lock(agent->chan);
 			ast_copy_string(buf, agent->chan->name, len);
+			ast_channel_unlock(agent->chan);
 			tmp = strrchr(buf, '-');
 			if (tmp)
 				*tmp = '\0';
+		} 
+	} else if (!strcasecmp(args.item, "fullchannel")) {
+		if (agent->chan) {
+			ast_channel_lock(agent->chan);
+			ast_copy_string(buf, agent->chan->name, len);
+			ast_channel_unlock(agent->chan);
 		} 
 	} else if (!strcasecmp(args.item, "exten")) {
 		buf[0] = '\0';
@@ -2305,6 +2339,75 @@ static struct ast_custom_function agent_function = {
 	.read = function_agent,
 };
 
+/*!
+ * \internal
+ * \brief Callback used to generate the agents tree.
+ * \param[in] search The search pattern tree.
+ * \retval NULL on error.
+ * \retval non-NULL The generated tree.
+ */
+static int agents_data_provider_get(const struct ast_data_search *search,
+	struct ast_data *data_root)
+{
+	struct agent_pvt *p;
+	struct ast_data *data_agent, *data_channel, *data_talkingto;
+
+	AST_LIST_LOCK(&agents);
+	AST_LIST_TRAVERSE(&agents, p, list) {
+		data_agent = ast_data_add_node(data_root, "agent");
+		if (!data_agent) {
+			continue;
+		}
+
+		ast_mutex_lock(&p->lock);
+		if (!(p->pending)) {
+			ast_data_add_str(data_agent, "id", p->agent);
+			ast_data_add_structure(agent_pvt, data_agent, p);
+
+			ast_data_add_bool(data_agent, "logged", p->chan ? 1 : 0);
+			if (p->chan) {
+				data_channel = ast_data_add_node(data_agent, "loggedon");
+				if (!data_channel) {
+					ast_mutex_unlock(&p->lock);
+					ast_data_remove_node(data_root, data_agent);
+					continue;
+				}
+				ast_channel_data_add_structure(data_channel, p->chan, 0);
+				if (p->owner && ast_bridged_channel(p->owner)) {
+					data_talkingto = ast_data_add_node(data_agent, "talkingto");
+					if (!data_talkingto) {
+						ast_mutex_unlock(&p->lock);
+						ast_data_remove_node(data_root, data_agent);
+						continue;
+					}
+					ast_channel_data_add_structure(data_talkingto, ast_bridged_channel(p->owner), 0);
+				}
+			} else {
+				ast_data_add_node(data_agent, "talkingto");
+				ast_data_add_node(data_agent, "loggedon");
+			}
+			ast_data_add_str(data_agent, "musiconhold", p->moh);
+		}
+		ast_mutex_unlock(&p->lock);
+
+		/* if this agent doesn't match remove the added agent. */
+		if (!ast_data_search_match(search, data_agent)) {
+			ast_data_remove_node(data_root, data_agent);
+		}
+	}
+	AST_LIST_UNLOCK(&agents);
+
+	return 0;
+}
+
+static const struct ast_data_handler agents_data_provider = {
+	.version = AST_DATA_HANDLER_VERSION,
+	.get = agents_data_provider_get
+};
+
+static const struct ast_data_entry agents_data_providers[] = {
+	AST_DATA_ENTRY("asterisk/channel/agent/list", &agents_data_provider),
+};
 
 /*!
  * \brief Initialize the Agents module.
@@ -2326,6 +2429,9 @@ static int load_module(void)
 	/* Dialplan applications */
 	ast_register_application_xml(app, login_exec);
 	ast_register_application_xml(app3, agentmonitoroutgoing_exec);
+
+	/* data tree */
+	ast_data_register_multiple(agents_data_providers, ARRAY_LEN(agents_data_providers));
 
 	/* Manager commands */
 	ast_manager_register_xml("Agents", EVENT_FLAG_AGENT, action_agents);
@@ -2360,6 +2466,8 @@ static int unload_module(void)
 	/* Unregister manager command */
 	ast_manager_unregister("Agents");
 	ast_manager_unregister("AgentLogoff");
+	/* Unregister the data tree */
+	ast_data_unregister(NULL);
 	/* Unregister channel */
 	AST_LIST_LOCK(&agents);
 	/* Hangup all interfaces if they have an owner */
@@ -2372,8 +2480,10 @@ static int unload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Agent Proxy Channel",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Agent Proxy Channel",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,
+		.load_pri = AST_MODPRI_CHANNEL_DRIVER,
+		.nonoptreq = "res_monitor,chan_local",
 	       );

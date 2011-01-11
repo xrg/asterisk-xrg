@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2010, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -48,11 +48,20 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include <signal.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <float.h>
+#include <stdlib.h>
 #ifdef HAVE_INOTIFY
 #include <sys/inotify.h>
+#elif defined(HAVE_KQUEUE)
+#include <sys/types.h>
+#include <sys/time.h>
+#include <sys/event.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #endif
 
 #include "private.h"
@@ -63,6 +72,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/strings.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/utils.h"
+#include "asterisk/test.h"
 
 #ifndef lint
 #ifndef NOID
@@ -96,6 +106,13 @@ static char	__attribute__((unused)) elsieid[] = "@(#)localtime.c	8.5";
 
 static const char	gmt[] = "GMT";
 static const struct timeval WRONG = { 0, 0 };
+
+#ifdef TEST_FRAMEWORK
+/* Protected from multiple threads by the zonelist lock */
+static struct ast_test *test = NULL;
+#else
+struct ast_test;
+#endif
 
 /*! \note
  * The DST rules to use if TZ has no rules and we can't load TZDEFRULES.
@@ -152,10 +169,23 @@ struct state {
 	struct lsinfo	lsis[TZ_MAX_LEAPS];
 #ifdef HAVE_INOTIFY
 	int wd[2];
+#elif defined(HAVE_KQUEUE)
+	int fd;
+# ifdef HAVE_O_SYMLINK
+	int fds;
+# else
+	DIR *dir;
+# endif /* defined(HAVE_O_SYMLINK) */
 #else
 	time_t  mtime[2];
 #endif
 	AST_LIST_ENTRY(state) list;
+};
+
+struct locale_entry {
+	AST_LIST_ENTRY(locale_entry) list;
+	locale_t locale;
+	char name[0];
 };
 
 struct rule {
@@ -220,6 +250,9 @@ static int		tzparse P((const char * name, struct state * sp,
 				int lastditch));
 
 static AST_LIST_HEAD_STATIC(zonelist, state);
+#ifdef HAVE_NEWLOCALE
+static AST_LIST_HEAD_STATIC(localelist, locale_entry);
+#endif
 
 #ifndef TZ_STRLEN_MAX
 #define TZ_STRLEN_MAX 255
@@ -239,12 +272,11 @@ static void *inotify_daemon(void *data)
 	} buf;
 	ssize_t res;
 	struct state *cur;
-	struct timespec ten_seconds = { 10, 0 };
 
 	inotify_fd = inotify_init();
 
 	ast_mutex_lock(&initialization_lock);
-	ast_cond_signal(&initialization);
+	ast_cond_broadcast(&initialization);
 	ast_mutex_unlock(&initialization_lock);
 
 	if (inotify_fd < 0) {
@@ -261,8 +293,10 @@ static void *inotify_daemon(void *data)
 			break;
 		} else if (res < 0) {
 			if (errno == EINTR || errno == EAGAIN) {
-				/* If read fails, then wait a bit, then continue */
-				nanosleep(&ten_seconds, NULL);
+				/* If read fails, try again */
+				AST_LIST_LOCK(&zonelist);
+				ast_cond_broadcast(&initialization);
+				AST_LIST_UNLOCK(&zonelist);
 				continue;
 			}
 			/* Sanity check -- this should never happen, either */
@@ -278,6 +312,7 @@ static void *inotify_daemon(void *data)
 			}
 		}
 		AST_LIST_TRAVERSE_SAFE_END
+		ast_cond_broadcast(&initialization);
 		AST_LIST_UNLOCK(&zonelist);
 	}
 	close(inotify_fd);
@@ -295,7 +330,7 @@ static void add_notify(struct state *sp, const char *path)
 			/* Give the thread a chance to initialize */
 			ast_cond_wait(&initialization, &initialization_lock);
 		} else {
-			ast_log(LOG_ERROR, "Unable to start notification thread\n");
+			fprintf(stderr, "Unable to start notification thread\n");
 			ast_mutex_unlock(&initialization_lock);
 			return;
 		}
@@ -318,6 +353,180 @@ static void add_notify(struct state *sp, const char *path)
 		);
 	}
 }
+#elif defined(HAVE_KQUEUE)
+static int queue_fd = -1;
+
+static void *kqueue_daemon(void *data)
+{
+	struct kevent kev;
+	struct state *sp;
+	struct timespec no_wait = { 0, 1 };
+
+	ast_mutex_lock(&initialization_lock);
+	if ((queue_fd = kqueue()) < 0) {
+		/* ast_log uses us to format messages, so if we called ast_log, we'd be
+		 * in for a nasty loop (seen already in testing) */
+		fprintf(stderr, "Unable to initialize kqueue(): %s\n", strerror(errno));
+		inotify_thread = AST_PTHREADT_NULL;
+
+		/* Okay to proceed */
+		ast_cond_signal(&initialization);
+		ast_mutex_unlock(&initialization_lock);
+		return NULL;
+	}
+
+	ast_cond_signal(&initialization);
+	ast_mutex_unlock(&initialization_lock);
+
+	for (;/*ever*/;) {
+		if (kevent(queue_fd, NULL, 0, &kev, 1, NULL) < 0) {
+			AST_LIST_LOCK(&zonelist);
+			ast_cond_broadcast(&initialization);
+			AST_LIST_UNLOCK(&zonelist);
+			continue;
+		}
+
+		sp = kev.udata;
+
+		/*!\note
+		 * If the file event fired, then the file was removed, so we'll need
+		 * to reparse the entry.  The directory event is a bit more
+		 * interesting.  Unfortunately, the queue doesn't contain information
+		 * about the file that changed (only the directory itself), so unless
+		 * we kept a record of the directory state before, it's not really
+		 * possible to know what change occurred.  But if we act paranoid and
+		 * just purge the associated file, then it will get reparsed, and
+		 * everything works fine.  It may be more work, but it's a vast
+		 * improvement over the alternative implementation, which is to stat
+		 * the file repeatedly in what is essentially a busy loop. */
+		AST_LIST_LOCK(&zonelist);
+		AST_LIST_REMOVE(&zonelist, sp, list);
+		AST_LIST_UNLOCK(&zonelist);
+
+		/* If the directory event fired, remove the file event */
+		EV_SET(&kev, sp->fd, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
+		kevent(queue_fd, &kev, 1, NULL, 0, &no_wait);
+		close(sp->fd);
+
+#ifdef HAVE_O_SYMLINK
+		if (sp->fds > -1) {
+			/* If the file event fired, remove the symlink event */
+			EV_SET(&kev, sp->fds, EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
+			kevent(queue_fd, &kev, 1, NULL, 0, &no_wait);
+			close(sp->fds);
+		}
+#else
+		if (sp->dir) {
+			/* If the file event fired, remove the directory event */
+			EV_SET(&kev, dirfd(sp->dir), EVFILT_VNODE, EV_DELETE, 0, 0, NULL);
+			kevent(queue_fd, &kev, 1, NULL, 0, &no_wait);
+			closedir(sp->dir);
+		}
+#endif
+		free(sp);
+
+		/* Just in case the signal was sent late */
+		AST_LIST_LOCK(&zonelist);
+		ast_cond_broadcast(&initialization);
+		AST_LIST_UNLOCK(&zonelist);
+	}
+}
+
+static void add_notify(struct state *sp, const char *path)
+{
+	struct kevent kev;
+	struct timespec no_wait = { 0, 1 };
+	char watchdir[PATH_MAX + 1] = "";
+
+	if (inotify_thread == AST_PTHREADT_NULL) {
+		ast_cond_init(&initialization, NULL);
+		ast_mutex_init(&initialization_lock);
+		ast_mutex_lock(&initialization_lock);
+		if (!(ast_pthread_create_background(&inotify_thread, NULL, kqueue_daemon, NULL))) {
+			/* Give the thread a chance to initialize */
+			ast_cond_wait(&initialization, &initialization_lock);
+		}
+		ast_mutex_unlock(&initialization_lock);
+	}
+
+	if (queue_fd < 0) {
+		/* Error already sent */
+		return;
+	}
+
+#ifdef HAVE_O_SYMLINK
+	if (readlink(path, watchdir, sizeof(watchdir) - 1) != -1 && (sp->fds = open(path, O_RDONLY | O_SYMLINK
+# ifdef HAVE_O_EVTONLY
+			| O_EVTONLY
+# endif
+			)) >= 0) {
+		EV_SET(&kev, sp->fds, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_ONESHOT, NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_REVOKE | NOTE_ATTRIB, 0, sp);
+		if (kevent(queue_fd, &kev, 1, NULL, 0, &no_wait) < 0 && errno != 0) {
+			/* According to the API docs, we may get -1 return value, due to the
+			 * NULL space for a returned event, but errno should be 0 unless
+			 * there's a real error. Otherwise, kevent will return 0 to indicate
+			 * that the time limit expired. */
+			fprintf(stderr, "Unable to watch '%s': %s\n", path, strerror(errno));
+			close(sp->fds);
+			sp->fds = -1;
+		}
+	}
+#else
+	if (readlink(path, watchdir, sizeof(watchdir) - 1) != -1) {
+		/* Special -- watch the directory for changes, because we cannot directly watch a symlink */
+		char *slash;
+
+		ast_copy_string(watchdir, path, sizeof(watchdir));
+
+		if ((slash = strrchr(watchdir, '/'))) {
+			*slash = '\0';
+		}
+		if (!(sp->dir = opendir(watchdir))) {
+			fprintf(stderr, "Unable to watch directory with symlink '%s': %s\n", path, strerror(errno));
+			goto watch_file;
+		}
+
+		/*!\note
+		 * You may be wondering about whether there is a potential conflict
+		 * with the kqueue interface, because we might be watching the same
+		 * directory for multiple zones.  The answer is no, because kqueue
+		 * looks at the descriptor to know if there's a duplicate.  Since we
+		 * (may) have opened the directory multiple times, each represents a
+		 * different event, so no replacement of an existing event will occur.
+		 * Likewise, there's no potential leak of a descriptor.
+		 */
+		EV_SET(&kev, dirfd(sp->dir), EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_ONESHOT,
+				NOTE_DELETE | NOTE_WRITE | NOTE_EXTEND | NOTE_REVOKE | NOTE_ATTRIB, 0, sp);
+		if (kevent(queue_fd, &kev, 1, NULL, 0, &no_wait) < 0 && errno != 0) {
+			fprintf(stderr, "Unable to watch '%s': %s\n", watchdir, strerror(errno));
+			closedir(sp->dir);
+			sp->dir = NULL;
+		}
+	}
+
+watch_file:
+#endif
+
+	if ((sp->fd = open(path, O_RDONLY
+# ifdef HAVE_O_EVTONLY
+			| O_EVTONLY
+# endif
+			)) < 0) {
+		fprintf(stderr, "Unable to watch '%s' for changes: %s\n", path, strerror(errno));
+		return;
+	}
+
+	EV_SET(&kev, sp->fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_ONESHOT, NOTE_WRITE | NOTE_EXTEND | NOTE_DELETE | NOTE_REVOKE | NOTE_ATTRIB, 0, sp);
+	if (kevent(queue_fd, &kev, 1, NULL, 0, &no_wait) < 0 && errno != 0) {
+		/* According to the API docs, we may get -1 return value, due to the
+		 * NULL space for a returned event, but errno should be 0 unless
+		 * there's a real error. Otherwise, kevent will return 0 to indicate
+		 * that the time limit expired. */
+		fprintf(stderr, "Unable to watch '%s': %s\n", path, strerror(errno));
+		close(sp->fd);
+		sp->fd = -1;
+	}
+}
 #else
 static void *notify_daemon(void *data)
 {
@@ -326,7 +535,7 @@ static void *notify_daemon(void *data)
 	struct timespec sixty_seconds = { 60, 0 };
 
 	ast_mutex_lock(&initialization_lock);
-	ast_cond_signal(&initialization);
+	ast_cond_broadcast(&initialization);
 	ast_mutex_unlock(&initialization_lock);
 
 	for (;/*ever*/;) {
@@ -347,12 +556,21 @@ static void *notify_daemon(void *data)
 			stat(name, &st);
 			lstat(name, &lst);
 			if (st.st_mtime > cur->mtime[0] || lst.st_mtime > cur->mtime[1]) {
+#ifdef TEST_FRAMEWORK
+				if (test) {
+					ast_test_status_update(test, "Removing cached TZ entry '%s' because underlying file changed. (%ld != %ld) or (%ld != %ld)\n", name, st.st_mtime, cur->mtime[0], lst.st_mtime, cur->mtime[1]);
+				} else
+#endif
+				{
+					ast_log(LOG_NOTICE, "Removing cached TZ entry '%s' because underlying file changed.\n", name);
+				}
 				AST_LIST_REMOVE_CURRENT(list);
 				ast_free(cur);
 				continue;
 			}
 		}
 		AST_LIST_TRAVERSE_SAFE_END
+		ast_cond_broadcast(&initialization);
 		AST_LIST_UNLOCK(&zonelist);
 	}
 	inotify_thread = AST_PTHREADT_NULL;
@@ -380,6 +598,22 @@ static void add_notify(struct state *sp, const char *path)
 	sp->mtime[1] = st.st_mtime;
 }
 #endif
+
+void ast_localtime_wakeup_monitor(struct ast_test *info)
+{
+	if (inotify_thread != AST_PTHREADT_NULL) {
+		AST_LIST_LOCK(&zonelist);
+#ifdef TEST_FRAMEWORK
+		test = info;
+#endif
+		pthread_kill(inotify_thread, SIGURG);
+		ast_cond_wait(&initialization, &(&zonelist)->lock);
+#ifdef TEST_FRAMEWORK
+		test = NULL;
+#endif
+		AST_LIST_UNLOCK(&zonelist);
+	}
+}
 
 /*! \note
 ** Section 4.12.3 of X3.159-1989 requires that
@@ -1176,8 +1410,16 @@ static const struct state *ast_tzset(const char *zone)
 {
 	struct state *sp;
 
-	if (ast_strlen_zero(zone))
+	if (ast_strlen_zero(zone)) {
+#ifdef SOLARIS
+		zone = getenv("TZ");
+		if (ast_strlen_zero(zone)) {
+			zone = "GMT";
+		}
+#else
 		zone = "/etc/localtime";
+#endif
+	}
 
 	AST_LIST_LOCK(&zonelist);
 	AST_LIST_TRAVERSE(&zonelist, sp, list) {
@@ -1925,15 +2167,104 @@ struct timeval ast_mktime(struct ast_tm *tmp, const char *zone)
 	return time1(tmp, localsub, 0L, sp);
 }
 
-int ast_strftime(char *buf, size_t len, const char *tmp, const struct ast_tm *tm)
+#ifdef HAVE_NEWLOCALE
+static struct locale_entry *find_by_locale(locale_t locale)
+{
+	struct locale_entry *cur;
+	AST_LIST_TRAVERSE(&localelist, cur, list) {
+		if (locale == cur->locale) {
+			return cur;
+		}
+	}
+	return NULL;
+}
+
+static struct locale_entry *find_by_name(const char *name)
+{
+	struct locale_entry *cur;
+	AST_LIST_TRAVERSE(&localelist, cur, list) {
+		if (strcmp(name, cur->name) == 0) {
+			return cur;
+		}
+	}
+	return NULL;
+}
+
+static const char *store_by_locale(locale_t prevlocale)
+{
+	struct locale_entry *cur;
+	if (prevlocale == LC_GLOBAL_LOCALE) {
+		return NULL;
+	} else {
+		/* Get a handle for this entry, if any */
+		if ((cur = find_by_locale(prevlocale))) {
+			return cur->name;
+		} else {
+			/* Create an entry, so it can be restored later */
+			int x;
+			cur = NULL;
+			AST_LIST_LOCK(&localelist);
+			for (x = 0; x < 10000; x++) {
+				char name[5];
+				snprintf(name, sizeof(name), "%04d", x);
+				if (!find_by_name(name)) {
+					if ((cur = ast_calloc(1, sizeof(*cur) + strlen(name) + 1))) {
+						cur->locale = prevlocale;
+						strcpy(cur->name, name); /* SAFE */
+						AST_LIST_INSERT_TAIL(&localelist, cur, list);
+					}
+					break;
+				}
+			}
+			AST_LIST_UNLOCK(&localelist);
+			return cur ? cur->name : NULL;
+		}
+	}
+}
+
+const char *ast_setlocale(const char *locale)
+{
+	struct locale_entry *cur;
+	locale_t prevlocale = LC_GLOBAL_LOCALE;
+
+	if (locale == NULL) {
+		return store_by_locale(uselocale(LC_GLOBAL_LOCALE));
+	}
+
+	AST_LIST_LOCK(&localelist);
+	if ((cur = find_by_name(locale))) {
+		prevlocale = uselocale(cur->locale);
+	}
+
+	if (!cur) {
+		if ((cur = ast_calloc(1, sizeof(*cur) + strlen(locale) + 1))) {
+			cur->locale = newlocale(LC_ALL_MASK, locale, NULL);
+			strcpy(cur->name, locale); /* SAFE */
+			AST_LIST_INSERT_TAIL(&localelist, cur, list);
+			prevlocale = uselocale(cur->locale);
+		}
+	}
+	AST_LIST_UNLOCK(&localelist);
+	return store_by_locale(prevlocale);
+}
+#else
+const char *ast_setlocale(const char *unused)
+{
+	return NULL;
+}
+#endif
+
+int ast_strftime_locale(char *buf, size_t len, const char *tmp, const struct ast_tm *tm, const char *locale)
 {
 	size_t fmtlen = strlen(tmp) + 1;
 	char *format = ast_calloc(1, fmtlen), *fptr = format, *newfmt;
 	int decimals = -1, i, res;
 	long fraction;
+	const char *prevlocale;
 
-	if (!format)
+	if (!format) {
 		return -1;
+	}
 	for (; *tmp; tmp++) {
 		if (*tmp == '%') {
 			switch (tmp[1]) {
@@ -1943,14 +2274,16 @@ int ast_strftime(char *buf, size_t len, const char *tmp, const struct ast_tm *tm
 			case '4':
 			case '5':
 			case '6':
-				if (tmp[2] != 'q')
+				if (tmp[2] != 'q') {
 					goto defcase;
+				}
 				decimals = tmp[1] - '0';
 				tmp++;
 				/* Fall through */
 			case 'q': /* Milliseconds */
-				if (decimals == -1)
+				if (decimals == -1) {
 					decimals = 3;
+				}
 
 				/* Juggle some memory to fit the item */
 				newfmt = ast_realloc(format, fmtlen + decimals);
@@ -1963,8 +2296,9 @@ int ast_strftime(char *buf, size_t len, const char *tmp, const struct ast_tm *tm
 				fmtlen += decimals;
 
 				/* Reduce the fraction of time to the accuracy needed */
-				for (i = 6, fraction = tm->tm_usec; i > decimals; i--)
+				for (i = 6, fraction = tm->tm_usec; i > decimals; i--) {
 					fraction /= 10;
+				}
 				fptr += sprintf(fptr, "%0*ld", decimals, fraction);
 
 				/* Reset, in case more than one 'q' specifier exists */
@@ -1974,25 +2308,47 @@ int ast_strftime(char *buf, size_t len, const char *tmp, const struct ast_tm *tm
 			default:
 				goto defcase;
 			}
-		} else
+		} else {
 defcase:	*fptr++ = *tmp;
+		}
 	}
 	*fptr = '\0';
 #undef strftime
+	if (locale) {
+		prevlocale = ast_setlocale(locale);
+	}
 	res = (int)strftime(buf, len, format, (struct tm *)tm);
+	if (locale) {
+		ast_setlocale(prevlocale);
+	}
 	ast_free(format);
 	return res;
 }
 
-char *ast_strptime(const char *s, const char *format, struct ast_tm *tm)
+int ast_strftime(char *buf, size_t len, const char *tmp, const struct ast_tm *tm)
+{
+	return ast_strftime_locale(buf, len, tmp, tm, NULL);
+}
+
+char *ast_strptime_locale(const char *s, const char *format, struct ast_tm *tm, const char *locale)
 {
 	struct tm tm2 = { 0, };
-	char *res = strptime(s, format, &tm2);
+	char *res;
+	const char *prevlocale;
+
+	prevlocale = ast_setlocale(locale);
+	res = strptime(s, format, &tm2);
+	ast_setlocale(prevlocale);
 	memcpy(tm, &tm2, sizeof(*tm));
 	tm->tm_usec = 0;
 	/* strptime(3) doesn't set .tm_isdst correctly, so to force ast_mktime(3)
 	 * to deal with it correctly, we set it to -1. */
 	tm->tm_isdst = -1;
 	return res;
+}
+
+char *ast_strptime(const char *s, const char *format, struct ast_tm *tm)
+{
+	return ast_strptime_locale(s, format, tm, NULL);
 }
 

@@ -36,6 +36,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 #include "asterisk/astobj2.h"
 #include "asterisk/time.h"
 #include "asterisk/lock.h"
+#include "asterisk/poll-compat.h"
 
 static void *timing_funcs_handle;
 
@@ -376,16 +377,12 @@ static void read_pipe(struct pthread_timer *timer, unsigned int quantity)
 	do {
 		unsigned char buf[1024];
 		ssize_t res;
-		fd_set rfds;
-		struct timeval timeout = {
-			.tv_sec = 0,
+		struct pollfd pfd = {
+			.fd = rd_fd,
+			.events = POLLIN,
 		};
 
-		/* Make sure there is data to read */
-		FD_ZERO(&rfds);
-		FD_SET(rd_fd, &rfds);
-
-		if (select(rd_fd + 1, &rfds, NULL, NULL, &timeout) != 1) {
+		if (ast_poll(&pfd, 1, 0) != 1) {
 			ast_debug(1, "Reading not available on timing pipe, "
 					"quantity: %u\n", quantity);
 			break;
@@ -524,5 +521,5 @@ static int unload_module(void)
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "pthread Timing Interface",
 		.load = load_module,
 		.unload = unload_module,
-		.load_pri = 10,
+		.load_pri = AST_MODPRI_CHANNEL_DEPEND,
 		);

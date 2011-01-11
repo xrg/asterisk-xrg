@@ -62,6 +62,8 @@ enum ast_audiohook_flags {
 	 * slinfactories. We will flush the factories if they contain too many samples.
 	 */
 	AST_AUDIOHOOK_SMALL_QUEUE = (1 << 3),
+	AST_AUDIOHOOK_MUTE_READ = (1 << 4),     /*!< audiohook should be mute frames read */
+	AST_AUDIOHOOK_MUTE_WRITE = (1 << 5),    /*!< audiohook should be mute frames written */
 };
 
 #define AST_AUDIOHOOK_SYNC_TOLERANCE 100 /*< Tolerance in milliseconds for audiohooks synchronization */
@@ -73,9 +75,16 @@ struct ast_audiohook;
  * \param chan Channel
  * \param frame Frame of audio to manipulate
  * \param direction Direction frame came from
- * \return Returns 0 on success, -1 on failure
- * \note An audiohook does not have any reference to a private data structure for manipulate types. It is up to the manipulate callback to store this data
- *       via it's own method. An example would be datastores.
+ * \return Returns 0 on success, -1 on failure.
+ * \note An audiohook does not have any reference to a private data structure for manipulate
+ *       types. It is up to the manipulate callback to store this data via it's own method.
+ *       An example would be datastores.
+ * \note The input frame should never be freed or corrupted during a manipulate callback.
+ *       If the callback has the potential to corrupt the frame's data during manipulation,
+ *       local data should be used for the manipulation and only copied to the frame on
+ *       success.
+ * \note A failure return value indicates that the frame was not manipulated and that
+ *       is being returned in its original state.
  */
 typedef int (*ast_audiohook_manipulate_callback)(struct ast_audiohook *audiohook, struct ast_channel *chan, struct ast_frame *frame, enum ast_audiohook_direction direction);
 
@@ -193,6 +202,13 @@ int ast_audiohook_detach_source(struct ast_channel *chan, const char *source);
  */
 int ast_audiohook_remove(struct ast_channel *chan, struct ast_audiohook *audiohook);
 
+/*!
+ * \brief determines if a audiohook_list is empty or not.
+ *
+ * retval 0 false, 1 true
+ */
+int ast_audiohook_write_list_empty(struct ast_audiohook_list *audiohook_list);
+
 /*! \brief Pass a frame off to be handled by the audiohook core
  * \param chan Channel that the list is coming off of
  * \param audiohook_list List of audiohooks
@@ -276,6 +292,16 @@ int ast_audiohook_volume_get(struct ast_channel *chan, enum ast_audiohook_direct
  * \since 1.6.1
  */
 int ast_audiohook_volume_adjust(struct ast_channel *chan, enum ast_audiohook_direction direction, int volume);
+
+/*! \brief Mute frames read from or written to a channel
+ * \param chan Channel to muck with
+ * \param source Type of audiohook
+ * \param flag which direction to set / clear
+ * \param clear set or clear muted frames on direction based on flag parameter
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_audiohook_set_mute(struct ast_channel *chan, const char *source, enum ast_audiohook_flags flag, int clear);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

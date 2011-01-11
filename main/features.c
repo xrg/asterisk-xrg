@@ -30,6 +30,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/_private.h"
 
 #include <pthread.h>
+#include <signal.h>
 #include <sys/time.h>
 #include <sys/signal.h>
 #include <netinet/in.h>
@@ -178,7 +179,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<parameter name="timeout">
-				<para>A custom parking timeout for this parked call.</para>
+				<para>A custom parking timeout for this parked call. Value in milliseconds.</para>
 			</parameter>
 			<parameter name="return_context">
 				<para>The context to return the call to after it times out.</para>
@@ -256,6 +257,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="Timeout">
 				<para>Number of milliseconds to wait before callback.</para>
 			</parameter>
+			<parameter name="Parkinglot">
+				<para>Parking lot to park channel in.</para>
+			</parameter>
 		</syntax>
 		<description>
 			<para>Park a channel.</para>
@@ -287,14 +291,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</manager>
  ***/
 
-#define DEFAULT_PARK_TIME 45000
-#define DEFAULT_TRANSFER_DIGIT_TIMEOUT 3000
-#define DEFAULT_FEATURE_DIGIT_TIMEOUT 1000
-#define DEFAULT_NOANSWER_TIMEOUT_ATTENDED_TRANSFER 15000
-#define DEFAULT_PARKINGLOT "default"			/*!< Default parking lot */
-#define DEFAULT_ATXFER_DROP_CALL 0
-#define DEFAULT_ATXFER_LOOP_DELAY 10000
-#define DEFAULT_ATXFER_CALLBACK_RETRIES 2
+#define DEFAULT_PARK_TIME							45000	/*!< ms */
+#define DEFAULT_PARK_EXTENSION						"700"
+#define DEFAULT_TRANSFER_DIGIT_TIMEOUT				3000	/*!< ms */
+#define DEFAULT_FEATURE_DIGIT_TIMEOUT				1000	/*!< ms */
+#define DEFAULT_NOANSWER_TIMEOUT_ATTENDED_TRANSFER	15000	/*!< ms */
+#define DEFAULT_ATXFER_DROP_CALL					0		/*!< Do not drop call. */
+#define DEFAULT_ATXFER_LOOP_DELAY					10000	/*!< ms */
+#define DEFAULT_ATXFER_CALLBACK_RETRIES				2
 
 #define AST_MAX_WATCHERS 256
 #define MAX_DIAL_FEATURE_OPTIONS 30
@@ -344,6 +348,7 @@ struct parkeduser {
 /*! \brief Structure for parking lots which are put in a container. */
 struct ast_parkinglot {
 	char name[AST_MAX_CONTEXT];
+	char parkext[AST_MAX_EXTENSION];				/*!< Parkingextension */
 	char parking_con[AST_MAX_EXTENSION];		/*!< Context for which parking is made accessible */
 	char parking_con_dial[AST_MAX_EXTENSION];	/*!< Context for dialback for parking (KLUDGE) */
 	int parking_start;				/*!< First available extension for parking */
@@ -357,6 +362,7 @@ struct ast_parkinglot {
 	int parkedcallreparking;                        /*!< Enable DTMF based parking on bridge when picking up parked calls */
 	int parkedcallhangup;                           /*!< Enable DTMF based hangup on a bridge when pickup up parked calls */
 	int parkedcallrecording;                        /*!< Enable DTMF based recording on a bridge when picking up parked calls */
+	unsigned short the_mark:1;                      /*!< Used during reloads, that which bears the_mark shall be deleted! */
 	AST_LIST_HEAD(parkinglot_parklist, parkeduser) parkings; /*!< List of active parkings in this parkinglot */
 };
 
@@ -437,14 +443,52 @@ static const struct ast_datastore_info dial_features_info = {
 static struct ast_parkinglot *parkinglot_addref(struct ast_parkinglot *parkinglot);
 static void parkinglot_unref(struct ast_parkinglot *parkinglot);
 static void parkinglot_destroy(void *obj);
-int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds, fd_set *nrfds, fd_set *nefds, int *fs, int *max);
+int manage_parkinglot(struct ast_parkinglot *curlot, const struct pollfd *pfds, const int nfds, struct pollfd **new_pfds, int *new_nfds, int *fs);
 struct ast_parkinglot *find_parkinglot(const char *name);
 static struct ast_parkinglot *create_parkinglot(const char *name);
 static struct ast_parkinglot *copy_parkinglot(const char *name, const struct ast_parkinglot *parkinglot);
 
-const char *ast_parking_ext(void)
+static int find_parkinglot_by_position_cb(void *obj, void *args, int flags)
 {
-	return parking_ext;
+	struct ast_parkinglot *parkinglot = obj;
+	int *parkpos = args;
+
+	if (*parkpos >= parkinglot->parking_start && *parkpos <= parkinglot->parking_stop) {
+		return CMP_MATCH | CMP_STOP;
+	}
+
+	return 0;
+}
+
+static int find_parkinglot_by_exten_cb(void *obj, void *args, int flags)
+{
+	struct ast_parkinglot *parkinglot = obj;
+	const char *parkext = args;
+
+	if (!strcmp(parkinglot->parkext, parkext)) {
+		return CMP_MATCH | CMP_STOP;
+	}
+
+	return 0;
+}
+
+int ast_parking_ext_valid(const char *exten_str, struct ast_channel *chan, const char *context)
+{
+	struct ast_exten *exten;
+	struct pbx_find_info q = { .stacklen = 0 }; /* the rest is reset in pbx_find_extension */
+	const char *app_at_exten;
+
+	exten = pbx_find_extension(chan, NULL, &q, context, exten_str, 1, NULL, NULL, E_MATCH);
+	if (!exten) {
+		return 0;
+	}
+
+	app_at_exten = ast_get_extension_app(exten);
+	if (!app_at_exten || strcmp(PARK_APP_NAME, app_at_exten)) {
+		return 0;
+	}
+
+	return 1;
 }
 
 const char *ast_pickup_ext(void)
@@ -691,6 +735,7 @@ struct ast_park_call_args {
 	uint32_t flags;
 	/*! Parked user that has already obtained a parking space */
 	struct parkeduser *pu;
+	struct ast_parkinglot *parkinglot; /*! parkinglot to be parked in, based on parkext */
 };
 
 static struct parkeduser *park_space_reserve(struct ast_channel *chan, struct ast_channel *peer, struct ast_park_call_args *args)
@@ -701,15 +746,23 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan, struct as
 	const char *parkingexten;
 	struct ast_parkinglot *parkinglot = NULL;
 
-	if (peer)
+	if (args->parkinglot) {
+		parkinglot = args->parkinglot;
+		parkinglotname = parkinglot->name;
+	} else if (peer) {
 		parkinglotname = findparkinglotname(peer);
-	else /* peer was NULL, check chan (ParkAndAnnounce / res_agi) */
+	} else { /* peer was NULL, check chan (ParkAndAnnounce / res_agi) */
 		parkinglotname = findparkinglotname(chan);
+	}
 
-	if (parkinglotname) {
-		ast_debug(1, "Found chanvar Parkinglot: %s\n", parkinglotname);
-		parkinglot = find_parkinglot(parkinglotname);
-
+	if (!args->parkinglot) {
+		if (parkinglotname) {
+			parkinglot = find_parkinglot(parkinglotname);
+		} else {
+			ast_debug(4, "This could be an indication channel driver needs updating, using default lot.\n");
+			parkinglot = parkinglot_addref(default_parkinglot);
+		}
+		ast_debug(1, "Found chanvar Parkinglot: %s\n", parkinglot->name);
 	}
 
 	/* Dynamically create parkinglot */
@@ -760,8 +813,7 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan, struct as
 		parkinglot = parkinglot_addref(default_parkinglot);
 	}
 
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Parkinglot: %s\n", parkinglot->name);
+	ast_debug(1, "Parkinglot: %s\n", parkinglot->name);
 
 	/* Allocate memory for parking data */
 	if (!(pu = ast_calloc(1, sizeof(*pu)))) {
@@ -782,14 +834,14 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan, struct as
 		 * limitation here.  If extout was not numeric, we could permit
 		 * arbitrary non-numeric extensions.
 		 */
-        if (sscanf(parkingexten, "%30d", &parking_space) != 1 || parking_space < 0) {
+	if (sscanf(parkingexten, "%30d", &parking_space) != 1 || parking_space < 0) {
 			AST_LIST_UNLOCK(&parkinglot->parkings);
 			parkinglot_unref(parkinglot);
-            free(pu);
-            ast_log(LOG_WARNING, "PARKINGEXTEN does not indicate a valid parking slot: '%s'.\n", parkingexten);
-            return NULL;
-        }
-        snprintf(pu->parkingexten, sizeof(pu->parkingexten), "%d", parking_space);
+	    free(pu);
+	    ast_log(LOG_WARNING, "PARKINGEXTEN does not indicate a valid parking slot: '%s'.\n", parkingexten);
+	    return NULL;
+	}
+	snprintf(pu->parkingexten, sizeof(pu->parkingexten), "%d", parking_space);
 
 		if (ast_exists_extension(NULL, parkinglot->parking_con, pu->parkingexten, 1, NULL)) {
 			ast_log(LOG_WARNING, "Requested parking extension already exists: %s@%s\n", parkingexten, parkinglot->parking_con);
@@ -843,9 +895,8 @@ static struct parkeduser *park_space_reserve(struct ast_channel *chan, struct as
 
 	pu->notquiteyet = 1;
 	pu->parkingnum = parking_space;
-	pu->parkinglot = parkinglot_addref(parkinglot);
+	pu->parkinglot = parkinglot;
 	AST_LIST_INSERT_TAIL(&parkinglot->parkings, pu, list);
-	parkinglot_unref(parkinglot);
 
 	return pu;
 }
@@ -960,8 +1011,8 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 		"Uniqueid: %s\r\n",
 		pu->parkingexten, pu->chan->name, pu->parkinglot->name, event_from ? event_from : "",
 		(long)pu->start.tv_sec + (long)(pu->parkingtime/1000) - (long)time(NULL),
-		S_OR(pu->chan->cid.cid_num, "<unknown>"),
-		S_OR(pu->chan->cid.cid_name, "<unknown>"),
+		S_COR(pu->chan->caller.id.number.valid, pu->chan->caller.id.number.str, "<unknown>"),
+		S_COR(pu->chan->caller.id.name.valid, pu->chan->caller.id.name.str, "<unknown>"),
 		pu->chan->uniqueid
 		);
 
@@ -1000,21 +1051,27 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 }
 
 /*! \brief Park a call */
-int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeout, int *extout)
+int ast_park_call(struct ast_channel *chan, struct ast_channel *peer, int timeout, const char *parkexten, int *extout)
 {
+	struct ast_parkinglot *found_lot = ao2_callback(parkinglots, 0, find_parkinglot_by_exten_cb, (void *) parkexten);
+
 	struct ast_park_call_args args = {
 		.timeout = timeout,
 		.extout = extout,
+		.parkinglot = found_lot,
 	};
 
 	return park_call_full(chan, peer, &args);
 }
 
+/*!
+ * \param rchan is the transferee
+ * \param peer is the transferer
+ */
 static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int timeout, int *extout, int play_announcement, struct ast_park_call_args *args)
 {
 	struct ast_channel *chan;
 	struct ast_frame *f;
-	int park_status;
 	struct ast_park_call_args park_args = {0,};
 
 	if (!args) {
@@ -1024,8 +1081,9 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 	}
 
 	if ((args->pu = park_space_reserve(rchan, peer, args)) == NULL) {
-		if (peer)
-			ast_stream_and_wait(peer, "beeperr", "");
+		if (peer) {
+			ast_stream_and_wait(peer, "pbx-parkingfailed", "");
+		}
 		return AST_FEATURE_RETURN_PARKFAILED;
 	}
 
@@ -1060,12 +1118,8 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 		args->orig_chan_name = ast_strdupa(peer->name);
 	}
 
-	park_status = park_call_full(chan, peer, args);
-	if (park_status == 1) {
-	/* would be nice to play "invalid parking extension" */
-		ast_hangup(chan);
-		return -1;
-	}
+	/* parking space reserved, return code check unnecessary */
+	park_call_full(chan, peer, args);
 
 	return 0;
 }
@@ -1076,14 +1130,9 @@ int ast_masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, int 
 	return masq_park_call(rchan, peer, timeout, extout, 0, NULL);
 }
 
-static int masq_park_call_announce_args(struct ast_channel *rchan, struct ast_channel *peer, struct ast_park_call_args *args)
+static int masq_park_call_announce(struct ast_channel *rchan, struct ast_channel *peer, struct ast_park_call_args *args)
 {
 	return masq_park_call(rchan, peer, 0, NULL, 1, args);
-}
-
-static int masq_park_call_announce(struct ast_channel *rchan, struct ast_channel *peer, int timeout, int *extout)
-{
-	return masq_park_call(rchan, peer, timeout, extout, 1, NULL);
 }
 
 #ifdef TEST_FRAMEWORK
@@ -1096,7 +1145,7 @@ static struct ast_channel *create_test_channel(const struct ast_channel_tech *fa
 {
 	struct ast_channel *test_channel1;
 	if (!(test_channel1 = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, NULL,
-        NULL, NULL, 0, 0, "TestChannel1"))) {
+	NULL, NULL, 0, 0, "TestChannel1"))) {
 		return NULL;
 	}
 
@@ -1168,7 +1217,7 @@ AST_TEST_DEFINE(features_test)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "features_test";
-		info->category = "main/features/";
+		info->category = "/main/features/";
 		info->summary = "Features unit test";
 		info->description =
 			"Tests whether parking respects PARKINGLOT settings";
@@ -1272,25 +1321,14 @@ static void set_peers(struct ast_channel **caller, struct ast_channel **callee,
 	}
 }
 
-/*! 
- * \brief support routing for one touch call parking
- * \param chan channel parking call
- * \param peer channel to be parked
- * \param config unsed
- * \param code unused
- * \param sense feature options
- *
- * \param data
- * Setup channel, set return exten,priority to 's,1'
- * answer chan, sleep chan, park call
-*/
-static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
+static int parkcall_helper(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, struct ast_park_call_args *args)
 {
-	struct ast_channel *parker;
-	struct ast_channel *parkee;
 	int res = 0;
 
-	set_peers(&parker, &parkee, peer, chan, sense);
+	if (args) {
+		ast_debug(1, "Parkinglot specified for builtin_parkcall: %s\n", args->parkinglot->name);
+	}
+
 	/* we used to set chan's exten and priority to "s" and 1
 	   here, but this generates (in some cases) an invalid
 	   extension, and if "s" exists, could errantly
@@ -1305,11 +1343,31 @@ static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, 
 		res = ast_safe_sleep(chan, 1000);
 
 	if (!res) { /* one direction used to call park_call.... */
-		res = masq_park_call_announce(parkee, parker, 0, NULL);
+		struct ast_channel *parker;
+		struct ast_channel *parkee;
+		set_peers(&parker, &parkee, peer, chan, sense);
+		res = masq_park_call_announce(parkee, parker, args);
 		/* PBX should hangup zombie channel if a masquerade actually occurred (res=0) */
 	}
 
 	return res;
+}
+
+/*! 
+ * \brief support routing for one touch call parking
+ * \param chan channel parking call
+ * \param peer channel to be parked
+ * \param config unsed
+ * \param code unused
+ * \param sense feature options
+ *
+ * \param data
+ * Setup channel, set return exten,priority to 's,1'
+ * answer chan, sleep chan, park call
+*/
+static int builtin_parkcall(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
+{
+	return parkcall_helper(chan, peer, config, code, sense, NULL);
 }
 
 /*! \brief Play message to both caller and callee in bridged call, plays synchronously, autoservicing the
@@ -1320,6 +1378,7 @@ static int play_message_in_bridged_call(struct ast_channel *caller_chan, struct 
 	/* First play for caller, put other channel on auto service */
 	if (ast_autoservice_start(callee_chan))
 		return -1;
+	ast_autoservice_ignore(callee_chan, AST_FRAME_DTMF_END);
 	if (ast_stream_and_wait(caller_chan, audiofile, "")) {
 		ast_log(LOG_WARNING, "Failed to play automon message!\n");
 		ast_autoservice_stop(callee_chan);
@@ -1330,6 +1389,7 @@ static int play_message_in_bridged_call(struct ast_channel *caller_chan, struct 
 	/* Then play for callee, put other channel on auto service */
 	if (ast_autoservice_start(caller_chan))
 		return -1;
+	ast_autoservice_ignore(caller_chan, AST_FRAME_DTMF_END);
 	if (ast_stream_and_wait(callee_chan, audiofile, "")) {
 		ast_log(LOG_WARNING, "Failed to play automon message !\n");
 		ast_autoservice_stop(caller_chan);
@@ -1416,8 +1476,10 @@ static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *pee
 			snprintf(touch_filename, len, "%s-%ld-%s", S_OR(touch_monitor_prefix, "auto"), (long)time(NULL), touch_monitor);
 			snprintf(args, len, "%s,%s,m", S_OR(touch_format, "wav"), touch_filename);
 		} else {
-			caller_chan_id = ast_strdupa(S_OR(caller_chan->cid.cid_num, caller_chan->name));
-			callee_chan_id = ast_strdupa(S_OR(callee_chan->cid.cid_num, callee_chan->name));
+			caller_chan_id = ast_strdupa(S_COR(caller_chan->caller.id.number.valid,
+				caller_chan->caller.id.number.str, caller_chan->name));
+			callee_chan_id = ast_strdupa(S_COR(callee_chan->caller.id.number.valid,
+				callee_chan->caller.id.number.str, callee_chan->name));
 			len = strlen(caller_chan_id) + strlen(callee_chan_id) + 50;
 			args = alloca(len);
 			touch_filename = alloca(len);
@@ -1472,6 +1534,7 @@ static int builtin_automixmonitor(struct ast_channel *chan, struct ast_channel *
 	if (!ast_strlen_zero(courtesytone)) {
 		if (ast_autoservice_start(callee_chan))
 			return -1;
+		ast_autoservice_ignore(callee_chan, AST_FRAME_DTMF_END);
 		if (ast_stream_and_wait(caller_chan, courtesytone, "")) {
 			ast_log(LOG_WARNING, "Failed to play courtesy tone!\n");
 			ast_autoservice_stop(callee_chan);
@@ -1529,8 +1592,10 @@ static int builtin_automixmonitor(struct ast_channel *chan, struct ast_channel *
 			snprintf(touch_filename, len, "auto-%ld-%s", (long)time(NULL), touch_monitor);
 			snprintf(args, len, "%s.%s,b", touch_filename, (touch_format) ? touch_format : "wav");
 		} else {
-			caller_chan_id = ast_strdupa(S_OR(caller_chan->cid.cid_num, caller_chan->name));
-			callee_chan_id = ast_strdupa(S_OR(callee_chan->cid.cid_num, callee_chan->name));
+			caller_chan_id = ast_strdupa(S_COR(caller_chan->caller.id.number.valid,
+				caller_chan->caller.id.number.str, caller_chan->name));
+			callee_chan_id = ast_strdupa(S_COR(callee_chan->caller.id.number.valid,
+				callee_chan->caller.id.number.str, callee_chan->name));
 			len = strlen(caller_chan_id) + strlen(callee_chan_id) + 50;
 			args = alloca(len);
 			touch_filename = alloca(len);
@@ -1612,6 +1677,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	struct ast_channel *transferer;
 	struct ast_channel *transferee;
 	const char *transferer_real_context;
+	struct ast_parkinglot *found_lot = NULL;
 	char xferto[256];
 	int res, parkstatus = 0;
 
@@ -1619,6 +1685,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	transferer_real_context = real_ctx(transferer, transferee);
 	/* Start autoservice on chan while we talk to the originator */
 	ast_autoservice_start(transferee);
+	ast_autoservice_ignore(transferee, AST_FRAME_DTMF_END);
 	ast_indicate(transferee, AST_CONTROL_HOLD);
 
 	memset(xferto, 0, sizeof(xferto));
@@ -1638,11 +1705,16 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 		finishup(transferee);
 		return res;
 	}
-	if (!strcmp(xferto, ast_parking_ext())) {
+
+	found_lot = ao2_callback(parkinglots, 0, find_parkinglot_by_exten_cb, &xferto);
+	if (found_lot) {
+		struct ast_park_call_args args = {
+			.parkinglot = found_lot,
+		};
 		res = finishup(transferee);
 		if (res)
 			res = -1;
-		else if (!(parkstatus = masq_park_call_announce(transferee, transferer, 0, NULL))) {	/* success */
+		else if (!(parkstatus = masq_park_call_announce(transferee, transferer, &args))) {	/* success */
 			/* We return non-zero, but tell the PBX not to hang the channel when
 			   the thread dies -- We have to be careful now though.  We are responsible for 
 			   hanging up the channel, else it will never be hung up! */
@@ -1652,7 +1724,8 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 			ast_log(LOG_WARNING, "Unable to park call %s, parkstatus = %d\n", transferee->name, parkstatus);
 		}
 		/*! \todo XXX Maybe we should have another message here instead of invalid extension XXX */
-	} else if (ast_exists_extension(transferee, transferer_real_context, xferto, 1, transferer->cid.cid_num)) {
+	} else if (ast_exists_extension(transferee, transferer_real_context, xferto, 1,
+		S_COR(transferer->caller.id.number.valid, transferer->caller.id.number.str, NULL))) {
 		ast_cel_report_event(transferer, AST_CEL_BLINDTRANSFER, NULL, xferto, transferee);
 		pbx_builtin_setvar_helper(transferer, "BLINDTRANSFER", transferee->name);
 		pbx_builtin_setvar_helper(transferee, "BLINDTRANSFER", transferer->name);
@@ -1687,7 +1760,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 			ast_set_flag(transferee, AST_FLAG_BRIDGE_HANGUP_DONT); /* don't let the after-bridge code run the h-exten */
 			ast_log(LOG_DEBUG,"ABOUT TO AST_ASYNC_GOTO, have a pbx... set HANGUP_DONT on chan=%s\n", transferee->name);
 			if (ast_channel_connected_line_macro(transferee, transferer, &transferer->connected, 1, 0)) {
-				ast_channel_update_connected_line(transferee, &transferer->connected);
+				ast_channel_update_connected_line(transferer, &transferer->connected, NULL);
 			}
 			set_c_e_p(transferee, transferer_real_context, xferto, 0);
 		}
@@ -1696,7 +1769,7 @@ static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *p
 	} else {
 		ast_verb(3, "Unable to find extension '%s' in context '%s'\n", xferto, transferer_real_context);
 	}
-	if (parkstatus != AST_FEATURE_RETURN_PARKFAILED && ast_stream_and_wait(transferer, xferfailsound, AST_DIGIT_ANY) < 0) {
+	if (parkstatus != AST_FEATURE_RETURN_PARKFAILED && ast_stream_and_wait(transferer, xferfailsound, AST_DIGIT_ANY) < 0) { /* Play 'extension does not exist' */
 		finishup(transferee);
 		return -1;
 	}
@@ -1759,12 +1832,14 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	struct ast_party_connected_line connected_line;
 	struct ast_datastore *features_datastore;
 	struct ast_dial_features *dialfeatures = NULL;
+	struct ast_parkinglot *parkinglot;
 
 	ast_debug(1, "Executing Attended Transfer %s, %s (sense=%d) \n", chan->name, peer->name, sense);
 	set_peers(&transferer, &transferee, peer, chan, sense);
 	transferer_real_context = real_ctx(transferer, transferee);
 	/* Start autoservice on chan while we talk to the originator */
 	ast_autoservice_start(transferee);
+	ast_autoservice_ignore(transferee, AST_FRAME_DTMF_END);
 	ast_indicate(transferee, AST_CONTROL_HOLD);
 	
 	/* Transfer */
@@ -1791,7 +1866,8 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	}
 
 	/* valid extension, res == 1 */
-	if (!ast_exists_extension(transferer, transferer_real_context, xferto, 1, transferer->cid.cid_num)) {
+	if (!ast_exists_extension(transferer, transferer_real_context, xferto, 1,
+		S_COR(transferer->caller.id.number.valid, transferer->caller.id.number.str, NULL))) {
 		ast_log(LOG_WARNING, "Extension %s does not exist in context %s\n",xferto,transferer_real_context);
 		finishup(transferee);
 		if (ast_stream_and_wait(transferer, "beeperr", ""))
@@ -1799,12 +1875,16 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		return AST_FEATURE_RETURN_SUCCESS;
 	}
 
- 	/* If we are attended transfering to parking, just use builtin_parkcall instead of trying to track all of
- 	 * the different variables for handling this properly with a builtin_atxfer */
- 	if (!strcmp(xferto, ast_parking_ext())) {
- 		finishup(transferee);
- 		return builtin_parkcall(chan, peer, config, code, sense, data);
- 	}
+	/* If we are attended transfering to parking, just use parkcall_helper instead of trying to track all of
+	 * the different variables for handling this properly with a builtin_atxfer */
+	parkinglot = ao2_callback(parkinglots, 0, find_parkinglot_by_exten_cb, &xferto);
+	if (parkinglot) {
+		struct ast_park_call_args args = {
+			.parkinglot = parkinglot,
+		};
+		finishup(transferee);
+		return parkcall_helper(chan, peer, config, code, sense, &args);
+	}
 
 	l = strlen(xferto);
 	snprintf(xferto + l, sizeof(xferto) - l, "@%s/n", transferer_real_context);	/* append context */
@@ -1823,11 +1903,17 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		}
 	}
 
-	newchan = feature_request_and_dial(transferer, transferee, "Local", ast_best_codec(transferer->nativeformats),
-		xferto, atxfernoanswertimeout, &outstate, transferer->cid.cid_num, transferer->cid.cid_name, 1, transferer->language);
+	newchan = feature_request_and_dial(transferer, transferee, "Local",
+		ast_best_codec(transferer->nativeformats),
+		xferto, atxfernoanswertimeout, &outstate,
+		transferer->caller.id.number.valid ? transferer->caller.id.number.str : NULL,
+		transferer->caller.id.name.valid ? transferer->caller.id.name.str : NULL,
+		1, transferer->language);
 
 	ast_party_connected_line_init(&connected_line);
 	if (!ast_check_hangup(transferer)) {
+		int hangup_dont = 0;
+
 		/* Transferer is up - old behaviour */
 		ast_indicate(transferer, -1);
 		if (!newchan) {
@@ -1860,7 +1946,18 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		ast_channel_lock(transferer);
 		ast_party_connected_line_copy(&connected_line, &transferer->connected);
 		ast_channel_unlock(transferer);
+
+		/* ast_bridge_call clears AST_FLAG_BRIDGE_HANGUP_DONT, but we don't
+		   want that to happen here because we're also in another bridge already
+		 */
+		if (ast_test_flag(chan, AST_FLAG_BRIDGE_HANGUP_DONT)) {
+			hangup_dont = 1;
+		}
 		res = ast_bridge_call(transferer, newchan, &bconfig);
+		if (hangup_dont) {
+			ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_DONT);
+		}
+
 		if (ast_check_hangup(newchan) || !ast_check_hangup(transferer)) {
 			ast_hangup(newchan);
 			if (ast_stream_and_wait(transferer, xfersound, ""))
@@ -1978,14 +2075,14 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		 */
 		connected_line.source = AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER;
 		if (ast_channel_connected_line_macro(newchan, xferchan, &connected_line, 1, 0)) {
-			ast_channel_update_connected_line(xferchan, &connected_line);
+			ast_channel_update_connected_line(xferchan, &connected_line, NULL);
 		}
 		ast_channel_lock(xferchan);
-		ast_connected_line_copy_from_caller(&connected_line, &xferchan->cid);
+		ast_connected_line_copy_from_caller(&connected_line, &xferchan->caller);
 		ast_channel_unlock(xferchan);
 		connected_line.source = AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER;
 		if (ast_channel_connected_line_macro(xferchan, newchan, &connected_line, 0, 0)) {
-			ast_channel_update_connected_line(newchan, &connected_line);
+			ast_channel_update_connected_line(newchan, &connected_line, NULL);
 		}
 		ast_party_connected_line_free(&connected_line);
 
@@ -2015,15 +2112,24 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 			}
 
 			ast_log(LOG_NOTICE, "We're trying to call %s/%s\n", transferer_tech, transferer_name);
-			newchan = feature_request_and_dial(transferee, NULL, transferer_tech, ast_best_codec(transferee->nativeformats),
-				transferer_name, atxfernoanswertimeout, &outstate, transferee->cid.cid_num, transferee->cid.cid_name, 0, transferer->language);
+			newchan = feature_request_and_dial(transferee, NULL, transferer_tech,
+				ast_best_codec(transferee->nativeformats),
+				transferer_name, atxfernoanswertimeout, &outstate,
+				transferee->caller.id.number.valid ? transferee->caller.id.number.str : NULL,
+				transferee->caller.id.name.valid ? transferee->caller.id.name.str : NULL,
+				0, transferer->language);
 			while (!newchan && !atxferdropcall && tries < atxfercallbackretries) {
 				/* Trying to transfer again */
 				ast_autoservice_start(transferee);
+				ast_autoservice_ignore(transferee, AST_FRAME_DTMF_END);
 				ast_indicate(transferee, AST_CONTROL_HOLD);
 
-				newchan = feature_request_and_dial(transferer, transferee, "Local", ast_best_codec(transferer->nativeformats),
-					xferto, atxfernoanswertimeout, &outstate, transferer->cid.cid_num, transferer->cid.cid_name, 1, transferer->language);
+				newchan = feature_request_and_dial(transferer, transferee, "Local",
+					ast_best_codec(transferer->nativeformats),
+					xferto, atxfernoanswertimeout, &outstate,
+					transferer->caller.id.number.valid ? transferer->caller.id.number.str : NULL,
+					transferer->caller.id.name.valid ? transferer->caller.id.name.str : NULL,
+					1, transferer->language);
 				if (ast_autoservice_stop(transferee) < 0) {
 					if (newchan)
 						ast_hangup(newchan);
@@ -2034,8 +2140,12 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 					ast_debug(1, "Sleeping for %d ms before callback.\n", atxferloopdelay);
 					ast_safe_sleep(transferee, atxferloopdelay);
 					ast_debug(1, "Trying to callback...\n");
-					newchan = feature_request_and_dial(transferee, NULL, transferer_tech, ast_best_codec(transferee->nativeformats),
-						transferer_name, atxfernoanswertimeout, &outstate, transferee->cid.cid_num, transferee->cid.cid_name, 0, transferer->language);
+					newchan = feature_request_and_dial(transferee, NULL, transferer_tech,
+						ast_best_codec(transferee->nativeformats),
+						transferer_name, atxfernoanswertimeout, &outstate,
+						transferee->caller.id.number.valid ? transferee->caller.id.number.str : NULL,
+						transferee->caller.id.name.valid ? transferee->caller.id.name.str : NULL,
+						0, transferer->language);
 				}
 				tries++;
 			}
@@ -2093,18 +2203,18 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 		}
 
 		ast_channel_lock(newchan);
-		ast_connected_line_copy_from_caller(&connected_line, &newchan->cid);
+		ast_connected_line_copy_from_caller(&connected_line, &newchan->caller);
 		ast_channel_unlock(newchan);
 		connected_line.source = AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER;
 		if (ast_channel_connected_line_macro(newchan, xferchan, &connected_line, 1, 0)) {
-			ast_channel_update_connected_line(xferchan, &connected_line);
+			ast_channel_update_connected_line(xferchan, &connected_line, NULL);
 		}
 		ast_channel_lock(xferchan);
-		ast_connected_line_copy_from_caller(&connected_line, &xferchan->cid);
+		ast_connected_line_copy_from_caller(&connected_line, &xferchan->caller);
 		ast_channel_unlock(xferchan);
 		connected_line.source = AST_CONNECTED_LINE_UPDATE_SOURCE_TRANSFER;
 		if (ast_channel_connected_line_macro(xferchan, newchan, &connected_line, 0, 0)) {
-			ast_channel_update_connected_line(newchan, &connected_line);
+			ast_channel_update_connected_line(newchan, &connected_line, NULL);
 		}
 
 		ast_party_connected_line_free(&connected_line);
@@ -2116,6 +2226,11 @@ static int builtin_atxfer(struct ast_channel *chan, struct ast_channel *peer, st
 	} else {
 		/* Transferee hung up */
 		finishup(transferee);
+		/* At this point both the transferer transferee have hungup,
+		 * so if newchan is up, hang it up as it has no one to talk to */
+		if (newchan) {
+			ast_hangup(newchan);
+		}
 		return -1;
 	}
 }
@@ -2159,7 +2274,7 @@ void ast_register_feature(struct ast_call_feature *feature)
  * Add new feature group to the feature group list insert at head of list.
  * \note This function MUST be called while feature_groups is locked.
 */
-static struct feature_group* register_group(const char *fgname)
+static struct feature_group *register_group(const char *fgname)
 {
 	struct feature_group *fg;
 
@@ -2168,8 +2283,9 @@ static struct feature_group* register_group(const char *fgname)
 		return NULL;
 	}
 
-	if (!(fg = ast_calloc_with_stringfields(1, struct feature_group, 128)))
+	if (!(fg = ast_calloc_with_stringfields(1, struct feature_group, 128))) {
 		return NULL;
+	}
 
 	ast_string_field_set(fg, gname, fgname);
 
@@ -2189,7 +2305,7 @@ static struct feature_group* register_group(const char *fgname)
  * Check fg and feature specified, add feature to list
  * \note This function MUST be called while feature_groups is locked. 
 */
-static void register_group_feature(struct feature_group *fg, const char *exten, struct ast_call_feature *feature) 
+static void register_group_feature(struct feature_group *fg, const char *exten, struct ast_call_feature *feature)
 {
 	struct feature_group_exten *fge;
 
@@ -2203,17 +2319,18 @@ static void register_group_feature(struct feature_group *fg, const char *exten, 
 		return;
 	}
 
-	if (!(fge = ast_calloc_with_stringfields(1, struct feature_group_exten, 128)))
+	if (!(fge = ast_calloc_with_stringfields(1, struct feature_group_exten, 128))) {
 		return;
+	}
 
 	ast_string_field_set(fge, exten, S_OR(exten, feature->exten));
 
 	fge->feature = feature;
 
-	AST_LIST_INSERT_HEAD(&fg->features, fge, entry);		
+	AST_LIST_INSERT_HEAD(&fg->features, fge, entry);
 
 	ast_verb(2, "Registered feature '%s' for group '%s' at exten '%s'\n",
-					feature->sname, fg->gname, exten);
+					feature->sname, fg->gname, fge->exten);
 }
 
 void ast_unregister_feature(struct ast_call_feature *feature)
@@ -2280,7 +2397,8 @@ static void ast_unregister_groups(void)
  * \retval feature group on success.
  * \retval NULL on failure.
 */
-static struct feature_group *find_group(const char *name) {
+static struct feature_group *find_group(const char *name)
+{
 	struct feature_group *fg = NULL;
 
 	AST_LIST_TRAVERSE(&feature_groups, fg, entry) {
@@ -2360,6 +2478,7 @@ static int feature_exec_app(struct ast_channel *chan, struct ast_channel *peer, 
 	}
 
 	ast_autoservice_start(idle);
+	ast_autoservice_ignore(idle, AST_FRAME_DTMF_END);
 	
 	if(work && idle) {
 		pbx_builtin_setvar_helper(work, "DYNAMIC_PEERNAME", idle->name);
@@ -2414,7 +2533,7 @@ static int remap_feature(const char *name, const char *value)
 
 /*!
  * \brief Helper function for feature_interpret and ast_feature_detect
- * \param chan,peer,config,code,sense,dynamic_features char buf,feature flags,operation,feature
+ * \param chan,peer,config,code,sense,dynamic_features_buf,features,operation,feature
  *
  * Lock features list, browse for code, unlock list
  * If a feature is found and the operation variable is set, that feature's
@@ -2472,20 +2591,23 @@ static int feature_interpret_helper(struct ast_channel *chan, struct ast_channel
 
 		if (fg) {
 			AST_LIST_TRAVERSE(&fg->features, fge, entry) {
-				if (strcasecmp(fge->exten, code))
-					continue;
-				if (operation) {
-					res = fge->feature->operation(chan, peer, config, code, sense, fge->feature);
+				if (!strcmp(fge->exten, code)) {
+					if (operation) {
+						res = fge->feature->operation(chan, peer, config, code, sense, fge->feature);
+					}
+					memcpy(feature, fge->feature, sizeof(feature));
+					if (res != AST_FEATURE_RETURN_KEEPTRYING) {
+						AST_RWLIST_UNLOCK(&feature_groups);
+						break;
+					}
+					res = AST_FEATURE_RETURN_PASSDIGITS;
+				} else if (!strncmp(fge->exten, code, strlen(code))) {
+					res = AST_FEATURE_RETURN_STOREDIGITS;
 				}
-				memcpy(feature, fge->feature, sizeof(feature));
-				if (res != AST_FEATURE_RETURN_KEEPTRYING) {
-					AST_RWLIST_UNLOCK(&feature_groups);
-					break;
-				}
-				res = AST_FEATURE_RETURN_PASSDIGITS;
 			}
-			if (fge)
+			if (fge) {
 				break;
+			}
 		}
 
 		AST_RWLIST_UNLOCK(&feature_groups);
@@ -2589,12 +2711,31 @@ static void set_config_flags(struct ast_channel *chan, struct ast_channel *peer,
 
 			/* while we have a feature */
 			while ((tok = strsep(&tmp, "#"))) {
+				struct feature_group *fg;
+
+				AST_RWLIST_RDLOCK(&feature_groups);
+				AST_RWLIST_TRAVERSE(&feature_groups, fg, entry) {
+					struct feature_group_exten *fge;
+
+					AST_LIST_TRAVERSE(&fg->features, fge, entry) {
+						if (ast_test_flag(fge->feature, AST_FEATURE_FLAG_BYCALLER)) {
+							ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_0);
+						}
+						if (ast_test_flag(fge->feature, AST_FEATURE_FLAG_BYCALLEE)) {
+							ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
+						}
+					}
+				}
+				AST_RWLIST_UNLOCK(&feature_groups);
+
 				AST_RWLIST_RDLOCK(&feature_list);
 				if ((feature = find_dynamic_feature(tok)) && ast_test_flag(feature, AST_FEATURE_FLAG_NEEDSDTMF)) {
-					if (ast_test_flag(feature, AST_FEATURE_FLAG_BYCALLER))
+					if (ast_test_flag(feature, AST_FEATURE_FLAG_BYCALLER)) {
 						ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_0);
-					if (ast_test_flag(feature, AST_FEATURE_FLAG_BYCALLEE))
+					}
+					if (ast_test_flag(feature, AST_FEATURE_FLAG_BYCALLEE)) {
 						ast_set_flag(config, AST_BRIDGE_DTMF_CHANNEL_1);
+					}
 				}
 				AST_RWLIST_UNLOCK(&feature_list);
 			}
@@ -2604,7 +2745,7 @@ static void set_config_flags(struct ast_channel *chan, struct ast_channel *peer,
 
 /*! 
  * \brief Get feature and dial
- * \param caller,transferee,type,format,data,timeout,outstate,cid_num,cid_name,igncallerstate
+ * \param caller,transferee,type,format,data,timeout,outstate,cid_num,cid_name,igncallerstate,language
  *
  * Request channel, set channel variables, initiate call,check if they want to disconnect
  * go into loop, check if timeout has elapsed, check if person to be transfered hung up,
@@ -2645,7 +2786,7 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller, 
 	pbx_builtin_setvar_helper(chan, "TRANSFERERNAME", caller->name);
 		
 	ast_channel_lock(chan);
-	ast_connected_line_copy_from_caller(&chan->connected, &caller->cid);
+	ast_connected_line_copy_from_caller(&chan->connected, &caller->caller);
 	ast_channel_unlock(chan);
 	
 	if (ast_call(chan, data, timeout)) {
@@ -2692,7 +2833,7 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller, 
 
 		if (chan && (chan == active_channel)){
 			if (!ast_strlen_zero(chan->call_forward)) {
-				if (!(chan = ast_call_forward(caller, chan, &to, format, NULL, outstate))) {
+				if (!(chan = ast_call_forward(caller, chan, NULL, format, NULL, outstate))) {
 					return NULL;
 				}
 				continue;
@@ -2726,6 +2867,10 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller, 
 				} else if (f->subclass.integer == AST_CONTROL_CONNECTED_LINE) {
 					if (ast_channel_connected_line_macro(chan, caller, f, 1, 1)) {
 						ast_indicate_data(caller, AST_CONTROL_CONNECTED_LINE, f->data.ptr, f->datalen);
+					}
+				} else if (f->subclass.integer == AST_CONTROL_REDIRECTING) {
+					if (ast_channel_redirecting_macro(chan, caller, f, 1, 1)) {
+						ast_indicate_data(caller, AST_CONTROL_REDIRECTING, f->data.ptr, f->datalen);
 					}
 				} else if (f->subclass.integer != -1 && f->subclass.integer != AST_CONTROL_PROGRESS) {
 					ast_log(LOG_NOTICE, "Don't know what to do about control frame: %d\n", f->subclass.integer);
@@ -2803,17 +2948,17 @@ void ast_channel_log(char *title, struct ast_channel *chan) /* for debug, this i
 {
        ast_log(LOG_NOTICE, "______ %s (%lx)______\n", title, (unsigned long)chan);
        ast_log(LOG_NOTICE, "CHAN: name: %s;  appl: %s; data: %s; contxt: %s;  exten: %s; pri: %d;\n",
-                       chan->name, chan->appl, chan->data, chan->context, chan->exten, chan->priority);
+		       chan->name, chan->appl, chan->data, chan->context, chan->exten, chan->priority);
        ast_log(LOG_NOTICE, "CHAN: acctcode: %s;  dialcontext: %s; amaflags: %x; maccontxt: %s;  macexten: %s; macpri: %d;\n",
-                       chan->accountcode, chan->dialcontext, chan->amaflags, chan->macrocontext, chan->macroexten, chan->macropriority);
+		       chan->accountcode, chan->dialcontext, chan->amaflags, chan->macrocontext, chan->macroexten, chan->macropriority);
        ast_log(LOG_NOTICE, "CHAN: masq: %p;  masqr: %p; _bridge: %p; uniqueID: %s; linkedID:%s\n",
-                       chan->masq, chan->masqr,
-                       chan->_bridge, chan->uniqueid, chan->linkedid);
+		       chan->masq, chan->masqr,
+		       chan->_bridge, chan->uniqueid, chan->linkedid);
        if (chan->masqr)
-               ast_log(LOG_NOTICE, "CHAN: masquerading as: %s;  cdr: %p;\n",
-                               chan->masqr->name, chan->masqr->cdr);
+	       ast_log(LOG_NOTICE, "CHAN: masquerading as: %s;  cdr: %p;\n",
+		               chan->masqr->name, chan->masqr->cdr);
        if (chan->_bridge)
-               ast_log(LOG_NOTICE, "CHAN: Bridged to %s\n", chan->_bridge->name);
+	       ast_log(LOG_NOTICE, "CHAN: Bridged to %s\n", chan->_bridge->name);
 
 	ast_log(LOG_NOTICE, "===== done ====\n");
 }
@@ -2946,11 +3091,12 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	int hasfeatures=0;
 	int hadfeatures=0;
 	int autoloopflag;
+	int we_disabled_peer_cdr = 0;
 	struct ast_option_header *aoh;
 	struct ast_cdr *bridge_cdr = NULL;
 	struct ast_cdr *orig_peer_cdr = NULL;
-	struct ast_cdr *chan_cdr = pick_unlocked_cdr(chan->cdr); /* the proper chan cdr, if there are forked cdrs */
-	struct ast_cdr *peer_cdr = pick_unlocked_cdr(peer->cdr); /* the proper chan cdr, if there are forked cdrs */
+	struct ast_cdr *chan_cdr = chan->cdr; /* the proper chan cdr, if there are forked cdrs */
+	struct ast_cdr *peer_cdr = peer->cdr; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_chan_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_peer_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
 
@@ -3013,9 +3159,9 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			ast_cdr_appenduserfield(chan, tmp);
 		} else
 			ast_cdr_setuserfield(chan, peer->cdr->userfield);
-		/* free the peer's cdr without ast_cdr_free complaining */
-		ast_free(peer->cdr);
-		peer->cdr = NULL;
+		/* Don't delete the CDR; just disable it. */
+		ast_set_flag(peer->cdr, AST_CDR_FLAG_POST_DISABLED);
+		we_disabled_peer_cdr = 1;
 	}
 	ast_copy_string(orig_channame,chan->name,sizeof(orig_channame));
 	ast_copy_string(orig_peername,peer->name,sizeof(orig_peername));
@@ -3027,14 +3173,16 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			ast_set_flag(chan_cdr, AST_CDR_FLAG_MAIN);
 			ast_cdr_update(chan);
 			bridge_cdr = ast_cdr_dup_unique_swap(chan_cdr);
+			/* rip any forked CDR's off of the chan_cdr and attach
+			 * them to the bridge_cdr instead */
+			bridge_cdr->next = chan_cdr->next;
+			chan_cdr->next = NULL;
 			ast_copy_string(bridge_cdr->lastapp, S_OR(chan->appl, ""), sizeof(bridge_cdr->lastapp));
 			ast_copy_string(bridge_cdr->lastdata, S_OR(chan->data, ""), sizeof(bridge_cdr->lastdata));
 			if (peer_cdr && !ast_strlen_zero(peer_cdr->userfield)) {
 				ast_copy_string(bridge_cdr->userfield, peer_cdr->userfield, sizeof(bridge_cdr->userfield));
 			}
-			if (peer_cdr && ast_strlen_zero(peer->accountcode)) {
-				ast_cdr_setaccount(peer, chan->accountcode);
-			}
+			ast_cdr_setaccount(peer, chan->accountcode);
 
 		} else {
 			/* better yet, in a xfer situation, find out why the chan cdr got zapped (pun unintentional) */
@@ -3075,11 +3223,11 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		   tvcmp check to the if below */
 
 		if (peer_cdr && !ast_tvzero(peer_cdr->answer) && ast_tvcmp(peer_cdr->answer, bridge_cdr->start) >= 0) {
-			bridge_cdr->answer = peer_cdr->answer;
-			bridge_cdr->disposition = peer_cdr->disposition;
+			ast_cdr_setanswer(bridge_cdr, peer_cdr->answer);
+			ast_cdr_setdisposition(bridge_cdr, peer_cdr->disposition);
 			if (chan_cdr) {
-				chan_cdr->answer = peer_cdr->answer;
-				chan_cdr->disposition = peer_cdr->disposition;
+				ast_cdr_setanswer(chan_cdr, peer_cdr->answer);
+				ast_cdr_setdisposition(chan_cdr, peer_cdr->disposition);
 			}
 		} else {
 			ast_cdr_answer(bridge_cdr);
@@ -3095,6 +3243,11 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				ast_set_flag(peer_cdr, AST_CDR_FLAG_BRIDGED);
 			}
 		}
+		/* the DIALED flag may be set if a dialed channel is transfered
+		 * and then bridged to another channel.  In order for the
+		 * bridge CDR to be written, the DIALED flag must not be
+		 * present. */
+		ast_clear_flag(bridge_cdr, AST_CDR_FLAG_DIALED);
 	}
 	ast_cel_report_event(chan, AST_CEL_BRIDGE_START, NULL, NULL, NULL);
 	for (;;) {
@@ -3188,7 +3341,15 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				if (!ast_channel_connected_line_macro(who, other, f, who != chan, 1)) {
 					break;
 				}
-				/* The implied "else" falls through purposely */
+				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
+				break;
+			case AST_CONTROL_REDIRECTING:
+				if (!ast_channel_redirecting_macro(who, other, f, who != chan, 1)) {
+					break;
+				}
+				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
+				break;
+			case AST_CONTROL_AOC:
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
 				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
@@ -3251,7 +3412,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				}
 				config->feature_start_time = ast_tvnow();
 				config->feature_timer = featuredigittimeout;
-				ast_debug(1, "Set feature timer to %ld\n", config->feature_timer);
+				ast_debug(1, "Set feature timer to %ld ms\n", config->feature_timer);
 			}
 		}
 		if (f)
@@ -3278,8 +3439,9 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 	 * if it were, then chan belongs to a different thread now, and might have been hung up long
      * ago.
 	 */
-	if (!ast_test_flag(&(config->features_caller),AST_FEATURE_NO_H_EXTEN) &&
-		ast_exists_extension(chan, chan->context, "h", 1, chan->cid.cid_num)) {
+	if (!ast_test_flag(&(config->features_caller),AST_FEATURE_NO_H_EXTEN)
+		&& ast_exists_extension(chan, chan->context, "h", 1,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 		struct ast_cdr *swapper = NULL;
 		char savelastapp[AST_MAX_EXTENSION];
 		char savelastdata[AST_MAX_EXTENSION];
@@ -3307,10 +3469,16 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 		ast_copy_string(chan->exten, "h", sizeof(chan->exten));
 		chan->priority = 1;
 		ast_channel_unlock(chan);
-		while ((spawn_error = ast_spawn_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num, &found, 1)) == 0) {
+		while ((spawn_error = ast_spawn_extension(chan, chan->context, chan->exten,
+			chan->priority,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+			&found, 1)) == 0) {
 			chan->priority++;
 		}
-		if (spawn_error && (!ast_exists_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num) || ast_check_hangup(chan))) {
+		if (spawn_error
+			&& (!ast_exists_extension(chan, chan->context, chan->exten, chan->priority,
+				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))
+				|| ast_check_hangup(chan))) {
 			/* if the extension doesn't exist or a hangup occurred, this isn't really a spawn error */
 			spawn_error = 0;
 		}
@@ -3401,7 +3569,7 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			/* new channel */
 			ast_cdr_specialized_reset(new_chan_cdr, 0);
 		} else {
-			ast_cdr_specialized_reset(chan_cdr, 0); /* nothing changed, reset the chan_cdr  */
+			ast_cdr_specialized_reset(chan->cdr, 0); /* nothing changed, reset the chan cdr  */
 		}
 	}
 
@@ -3433,7 +3601,10 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 				ast_cdr_specialized_reset(new_peer_cdr, 0);
 			}
 		} else {
-			ast_cdr_specialized_reset(peer_cdr, 0); /* nothing changed, reset the peer_cdr  */
+			if (we_disabled_peer_cdr) {
+				ast_clear_flag(peer->cdr, AST_CDR_FLAG_POST_DISABLED);
+			}
+			ast_cdr_specialized_reset(peer->cdr, 0); /* nothing changed, reset the peer cdr  */
 		}
 	}
 	
@@ -3453,8 +3624,8 @@ static void post_manager_event(const char *s, struct parkeduser *pu)
 		pu->parkingexten, 
 		pu->chan->name,
 		pu->parkinglot->name,
-		S_OR(pu->chan->cid.cid_num, "<unknown>"),
-		S_OR(pu->chan->cid.cid_name, "<unknown>"),
+		S_COR(pu->chan->caller.id.number.valid, pu->chan->caller.id.number.str, "<unknown>"),
+		S_COR(pu->chan->caller.id.name.valid, pu->chan->caller.id.name.str, "<unknown>"),
 		pu->chan->uniqueid
 		);
 }
@@ -3504,9 +3675,8 @@ static char *callback_dialoptions(struct ast_flags *features_callee, struct ast_
 }
 
 /*! \brief Run management on parkinglots, called once per parkinglot */
-int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds, fd_set *nrfds, fd_set *nefds, int *ms, int *max)
+int manage_parkinglot(struct ast_parkinglot *curlot, const struct pollfd *pfds, const int nfds, struct pollfd **new_pfds, int *new_nfds, int *ms)
 {
-
 	struct parkeduser *pu;
 	int res = 0;
 	char parkingslot[AST_MAX_EXTENSION];
@@ -3529,22 +3699,25 @@ int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds,
 			/* Get chan, exten from derived kludge */
 			if (pu->peername[0]) {
 				char *peername = ast_strdupa(pu->peername);
-				char *cp = strrchr(peername, '-');
-				char peername_flat[AST_MAX_EXTENSION]; /* using something like DAHDI/52 for an extension name is NOT a good idea */
+				char *dash = strrchr(peername, '-');
+				char *peername_flat; /* using something like DAHDI/52 for an extension name is NOT a good idea */
 				int i;
 
-				if (cp) 
-					*cp = 0;
-				ast_copy_string(peername_flat,peername,sizeof(peername_flat));
-				for(i=0; peername_flat[i] && i < AST_MAX_EXTENSION; i++) {
-					if (peername_flat[i] == '/') 
-						peername_flat[i]= '0';
+				if (dash) {
+					*dash = '\0';
 				}
+
+				peername_flat = ast_strdupa(peername);
+				for (i = 0; peername_flat[i]; i++) {
+					if (peername_flat[i] == '/') {
+						peername_flat[i]= '_';
+					}
+				}
+
 				con = ast_context_find_or_create(NULL, NULL, pu->parkinglot->parking_con_dial, registrar);
 				if (!con) {
 					ast_log(LOG_ERROR, "Parking dial context '%s' does not exist and unable to create\n", pu->parkinglot->parking_con_dial);
-				}
-				if (con) {
+				} else {
 					char returnexten[AST_MAX_EXTENSION];
 					struct ast_datastore *features_datastore;
 					struct ast_dial_features *dialfeatures = NULL;
@@ -3564,7 +3737,7 @@ int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds,
 						char buf[MAX_DIAL_FEATURE_OPTIONS] = {0,};
 						snprintf(returnexten, sizeof(returnexten), "%s,30,%s", peername, callback_dialoptions(&(dialfeatures->features_callee), &(dialfeatures->features_caller), buf, sizeof(buf)));
 					} else { /* Existing default */
-						ast_log(LOG_WARNING, "Dialfeatures not found on %s, using default!\n", chan->name);
+						ast_log(LOG_NOTICE, "Dial features not found on %s, using default!\n", chan->name);
 						snprintf(returnexten, sizeof(returnexten), "%s,30,t", peername);
 					}
 
@@ -3577,7 +3750,6 @@ int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds,
 					if (comebacktoorigin) {
 						set_c_e_p(chan, pu->parkinglot->parking_con_dial, peername_flat, 1);
 					} else {
-						ast_log(LOG_WARNING, "now going to parkedcallstimeout,s,1 | ps is %d\n",pu->parkingnum);
 						snprintf(parkingslot, sizeof(parkingslot), "%d", pu->parkingnum);
 						pbx_builtin_setvar_helper(chan, "PARKINGSLOT", parkingslot);
 						set_c_e_p(chan, "parkedcallstimeout", peername_flat, 1);
@@ -3611,14 +3783,33 @@ int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds,
 		} else {	/* still within parking time, process descriptors */
 			for (x = 0; x < AST_MAX_FDS; x++) {
 				struct ast_frame *f;
+				int y;
 
-				if ((chan->fds[x] == -1) || (!FD_ISSET(chan->fds[x], rfds) && !FD_ISSET(pu->chan->fds[x], efds))) 
+				if (chan->fds[x] == -1) {
+					continue;	/* nothing on this descriptor */
+				}
+
+				for (y = 0; y < nfds; y++) {
+					if (pfds[y].fd == chan->fds[x]) {
+						/* Found poll record! */
+						break;
+					}
+				}
+				if (y == nfds) {
+					/* Not found */
 					continue;
-				
-				if (FD_ISSET(chan->fds[x], efds))
+				}
+
+				if (!(pfds[y].revents & (POLLIN | POLLERR))) {
+					/* Next x */
+					continue;
+				}
+
+				if (pfds[y].revents & POLLERR) {
 					ast_set_flag(chan, AST_FLAG_EXCEPTION);
-				else
+				} else {
 					ast_clear_flag(chan, AST_FLAG_EXCEPTION);
+				}
 				chan->fdno = x;
 
 				/* See if they need servicing */
@@ -3643,6 +3834,7 @@ int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds,
 					} else
 						ast_log(LOG_WARNING, "Whoa, no parking context for parking lot %s?\n", curlot->name);
 					AST_LIST_REMOVE_CURRENT(list);
+					parkinglot_unref(pu->parkinglot);
 					free(pu);
 					break;
 				} else {
@@ -3659,22 +3851,29 @@ int manage_parkinglot(struct ast_parkinglot *curlot, fd_set *rfds, fd_set *efds,
 				}
 			} /* End for */
 			if (x >= AST_MAX_FDS) {
-std:				for (x=0; x<AST_MAX_FDS; x++) {	/* mark fds for next round */
+std:			for (x = 0; x < AST_MAX_FDS; x++) {	/* mark fds for next round */
 					if (chan->fds[x] > -1) {
-						FD_SET(chan->fds[x], nrfds);
-						FD_SET(chan->fds[x], nefds);
-						if (chan->fds[x] > *max)
-							*max = chan->fds[x];
+						void *tmp = ast_realloc(*new_pfds, (*new_nfds + 1) * sizeof(struct pollfd));
+						if (!tmp) {
+							continue;
+						}
+						*new_pfds = tmp;
+						(*new_pfds)[*new_nfds].fd = chan->fds[x];
+						(*new_pfds)[*new_nfds].events = POLLIN | POLLERR;
+						(*new_pfds)[*new_nfds].revents = 0;
+						(*new_nfds)++;
 					}
 				}
 				/* Keep track of our shortest wait */
-				if (tms < *ms || *ms < 0)
+				if (tms < *ms || *ms < 0) {
 					*ms = tms;
+				}
 			}
 		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 	AST_LIST_UNLOCK(&curlot->parkings);
+
 	return res;
 }
 
@@ -3688,53 +3887,49 @@ std:				for (x=0; x<AST_MAX_FDS; x++) {	/* mark fds for next round */
 */
 static void *do_parking_thread(void *ignore)
 {
-	fd_set rfds, efds;	/* results from previous select, to be preserved across loops. */
-	fd_set nrfds, nefds;	/* args for the next select */
-	FD_ZERO(&rfds);
-	FD_ZERO(&efds);
+	struct pollfd *pfds = NULL, *new_pfds = NULL;
+	int nfds = 0, new_nfds = 0;
 
 	for (;;) {
-		int res = 0;
-		int ms = -1;	/* select timeout, uninitialized */
-		int max = -1;	/* max fd, none there yet */
 		struct ao2_iterator iter;
 		struct ast_parkinglot *curlot;
-		FD_ZERO(&nrfds);
-		FD_ZERO(&nefds);
+		int ms = -1;	/* poll2 timeout, uninitialized */
 		iter = ao2_iterator_init(parkinglots, 0);
 
 		while ((curlot = ao2_iterator_next(&iter))) {
-			res = manage_parkinglot(curlot, &rfds, &efds, &nrfds, &nefds, &ms, &max);
+			manage_parkinglot(curlot, pfds, nfds, &new_pfds, &new_nfds, &ms);
 			ao2_ref(curlot, -1);
 		}
+		ao2_iterator_destroy(&iter);
 
-		rfds = nrfds;
-		efds = nefds;
-		{
-			struct timeval wait = ast_samp2tv(ms, 1000);
-			/* Wait for something to happen */
-			ast_select(max + 1, &rfds, NULL, &efds, (ms > -1) ? &wait : NULL);
-		}
+		/* Recycle */
+		ast_free(pfds);
+		pfds = new_pfds;
+		nfds = new_nfds;
+		new_pfds = NULL;
+		new_nfds = 0;
+
+		/* Wait for something to happen */
+		ast_poll(pfds, nfds, ms);
 		pthread_testcancel();
 	}
+	/* If this WERE reached, we'd need to free(pfds) */
 	return NULL;	/* Never reached */
 }
 
 /*! \brief Find parkinglot by name */
 struct ast_parkinglot *find_parkinglot(const char *name)
 {
-	struct ast_parkinglot *parkinglot = NULL;
-	struct ast_parkinglot tmp_parkinglot;
-	
-	if (ast_strlen_zero(name))
+	struct ast_parkinglot *parkinglot;
+
+	if (ast_strlen_zero(name)) {
 		return NULL;
+	}
 
-	ast_copy_string(tmp_parkinglot.name, name, sizeof(tmp_parkinglot.name));
-
-	parkinglot = ao2_find(parkinglots, &tmp_parkinglot, OBJ_POINTER);
-
-	if (parkinglot && option_debug)
-		ast_log(LOG_DEBUG, "Found Parkinglot: %s\n", parkinglot->name);
+	parkinglot = ao2_find(parkinglots, (void *) name, 0);
+	if (parkinglot) {
+		ast_debug(1, "Found Parkinglot: %s\n", parkinglot->name);
+	}
 
 	return parkinglot;
 }
@@ -3746,7 +3941,10 @@ struct ast_parkinglot *copy_parkinglot(const char *name, const struct ast_parkin
 	if (ast_strlen_zero(name)) { /* No name specified */
 		return NULL;
 	}
-	if (find_parkinglot(name)) { /* Parkinglot with that name allready exists */
+	if ((copylot = find_parkinglot(name))) { /* Parkinglot with that name already exists */
+		if (copylot) {
+			ao2_ref(copylot, -1);
+		}
 		return NULL;
 	}
 
@@ -3838,7 +4036,8 @@ static int park_call_exec(struct ast_channel *chan, const char *data)
 		ast_app_parse_options(park_call_options, &flags, NULL, app_args.options);
 		args.flags = flags.flags;
 
-		res = masq_park_call_announce_args(chan, chan, &args);
+		args.parkinglot = ao2_callback(parkinglots, 0, find_parkinglot_by_exten_cb, &orig_exten);
+		res = masq_park_call_announce(chan, chan, &args);
 		/* Continue on in the dialplan */
 		if (res == 1) {
 			ast_copy_string(chan->exten, orig_exten, sizeof(chan->exten));
@@ -3853,7 +4052,7 @@ static int park_call_exec(struct ast_channel *chan, const char *data)
 }
 
 /*! \brief Pickup parked call */
-static int park_exec_full(struct ast_channel *chan, const char *data, struct ast_parkinglot *parkinglot)
+static int park_exec_full(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
 	struct ast_channel *peer=NULL;
@@ -3861,17 +4060,19 @@ static int park_exec_full(struct ast_channel *chan, const char *data, struct ast
 	struct ast_context *con;
 	int park = 0;
 	struct ast_bridge_config config;
+	struct ast_parkinglot *parkinglot;
 
-	if (data)
+	if (data) {
 		park = atoi((char *) data);
+	}
 
-	parkinglot = find_parkinglot(findparkinglotname(chan)); 	
+	parkinglot = ao2_callback(parkinglots, 0, find_parkinglot_by_position_cb, (void *) &park);
 	if (!parkinglot)
 		parkinglot = default_parkinglot;
 
 	AST_LIST_LOCK(&parkinglot->parkings);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&parkinglot->parkings, pu, list) {
-		if (!data || pu->parkingnum == park) {
+		if (!pu->notquiteyet && (!data || pu->parkingnum == park)) {
 			if (pu->chan->pbx) { /* do not allow call to be picked up until the PBX thread is finished */
 				AST_LIST_UNLOCK(&parkinglot->parkings);
 				return -1;
@@ -3902,8 +4103,8 @@ static int park_exec_full(struct ast_channel *chan, const char *data, struct ast
 			"CallerIDNum: %s\r\n"
 			"CallerIDName: %s\r\n",
 			pu->parkingexten, pu->chan->name, chan->name,
-			S_OR(pu->chan->cid.cid_num, "<unknown>"),
-			S_OR(pu->chan->cid.cid_name, "<unknown>")
+			S_COR(pu->chan->caller.id.number.valid, pu->chan->caller.id.number.str, "<unknown>"),
+			S_COR(pu->chan->caller.id.name.valid, pu->chan->caller.id.name.str, "<unknown>")
 			);
 
 		ast_free(pu);
@@ -4002,6 +4203,7 @@ static int park_exec_full(struct ast_channel *chan, const char *data, struct ast
 			ast_set_flag(&(config.features_caller), AST_FEATURE_AUTOMON);
 		}
 
+		parkinglot_unref(parkinglot);
 		res = ast_bridge_call(chan, peer, &config);
 
 		pbx_builtin_setvar_helper(chan, "PARKEDCHANNEL", peer->name);
@@ -4023,7 +4225,7 @@ static int park_exec_full(struct ast_channel *chan, const char *data, struct ast
 
 static int park_exec(struct ast_channel *chan, const char *data) 
 {
-	return park_exec_full(chan, data, default_parkinglot);
+	return park_exec_full(chan, data);
 }
 
 /*! \brief Unreference parkinglot object. If no more references,
@@ -4031,15 +4233,13 @@ static int park_exec(struct ast_channel *chan, const char *data)
 static void parkinglot_unref(struct ast_parkinglot *parkinglot) 
 {
 	int refcount = ao2_ref(parkinglot, -1);
-	if (option_debug > 2)
-		ast_log(LOG_DEBUG, "Multiparking: %s refcount now %d\n", parkinglot->name, refcount - 1);
+	ast_debug(3, "Multiparking: %s refcount now %d\n", parkinglot->name, refcount - 1);
 }
 
 static struct ast_parkinglot *parkinglot_addref(struct ast_parkinglot *parkinglot)
 {
 	int refcount = ao2_ref(parkinglot, +1);
-	if (option_debug > 2)
-		ast_log(LOG_DEBUG, "Multiparking: %s refcount now %d\n", parkinglot->name, refcount + 1);
+	ast_debug(3, "Multiparking: %s refcount now %d\n", parkinglot->name, refcount + 1);
 	return parkinglot;
 }
 
@@ -4069,10 +4269,28 @@ static void parkinglot_destroy(void *obj)
 	con = ast_context_find(ruin->parking_con);
 	if (con)
 		ast_context_destroy(con, registrar);
-	ao2_unlink(parkinglots, ruin);
 }
 
-/*! \brief Build parkinglot from configuration and chain it in */
+/*! 
+ * \brief Add parking hints for all defined parking lots 
+ * \param context
+ * \param start starting parkinglot number
+ * \param stop ending parkinglot number
+*/
+static void park_add_hints(char *context, int start, int stop)
+{
+	int numext;
+	char device[AST_MAX_EXTENSION];
+	char exten[10];
+
+	for (numext = start; numext <= stop; numext++) {
+		snprintf(exten, sizeof(exten), "%d", numext);
+		snprintf(device, sizeof(device), "park:%s@%s", exten, context);
+		ast_add_extension(context, 1, exten, PRIORITY_HINT, NULL, NULL, device, NULL, NULL, registrar);
+	}
+}
+
+/*! \brief Build parkinglot from configuration and chain it in if it doesn't already exist */
 static struct ast_parkinglot *build_parkinglot(char *name, struct ast_variable *var)
 {
 	struct ast_parkinglot *parkinglot;
@@ -4100,6 +4318,8 @@ static struct ast_parkinglot *build_parkinglot(char *name, struct ast_variable *
 	while(confvar) {
 		if (!strcasecmp(confvar->name, "context")) {
 			ast_copy_string(parkinglot->parking_con, confvar->value, sizeof(parkinglot->parking_con));
+		} else if (!strcasecmp(confvar->name, "parkext")) {
+			ast_copy_string(parkinglot->parkext, confvar->value, sizeof(parkinglot->parkext));
 		} else if (!strcasecmp(confvar->name, "parkingtime")) {
 			if ((sscanf(confvar->value, "%30d", &parkinglot->parkingtime) != 1) || (parkinglot->parkingtime < 1)) {
 				ast_log(LOG_WARNING, "%s is not a valid parkingtime\n", confvar->value);
@@ -4117,43 +4337,51 @@ static struct ast_parkinglot *build_parkinglot(char *name, struct ast_variable *
 		} else if (!strcasecmp(confvar->name, "findslot")) {
 			parkinglot->parkfindnext = (!strcasecmp(confvar->value, "next"));
 		} else if (!strcasecmp(confvar->name, "parkedcalltransfers")) {
-                        ast_log(LOG_DEBUG, "Setting parking lot %s %s to %s\n", name, confvar->name, confvar->value);
-                        if (!strcasecmp(confvar->value, "both"))
-                                parkinglot->parkedcalltransfers = AST_FEATURE_FLAG_BYBOTH;
-                        else if (!strcasecmp(confvar->value, "caller"))
-                                parkinglot->parkedcalltransfers = AST_FEATURE_FLAG_BYCALLER;
-                        else if (!strcasecmp(confvar->value, "callee"))
-                                parkinglot->parkedcalltransfers = AST_FEATURE_FLAG_BYCALLEE;
-                } else if (!strcasecmp(confvar->name, "parkedcallreparking")) {
-                        ast_log(LOG_DEBUG, "Setting parking lot %s %s to %s\n", name, confvar->name, confvar->value);
-                        if (!strcasecmp(confvar->value, "both"))
-                                parkinglot->parkedcallreparking = AST_FEATURE_FLAG_BYBOTH;
-                        else if (!strcasecmp(confvar->value, "caller"))
-                                parkinglot->parkedcallreparking = AST_FEATURE_FLAG_BYCALLER;
-                        else if (!strcasecmp(confvar->value, "callee"))
-                                parkinglot->parkedcallreparking = AST_FEATURE_FLAG_BYCALLEE;
-                } else if (!strcasecmp(confvar->name, "parkedcallhangup")) {
-                        ast_log(LOG_DEBUG, "Setting parking lot %s %s to %s\n", name, confvar->name, confvar->value);
-                        if (!strcasecmp(confvar->value, "both"))
-                                parkinglot->parkedcallhangup = AST_FEATURE_FLAG_BYBOTH;
-                        else if (!strcasecmp(confvar->value, "caller"))
-                                parkinglot->parkedcallhangup = AST_FEATURE_FLAG_BYCALLER;
-                        else if (!strcasecmp(confvar->value, "callee"))
-                                parkinglot->parkedcallhangup = AST_FEATURE_FLAG_BYCALLEE;
-                } else if (!strcasecmp(confvar->name, "parkedcallrecording")) {
-                        ast_log(LOG_DEBUG, "Setting parking lot %s %s to %s\n", name, confvar->name, confvar->value);
-                        if (!strcasecmp(confvar->value, "both"))
-                                parkinglot->parkedcallrecording = AST_FEATURE_FLAG_BYBOTH;
-                        else if (!strcasecmp(confvar->value, "caller"))
-                                parkinglot->parkedcallrecording = AST_FEATURE_FLAG_BYCALLER;
-                        else if (!strcasecmp(confvar->value, "callee"))
-                                parkinglot->parkedcallrecording = AST_FEATURE_FLAG_BYCALLEE;
-                }
+			ast_log(LOG_DEBUG, "Setting parking lot %s %s to %s\n", name, confvar->name, confvar->value);
+			if (!strcasecmp(confvar->value, "both")) {
+				parkinglot->parkedcalltransfers = AST_FEATURE_FLAG_BYBOTH;
+			} else if (!strcasecmp(confvar->value, "caller")) {
+				parkinglot->parkedcalltransfers = AST_FEATURE_FLAG_BYCALLER;
+		        } else if (!strcasecmp(confvar->value, "callee")) {
+				parkinglot->parkedcalltransfers = AST_FEATURE_FLAG_BYCALLEE;
+			}
+		} else if (!strcasecmp(confvar->name, "parkedcallreparking")) {
+			ast_log(LOG_DEBUG, "Setting parking lot %s %s to %s\n", name, confvar->name, confvar->value);
+			if (!strcasecmp(confvar->value, "both")) {
+				parkinglot->parkedcallreparking = AST_FEATURE_FLAG_BYBOTH;
+			} else if (!strcasecmp(confvar->value, "caller")) {
+				parkinglot->parkedcallreparking = AST_FEATURE_FLAG_BYCALLER;
+			} else if (!strcasecmp(confvar->value, "callee")) {
+				parkinglot->parkedcallreparking = AST_FEATURE_FLAG_BYCALLEE;
+			}
+		} else if (!strcasecmp(confvar->name, "parkedcallhangup")) {
+			ast_log(LOG_DEBUG, "Setting parking lot %s %s to %s\n", name, confvar->name, confvar->value);
+			if (!strcasecmp(confvar->value, "both")) {
+				parkinglot->parkedcallhangup = AST_FEATURE_FLAG_BYBOTH;
+			} else if (!strcasecmp(confvar->value, "caller")) {
+				parkinglot->parkedcallhangup = AST_FEATURE_FLAG_BYCALLER; 
+			} else if (!strcasecmp(confvar->value, "callee")) {
+				parkinglot->parkedcallhangup = AST_FEATURE_FLAG_BYCALLEE;
+			}
+		} else if (!strcasecmp(confvar->name, "parkedcallrecording")) {
+			ast_log(LOG_DEBUG, "Setting parking lot %s %s to %s\n", name, confvar->name, confvar->value);
+			if (!strcasecmp(confvar->value, "both")) {
+				parkinglot->parkedcallrecording = AST_FEATURE_FLAG_BYBOTH;
+			} else if (!strcasecmp(confvar->value, "caller")) {
+				parkinglot->parkedcallrecording = AST_FEATURE_FLAG_BYCALLER;
+			} else if (!strcasecmp(confvar->value, "callee")) {
+				parkinglot->parkedcallrecording = AST_FEATURE_FLAG_BYCALLEE;
+			}
+		}
 		confvar = confvar->next;
 	}
 	/* make sure parkingtime is set if not specified */
 	if (parkinglot->parkingtime == 0) {
 		parkinglot->parkingtime = DEFAULT_PARK_TIME;
+	}
+	if (ast_strlen_zero(parkinglot->parkext)) {
+		ast_debug(2, "no parkext specified for %s - setting it to %s\n", parkinglot->name, DEFAULT_PARK_EXTENSION);
+		ast_copy_string(parkinglot->parkext, DEFAULT_PARK_EXTENSION, sizeof(parkinglot->parkext));
 	}
 
 	if (!var) {	/* Default parking lot */
@@ -4176,22 +4404,26 @@ static struct ast_parkinglot *build_parkinglot(char *name, struct ast_variable *
 
 	/* Add a parking extension into the context */
 	if (!error && !oldparkinglot) {
-		if (!ast_strlen_zero(ast_parking_ext())) {
-			if (ast_add_extension2(con, 1, ast_parking_ext(), 1, NULL, NULL, parkcall, strdup(""), ast_free_ptr, registrar) == -1)
+		if (!ast_strlen_zero(parkinglot->parkext)) {
+			if (ast_add_extension2(con, 1, parkinglot->parkext, 1, NULL, NULL, parkcall, strdup(""), ast_free_ptr, registrar) == -1)
 				error = 1;
 		}
 	}
+
+	/* Add parking hints */
+	if (parkinglot->parkaddhints)
+		park_add_hints(parkinglot->parking_con, parkinglot->parking_start, parkinglot->parking_stop);
 
 	ao2_unlock(parkinglot);
 
 	if (error) {
 		ast_log(LOG_WARNING, "Parking %s not open for business. Configuration error.\n", name);
 		parkinglot_destroy(parkinglot);
+		parkinglot_unref(parkinglot);
 		return NULL;
 	}
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Parking %s now open for business. (start exten %d end %d)\n", name, start, end);
-
+	ast_debug(1, "Parking %s now open for business. (start exten %d end %d)\n", name, start, end);
+	parkinglot->the_mark = 0;
 
 	/* Move it into the list, if it wasn't already there */
 	if (!oldparkinglot) {
@@ -4200,26 +4432,6 @@ static struct ast_parkinglot *build_parkinglot(char *name, struct ast_variable *
 	parkinglot_unref(parkinglot);
 
 	return parkinglot;
-}
-
-
-/*! 
- * \brief Add parking hints for all defined parking lots 
- * \param context
- * \param start starting parkinglot number
- * \param stop ending parkinglot number
-*/
-static void park_add_hints(char *context, int start, int stop)
-{
-	int numext;
-	char device[AST_MAX_EXTENSION];
-	char exten[10];
-
-	for (numext = start; numext <= stop; numext++) {
-		snprintf(exten, sizeof(exten), "%d", numext);
-		snprintf(device, sizeof(device), "park:%s@%s", exten, context);
-		ast_add_extension(context, 1, exten, PRIORITY_HINT, NULL, NULL, device, NULL, NULL, registrar);
-	}
 }
 
 static int load_config(void) 
@@ -4232,8 +4444,6 @@ static int load_config(void)
 	struct ast_variable *var = NULL;
 	struct feature_group *fg = NULL;
 	struct ast_flags config_flags = { 0 };
-	char old_parking_ext[AST_MAX_EXTENSION];
-	char old_parking_con[AST_MAX_EXTENSION] = "";
 	char *ctg; 
 	static const char * const categories[] = { 
 		/* Categories in features.conf that are not
@@ -4244,32 +4454,27 @@ static int load_config(void)
 		"applicationmap"
 	};
 
+	default_parkinglot = build_parkinglot(DEFAULT_PARKINGLOT, NULL);
 	if (default_parkinglot) {
-		strcpy(old_parking_con, default_parkinglot->parking_con);
-		strcpy(old_parking_ext, parking_ext);
-	} else {
-		default_parkinglot = build_parkinglot(DEFAULT_PARKINGLOT, NULL);
-		if (default_parkinglot) {
-			ao2_lock(default_parkinglot);
-			default_parkinglot->parking_start = 701;
-			default_parkinglot->parking_stop = 750;
-			default_parkinglot->parking_offset = 0;
-			default_parkinglot->parkfindnext = 0;
-			default_parkinglot->parkingtime = DEFAULT_PARK_TIME;
-			ao2_unlock(default_parkinglot);
-		}
+		ao2_lock(default_parkinglot);
+		ast_copy_string(default_parkinglot->parkext, DEFAULT_PARK_EXTENSION, sizeof(default_parkinglot->parkext));
+		default_parkinglot->parking_start = 701;
+		default_parkinglot->parking_stop = 750;
+		default_parkinglot->parking_offset = 0;
+		default_parkinglot->parkfindnext = 0;
+		default_parkinglot->parkingtime = DEFAULT_PARK_TIME;
+		ao2_unlock(default_parkinglot);
 	}
+	
 	if (default_parkinglot) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Configuration of default parkinglot done.\n");
+		ast_debug(1, "Configuration of default parkinglot done.\n");
 	} else {
 		ast_log(LOG_ERROR, "Configuration of default parkinglot failed.\n");
 		return -1;
 	}
-	
 
 	/* Reset to defaults */
-	strcpy(parking_ext, "700");
+	strcpy(default_parkinglot->parkext, DEFAULT_PARK_EXTENSION);
 	strcpy(pickup_ext, "*8");
 	courtesytone[0] = '\0';
 	strcpy(xfersound, "beep");
@@ -4300,7 +4505,7 @@ static int load_config(void)
 	}
 	for (var = ast_variable_browse(cfg, "general"); var; var = var->next) {
 		if (!strcasecmp(var->name, "parkext")) {
-			ast_copy_string(parking_ext, var->value, sizeof(parking_ext));
+			ast_copy_string(default_parkinglot->parkext, var->value, sizeof(default_parkinglot->parkext));
 		} else if (!strcasecmp(var->name, "context")) {
 			ast_copy_string(default_parkinglot->parking_con, var->value, sizeof(default_parkinglot->parking_con));
 		} else if (!strcasecmp(var->name, "parkingtime")) {
@@ -4380,7 +4585,7 @@ static int load_config(void)
 		} else if (!strcasecmp(var->name, "atxferdropcall")) {
 			atxferdropcall = ast_true(var->value);
 		} else if (!strcasecmp(var->name, "atxfercallbackretries")) {
-			if ((sscanf(var->value, "%30u", &atxferloopdelay) != 1)) {
+			if ((sscanf(var->value, "%30u", &atxfercallbackretries) != 1)) {
 				ast_log(LOG_WARNING, "%s is not a valid atxfercallbackretries\n", var->value);
 				atxfercallbackretries = DEFAULT_ATXFER_CALLBACK_RETRIES;
 			}
@@ -4420,25 +4625,33 @@ static int load_config(void)
 	ast_unregister_features();
 	for (var = ast_variable_browse(cfg, "applicationmap"); var; var = var->next) {
 		char *tmp_val = ast_strdupa(var->value);
-		char *exten, *activateon, *activatedby, *app, *app_args, *moh_class; 
+		char *activateon; 
 		struct ast_call_feature *feature;
+		AST_DECLARE_APP_ARGS(args,
+			AST_APP_ARG(exten);
+			AST_APP_ARG(activatedby);
+			AST_APP_ARG(app);
+			AST_APP_ARG(app_args);
+			AST_APP_ARG(moh_class);
+		);
 
-		/* strsep() sets the argument to NULL if match not found, and it
-		 * is safe to use it with a NULL argument, so we don't check
-		 * between calls.
-		 */
-		exten = strsep(&tmp_val,",");
-		activatedby = strsep(&tmp_val,",");
-		app = strsep(&tmp_val,",");
-		app_args = strsep(&tmp_val,",");
-		moh_class = strsep(&tmp_val,",");
+		AST_STANDARD_APP_ARGS(args, tmp_val);
+		if (strchr(args.app, '(')) {
+			/* New syntax */
+			args.moh_class = args.app_args;
+			args.app_args = strchr(args.app, '(');
+			*args.app_args++ = '\0';
+			if (args.app_args[strlen(args.app_args) - 1] == ')') {
+				args.app_args[strlen(args.app_args) - 1] = '\0';
+			}
+		}
 
-		activateon = strsep(&activatedby, "/");	
+		activateon = strsep(&args.activatedby, "/");	
 
 		/*! \todo XXX var_name or app_args ? */
-		if (ast_strlen_zero(app) || ast_strlen_zero(exten) || ast_strlen_zero(activateon) || ast_strlen_zero(var->name)) {
+		if (ast_strlen_zero(args.app) || ast_strlen_zero(args.exten) || ast_strlen_zero(activateon) || ast_strlen_zero(var->name)) {
 			ast_log(LOG_NOTICE, "Please check the feature Mapping Syntax, either extension, name, or app aren't provided %s %s %s %s\n",
-				app, exten, activateon, var->name);
+				args.app, args.exten, activateon, var->name);
 			continue;
 		}
 
@@ -4450,20 +4663,23 @@ static int load_config(void)
 		}
 		AST_RWLIST_UNLOCK(&feature_list);
 				
-		if (!(feature = ast_calloc(1, sizeof(*feature))))
-			continue;					
+		if (!(feature = ast_calloc(1, sizeof(*feature)))) {
+			continue;
+		}
 
 		ast_copy_string(feature->sname, var->name, FEATURE_SNAME_LEN);
-		ast_copy_string(feature->app, app, FEATURE_APP_LEN);
-		ast_copy_string(feature->exten, exten, FEATURE_EXTEN_LEN);
+		ast_copy_string(feature->app, args.app, FEATURE_APP_LEN);
+		ast_copy_string(feature->exten, args.exten, FEATURE_EXTEN_LEN);
 		
-		if (app_args) 
-			ast_copy_string(feature->app_args, app_args, FEATURE_APP_ARGS_LEN);
+		if (args.app_args) {
+			ast_copy_string(feature->app_args, args.app_args, FEATURE_APP_ARGS_LEN);
+		}
 
-		if (moh_class)
-			ast_copy_string(feature->moh_class, moh_class, FEATURE_MOH_LEN);
-			
-		ast_copy_string(feature->exten, exten, sizeof(feature->exten));
+		if (args.moh_class) {
+			ast_copy_string(feature->moh_class, args.moh_class, FEATURE_MOH_LEN);
+		}
+
+		ast_copy_string(feature->exten, args.exten, sizeof(feature->exten));
 		feature->operation = feature_exec_app;
 		ast_set_flag(feature, AST_FEATURE_FLAG_NEEDSDTMF);
 
@@ -4478,13 +4694,13 @@ static int load_config(void)
 			continue;
 		}
 
-		if (ast_strlen_zero(activatedby))
+		if (ast_strlen_zero(args.activatedby))
 			ast_set_flag(feature, AST_FEATURE_FLAG_BYBOTH);
-		else if (!strcasecmp(activatedby, "caller"))
+		else if (!strcasecmp(args.activatedby, "caller"))
 			ast_set_flag(feature, AST_FEATURE_FLAG_BYCALLER);
-		else if (!strcasecmp(activatedby, "callee"))
+		else if (!strcasecmp(args.activatedby, "callee"))
 			ast_set_flag(feature, AST_FEATURE_FLAG_BYCALLEE);
-		else if (!strcasecmp(activatedby, "both"))
+		else if (!strcasecmp(args.activatedby, "both"))
 			ast_set_flag(feature, AST_FEATURE_FLAG_BYBOTH);
 		else {
 			ast_log(LOG_NOTICE, "Invalid 'ActivatedBy' specification for feature '%s',"
@@ -4493,8 +4709,8 @@ static int load_config(void)
 		}
 
 		ast_register_feature(feature);
-			
-		ast_verb(2, "Mapping Feature '%s' to app '%s(%s)' with code '%s'\n", var->name, app, app_args, exten);
+
+		ast_verb(2, "Mapping Feature '%s' to app '%s(%s)' with code '%s'\n", var->name, args.app, args.app_args, args.exten);
 	}
 
 	ast_unregister_groups();
@@ -4543,22 +4759,15 @@ static int load_config(void)
 
 	ast_config_destroy(cfg);
 
-	/* Remove the old parking extension */
-	if (!ast_strlen_zero(old_parking_con) && (con = ast_context_find(old_parking_con)))	{
-		if(ast_context_remove_extension2(con, old_parking_ext, 1, registrar, 0))
-				notify_metermaids(old_parking_ext, old_parking_con, AST_DEVICE_NOT_INUSE);
-		ast_debug(1, "Removed old parking extension %s@%s\n", old_parking_ext, old_parking_con);
-	}
-	
 	if (!(con = ast_context_find_or_create(NULL, NULL, default_parkinglot->parking_con, registrar))) {
 		ast_log(LOG_ERROR, "Parking context '%s' does not exist and unable to create\n", default_parkinglot->parking_con);
 		return -1;
 	}
-	res = ast_add_extension2(con, 1, ast_parking_ext(), 1, NULL, NULL, parkcall, NULL, NULL, registrar);
+	res = ast_add_extension2(con, 1, default_parkinglot->parkext, 1, NULL, NULL, parkcall, NULL, NULL, registrar);
 	if (default_parkinglot->parkaddhints)
 		park_add_hints(default_parkinglot->parking_con, default_parkinglot->parking_start, default_parkinglot->parking_stop);
 	if (!res)
-		notify_metermaids(ast_parking_ext(), default_parkinglot->parking_con, AST_DEVICE_INUSE);
+		notify_metermaids(default_parkinglot->parkext, default_parkinglot->parking_con, AST_DEVICE_INUSE); 
 	return res;
 
 }
@@ -4615,34 +4824,62 @@ static char *handle_feature_show(struct ast_cli_entry *e, int cmd, struct ast_cl
 		AST_RWLIST_UNLOCK(&feature_list);
 	}
 
-	// loop through all the parking lots
-	iter = ao2_iterator_init(parkinglots, 0);
+	ast_cli(a->fd, "\nFeature Groups:\n");
+	ast_cli(a->fd, "---------------\n");
+	if (AST_RWLIST_EMPTY(&feature_groups)) {
+		ast_cli(a->fd, "(none)\n");
+	} else {
+		struct feature_group *fg;
+		struct feature_group_exten *fge;
 
+		AST_RWLIST_RDLOCK(&feature_groups);
+		AST_RWLIST_TRAVERSE(&feature_groups, fg, entry) {
+			ast_cli(a->fd, "===> Group: %s\n", fg->gname);
+			AST_LIST_TRAVERSE(&fg->features, fge, entry) {
+				ast_cli(a->fd, "===> --> %s (%s)\n", fge->feature->sname, fge->exten);
+			}
+		}
+		AST_RWLIST_UNLOCK(&feature_groups);
+	}
+
+	iter = ao2_iterator_init(parkinglots, 0);
 	while ((curlot = ao2_iterator_next(&iter))) {
 		ast_cli(a->fd, "\nCall parking (Parking lot: %s)\n", curlot->name);
 		ast_cli(a->fd, "------------\n");
-		ast_cli(a->fd,"%-22s:      %s\n", "Parking extension", parking_ext);
+		ast_cli(a->fd,"%-22s:      %s\n", "Parking extension", curlot->parkext);
 		ast_cli(a->fd,"%-22s:      %s\n", "Parking context", curlot->parking_con);
 		ast_cli(a->fd,"%-22s:      %d-%d\n", "Parked call extensions", curlot->parking_start, curlot->parking_stop);
+		ast_cli(a->fd,"%-22s:      %d\n", "Parkingtime", curlot->parkingtime);
+		ast_cli(a->fd,"%-22s:      %s\n", "MusicOnHold class", curlot->mohclass);
 		ast_cli(a->fd,"\n");
 		ao2_ref(curlot, -1);
 	}
-
+	ao2_iterator_destroy(&iter);
 
 	return CLI_SUCCESS;
+}
+
+static int parkinglot_markall_cb(void *obj, void *arg, int flags)
+{
+	struct ast_parkinglot *parkinglot = obj;
+	parkinglot->the_mark = 1;
+	return 0;
+}
+
+static int parkinglot_is_marked_cb(void *obj, void *arg, int flags)
+{
+	struct ast_parkinglot *parkinglot = obj;
+	return parkinglot->the_mark ? CMP_MATCH : 0;
 }
 
 int ast_features_reload(void)
 {
 	int res;
-	/* Release parking lot list */
-	//ASTOBJ_CONTAINER_MARKALL(&parkinglots);
-	// TODO: I don't think any marking is necessary
 
-	/* Reload configuration */
-	res = load_config();
+	ao2_t_callback(parkinglots, OBJ_NODATA, parkinglot_markall_cb, NULL, "callback to mark all parkinglots");
+	res = load_config(); /* Reload configuration */
+	ao2_t_callback(parkinglots, OBJ_NODATA | OBJ_UNLINK, parkinglot_is_marked_cb, NULL, "callback to remove all marked parkinglots");
 	
-	//ASTOBJ_CONTAINER_PRUNE_MARKED(&parkinglots, parkinglot_destroy);
 	return res;
 }
 
@@ -4855,7 +5092,8 @@ static char *handle_parkedcalls(struct ast_cli_entry *e, int cmd, struct ast_cli
 	iter = ao2_iterator_init(parkinglots, 0);
 	while ((curlot = ao2_iterator_next(&iter))) {
 		int lotparked = 0;
-		ast_cli(a->fd, "*** Parking lot: %s\n", curlot->name);
+		/* subtract ref for iterator and for configured parking lot */
+		ast_cli(a->fd, "*** Parking lot: %s (%d)\n", curlot->name, ao2_ref(curlot, 0) - 2);
 
 		AST_LIST_LOCK(&curlot->parkings);
 		AST_LIST_TRAVERSE(&curlot->parkings, cur, list) {
@@ -4921,8 +5159,8 @@ static int manager_parking_status(struct mansession *s, const struct message *m)
 				"\r\n",
 				cur->parkingnum, cur->chan->name, cur->peername,
 				(long) cur->start.tv_sec + (long) (cur->parkingtime / 1000) - (long) time(NULL),
-				S_OR(cur->chan->cid.cid_num, ""),	/* XXX in other places it is <unknown> */
-				S_OR(cur->chan->cid.cid_name, ""),
+				S_COR(cur->chan->caller.id.number.valid, cur->chan->caller.id.number.str, ""),	/* XXX in other places it is <unknown> */
+				S_COR(cur->chan->caller.id.name.valid, cur->chan->caller.id.name.str, ""),
 				idText);
 		}
 		AST_LIST_UNLOCK(&curlot->parkings);
@@ -4951,11 +5189,11 @@ static int manager_park(struct mansession *s, const struct message *m)
 	const char *channel = astman_get_header(m, "Channel");
 	const char *channel2 = astman_get_header(m, "Channel2");
 	const char *timeout = astman_get_header(m, "Timeout");
+	const char *parkinglotname = astman_get_header(m, "Parkinglot");
 	char buf[BUFSIZ];
-	int to = 0;
 	int res = 0;
-	int parkExt = 0;
 	struct ast_channel *ch1, *ch2;
+	struct ast_park_call_args args = {0,};
 
 	if (ast_strlen_zero(channel)) {
 		astman_send_error(s, m, "Channel not specified");
@@ -4980,16 +5218,19 @@ static int manager_park(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
+	if (!ast_strlen_zero(timeout)) {
+		sscanf(timeout, "%30d", &args.timeout);
+	}
+	if (!ast_strlen_zero(parkinglotname)) {
+		args.parkinglot = find_parkinglot(parkinglotname);
+	}
+
 	ast_channel_lock(ch1);
 	while (ast_channel_trylock(ch2)) {
 		CHANNEL_DEADLOCK_AVOIDANCE(ch1);
 	}
 
-	if (!ast_strlen_zero(timeout)) {
-		sscanf(timeout, "%30d", &to);
-	}
-
-	res = ast_masq_park_call(ch1, ch2, to, &parkExt);
+	res = masq_park_call(ch1, ch2, 0, NULL, 0, &args);
 	if (!res) {
 		ast_softhangup(ch2, AST_SOFTHANGUP_EXPLICIT);
 		astman_send_ack(s, m, "Park successful");
@@ -5058,12 +5299,12 @@ int ast_pickup_call(struct ast_channel *chan)
 	connected_caller = cur->connected;
 	connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
 	if (ast_channel_connected_line_macro(NULL, chan, &connected_caller, 0, 0)) {
-		ast_channel_update_connected_line(chan, &connected_caller);
+		ast_channel_update_connected_line(chan, &connected_caller, NULL);
 	}
 
-	ast_party_connected_line_collect_caller(&connected_caller, &chan->cid);
+	ast_party_connected_line_collect_caller(&connected_caller, &chan->caller);
 	connected_caller.source = AST_CONNECTED_LINE_UPDATE_SOURCE_ANSWER;
-	ast_channel_queue_connected_line_update(chan, &connected_caller);
+	ast_channel_queue_connected_line_update(chan, &connected_caller, NULL);
 
 	ast_channel_unlock(cur);
 	ast_channel_unlock(chan);

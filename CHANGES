@@ -1,4 +1,4 @@
-======================================================================
+==============================================================================
 ===
 === This file documents the new and/or enhanced functionality added in
 === the Asterisk versions listed below. This file does NOT include
@@ -6,7 +6,38 @@
 === previous versions; for that information see the UPGRADE.txt file
 === and the other UPGRADE files for older releases.
 ===
-======================================================================
+==============================================================================
+
+------------------------------------------------------------------------------
+--- Functionality changes from Asterisk 1.8 to Asterisk 1.10 -----------------
+------------------------------------------------------------------------------
+
+Asterisk Manager Interface
+--------------------------
+ * PeerStatus now includes Address and Port.
+ * Added Hold events for when the remote party puts the call on and off hold
+   for chan_dahdi ISDN channels.
+
+Asterisk HTTP Server
+--------------------------
+ * The HTTP Server can bind to IPv6 addresses.
+
+CLI Changes
+--------------------------
+ * New 'gtalk show settings' command showing the current settings loaded from
+   gtalk.conf.
+ * The 'logger reload' command now supports an optional argument, specifying an
+   alternate configuration file to use.
+
+CDR
+--------------------------
+ * The filter option in cdr_adaptive_odbc now supports negating the argument,
+   thus allowing records which do NOT match the specified filter.
+
+libpri channel driver (chan_dahdi) DAHDI changes
+--------------------------
+ * Added moh_signaling option to specify what to do when the channel's bridged
+   peer puts the ISDN channel on hold.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.8 ----------------
@@ -56,11 +87,40 @@ SIP Changes
  * Added 'use_q850_reason' configuration option for generating and parsing
    if available  Reason: Q.850;cause=<cause code> header. It is implemented
    in some gateways for better passing PRI/SS7 cause codes via SIP.
+ * When dialing SIP peers, a new component may be added to the end of the dialstring
+   to indicate that a specific remote IP address or host should be used when dialing
+   the particular peer. The dialstring format is SIP/peer/exten/host_or_IP.
+ * SRTP SDES support for encrypting calls to/from Asterisk over SIP. The
+   ability to selectively force bridged channels to also be encrypted is also
+   implemented. Branching in the dialplan can be done based on whether or not
+   a channel has secure media and/or signaling.
+ * Added directmediapermit/directmediadeny to limit which peers can send direct media
+   to each other
+ * Added the 'snom_aoc_enabled' option to turn on support for sending Advice of
+   Charge messages to snom phones.
+ * Added support for G.719 media streams.
+ * Added support for 16khz signed linear media streams.
+ * SIP is now able to bind to and communicate with IPv6 addresses. In addition,
+   RTP has been outfitted with the same abilities.
+ * Added support for setting the Max-Forwards: header in SIP requests. Setting is
+   available in device configurations as well as in the dial plan.
+ * Addition of the 'subscribe_network_change' option for turning on and off
+   res_stun_monitor module support in chan_sip.
+ * Addition of the 'auth_options_requests' option for turning on and off
+   authentication for OPTIONS requests in chan_sip.
+
 
 IAX2 Changes
 -----------
  * Added rtsavesysname option into iax.conf to allow the systname to be saved
    on realtime updates.
+ * Added the ability for chan_iax2 to inform the dialplan whether or not
+   encryption is being used. This interoperates with the SIP SRTP implementation
+   so that a secure SIP call can be bridged to a secure IAX call when the
+   dialplan requires bridged channels to be "secure".
+ * Addition of the 'subscribe_network_change' option for turning on and off
+   res_stun_monitor module support in chan_iax.
+
 
 MGCP Changes
 ------------
@@ -70,16 +130,16 @@ MGCP Changes
  * PacketCable NCS 1.0 support has been added for Docsis/Eurodocsis Networks.
    See configs/res_pktccops.conf for more information.
 
+XMPP Google Talk/Jingle changes
+-------------------------------
+  * Added the externip option to gtalk.conf.
+  * Added the stunaddr option to gtalk.conf which allows for the automatic
+    retrieval of the external ip from a stun server.
+
 Applications
 ------------
  * Added 'p' option to PickupChan() to allow for picking up channel by the first
    match to a partial channel name.
- * Added "ready" option to QUEUE_MEMBER counting to count free agents who's wrap-up
-   timeout has expired.
- * Added 'R' option to app_queue.  This option stops moh and indicates ringing
-   to the caller when an Agent's phone is ringing.  This can be used to indicate
-   to the caller that their call is about to be picked up, which is nice when
-   one has been on hold for an extened period of time.
  * Added .m3u support for Mp3Player application.
  * Added progress option to the app_dial D() option.  When progress DTMF is
    present, those values are sent immediately upon receiving a PROGRESS message
@@ -121,6 +181,7 @@ Applications
  * Voicemail now supports per mailbox settings for folders when using IMAP storage.
    Previously the folder could only be set per context, but has now been extended 
    using the imapfolder option.
+ * Voicemail now supports per mailbox settings for nextaftercmd and minsecs.
  * Voicemail now allows the pager date format to be specified separately from the
    email date format.
  * New applications JabberJoin, JabberLeave, and JabberSendGroup have been added
@@ -140,25 +201,33 @@ Applications
    type features.
  * Added new application VMSayName that will play the recorded name of the voicemail
    user if it exists, otherwise will play the mailbox number.
+ * Added custom device states to ConfBridge bridges.  Use 'confbridge:<name>' to
+   retrieve state for a particular bridge, where <name> is the conference name
+ * app_directory now allows exiting at any time using the operator or pound key.
+ * Voicemail now supports setting a locale per-mailbox.
+ * Two new applications are provided for declining counting phrases in multiple
+   languages.  See the application notes for SayCountedNoun and SayCountedAdj for
+   more information.
+ * Voicemail now runs the externnotify script when pollmailboxes is activated and
+   notices a change.
+ * Voicemail now includes rdnis within msgXXXX.txt file.
+ * Added 'D' command to ExternalIVR full details in doc/externalivr.txt
+ * Added 'v' option to MeetMe to play voicemail greetings when a user joins/leaves
+   a MeetMe conference
 
 Dialplan Functions
 ------------------
+ * SRVQUERY and SRVRESULT functions added. This can be used to query and iterate
+   over SRV records associated with a specific service. From the CLI, type
+   'core show function SRVQUERY' and 'core show function SRVRESULT' for more
+   details on how these may be used.
  * PITCH_SHIFT dialplan function added. This function can be used to modify the
    pitch of a channel's tx and rx audio streams.
  * Added new dialplan functions CONNECTEDLINE and REDIRECTING which permits
    setting various connected line and redirecting party information.
  * CALLERID and CONNECTEDLINE dialplan functions have been extended to
    support ISDN subaddressing.
- * The CHANNEL() function now supports the "name" option.
- * For DAHDI channels, the CHANNEL() dialplan function now
-   supports changing the channel's buffer policy (for the current
-   call only), using this syntax:
-
-   exten => s,n,Set(CHANNEL(buffers)=6,full)
-
-   This would change the channel to the 'full' buffer policy and
-   6 (six) buffers. Possible options for this setting are the same
-   as those in chan_dahdi.conf.
+ * The CHANNEL() function now supports the "name" and "checkhangup" options.
  * For DAHDI channels, the CHANNEL() dialplan function now allows
    the dialplan to request changes in the configuration of the active
    echo canceller on the channel (if any), for the current call only.
@@ -198,6 +267,21 @@ Dialplan Functions
    prefixing the name of the hash at assignment with the appropriate number of
    underscores, just like variables.
  * GROUP_MATCH_COUNT has been improved to allow regex matching on category
+ * CHANNEL(secure_bridge_signaling) and CHANNEL(secure_bridge_media) to set/get
+   whether or not channels that are bridged to the current channel will be
+   required to have secure signaling and/or media.
+ * CHANNEL(secure_signaling) and CHANNEL(secure_media) to get whether or not
+   the current channel has secure signaling and/or media.
+ * For DAHDI/ISDN channels, the CHANNEL() dialplan function now supports the
+   "no_media_path" option.
+   Returns "0" if there is a B channel associated with the call.
+   Returns "1" if no B channel is associated with the call.  The call is either
+   on hold or is a call waiting call.
+ * Added option to dialplan function CDR(), the 'f' option
+   allows for high resolution times for billsec and duration fields.
+ * FILE() now supports line-mode and writing.
+ * Added FIELDNUM(), which returns the 1-based offset of a field in a list.
+ * FRAME_TRACE(), for tracking internal ast_frames on a channel.
 
 Dialplan Variables
 ------------------
@@ -216,53 +300,69 @@ Dialplan Variables
 
 Queue changes
 -------------
-  * A new config option, penaltymemberslimit, has been added to queues.conf.
-    When set this option will disregard penalty settings when a queue has too
-    few members.
-  * A new option, 'I' has been added to both app_queue and app_dial.
-    By setting this option, Asterisk will not update the caller with
-    connected line changes or redirecting party changes when they occur.
-  * A 'relative-peroidic-announce' option has been added to queues.conf.  When
-    enabled, this option will cause periodic announce times to be calculated
-    from the end of announcements rather than from the beginning.
+ * Added "ready" option to QUEUE_MEMBER counting to count free agents whose wrap-up
+   timeout has expired.
+ * Added 'R' option to app_queue.  This option stops moh and indicates ringing
+   to the caller when an Agent's phone is ringing.  This can be used to indicate
+   to the caller that their call is about to be picked up, which is nice when
+   one has been on hold for an extened period of time.
+ * A new config option, penaltymemberslimit, has been added to queues.conf.
+   When set this option will disregard penalty settings when a queue has too
+   few members.
+ * A new option, 'I' has been added to both app_queue and app_dial.
+   By setting this option, Asterisk will not update the caller with
+   connected line changes or redirecting party changes when they occur.
+ * A 'relative-peroidic-announce' option has been added to queues.conf.  When
+   enabled, this option will cause periodic announce times to be calculated
+   from the end of announcements rather than from the beginning.
+ * The autopause option in queues.conf can be passed a new value, "all." The
+   result is that if a member becomes auto-paused, he will be paused in all
+   queues for which he is a member, not just the queue that failed to reach
+   the member.
+ * Added dialplan function QUEUE_EXISTS to check if a queue exists
+ * The queue logger now allows events to optionally propagate to a file,
+   even when realtime logging is turned on.  Additionally, realtime logging
+   supports sending the event arguments to 5 individual fields, although it
+   will fallback to the previous data definition, if the new table layout is
+   not found.
 
 mISDN channel driver (chan_misdn) changes
 ----------------------------------------
-  * Added display_connected parameter to misdn.conf to put a display string
-    in the CONNECT message containing the connected name and/or number if
-    the presentation setting permits it.
-  * Added display_setup parameter to misdn.conf to put a display string
-    in the SETUP message containing the caller name and/or number if the
-    presentation setting permits it.
-  * Made misdn.conf parameters localdialplan and cpndialplan take a -1 to
-    indicate the dialplan settings are to be obtained from the asterisk
-    channel.
-  * Made misdn.conf parameter callerid accept the "name" <number> format
-    used by the rest of the system.
-  * Made use the nationalprefix and internationalprefix misdn.conf
-    parameters to prefix any received number from the ISDN link if that
-    number has the corresponding Type-Of-Number.  NOTE:  This includes
-    comparing the incoming call's dialed number against the MSN list.
-  * Added the following new parameters: unknownprefix, netspecificprefix,
-    subscriberprefix, and abbreviatedprefix in misdn.conf to prefix any
-    received number from the ISDN link if that number has the corresponding
-    Type-Of-Number.
-  * Added new dialplan application misdn_command which permits controlling
-    the CCBS/CCNR functionality.
-  * Added new dialplan function mISDN_CC which permits retrieval of various
-    values from an active call completion record.
-  * For PTP, you should manually send the COLR of the redirected-to party
-    for an incomming redirected call if the incoming call could experience
-    further redirects.  Just set the REDIRECTING(to-num,i) = ${EXTEN} and
-    set the REDIRECTING(to-pres) to the COLR.  A call has been redirected
-    if the REDIRECTING(from-num) is not empty.
-  * For outgoing PTP redirected calls, you now need to use the inhibit(i)
-    option on all of the REDIRECTING statements before dialing the
-    redirected-to party.  You still have to set the REDIRECTING(to-xxx,i)
-    and the REDIRECTING(from-xxx,i) values.  The PTP call will update the
-    redirecting-to presentation (COLR) when it becomes available.
-  * Added outgoing_colp parameter to misdn.conf to filter outgoing COLP
-    information.
+ * Added display_connected parameter to misdn.conf to put a display string
+   in the CONNECT message containing the connected name and/or number if
+   the presentation setting permits it.
+ * Added display_setup parameter to misdn.conf to put a display string
+   in the SETUP message containing the caller name and/or number if the
+   presentation setting permits it.
+ * Made misdn.conf parameters localdialplan and cpndialplan take a -1 to
+   indicate the dialplan settings are to be obtained from the asterisk
+   channel.
+ * Made misdn.conf parameter callerid accept the "name" <number> format
+   used by the rest of the system.
+ * Made use the nationalprefix and internationalprefix misdn.conf
+   parameters to prefix any received number from the ISDN link if that
+   number has the corresponding Type-Of-Number.  NOTE:  This includes
+   comparing the incoming call's dialed number against the MSN list.
+ * Added the following new parameters: unknownprefix, netspecificprefix,
+   subscriberprefix, and abbreviatedprefix in misdn.conf to prefix any
+   received number from the ISDN link if that number has the corresponding
+   Type-Of-Number.
+ * Added new dialplan application misdn_command which permits controlling
+   the CCBS/CCNR functionality.
+ * Added new dialplan function mISDN_CC which permits retrieval of various
+   values from an active call completion record.
+ * For PTP, you should manually send the COLR of the redirected-to party
+   for an incomming redirected call if the incoming call could experience
+   further redirects.  Just set the REDIRECTING(to-num,i) = ${EXTEN} and
+   set the REDIRECTING(to-pres) to the COLR.  A call has been redirected
+   if the REDIRECTING(from-num) is not empty.
+ * For outgoing PTP redirected calls, you now need to use the inhibit(i)
+   option on all of the REDIRECTING statements before dialing the
+   redirected-to party.  You still have to set the REDIRECTING(to-xxx,i)
+   and the REDIRECTING(from-xxx,i) values.  The PTP call will update the
+   redirecting-to presentation (COLR) when it becomes available.
+ * Added outgoing_colp parameter to misdn.conf to filter outgoing COLP
+   information.
 
 thirdparty mISDN enhancements
 -----------------------------
@@ -323,6 +423,15 @@ libpri channel driver (chan_dahdi) DAHDI changes
    dialing option.  Dial(DAHDI/g1/[extension]/K(<keypad_digits>))
    Access any received keypad digits in SETUP message by: ${CHANNEL(keypad_digits)}
    (requires latest LibPRI)
+ * Added ability to send and receive ETSI Explicit Call Transfer (ECT) messages
+   to eliminate tromboned calls.  A tromboned call goes out an interface and comes
+   back into the same interface.  Tromboned calls happen because of call routing,
+   call deflection, call forwarding, and call transfer.
+ * Added the ability to send and receive ETSI Advice-Of-Charge messages. 
+ * Added the ability to support call waiting calls.  (The SETUP has no B channel
+   assigned.)
+ * Added Malicious Call ID (MCID) event to the AMI call event class.
+ * Added Message Waiting Indication (MWI) support for ISDN PTMP endpoints (phones).
 
 Asterisk Manager Interface
 --------------------------
@@ -347,6 +456,19 @@ Asterisk Manager Interface
    location than the first.
  * Added new event "JabberStatus" in the Jabber module to monitor buddies
    status.
+ * Added a "MixMonitorMute" AMI action for muting inbound and/or outbound audio
+   in a MixMonitor recording.
+ * The 'iax2 show peers' output is now similar to the expected output of
+   'sip show peers'.
+ * Added Advice-Of-Charge events (AOC-S, AOC-D, and AOC-E) in the new
+   aoc event class.
+ * Added Advice-Of-Charge manager action, AOCMessage, for generating AOC-D and
+   AOC-E messages on a channel.
+ * A DBGetComplete event now follows a DBGetResponse, to make the DBGet action
+   conform more closely to similar events.
+ * Added a new eventfilter option per user to allow whitelisting and blacklisting
+   of events.
+ * Added optional parkinglot variable for park command.
 
 Channel Event Logging
 ---------------------
@@ -362,20 +484,32 @@ CDR
 ---
  * 'linkedid' and 'peeraccount' are new CDR fields available to CDR aficionados.
    linkedid is based on uniqueID, but spreads to other channels as transfers, dials,
-   etc are performed. Thus the peices of CDR can be grouped into multilegged sets.
+   etc are performed. Thus the pieces of CDR can be grouped into multilegged sets.
  * Multiple files and formats can now be specified in cdr_custom.conf.
  * cdr_syslog has been added which allows CDRs to be written directly to syslog.
    See configs/cdr_syslog.conf.sample for more information.
  * A 'sequence' field has been added to CDRs which can be combined with
    linkedid or uniqueid to uniquely identify a CDR.
+ * Handling of billsec and duration field has changed. If your table definition
+   specifies those fields as float,double or similar they will now be logged with
+   microsecond accuracy instead of a whole integer.
 
 Calendaring for Asterisk
 ------------------------
  * A new set of modules were added supporing calendar integration with Asterisk.
    Dialplan functions for reading from and writing to calendars are included,
    as well as the ability to execute dialplan logic upon calendar event notifications.
-   iCalendar, CalDAV, and Exchange Server calendars are supported (Exchange support
-   only tested on Exchange Server 2003 with no support for forms-based authentication).
+   iCalendar, CalDAV, and Exchange Server calendars (via res_calendar_exchange for
+   Exchange Server 2003 with no write or attendee support, and res_calendar_ews for
+   Exchange Server 2007+ with full write and attendee support) are supported (Exchange
+   2003 support does not support forms-based authentication).
+
+Call Completion Supplementary Services for Asterisk
+---------------------------------------------------
+ * Call completion support has been added for SIP, DAHDI/ISDN, and DAHDI/analog.
+   DAHDI/ISDN supports call completion for the following switch types:
+   EuroIsdn(ETSI) for PTP and PTMP modes, and Qsig.
+   See doc/CCSS_architecture.pdf and doc/tex/ccss.tex(asterisk.pdf) for details.
 
 Multicast RTP Support
 ---------------------
@@ -401,6 +535,15 @@ Fax
  * A spandsp based fax backend (res_fax_spandsp) has been added.
  * The app_fax module has been deprecated in favor of the res_fax module and
    the new res_fax_spandsp backend.
+ * The SendFAX and ReceiveFAX applications now send their log messages to a
+   'fax' logger level, instead of to the generic logger levels. To see these
+   messages, the system's logger.conf file will need to direct the 'fax' logger
+   level to one or more destinations; the logger.conf.sample file includes an
+   example of how to do this. Note that if the 'fax' logger level is *not*
+   directed to at least one destination, log messages generated by these
+   applications will be lost, and that if the 'fax' logger level is directed to
+   the console, the 'core set verbose' and 'core set debug' CLI commands will
+   have no effect on whether the messages appear on the console or not.
 
 Miscellaneous
 -------------
@@ -425,6 +568,43 @@ Miscellaneous
    of dynamic parkinglots.
  * chan_dahdi now supports reporting alarms over AMI either by channel or span via
    the reportalarms config option.
+ * chan_dahdi supports dialing configuring and dialing by device file name.
+   DAHDI/span-name!local!1 will use /dev/dahdi/span-name/local/1 . Likewise
+   it may appear in chan_dahdi.conf as 'channel => span-name!local!1'.
+ * A new options for chan_dahdi.conf: 'ignore_failed_channels'. Boolean.
+   False by default. If set, chan_dahdi will ignore failed 'channel' entries.
+   Handy for the above name-based syntax as it does not depend on
+   initialization order.
+ * The Realtime dialplan switch now caches entries for 1 second.  This provides a
+   significant increase in performance (about 3X) for installations using this switchtype.
+ * Distributed devicestate now supports the use of the XMPP protocol, in addition to
+   AIS.  For more information, please see doc/distributed_devstate-XMPP.txt
+ * The addition of G.719 pass-through support.
+ * Added support for 16khz Speex audio.  This can be enabled by using 'allow=speex16'
+   during device configuration.
+ * The UNISTIM channel driver (chan_unistim) has been updated to support devices that
+   have less than 3 lines on the LCD.
+ * Realtime now supports database failover.  See the sample extconfig.conf for details.
+ * The addition of improved translation path building for wideband codecs.  Sample
+   rate changes during translation are now avoided unless absolutely necessary.
+ * The addition of the res_stun_monitor module for monitoring and reacting to network
+   changes while behind a NAT.
+
+CLI Changes
+-----------
+ * The 'core set debug' and 'core set verbose' commands, in previous versions, could
+   optionally accept a filename, to apply the setting only to the code generated from
+   that source file when Asterisk was built. However, there are some modules in Asterisk
+   that are composed of multiple source files, so this did not result in the behavior
+   that users expected. In this version, 'core set debug' and 'core set verbose'
+   can optionally accept *module* names instead (with or without the .so extension),
+   which applies the setting to the entire module specified, regardless of which source
+   files it was built from.
+ * New 'manager show settings' command showing the current settings loaded from
+   manager.conf. 
+ * Added 'all' keyword to the CLI command "channel request hangup" so that you can send
+   the channel hangup request to all channels.
+ * Added a "core reload" CLI command that executes a global reload of Asterisk.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.1 to Asterisk 1.6.2  -------------
@@ -494,6 +674,15 @@ DAHDI Changes
 
 Dialplan Functions
 ------------------
+ * For DAHDI channels, the CHANNEL() dialplan function now
+   supports changing the channel's buffer policy (for the current
+   call only), using this syntax:
+
+   exten => s,n,Set(CHANNEL(buffers)=6,full)
+
+   This would change the channel to the 'full' buffer policy and
+   6 (six) buffers. Possible options for this setting are the same
+   as those in chan_dahdi.conf.
  * Added a new dialplan function, CURLOPT, which permits setting various
    options that may be useful with the CURL dialplan function, such as
    cookies, proxies, connection timeouts, passwords, etc.
@@ -568,6 +757,12 @@ Miscellaneous
    This means the asterisk pid file will now be in /var/run/asterisk/asterisk.pid on LINUX
    instead of the /var/run/asterisk.pid where it used to be. This will make
    installs as non-root easier to manage.
+
+CDR
+---
+
+* The cdr.conf file must exist and be correctly programmed in order for CDR records to
+  be written; they will no longer be explicitly written.
 
 Asterisk Manager Interface
 --------------------------
@@ -751,6 +946,10 @@ IAX Changes
 
 CLI Changes
 -----------
+  * New CLI command, "data get <path> [<search> [<filter>]]" which retrieves the
+     data tree based on the given <path>.
+  * New CLI command "data show providers" that will display all the registered
+     callbacks.
   * New CLI command, "config reload <file.conf>" which reloads any module that
      references that particular configuration file.  Also added "config list"
      which shows which configuration files are in use.
@@ -947,10 +1146,6 @@ SIP changes
     option is enabled, Asterisk will watch for a CNG tone in the incoming audio
     for a received call.  If it is detected, the channel will jump to the 
     'fax' extension in the dialplan.
-  * Improved NAT and STUN support.
-     chan_sip now can use port numbers in bindaddr, externip and externhost
-     options, as well as contact a STUN server to detect its external address
-     for the SIP socket. See sip.conf.sample, 'NAT' section.
   * The default SIP useragent= identifier now includes the Asterisk version
   * A new option, match_auth_username in sip.conf changes the matching of incoming requests.
      If set, and the incoming request carries authentication info,
@@ -1104,6 +1299,7 @@ DUNDi changes
   * Added two new dialplan functions, DUNDIQUERY and DUNDIRESULT.  These
      functions will allow you to initiate a DUNDi query from the dialplan,
      find out how many results there are, and access each one.
+  * Added the ability to specifiy a port for a dundi peer.
 
 ENUM changes
 ------------
@@ -1240,6 +1436,8 @@ MeetMe Changes
      conference when there is only one member and the M option is used.
   * Added MEETME_INFO dialplan function which provides a way to query
      various properties of a Meetme conference.
+  * Added new admin features: *81: Roll call, *82: eject all, *83: mute all, 
+     and *84: record in-conf
 
 Other Dialplan Application Changes
 ----------------------------------
@@ -1350,6 +1548,8 @@ Call Features (res_features) Changes
   * Added cli command 'features reload' to reload call features from features.conf
   * Moved into core asterisk binary.
   * Changed the default setting for featuredigittimeout to 2000 ms from 500 ms.
+  * Added the ability for custom parking lots to be configured with their own
+    parking extension with the parkext option.
 
 Language Support Changes
 ------------------------
@@ -1359,7 +1559,7 @@ Language Support Changes
 AGI Changes
 -----------
   * Added SPEECH commands for speech recognition. A complete listing can be found
-     using agi show.
+    using agi show.
   * If app_stack is loaded, GOSUB is a native AGI command that may be used to
     invoke subroutines in the dialplan.  Note that calling EXEC with Gosub
     does not behave as expected; the native command needs to be used, instead.
@@ -1368,6 +1568,7 @@ AGI Changes
     of the URI parameter to the AGI function call in your dial plan. Also note
     that specifying a port number in the AGI URI will disable SRV lookups,
     even if you use the hagi: protocol.
+  * No longer support MSG_OOB flag on HANGUP.
 
 Logger changes
 --------------

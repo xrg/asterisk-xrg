@@ -47,7 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #ifdef __linux
 #include <linux/soundcard.h>
-#elif defined(__FreeBSD__) || defined(__CYGWIN__)
+#elif defined(__FreeBSD__) || defined(__CYGWIN__) || defined(__GLIBC__)
 #include <sys/soundcard.h>
 #else
 #include <soundcard.h>
@@ -601,7 +601,12 @@ static int oss_call(struct ast_channel *c, char *dest, int timeout)
 
 	AST_NONSTANDARD_APP_ARGS(args, parse, '/');
 
-	ast_verbose(" << Call to device '%s' dnid '%s' rdnis '%s' on console from '%s' <%s> >>\n", dest, c->cid.cid_dnid, c->cid.cid_rdnis, c->cid.cid_name, c->cid.cid_num);
+	ast_verbose(" << Call to device '%s' dnid '%s' rdnis '%s' on console from '%s' <%s> >>\n",
+		dest,
+		S_OR(c->dialed.number.str, ""),
+		S_COR(c->redirecting.from.number.valid, c->redirecting.from.number.str, ""),
+		S_COR(c->caller.id.name.valid, c->caller.id.name.str, ""),
+		S_COR(c->caller.id.number.valid, c->caller.id.number.str, ""));
 	if (!ast_strlen_zero(args.flags) && strcasecmp(args.flags, "answer") == 0) {
 		f.subclass.integer = AST_CONTROL_ANSWER;
 		ast_queue_frame(c, &f);
@@ -802,9 +807,13 @@ static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx,
 		ast_string_field_set(c, language, o->language);
 	/* Don't use ast_set_callerid() here because it will
 	 * generate a needless NewCallerID event */
-	c->cid.cid_ani = ast_strdup(o->cid_num);
-	if (!ast_strlen_zero(ext))
-		c->cid.cid_dnid = ast_strdup(ext);
+	if (!ast_strlen_zero(o->cid_num)) {
+		c->caller.ani.number.valid = 1;
+		c->caller.ani.number.str = ast_strdup(o->cid_num);
+	}
+	if (!ast_strlen_zero(ext)) {
+		c->dialed.number.str = ast_strdup(ext);
+	}
 
 	o->owner = c;
 	ast_module_ref(ast_module_info->self);
@@ -1180,9 +1189,10 @@ static char *console_transfer(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 	tmp = ast_ext_ctx(a->argv[2], &ext, &ctx);
 	if (ctx == NULL)			/* supply default context if needed */
 		ctx = o->owner->context;
-	if (!ast_exists_extension(b, ctx, ext, 1, b->cid.cid_num))
+	if (!ast_exists_extension(b, ctx, ext, 1,
+		S_COR(b->caller.id.number.valid, b->caller.id.number.str, NULL))) {
 		ast_cli(a->fd, "No such extension exists\n");
-	else {
+	} else {
 		ast_cli(a->fd, "Whee, transferring %s to %s@%s.\n", b->name, ext, ctx);
 		if (ast_async_goto(b, ctx, ext, 1))
 			ast_cli(a->fd, "Failed to transfer :(\n");
@@ -1457,7 +1467,7 @@ static int load_module(void)
 
 	if (ast_channel_register(&oss_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel type 'OSS'\n");
-		return AST_MODULE_LOAD_FAILURE;
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	ast_cli_register_multiple(cli_oss, ARRAY_LEN(cli_oss));

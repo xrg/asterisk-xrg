@@ -137,7 +137,7 @@ static char gatekeeper[100];
 static int gatekeeper_disable = 1;
 static int gatekeeper_discover = 0;
 static int gkroute = 0;
-/* Find user by alias (h.323 id) is default, alternative is the incomming call's source IP address*/
+/* Find user by alias (h.323 id) is default, alternative is the incoming call's source IP address*/
 static int userbyalias = 1;
 static int acceptAnonymous = 1;
 static unsigned int tos = 0;
@@ -205,7 +205,7 @@ static struct h323_alias_list {
 } aliasl;
 
 /* Asterisk RTP stuff */
-static struct sched_context *sched;
+static struct ast_sched_context *sched;
 static struct io_context *io;
 
 AST_MUTEX_DEFINE_STATIC(iflock);	/*!< Protect the interface list (oh323_pvt) */
@@ -306,7 +306,7 @@ static int oh323_simulate_dtmf_end(const void *data)
 	if (pvt) {
 		ast_mutex_lock(&pvt->lock);
 		/* Don't hold pvt lock while trying to lock the channel */
-		while(pvt->owner && ast_channel_trylock(pvt->owner)) {
+		while (pvt->owner && ast_channel_trylock(pvt->owner)) {
 			DEADLOCK_AVOIDANCE(&pvt->lock);
 		}
 
@@ -609,18 +609,20 @@ static int oh323_call(struct ast_channel *c, char *dest, int timeout)
 	/* make sure null terminated */
 	called_addr[sizeof(called_addr) - 1] = '\0';
 
-	if (c->connected.id.number)
-		ast_copy_string(pvt->options.cid_num, c->connected.id.number, sizeof(pvt->options.cid_num));
-
-	if (c->connected.id.name)
-		ast_copy_string(pvt->options.cid_name, c->connected.id.name, sizeof(pvt->options.cid_name));
-
-	if (c->cid.cid_rdnis) {
-		ast_copy_string(pvt->options.cid_rdnis, c->cid.cid_rdnis, sizeof(pvt->options.cid_rdnis));
+	if (c->connected.id.number.valid && c->connected.id.number.str) {
+		ast_copy_string(pvt->options.cid_num, c->connected.id.number.str, sizeof(pvt->options.cid_num));
 	}
 
-	pvt->options.presentation = c->connected.id.number_presentation;
-	pvt->options.type_of_number = c->connected.id.number_type;
+	if (c->connected.id.name.valid && c->connected.id.name.str) {
+		ast_copy_string(pvt->options.cid_name, c->connected.id.name.str, sizeof(pvt->options.cid_name));
+	}
+
+	if (c->redirecting.from.number.valid && c->redirecting.from.number.str) {
+		ast_copy_string(pvt->options.cid_rdnis, c->redirecting.from.number.str, sizeof(pvt->options.cid_rdnis));
+	}
+
+	pvt->options.presentation = ast_party_id_presentation(&c->connected.id);
+	pvt->options.type_of_number = c->connected.id.number.plan;
 
 	if ((addr = pbx_builtin_getvar_helper(c, "PRIREDIRECTREASON"))) {
 		if (!strcasecmp(addr, "UNKNOWN"))
@@ -914,7 +916,11 @@ static int oh323_indicate(struct ast_channel *c, int condition, const void *data
 		res = 0;
 		break;
 	case AST_CONTROL_SRCUPDATE:
-		ast_rtp_instance_new_source(pvt->rtp);
+		ast_rtp_instance_update_source(pvt->rtp);
+		res = 0;
+		break;
+	case AST_CONTROL_SRCCHANGE:
+		ast_rtp_instance_change_source(pvt->rtp);
 		res = 0;
 		break;
 	case AST_CONTROL_PROCEEDING:
@@ -950,15 +956,20 @@ static int oh323_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 
 static int __oh323_rtp_create(struct oh323_pvt *pvt)
 {
-	struct sockaddr_in our_addr;
+	struct ast_sockaddr our_addr;
 
 	if (pvt->rtp)
 		return 0;
 
-	if (ast_find_ourip(&our_addr.sin_addr, bindaddr)) {
-		ast_mutex_unlock(&pvt->lock);
-		ast_log(LOG_ERROR, "Unable to locate local IP address for RTP stream\n");
-		return -1;
+	{
+		struct ast_sockaddr tmp;
+
+		ast_sockaddr_from_sin(&tmp, &bindaddr);
+		if (ast_find_ourip(&our_addr, &tmp, AF_INET)) {
+			ast_mutex_unlock(&pvt->lock);
+			ast_log(LOG_ERROR, "Unable to locate local IP address for RTP stream\n");
+			return -1;
+		}
 	}
 	pvt->rtp = ast_rtp_instance_new("asterisk", sched, &our_addr, NULL);
 	if (!pvt->rtp) {
@@ -1071,17 +1082,22 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 
 		/* Don't use ast_set_callerid() here because it will
 		 * generate a needless NewCallerID event */
-		ch->cid.cid_ani = ast_strdup(cid_num);
+		if (!ast_strlen_zero(cid_num)) {
+			ch->caller.ani.number.valid = 1;
+			ch->caller.ani.number.str = ast_strdup(cid_num);
+		}
 
 		if (pvt->cd.redirect_reason >= 0) {
-			ch->cid.cid_rdnis = ast_strdup(pvt->cd.redirect_number);
+			ch->redirecting.from.number.valid = 1;
+			ch->redirecting.from.number.str = ast_strdup(pvt->cd.redirect_number);
 			pbx_builtin_setvar_helper(ch, "PRIREDIRECTREASON", redirectingreason2str(pvt->cd.redirect_reason));
 		}
-		ch->cid.cid_pres = pvt->cd.presentation;
-		ch->cid.cid_ton = pvt->cd.type_of_number;
+		ch->caller.id.name.presentation = pvt->cd.presentation;
+		ch->caller.id.number.presentation = pvt->cd.presentation;
+		ch->caller.id.number.plan = pvt->cd.type_of_number;
 
 		if (!ast_strlen_zero(pvt->exten) && strcmp(pvt->exten, "s")) {
-			ch->cid.cid_dnid = ast_strdup(pvt->exten);
+			ch->dialed.number.str = ast_strdup(pvt->exten);
 		}
 		if (pvt->cd.transfer_capability >= 0)
 			ch->transfercapability = pvt->cd.transfer_capability;
@@ -1404,9 +1420,14 @@ static struct oh323_user *build_user(const char *name, struct ast_variable *v, s
 				ast_log(LOG_ERROR, "A dynamic host on a type=user does not make any sense\n");
 				ASTOBJ_UNREF(user, oh323_destroy_user);
 				return NULL;
-			} else if (ast_get_ip(&user->addr, v->value)) {
-				ASTOBJ_UNREF(user, oh323_destroy_user);
-				return NULL;
+			} else {
+				struct ast_sockaddr tmp;
+
+				if (ast_get_ip(&tmp, v->value)) {
+					ASTOBJ_UNREF(user, oh323_destroy_user);
+					return NULL;
+				}
+				ast_sockaddr_to_sin(&tmp, &user->addr);
 			}
 			/* Let us know we need to use ip authentication */
 			user->host = 1;
@@ -1518,10 +1539,15 @@ static struct oh323_peer *build_peer(const char *name, struct ast_variable *v, s
 				ASTOBJ_UNREF(peer, oh323_destroy_peer);
 				return NULL;
 			}
-			if (ast_get_ip(&peer->addr, v->value)) {
-				ast_log(LOG_ERROR, "Could not determine IP for %s\n", v->value);
-				ASTOBJ_UNREF(peer, oh323_destroy_peer);
-				return NULL;
+			{
+				struct ast_sockaddr tmp;
+
+				if (ast_get_ip(&tmp, v->value)) {
+					ast_log(LOG_ERROR, "Could not determine IP for %s\n", v->value);
+					ASTOBJ_UNREF(peer, oh323_destroy_peer);
+					return NULL;
+				}
+				ast_sockaddr_to_sin(&tmp, &peer->addr);
 			}
 		} else if (!strcasecmp(v->name, "port")) {
 			peer->addr.sin_port = htons(atoi(v->value));
@@ -1918,7 +1944,12 @@ static struct rtp_info *external_rtp_create(unsigned call_reference, const char 
 		return NULL;
 	}
 	/* figure out our local RTP port and tell the H.323 stack about it */
-	ast_rtp_instance_get_local_address(pvt->rtp, &us);
+	{
+		struct ast_sockaddr tmp;
+
+		ast_rtp_instance_get_local_address(pvt->rtp, &tmp);
+		ast_sockaddr_to_sin(&tmp, &us);
+	}
 	ast_mutex_unlock(&pvt->lock);
 
 	ast_copy_string(info->addr, ast_inet_ntoa(us.sin_addr), sizeof(info->addr));
@@ -1967,7 +1998,12 @@ static void setup_rtp_connection(unsigned call_reference, const char *remoteIp, 
 	them.sin_port = htons(remotePort);
 
 	if (them.sin_addr.s_addr) {
-		ast_rtp_instance_set_remote_address(pvt->rtp, &them);
+		{
+			struct ast_sockaddr tmp;
+
+			ast_sockaddr_from_sin(&tmp, &them);
+			ast_rtp_instance_set_remote_address(pvt->rtp, &tmp);
+		}
 		if (pvt->recvonly) {
 			pvt->recvonly = 0;
 			rtp_change = NEED_UNHOLD;
@@ -3200,8 +3236,14 @@ static int oh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance 
 		ast_log(LOG_ERROR, "No Private Structure, this is bad\n");
 		return -1;
 	}
-	ast_rtp_instance_get_remote_address(rtp, &them);
-	ast_rtp_instance_get_local_address(rtp, &us);
+	{
+		struct ast_sockaddr tmp;
+
+		ast_rtp_instance_get_remote_address(rtp, &tmp);
+		ast_sockaddr_to_sin(&tmp, &them);
+		ast_rtp_instance_get_local_address(rtp, &tmp);
+		ast_sockaddr_to_sin(&tmp, &us);
+	}
 #if 0	/* Native bridge still isn't ready */
 	h323_native_bridge(pvt->cd.call_token, ast_inet_ntoa(them.sin_addr), mode);
 #endif
@@ -3219,7 +3261,7 @@ static enum ast_module_load_result load_module(void)
 	int res;
 
 	h323debug = 0;
-	sched = sched_context_create();
+	sched = ast_sched_context_create();
 	if (!sched) {
 		ast_log(LOG_WARNING, "Unable to create schedule context\n");
 		return AST_MODULE_LOAD_FAILURE;
@@ -3240,7 +3282,7 @@ static enum ast_module_load_result load_module(void)
 		ast_cli_unregister(&cli_h323_reload);
 		io_context_destroy(io);
 		io = NULL;
-		sched_context_destroy(sched);
+		ast_sched_context_destroy(sched);
 		sched = NULL;
 		ASTOBJ_CONTAINER_DESTROY(&userl);
 		ASTOBJ_CONTAINER_DESTROY(&peerl);
@@ -3253,7 +3295,7 @@ static enum ast_module_load_result load_module(void)
 			ast_cli_unregister(&cli_h323_reload);
 			h323_end_process();
 			io_context_destroy(io);
-			sched_context_destroy(sched);
+			ast_sched_context_destroy(sched);
 
 			ASTOBJ_CONTAINER_DESTROYALL(&userl, oh323_destroy_user);
 			ASTOBJ_CONTAINER_DESTROY(&userl);
@@ -3292,7 +3334,7 @@ static enum ast_module_load_result load_module(void)
 			ast_cli_unregister(&cli_h323_reload);
 			h323_end_process();
 			io_context_destroy(io);
-			sched_context_destroy(sched);
+			ast_sched_context_destroy(sched);
 
 			ASTOBJ_CONTAINER_DESTROYALL(&userl, oh323_destroy_user);
 			ASTOBJ_CONTAINER_DESTROY(&userl);
@@ -3301,7 +3343,7 @@ static enum ast_module_load_result load_module(void)
 			ASTOBJ_CONTAINER_DESTROYALL(&aliasl, oh323_destroy_alias);
 			ASTOBJ_CONTAINER_DESTROY(&aliasl);
 
-			return AST_MODULE_LOAD_FAILURE;
+			return AST_MODULE_LOAD_DECLINE;
 		}
 		/* Possibly register with a GK */
 		if (!gatekeeper_disable) {
@@ -3379,7 +3421,7 @@ static int unload_module(void)
 	if (io)
 		io_context_destroy(io);
 	if (sched)
-		sched_context_destroy(sched);
+		ast_sched_context_destroy(sched);
 
 	ASTOBJ_CONTAINER_DESTROYALL(&userl, oh323_destroy_user);
 	ASTOBJ_CONTAINER_DESTROY(&userl);
@@ -3391,8 +3433,9 @@ static int unload_module(void)
 	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "The NuFone Network's OpenH323 Channel Driver",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "The NuFone Network's OpenH323 Channel Driver",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,
+		.load_pri = AST_MODPRI_CHANNEL_DRIVER,
 );
