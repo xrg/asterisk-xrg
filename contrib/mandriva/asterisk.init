@@ -1,0 +1,122 @@
+#!/bin/bash
+#
+# asterisk - This shell script takes care of starting and stopping the asterisk daemon.
+#
+# chkconfig: 2345 40 60
+# description: Asterisk PBX and telephony daemon.
+# processname: asterisk
+# pidfile: /var/run/asterisk/asterisk.pid
+# config: /etc/asterisk/asterisk.conf
+# config: /etc/sysconfig/asterisk
+
+### BEGIN INIT INFO
+# Provides: asterisk
+# Required-Start: $network
+# Required-Stop: $network
+# Should-Start: mysqld postgresql ldap
+# Should-Stop: mysqld postgresql ldap
+# Default-Start: 2 3 4 5
+# Short-Description: Asterisk PBX and telephony daemon
+# Description: Asterisk PBX and telephony daemon
+### END INIT INFO
+
+# Source function library.
+. /etc/rc.d/init.d/functions
+
+# Source networking configuration.
+. /etc/sysconfig/network
+
+# Check that networking is up.
+[ "${NETWORKING}" = "no" ] && exit 0
+
+[ -x /usr/sbin/asterisk ] || exit 0
+[ -d /etc/asterisk ] || exit 0
+[ -f /etc/asterisk/asterisk.conf ] || exit 0
+
+[ -f /etc/sysconfig/asterisk ] && . /etc/sysconfig/asterisk
+
+ASTERISK="${DAEMON:-\"/usr/sbin/asterisk\"} -C ${CONFIG:-\"/etc/asterisk/asterisk.conf\"} -U ${USER:-\"asterisk\"} -G ${GROUP:-\"asterisk\"} ${OPTIONS:-\"\"}"
+
+RETVAL=0
+
+# See how we were called.
+case "$1" in
+  start)
+	echo -n "Starting asterisk: "
+	# need to reset permissions if ever * is started as root
+	chown -R ${USER:-"asterisk"}:${GROUP:-"asterisk"} ${FIXUP:-"/var/spool/asterisk /var/log/asterisk /var/run/asterisk /var/lib/asterisk/astdb"}
+	[ -n ${RUNDIR} ] && cd ${RUNDIR}
+	daemon ${ASTERISK}
+	sleep 2	# Give it time to die
+	succeeded=`pidof asterisk|awk '{print NF}'`
+	if [ $succeeded = "0" ]; then
+	    killall -9 mpg123 2>/dev/null
+	    failure
+	else
+	    success
+	fi
+	echo
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && touch /var/lock/subsys/asterisk
+	;;
+  stop)
+	echo -n "Shutting down asterisk: "
+	killproc asterisk
+	killall -9 mpg123 2>/dev/null
+	echo
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/asterisk
+	;;
+  stop_gracefully)
+	echo -n "Gracefully shutting down asterisk: "
+	${ASTERISK} -rx "stop gracefully" > /dev/null 2>&1 && success || failure
+	killall -9 mpg123 2>/dev/null
+	echo
+	RETVAL=$?
+	[ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/asterisk
+	;;
+  status)
+	succeeded=`pidof asterisk|awk '{print NF}'`
+	if [ $succeeded = "0" ]; then
+	    echo "Asterisk is not running"
+	else
+	    echo "Asterisk is currently running with $succeeded threads"
+	fi
+	RETVAL=$?
+	;;
+  restart)
+	$0 stop
+	usleep 100000
+	$0 start
+	RETVAL=$?
+	;;
+  restart_gracefully)
+	echo -n "Gracefully restarting asterisk: "
+	${ASTERISK} -rx 'restart gracefully' > /dev/null 2>&1 && success || failure
+	echo
+	RETVAL=$?
+	;;
+  reload)
+	echo -n "Reloading asterisk: "
+	${ASTERISK} -rx 'reload' > /dev/null 2>&1 && success || failure
+	echo
+	RETVAL=$?
+	;;
+  channels)
+	${ASTERISK} -rx 'show channels'
+	RETVAL=$?
+	;;
+  applications)
+	${ASTERISK} -rx 'show applications'
+	RETVAL=$?
+	;;
+  condrestart)
+	[ -f /var/lock/subsys/asterisk ] && restart || :
+	RETVAL=$?
+	;;
+  *)
+	echo "Usage: $0 {start|stop|stop_gracefully|status|restart|restart_gracefully|condrestart|reload|channels|applications}"
+	exit 1
+esac
+
+exit $RETVAL
