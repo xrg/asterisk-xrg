@@ -889,7 +889,7 @@ menuselect:
 	else \
 		echo "No menuselect user interface found. Install ncurses,"; \
 		echo "newt or GTK libraries to build one and re-rerun"; \
-		echo "'make menuselect'."; \
+		echo "'./configure' and 'make menuselect'."; \
 	fi
 
 ast_menuselect: menuselect-tree

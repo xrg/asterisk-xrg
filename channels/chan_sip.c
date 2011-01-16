@@ -22485,11 +22485,20 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		/* Fallthrough if we can't find the call leg internally */
 	}
 
+	/* Must release lock now, because it will not longer
+	   be accessible after the transfer! */
+	*nounlock = 1;
+	/*
+	 * Increase ref count so that we can delay channel destruction until after
+	 * we get a chance to fire off some events.
+	 */
+	ast_channel_ref(current.chan1);
+	sip_pvt_unlock(p);
+	ast_channel_unlock(current.chan1);
+
 	/* Parking a call */
 	if (p->refer->localtransfer && ast_parking_ext_valid(p->refer->refer_to, p->owner, p->owner->context)) {
-		/* Must release c's lock now, because it will not longer be accessible after the transfer! */
-		*nounlock = 1;
-		ast_channel_unlock(current.chan1);
+		sip_pvt_lock(p);
 		copy_request(&current.req, req);
 		ast_clear_flag(&p->flags[0], SIP_GOTREFER);
 		p->refer->status = REFER_200OK;
@@ -22515,6 +22524,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		if (sip_park(current.chan2, current.chan1, req, seqno, p->refer->refer_to)) {
 			transmit_notify_with_sipfrag(p, seqno, "500 Internal Server Error", TRUE);
 		}
+		ast_channel_unref(current.chan1);
 		return res;
 	}
 
@@ -22523,6 +22533,9 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		ast_debug(3, "chan1->name: %s\n", current.chan1->name);
 		pbx_builtin_setvar_helper(current.chan1, "BLINDTRANSFER", current.chan2->name);
 	}
+
+	sip_pvt_lock(p);
+
 	if (current.chan2) {
 		pbx_builtin_setvar_helper(current.chan2, "BLINDTRANSFER", current.chan1->name);
 		pbx_builtin_setvar_helper(current.chan2, "SIPDOMAIN", p->refer->refer_to_domain);
@@ -22544,15 +22557,6 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		if (current.chan2)
 			pbx_builtin_setvar_helper(current.chan2, "_SIPTRANSFER_REPLACES", tempheader);
 	}
-	/* Must release lock now, because it will not longer
-	   be accessible after the transfer! */
-	*nounlock = 1;
-	/*
-	 * Increase ref count so that we can delay channel destruction until after
-	 * we get a chance to fire off some events.
-	 */
-	ast_channel_ref(current.chan1);
-	ast_channel_unlock(current.chan1);
 
 	/* Connect the call */
 
@@ -23526,10 +23530,10 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 				ast_log(LOG_NOTICE, "Failed to authenticate device %s for SUBSCRIBE\n", get_header(req, "From"));
 				transmit_response_reliable(p, "403 Forbidden", req);
 			}
-		}
 
-		pvt_set_needdestroy(p, "authentication failed");
-		return 0;
+			pvt_set_needdestroy(p, "authentication failed");
+			return 0;
+		}
 	}
 
 	/* At this point, authpeer cannot be NULL. Remember we hold a reference,
