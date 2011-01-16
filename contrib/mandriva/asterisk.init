@@ -77,7 +77,7 @@ case "$1" in
 	;;
   status)
 	succeeded=`pidof asterisk|awk '{print NF}'`
-	if [ $succeeded = "0" ]; then
+	if [ -z "$succeeded" ] ; then
 	    echo "Asterisk is not running"
 	else
 	    echo "Asterisk is currently running with $succeeded threads"
