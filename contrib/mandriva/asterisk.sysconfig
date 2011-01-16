@@ -1,0 +1,26 @@
+
+# set nice level here
+NICELEVEL="+5"
+
+# Use file as master configuration file instead of the default.
+CONFIG="/etc/asterisk/asterisk.conf"
+
+# set asterisk binary here
+DAEMON="/usr/sbin/asterisk"
+
+# Run as user asterisk instead of the calling user.
+USER="asterisk"
+
+# Run as group asterisk instead of the calling group.
+GROUP="asterisk"
+
+# Name the directory asterisk will run at (cores will dump there)
+RUNDIR=/var/lib/asterisk
+
+# set additional options here (eg. '-g' for core dumps)
+OPTIONS=""
+
+# these files and directories has to be owned by USER and GROUP
+FIXUP="/var/spool/asterisk /var/log/asterisk /var/run/asterisk /var/lib/asterisk/astdb"
+
+	
