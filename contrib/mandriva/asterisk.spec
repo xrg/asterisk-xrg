@@ -1,6 +1,6 @@
 #define git_repodir /home/panosl/panos/build
 %define git_repo asterisk
-%define git_head 16xrg
+%define git_head master
 
 %define _requires_exceptions perl(Carp::Heavy)
 
@@ -53,11 +53,12 @@
 %define build_pri	0
 %endif
 
+# Note: at Mandriva/Mageia there is no /var/lib64 ..
 %define astvardir	/var/lib/asterisk
 %define modulesdir	%{_libdir}/asterisk/modules
 
 Summary:	Asterisk PBX
-Name:		asterisk16
+Name:		asterisk110
 Version:	%git_get_ver
 Release:	%git_get_rel
 License:	GPL
@@ -65,13 +66,14 @@ Group:		System/Servers
 URL:		http://www.asterisk.org/
 #Source0:	http://www.asterisk.org/html/downloads/%{name}-%{version}.tar.bz2
 Source0:	%git_bs_source %{name}-%{version}.tar.gz
-Source1:	asterisk.init
-Source2:	asterisk.sysconfig
-Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
-Source4:	%{name}-gitrpm.version
-Source5:	%{name}-changelog.gitrpm.txt
+#Source1:	asterisk.init
+#Source2:	asterisk.sysconfig
+#Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
+Source1:	%{name}-gitrpm.version
+Source2:	%{name}-changelog.gitrpm.txt
 Provides:	asterisk
 Obsoletes:	asterisk
+Obsoletes:	asterisk16
 Requires(pre): rpm-helper
 Requires(postun): rpm-helper
 Requires(post): rpm-helper
@@ -534,7 +536,7 @@ This package contains a couple of testing utilities:
 
 %prep
 %git_get_source
-%setup -q -a3
+%setup -q
 
 find . -type d -perm 0700 -exec chmod 755 {} \;
 find . -type d -perm 0555 -exec chmod 755 {} \;
@@ -544,9 +546,6 @@ find . -type f -perm 0444 -exec chmod 644 {} \;
 for i in `find . -type d -name CVS` `find . -type f -name .cvs\*` `find . -type f -name .#\*`; do
     if [ -e "$i" ]; then rm -rf $i; fi >&/dev/null
 done
-
-cat %{SOURCE1} > asterisk.init
-cat %{SOURCE2} > asterisk.sysconfig
 
 %if %mdkversion < 200900
 cp contrib/mandriva/menuselect.makeopts.2008 ./menuselect.makeopts
@@ -561,9 +560,9 @@ find -name "Makefile" | xargs perl -pi -e "s|/usr/lib|%{_libdir}|g"
 perl -pi -e "s|/lib\b|/%{_lib}|g" configure*
 
 # fix one convenient softlink
-pushd docs-html
-    ln -s book1.html index.html
-popd
+#pushd docs-html
+#    ln -s book1.html index.html
+#popd
 
 %build
 rm -f configure
@@ -695,11 +694,11 @@ export DONT_GPRINTIFY=1
 
 # install init scrips
 install -d %{buildroot}%{_initrddir}
-install -m0755 asterisk.init %{buildroot}%{_initrddir}/asterisk
+install -m0755 contrib/mandriva/asterisk.init %{buildroot}%{_initrddir}/asterisk
 
 # install sysconfig file
 install -d %{buildroot}%{_sysconfdir}/sysconfig
-install -m0644 asterisk.sysconfig %{buildroot}%{_sysconfdir}/sysconfig/asterisk
+install -m0644 contrib/mandriva/asterisk.sysconfig %{buildroot}%{_sysconfdir}/sysconfig/asterisk
 
 # fix logrotation
 install -d %{buildroot}%{_sysconfdir}/logrotate.d
@@ -723,6 +722,11 @@ touch %{name}-devel.filelist
     find doc/api/html -type f | sed 's/^/%doc /' | grep -v '\./%{name}-devel.filelist' > %{name}-devel.filelist
 %endif
 
+# move /var/lib64
+if [ -d %{buildroot}/var/lib64 ] ; then
+    mv %{buildroot}/var/lib64/* %{buildroot}/var/lib/
+fi
+
 # fix ghost files
 #touch	%{buildroot}%{astvardir}/astdb
 touch	%{buildroot}%{astvardir}/astdb
@@ -744,7 +748,7 @@ perl -pi -e "s|^varrundir=.*|varrundir=/var/run/asterisk|g" %{buildroot}%{_libdi
 #mkdir -p %{buildroot}%{_sysconfdir}/ssl/%{name}
 
 # Remove unpackages files
-rm -rf %{buildroot}%{astvardir}/moh/.asterisk-moh-freeplay-wav
+# rm -rf %{buildroot}%{astvardir}/moh/.asterisk-moh-freeplay-wav
 
 # use the stand alone asterisk-core-sounds package instead
 rm -rf %{buildroot}%{astvardir}/sounds
@@ -901,6 +905,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_rpt.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_timerfd.so
 %endif
+%attr(0755,root,root) %{_libdir}/asterisk/modules/app_saycounted.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sayunixtime.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_senddtmf.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sendtext.so
@@ -944,6 +949,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/codec_lpc10.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/codec_resample.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/codec_ulaw.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_g719.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_g723.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_g726.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_g729.so
@@ -959,7 +965,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren14.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren7.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_aes.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_connectedline.so
+#%attr(0755,root,root) %{_libdir}/asterisk/modules/func_connectedline.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav_gsm.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_vox.so
@@ -969,6 +975,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_callerid.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_cdr.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_channel.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_callcompletion.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_config.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_cut.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_db.so
@@ -978,6 +985,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_enum.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_env.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_extstate.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_frame_trace.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_global.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_groupcount.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_iconv.so
@@ -991,6 +999,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_sha1.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_shell.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_strings.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_srv.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_pitchshift.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_sysinfo.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_timeout.so
@@ -1019,10 +1028,11 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_realtime.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_smdi.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_speech.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_stun_monitor.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_pthread.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/test_dlinklists.so
+# %attr(0755,root,root) %{_libdir}/asterisk/modules/test_dlinklists.so
 # %attr(0755,root,root) %{_libdir}/asterisk/modules/test_heap.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_redirecting.so
+# %attr(0755,root,root) %{_libdir}/asterisk/modules/func_redirecting.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_sprintf.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_clialiases.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_rtp_asterisk.so
@@ -1038,8 +1048,8 @@ fi
 %attr(0755,root,root) %{modulesdir}/cel_manager.so
 %attr(0755,root,root) %{modulesdir}/chan_mobile.so
 %attr(0755,root,root) %{modulesdir}/chan_multicast_rtp.so
-%attr(0755,root,root) %{modulesdir}/chan_ooh323.so
-%attr(0755,root,root) %{modulesdir}/format_mp3.so
+# %attr(0755,root,root) %{modulesdir}/chan_ooh323.so
+# %attr(0755,root,root) %{modulesdir}/format_mp3.so
 %attr(0755,root,root) %{modulesdir}/res_calendar.so
 %attr(0755,root,root) %{modulesdir}/res_calendar_caldav.so
 %attr(0755,root,root) %{modulesdir}/res_calendar_exchange.so
@@ -1054,25 +1064,31 @@ fi
 %endif
 
 #attr(0755,asterisk,asterisk)	%dir			%{astvardir}
-%attr(0755,root,root)		%dir			%{astvardir}/agi-bin
-%attr(0755,root,root)					%{astvardir}/agi-bin/*
 %ghost							%{astvardir}/astdb
-%attr(0755,root,root)		%dir			%{astvardir}/firmware
-%attr(0755,root,root)		%dir			%{astvardir}/firmware/iax
-# %attr(0755,root,root)					%{astvardir}/firmware/iax/*.bin
+%attr(0755,root,root)		%dir			%{astvardir}/agi-bin 
+%attr(0755,root,root)					%{astvardir}/agi-bin/*
 %attr(0755,root,root)		%dir			%{astvardir}/images
 %attr(0644,root,root)					%{astvardir}/images/*.jpg
+%attr(0755,root,root)		%dir			%{astvardir}/static-http
+%attr(0644,root,root)					%{astvardir}/static-http/*
+%attr(0644,root,root)					%{astvardir}/phoneprov/*.cfg
+%attr(0644,root,root)					%{astvardir}/phoneprov/*.xml
+%attr(0755,asterisk,asterisk)	%dir			%{astvardir}/documentation
+%attr(-,asterisk,asterisk)				%{astvardir}/documentation/*
+
+%if 0
+# *-* Revise, where are they now?
+%attr(0755,root,root)		%dir			%{astvardir}/firmware
+%attr(0755,root,root)		%dir			%{astvardir}/firmware/iax
+%attr(0755,root,root)					%{astvardir}/firmware/iax/*.bin
 %attr(0755,root,root)		%dir			%{astvardir}/keys
 %attr(0644,root,root)					%{astvardir}/keys/*.pub
 %attr(0755,root,root)		%dir			%{astvardir}/moh
-%if 0
 %attr(0644,root,root)					%{astvardir}/moh/*.wav
-%endif
 # %doc							%{astvardir}/moh/LICENSE-asterisk-moh-freeplay-wav
-#attr(0755,root,root)		%dir			%{astvardir}/mohmp3
-#attr(0644,root,root)					%{astvardir}/mohmp3/*.mp3
-%attr(0755,root,root)		%dir			%{astvardir}/static-http
-%attr(0644,root,root)					%{astvardir}/static-http/*
+%attr(0755,root,root)		%dir			%{astvardir}/mohmp3
+%attr(0644,root,root)					%{astvardir}/mohmp3/*.mp3
+%endif
 
 %attr(0750,asterisk,asterisk)	%dir			/var/log/asterisk
 %attr(0750,asterisk,asterisk)	%dir			/var/log/asterisk/cdr-csv
@@ -1103,11 +1119,7 @@ fi
 #%attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/busy.gsm
 #%attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/unavail.gsm
 #attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/voicemail
-%attr(0644,root,root)					%{astvardir}/phoneprov/*.cfg
-%attr(0644,root,root)					%{astvardir}/phoneprov/*.xml
 
-%attr(0755,asterisk,asterisk)	%dir			%{astvardir}/documentation
-%attr(-,asterisk,asterisk)				%{astvardir}/documentation/*
 
 							%{_mandir}/man8/asterisk.8*
 							%{_mandir}/man8/astgenkey.8*
@@ -1127,16 +1139,17 @@ fi
 
 %files devel -f %{name}-devel.filelist
 %defattr(-,root,root,-)
-%doc doc/CODING-GUIDELINES doc/datastores.txt doc/modules.txt doc/valgrind.txt
+# *-* %doc doc/CODING-GUIDELINES doc/datastores.txt doc/modules.txt doc/valgrind.txt
 %dir %{_includedir}/asterisk
 %{_includedir}/asterisk.h
 %{_includedir}/asterisk/*.h
 %{_includedir}/asterisk/doxygen/*.h
-%{_libdir}/pkgconfig/asterisk.pc
+# %{_libdir}/pkgconfig/asterisk.pc
 
 %files firmware
 %defattr(-,root,root,-)
-%attr(0750,asterisk,asterisk) /var/lib/asterisk/firmware
+# *-*
+# %attr(0750,asterisk,asterisk) /var/lib/asterisk/firmware
 
 %if %mdkversion >= 200900
 %files plugins-ais
@@ -1194,7 +1207,7 @@ fi
 
 %files plugins-jabber
 %defattr(-,root,root,-)
-%doc doc/jabber.txt doc/jingle.txt
+# %doc doc/jabber.txt doc/jingle.txt
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/gtalk.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/jabber.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/jingle.conf
@@ -1213,7 +1226,7 @@ fi
 
 %files plugins-ldap
 %defattr(-,root,root,-)
-%doc doc/ldap.txt
+# %doc doc/ldap.txt
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_ldap.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_ldap.so
 
@@ -1250,7 +1263,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_odbc.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_odbc.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_odbc.so
-%attr(0755,root,root) %{modulesdir}/cel_adaptive_odbc.so
+%attr(0755,root,root) %{modulesdir}/cel_odbc.so
 %endif
 
 %files plugins-oss
@@ -1272,7 +1285,7 @@ fi
 
 %files plugins-pgsql
 %defattr(-,root,root,-)
-%doc contrib/scripts/realtime_pgsql.sql
+%doc contrib/realtime/postgresql/realtime.sql
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_pgsql.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_pgsql.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_pgsql.so
@@ -1292,9 +1305,9 @@ fi
 
 %files plugins-snmp
 %defattr(-,root,root,-)
-%doc doc/asterisk-mib.txt
-%doc doc/digium-mib.txt
-%doc doc/snmp.txt
+# %doc doc/asterisk-mib.txt
+# %doc doc/digium-mib.txt
+# %doc doc/snmp.txt
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_snmp.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_snmp.so
 
@@ -1321,7 +1334,7 @@ fi
 
 %files plugins-unistim
 %defattr(-,root,root,-)
-%doc doc/unistim.txt
+# %doc doc/unistim.txt
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/unistim.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_unistim.so
 
@@ -1367,20 +1380,23 @@ fi
 
 %files docs
 %defattr(-,root,root)
-%doc	docs-html/*
+# %doc	docs-html/*
 
 %files tests
+%if 0
+# They would depend on the TEST_FRAMEWORK option
 %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_dlinklists.so
-# %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_sched.so
-%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_logger.so
-# %attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
-%attr(0755,root,root)					%{_sbindir}/check_expr
-%attr(0755,root,root)					%{_sbindir}/check_expr2
-%attr(0755,root,root)					%{_sbindir}/hashtest
-%attr(0755,root,root)					%{_sbindir}/hashtest2
-%attr(0755,root,root)  %{_sbindir}/refcounter
-%attr(0755,root,root)  %{modulesdir}/test_amihooks.so
-%attr(0755,root,root)  %{modulesdir}/test_security_events.so
+%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_sched.so
+%attr(0755,root,root)  	%{_libdir}/asterisk/modules/test_logger.so
+%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
+%attr(0755,root,root)	%{modulesdir}/test_security_events.so
+%attr(0755,root,root)	%{modulesdir}/test_amihooks.so
+%endif
+%attr(0755,root,root)	%{_sbindir}/check_expr
+%attr(0755,root,root)	%{_sbindir}/check_expr2
+%attr(0755,root,root)	%{_sbindir}/hashtest
+%attr(0755,root,root)	%{_sbindir}/hashtest2
+%attr(0755,root,root)	%{_sbindir}/refcounter
 
 %changelog -f %{_sourcedir}/%{name}-changelog.gitrpm.txt
 
