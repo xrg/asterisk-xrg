@@ -9453,7 +9453,6 @@ static void handle_deferred_full_frames(struct iax2_thread *thread)
 	ast_mutex_lock(&thread->lock);
 
 	while ((pkt_buf = AST_LIST_REMOVE_HEAD(&thread->full_frames, entry))) {
-		ast_copy_string(thread->curfunc, "handle_deferred", 16);
 		ast_mutex_unlock(&thread->lock);
 
 		thread->buf = pkt_buf->buf;
@@ -9556,7 +9555,6 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 				break;
 		}
 		if (cur) {
-			ast_log(LOG_WARNING, "Reuse thread for callno\n");
 			/* we found another thread processing a full frame for this call,
 			   so queue it up for processing later. */
 			defer_full_frame(thread, cur);
@@ -9578,7 +9576,7 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 	/* Mark as ready and send on its way */
 	thread->iostate = IAX_IOSTATE_READY;
 #ifdef DEBUG_SCHED_MULTITHREAD
-	ast_copy_string(thread->curfunc, "socket_process", 15);
+	ast_copy_string(thread->curfunc, "socket_process", sizeof(thread->curfunc));
 #endif
 	signal_condition(&thread->lock, &thread->cond);
 
