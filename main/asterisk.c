@@ -111,6 +111,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/network.h"
 #include "asterisk/cli.h"
 #include "asterisk/channel.h"
+#include "asterisk/translate.h"
 #include "asterisk/features.h"
 #include "asterisk/ulaw.h"
 #include "asterisk/alaw.h"
@@ -142,6 +143,8 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/poll-compat.h"
 #include "asterisk/ccss.h"
 #include "asterisk/test.h"
+#include "asterisk/rtp_engine.h"
+#include "asterisk/format.h"
 #include "asterisk/aoc.h"
 
 #include "../defaults.h"
@@ -3319,7 +3322,7 @@ int main(int argc, char *argv[])
 			ast_clear_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND);
 			break;
 		case 'x':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_EXEC);
+			ast_set_flag(&ast_options, AST_OPT_FLAG_EXEC | AST_OPT_FLAG_NO_COLOR);
 			xarg = ast_strdupa(optarg);
 			break;
 		case '?':
@@ -3399,6 +3402,7 @@ int main(int argc, char *argv[])
 		fd2 = (l.rlim_cur > sizeof(readers) * 8 ? sizeof(readers) * 8 : l.rlim_cur) - 1;
 		if (dup2(fd, fd2) < 0) {
 			ast_log(LOG_WARNING, "Cannot open maximum file descriptor %d at boot? %s\n", fd2, strerror(errno));
+			close(fd);
 			break;
 		}
 
@@ -3407,9 +3411,12 @@ int main(int argc, char *argv[])
 		if (ast_select(fd2 + 1, &readers, NULL, NULL, &tv) < 0) {
 			ast_log(LOG_WARNING, "Maximum select()able file descriptor is %d\n", FD_SETSIZE);
 		}
+		ast_FD_SETSIZE = l.rlim_cur > ast_FDMAX ? ast_FDMAX : l.rlim_cur;
+		close(fd);
+		close(fd2);
 	} while (0);
 #elif defined(HAVE_VARIABLE_FDSET)
-	ast_FD_SETSIZE = l.rlim_cur;
+	ast_FD_SETSIZE = l.rlim_cur > ast_FDMAX ? ast_FDMAX : l.rlim_cur;
 #endif /* !defined(CONFIGURE_RAN_AS_ROOT) */
 
 	if ((!rungroup) && !ast_strlen_zero(ast_config_AST_RUN_GROUP))
@@ -3643,7 +3650,7 @@ int main(int argc, char *argv[])
 			ast_copy_string(canary_binary, argv[0], sizeof(canary_binary));
 			if ((lastslash = strrchr(canary_binary, '/'))) {
 				ast_copy_string(lastslash + 1, "astcanary", sizeof(canary_binary) + canary_binary - (lastslash + 1));
-				execl(canary_binary, "astcanary", canary_filename, (char *)NULL);
+				execl(canary_binary, "astcanary", canary_filename, ppid, (char *)NULL);
 			}
 
 			/* Should never happen */
@@ -3668,6 +3675,11 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 #endif
+
+	if (ast_translate_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
 
 	ast_aoc_cli_init();
 
@@ -3699,6 +3711,10 @@ int main(int argc, char *argv[])
 	threadstorage_init();
 
 	astobj2_init();
+
+	ast_format_attr_init();
+	ast_format_list_init();
+	ast_rtp_engine_init();
 
 	ast_autoservice_init();
 

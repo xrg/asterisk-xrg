@@ -33,6 +33,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/taskprocessor.h"
 #include "asterisk/event.h"
+#include "asterisk/devicestate.h"
 #include "asterisk/module.h"
 #include "asterisk/app.h"
 #include "asterisk/cli.h"
@@ -48,6 +49,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Request call completion service for a previously failed
 			call attempt.</para>
+			<para>This application sets the following channel variables:</para>
+			<variablelist>
+				<variable name="CC_REQUEST_RESULT">
+					<para>This is the returned status of the request.</para>
+					<value name="SUCCESS" />
+					<value name="FAIL" />
+				</variable>
+				<variable name="CC_REQUEST_REASON">
+					<para>This is the reason the request failed.</para>
+					<value name="NO_CORE_INSTANCE" />
+					<value name="NOT_GENERIC" />
+					<value name="TOO_MANY_REQUESTS" />
+					<value name="UNSPECIFIED" />
+				</variable>
+			</variablelist>
 		</description>
 	</application>
 	<application name="CallCompletionCancel" language="en_US">
@@ -57,6 +73,20 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax />
 		<description>
 			<para>Cancel a Call Completion Request.</para>
+			<para>This application sets the following channel variables:</para>
+			<variablelist>
+				<variable name="CC_CANCEL_RESULT">
+					<para>This is the returned status of the cancel.</para>
+					<value name="SUCCESS" />
+					<value name="FAIL" />
+				</variable>
+				<variable name="CC_CANCEL_REASON">
+					<para>This is the reason the cancel failed.</para>
+					<value name="NO_CORE_INSTANCE" />
+					<value name="NOT_GENERIC" />
+					<value name="UNSPECIFIED" />
+				</variable>
+			</variablelist>
 		</description>
 	</application>
  ***/
@@ -501,6 +531,111 @@ static int count_agents_cb(void *obj, void *arg, void *data, int flags)
 	return 0;
 }
 
+/* default values mapping from cc_state to ast_dev_state */
+
+#define CC_AVAILABLE_DEVSTATE_DEFAULT        AST_DEVICE_NOT_INUSE
+#define CC_CALLER_OFFERED_DEVSTATE_DEFAULT   AST_DEVICE_NOT_INUSE
+#define CC_CALLER_REQUESTED_DEVSTATE_DEFAULT AST_DEVICE_NOT_INUSE
+#define CC_ACTIVE_DEVSTATE_DEFAULT           AST_DEVICE_INUSE
+#define CC_CALLEE_READY_DEVSTATE_DEFAULT     AST_DEVICE_RINGING
+#define CC_CALLER_BUSY_DEVSTATE_DEFAULT      AST_DEVICE_ONHOLD
+#define CC_RECALLING_DEVSTATE_DEFAULT        AST_DEVICE_RINGING
+#define CC_COMPLETE_DEVSTATE_DEFAULT         AST_DEVICE_NOT_INUSE
+#define CC_FAILED_DEVSTATE_DEFAULT           AST_DEVICE_NOT_INUSE
+
+/*!
+ * \internal
+ * \brief initialization of defaults for CC_STATE to DEVICE_STATE map
+ */
+static enum ast_device_state cc_state_to_devstate_map[] = {
+	[CC_AVAILABLE] =        CC_AVAILABLE_DEVSTATE_DEFAULT,
+	[CC_CALLER_OFFERED] =   CC_CALLER_OFFERED_DEVSTATE_DEFAULT,
+	[CC_CALLER_REQUESTED] = CC_CALLER_REQUESTED_DEVSTATE_DEFAULT,
+	[CC_ACTIVE] =           CC_ACTIVE_DEVSTATE_DEFAULT,
+	[CC_CALLEE_READY] =     CC_CALLEE_READY_DEVSTATE_DEFAULT,
+	[CC_CALLER_BUSY] =      CC_CALLER_BUSY_DEVSTATE_DEFAULT,
+	[CC_RECALLING] =        CC_RECALLING_DEVSTATE_DEFAULT,
+	[CC_COMPLETE] =         CC_COMPLETE_DEVSTATE_DEFAULT,
+	[CC_FAILED] =           CC_FAILED_DEVSTATE_DEFAULT,
+};
+
+/*!
+ * \intenral
+ * \brief lookup the ast_device_state mapped to cc_state
+ *
+ * \return the correponding DEVICE STATE from the cc_state_to_devstate_map
+ * when passed an internal state.
+ */
+static enum ast_device_state cc_state_to_devstate(enum cc_state state)
+{
+	return cc_state_to_devstate_map[state];
+}
+
+/*!
+ * \internal
+ * \brief Callback for devicestate providers
+ *
+ * \details
+ * Initialize with ast_devstate_prov_add() and returns the corresponding
+ * DEVICE STATE based on the current CC_STATE state machine if the requested
+ * device is found and is a generic device. Returns the equivalent of
+ * CC_FAILED, which defaults to NOT_INUSE, if no device is found.  NOT_INUSE would
+ * indicate that there is no presence of any pending call back.
+ */
+static enum ast_device_state ccss_device_state(const char *device_name)
+{
+	struct cc_core_instance *core_instance;
+	unsigned long match_flags;
+	enum ast_device_state cc_current_state;
+
+	match_flags = MATCH_NO_REQUEST;
+	core_instance = ao2_t_callback_data(cc_core_instances, 0, match_agent,
+		(char *) device_name, &match_flags,
+		"Find Core Instance for ccss_device_state reqeust.");
+	if (!core_instance) {
+		ast_log_dynamic_level(cc_logger_level,
+			"Couldn't find a core instance for caller %s\n", device_name);
+		return cc_state_to_devstate(CC_FAILED);
+	}
+
+	ast_log_dynamic_level(cc_logger_level,
+		"Core %d: Found core_instance for caller %s in state %s\n",
+		core_instance->core_id, device_name, cc_state_to_string(core_instance->current_state));
+
+	if (strcmp(core_instance->agent->callbacks->type, "generic")) {
+		ast_log_dynamic_level(cc_logger_level,
+			"Core %d: Device State is only for generic agent types.\n",
+			core_instance->core_id);
+		cc_unref(core_instance, "Unref core_instance since ccss_device_state was called with native agent");
+		return cc_state_to_devstate(CC_FAILED);
+	}
+	cc_current_state = cc_state_to_devstate(core_instance->current_state);
+	cc_unref(core_instance, "Unref core_instance done with ccss_device_state");
+	return cc_current_state;
+}
+
+/*!
+ * \internal
+ * \brief Notify Device State Changes from CC STATE MACHINE
+ *
+ * \details
+ * Any time a state is changed, we call this function to notify the DEVICE STATE
+ * subsystem of the change so that subscribed phones to any corresponding hints that
+ * are using that state are updated.
+ */
+static void ccss_notify_device_state_change(const char *device, enum cc_state state)
+{
+	enum ast_device_state devstate;
+
+	devstate = cc_state_to_devstate(state);
+
+	ast_log_dynamic_level(cc_logger_level,
+		"Notification of CCSS state change to '%s', device state '%s' for device '%s'",
+		cc_state_to_string(state), ast_devstate2str(devstate), device);
+
+	ast_devstate_changed(devstate, "ccss:%s", device);
+}
+
 #define CC_OFFER_TIMER_DEFAULT			20		/* Seconds */
 #define CCNR_AVAILABLE_TIMER_DEFAULT	7200	/* Seconds */
 #define CCBS_AVAILABLE_TIMER_DEFAULT	4800	/* Seconds */
@@ -613,6 +748,7 @@ int ast_cc_get_param(struct ast_cc_config_params *params, const char * const nam
 		char *buf, size_t buf_len)
 {
 	const char *value = NULL;
+
 	if (!strcasecmp(name, "cc_callback_macro")) {
 		value = ast_get_cc_callback_macro(params);
 	} else if (!strcasecmp(name, "cc_agent_policy")) {
@@ -622,8 +758,7 @@ int ast_cc_get_param(struct ast_cc_config_params *params, const char * const nam
 	} else if (!strcasecmp(name, "cc_agent_dialstring")) {
 		value = ast_get_cc_agent_dialstring(params);
 	}
-
-	if (!ast_strlen_zero(value)) {
+	if (value) {
 		ast_copy_string(buf, value, buf_len);
 		return 0;
 	}
@@ -2205,7 +2340,7 @@ static void check_callback_sanity(const struct ast_cc_agent_callbacks *callbacks
 	ast_assert(callbacks->init != NULL);
 	ast_assert(callbacks->start_offer_timer != NULL);
 	ast_assert(callbacks->stop_offer_timer != NULL);
-	ast_assert(callbacks->ack != NULL);
+	ast_assert(callbacks->respond != NULL);
 	ast_assert(callbacks->status_request != NULL);
 	ast_assert(callbacks->start_monitoring != NULL);
 	ast_assert(callbacks->callee_available != NULL);
@@ -2267,7 +2402,7 @@ static struct ast_cc_agent *cc_agent_init(struct ast_channel *caller_chan,
 static int cc_generic_agent_init(struct ast_cc_agent *agent, struct ast_channel *chan);
 static int cc_generic_agent_start_offer_timer(struct ast_cc_agent *agent);
 static int cc_generic_agent_stop_offer_timer(struct ast_cc_agent *agent);
-static void cc_generic_agent_ack(struct ast_cc_agent *agent);
+static void cc_generic_agent_respond(struct ast_cc_agent *agent, enum ast_cc_agent_response_reason reason);
 static int cc_generic_agent_status_request(struct ast_cc_agent *agent);
 static int cc_generic_agent_stop_ringing(struct ast_cc_agent *agent);
 static int cc_generic_agent_start_monitoring(struct ast_cc_agent *agent);
@@ -2279,7 +2414,7 @@ static struct ast_cc_agent_callbacks generic_agent_callbacks = {
 	.init = cc_generic_agent_init,
 	.start_offer_timer = cc_generic_agent_start_offer_timer,
 	.stop_offer_timer = cc_generic_agent_stop_offer_timer,
-	.ack = cc_generic_agent_ack,
+	.respond = cc_generic_agent_respond,
 	.status_request = cc_generic_agent_status_request,
 	.stop_ringing = cc_generic_agent_stop_ringing,
 	.start_monitoring = cc_generic_agent_start_monitoring,
@@ -2403,7 +2538,7 @@ static int cc_generic_agent_stop_offer_timer(struct ast_cc_agent *agent)
 	return 0;
 }
 
-static void cc_generic_agent_ack(struct ast_cc_agent *agent)
+static void cc_generic_agent_respond(struct ast_cc_agent *agent, enum ast_cc_agent_response_reason reason)
 {
 	/* The generic agent doesn't have to do anything special to
 	 * acknowledge a CC request. Just return.
@@ -2482,28 +2617,30 @@ static void *generic_recall(void *data)
 	struct ast_channel *chan;
 	const char *callback_macro = ast_get_cc_callback_macro(agent->cc_params);
 	unsigned int recall_timer = ast_get_cc_recall_timer(agent->cc_params) * 1000;
+	struct ast_format tmp_fmt;
+	struct ast_format_cap *tmp_cap = ast_format_cap_alloc_nolock();
+
+	if (!tmp_cap) {
+		return NULL;
+	}
 
 	tech = interface;
 	if ((target = strchr(interface, '/'))) {
 		*target++ = '\0';
 	}
-	if (!(chan = ast_request_and_dial(tech, AST_FORMAT_SLINEAR, NULL, target, recall_timer, &reason, generic_pvt->cid_num, generic_pvt->cid_name))) {
+
+	ast_format_cap_add(tmp_cap, ast_format_set(&tmp_fmt, AST_FORMAT_SLINEAR, 0));
+	if (!(chan = ast_request_and_dial(tech, tmp_cap, NULL, target, recall_timer, &reason, generic_pvt->cid_num, generic_pvt->cid_name))) {
 		/* Hmm, no channel. Sucks for you, bud.
 		 */
 		ast_log_dynamic_level(cc_logger_level, "Core %d: Failed to call back %s for reason %d\n",
 				agent->core_id, agent->device_name, reason);
 		ast_cc_failed(agent->core_id, "Failed to call back device %s/%s", tech, target);
+		ast_format_cap_destroy(tmp_cap);
 		return NULL;
 	}
-	if (!ast_strlen_zero(callback_macro)) {
-		ast_log_dynamic_level(cc_logger_level, "Core %d: There's a callback macro configured for agent %s\n",
-				agent->core_id, agent->device_name);
-		if (ast_app_run_macro(NULL, chan, callback_macro, NULL)) {
-			ast_cc_failed(agent->core_id, "Callback macro to %s failed. Maybe a hangup?", agent->device_name);
-			ast_hangup(chan);
-			return NULL;
-		}
-	}
+	ast_format_cap_destroy(tmp_cap);
+	
 	/* We have a channel. It's time now to set up the datastore of recalled CC interfaces.
 	 * This will be a common task for all recall functions. If it were possible, I'd have
 	 * the core do it automatically, but alas I cannot. Instead, I will provide a public
@@ -2515,6 +2652,19 @@ static void *generic_recall(void *data)
 	ast_copy_string(chan->exten, generic_pvt->exten, sizeof(chan->exten));
 	ast_copy_string(chan->context, generic_pvt->context, sizeof(chan->context));
 	chan->priority = 1;
+
+	pbx_builtin_setvar_helper(chan, "CC_EXTEN", generic_pvt->exten);
+	pbx_builtin_setvar_helper(chan, "CC_CONTEXT", generic_pvt->context);
+
+	if (!ast_strlen_zero(callback_macro)) {
+		ast_log_dynamic_level(cc_logger_level, "Core %d: There's a callback macro configured for agent %s\n",
+				agent->core_id, agent->device_name);
+		if (ast_app_run_macro(NULL, chan, callback_macro, NULL)) {
+			ast_cc_failed(agent->core_id, "Callback macro to %s failed. Maybe a hangup?", agent->device_name);
+			ast_hangup(chan);
+			return NULL;
+		}
+	}
 	ast_cc_agent_recalling(agent->core_id, "Generic agent %s is recalling", agent->device_name);
 	ast_pbx_start(chan);
 	return NULL;
@@ -2620,6 +2770,7 @@ static struct cc_core_instance *cc_core_init_instance(struct ast_channel *caller
 }
 
 struct cc_state_change_args {
+	struct cc_core_instance *core_instance;/*!< Holds reference to core instance. */
 	enum cc_state state;
 	int core_id;
 	char debug[1];
@@ -2768,6 +2919,8 @@ static int cc_caller_requested(struct cc_core_instance *core_instance, struct cc
 {
 	if (!ast_cc_request_is_within_limits()) {
 		ast_log(LOG_WARNING, "Cannot request CC since there is no more room for requests\n");
+		core_instance->agent->callbacks->respond(core_instance->agent,
+			AST_CC_AGENT_RESPONSE_FAILURE_TOO_MANY);
 		ast_cc_failed(core_instance->core_id, "Too many requests in the system");
 		return -1;
 	}
@@ -2806,7 +2959,8 @@ static int cc_active(struct cc_core_instance *core_instance, struct cc_state_cha
 	 *    call monitor's unsuspend callback.
 	 */
 	if (previous_state == CC_CALLER_REQUESTED) {
-		core_instance->agent->callbacks->ack(core_instance->agent);
+		core_instance->agent->callbacks->respond(core_instance->agent,
+			AST_CC_AGENT_RESPONSE_SUCCESS);
 		manager_event(EVENT_FLAG_CC, "CCRequestAcknowledged",
 			"CoreID: %d\r\n"
 			"Caller: %s\r\n",
@@ -2943,15 +3097,19 @@ static int cc_do_state_change(void *datap)
 	ast_log_dynamic_level(cc_logger_level, "Core %d: State change to %d requested. Reason: %s\n",
 			args->core_id, args->state, args->debug);
 
-	if (!(core_instance = find_cc_core_instance(args->core_id))) {
-		ast_log_dynamic_level(cc_logger_level, "Core %d: Unable to find core instance.\n", args->core_id);
-		ast_free(args);
-		return -1;
-	}
+	core_instance = args->core_instance;
 
 	if (!is_state_change_valid(core_instance->current_state, args->state, core_instance->agent)) {
 		ast_log_dynamic_level(cc_logger_level, "Core %d: Invalid state change requested. Cannot go from %s to %s\n",
 				args->core_id, cc_state_to_string(core_instance->current_state), cc_state_to_string(args->state));
+		if (args->state == CC_CALLER_REQUESTED) {
+			/*
+			 * For out-of-order requests, we need to let the requester know that
+			 * we can't handle the request now.
+			 */
+			core_instance->agent->callbacks->respond(core_instance->agent,
+				AST_CC_AGENT_RESPONSE_FAILURE_INVALID);
+		}
 		ast_free(args);
 		cc_unref(core_instance, "Unref core instance from when it was found earlier");
 		return -1;
@@ -2961,6 +3119,11 @@ static int cc_do_state_change(void *datap)
 	previous_state = core_instance->current_state;
 	core_instance->current_state = args->state;
 	res = state_change_funcs[core_instance->current_state](core_instance, args, previous_state);
+
+	/* If state change successful then notify any device state watchers of the change */
+	if (!res && !strcmp(core_instance->agent->callbacks->type, "generic")) {
+		ccss_notify_device_state_change(core_instance->agent->device_name, core_instance->current_state);
+	}
 
 	ast_free(args);
 	cc_unref(core_instance, "Unref since state change has completed"); /* From ao2_find */
@@ -2973,6 +3136,7 @@ static int cc_request_state_change(enum cc_state state, const int core_id, const
 	int debuglen;
 	char dummy[1];
 	va_list aq;
+	struct cc_core_instance *core_instance;
 	struct cc_state_change_args *args;
 	/* This initial call to vsnprintf is simply to find what the
 	 * size of the string needs to be
@@ -2988,12 +3152,22 @@ static int cc_request_state_change(enum cc_state state, const int core_id, const
 		return -1;
 	}
 
+	core_instance = find_cc_core_instance(core_id);
+	if (!core_instance) {
+		ast_log_dynamic_level(cc_logger_level, "Core %d: Unable to find core instance.\n",
+			core_id);
+		ast_free(args);
+		return -1;
+	}
+
+	args->core_instance = core_instance;
 	args->state = state;
 	args->core_id = core_id;
 	vsnprintf(args->debug, debuglen, debug, ap);
 
 	res = ast_taskprocessor_push(cc_core_taskprocessor, cc_do_state_change, args);
 	if (res) {
+		cc_unref(core_instance, "Unref core instance. ast_taskprocessor_push failed");
 		ast_free(args);
 	}
 	return res;
@@ -3186,10 +3360,14 @@ struct ast_cc_monitor *ast_cc_get_monitor_by_recall_core_id(const int core_id, c
  * \param dialstring A new dialstring to add
  * \retval void
  */
-static void cc_unique_append(struct ast_str *str, const char * const dialstring)
+static void cc_unique_append(struct ast_str *str, const char *dialstring)
 {
 	char dialstring_search[AST_CHANNEL_NAME];
 
+	if (ast_strlen_zero(dialstring)) {
+		/* No dialstring to append. */
+		return;
+	}
 	snprintf(dialstring_search, sizeof(dialstring_search), "%s%c", dialstring, '&');
 	if (strstr(ast_str_buffer(str), dialstring_search)) {
 		return;
@@ -3218,6 +3396,10 @@ static void build_cc_interfaces_chanvar(struct ast_cc_monitor *starting_point, s
 	struct extension_child_dialstring *child_dialstring;
 	struct ast_cc_monitor *monitor_iter = starting_point;
 	int top_level_id = starting_point->id;
+	size_t length;
+
+	/* Init to an empty string. */
+	ast_str_truncate(str, 0);
 
 	/* First we need to take all of the is_valid child_dialstrings from
 	 * the extension monitor we found and add them to the CC_INTERFACES
@@ -3240,7 +3422,15 @@ static void build_cc_interfaces_chanvar(struct ast_cc_monitor *starting_point, s
 	/* str will have an extra '&' tacked onto the end of it, so we need
 	 * to get rid of that.
 	 */
-	ast_str_truncate(str, ast_str_strlen(str) - 1);
+	length = ast_str_strlen(str);
+	if (length) {
+		ast_str_truncate(str, length - 1);
+	}
+	if (length <= 1) {
+		/* Nothing to recall?  This should not happen. */
+		ast_log(LOG_ERROR, "CC_INTERFACES is empty. starting device_name:'%s'\n",
+			starting_point->interface->device_name);
+	}
 }
 
 int ast_cc_agent_set_interfaces_chanvar(struct ast_channel *chan)
@@ -3884,7 +4074,9 @@ static int ccreq_exec(struct ast_channel *chan, const char *data)
 	match_flags = MATCH_NO_REQUEST;
 	if (!(core_instance = ao2_t_callback_data(cc_core_instances, 0, match_agent, device_name, &match_flags, "Find core instance for CallCompletionRequest"))) {
 		ast_log_dynamic_level(cc_logger_level, "Couldn't find a core instance for caller %s\n", device_name);
-		return -1;
+		pbx_builtin_setvar_helper(chan, "CC_REQUEST_RESULT", "FAIL");
+		pbx_builtin_setvar_helper(chan, "CC_REQUEST_REASON", "NO_CORE_INSTANCE");
+		return 0;
 	}
 
 	ast_log_dynamic_level(cc_logger_level, "Core %d: Found core_instance for caller %s\n",
@@ -3894,6 +4086,7 @@ static int ccreq_exec(struct ast_channel *chan, const char *data)
 		ast_log_dynamic_level(cc_logger_level, "Core %d: CallCompletionRequest is only for generic agent types.\n",
 				core_instance->core_id);
 		pbx_builtin_setvar_helper(chan, "CC_REQUEST_RESULT", "FAIL");
+		pbx_builtin_setvar_helper(chan, "CC_REQUEST_REASON", "NOT_GENERIC");
 		cc_unref(core_instance, "Unref core_instance since CallCompletionRequest was called with native agent");
 		return 0;
 	}
@@ -3903,14 +4096,19 @@ static int ccreq_exec(struct ast_channel *chan, const char *data)
 				core_instance->core_id);
 		ast_cc_failed(core_instance->core_id, "Too many CC requests\n");
 		pbx_builtin_setvar_helper(chan, "CC_REQUEST_RESULT", "FAIL");
+		pbx_builtin_setvar_helper(chan, "CC_REQUEST_REASON", "TOO_MANY_REQUESTS");
 		cc_unref(core_instance, "Unref core_instance since too many CC requests");
 		return 0;
 	}
 
 	res = ast_cc_agent_accept_request(core_instance->core_id, "CallCompletionRequest called by caller %s for core_id %d", device_name, core_instance->core_id);
 	pbx_builtin_setvar_helper(chan, "CC_REQUEST_RESULT", res ? "FAIL" : "SUCCESS");
+	if (res) {
+		pbx_builtin_setvar_helper(chan, "CC_REQUEST_REASON", "UNSPECIFIED");
+	}
+
 	cc_unref(core_instance, "Done with CallCompletionRequest");
-	return res;
+	return 0;
 }
 
 static const char *cccancel_app = "CallCompletionCancel";
@@ -3926,19 +4124,27 @@ static int cccancel_exec(struct ast_channel *chan, const char *data)
 
 	match_flags = MATCH_REQUEST;
 	if (!(core_instance = ao2_t_callback_data(cc_core_instances, 0, match_agent, device_name, &match_flags, "Find core instance for CallCompletionCancel"))) {
-		ast_log(LOG_WARNING, "Cannot find CC transaction to cancel for caller %s\n", device_name);
-		return -1;
+		ast_log_dynamic_level(cc_logger_level, "Cannot find CC transaction to cancel for caller %s\n", device_name);
+		pbx_builtin_setvar_helper(chan, "CC_CANCEL_RESULT", "FAIL");
+		pbx_builtin_setvar_helper(chan, "CC_CANCEL_REASON", "NO_CORE_INSTANCE");
+		return 0;
 	}
 
 	if (strcmp(core_instance->agent->callbacks->type, "generic")) {
 		ast_log(LOG_WARNING, "CallCompletionCancel may only be used for calles with a generic agent\n");
 		cc_unref(core_instance, "Unref core instance found during CallCompletionCancel");
-		return -1;
+		pbx_builtin_setvar_helper(chan, "CC_CANCEL_RESULT", "FAIL");
+		pbx_builtin_setvar_helper(chan, "CC_CANCEL_REASON", "NOT_GENERIC");
+		return 0;
 	}
 	res = ast_cc_failed(core_instance->core_id, "Call completion request Cancelled for core ID %d by caller %s",
 			core_instance->core_id, device_name);
 	cc_unref(core_instance, "Unref core instance found during CallCompletionCancel");
-	return res;
+	pbx_builtin_setvar_helper(chan, "CC_CANCEL_RESULT", res ? "FAIL" : "SUCCESS");
+	if (res) {
+		pbx_builtin_setvar_helper(chan, "CC_CANCEL_REASON", "UNSPECIFIED");
+	}
+	return 0;
 }
 
 struct count_monitors_cb_data {
@@ -4005,6 +4211,59 @@ static void initialize_cc_max_requests(void)
 
 	ast_config_destroy(cc_config);
 	return;
+}
+
+/*!
+ * \internal
+ * \brief helper function to parse and configure each devstate map
+ */
+static void initialize_cc_devstate_map_helper(struct ast_config *cc_config, enum cc_state state, const char *cc_setting)
+{
+	const char *cc_devstate_str;
+	enum ast_device_state this_devstate;
+
+	if ((cc_devstate_str = ast_variable_retrieve(cc_config, "general", cc_setting))) {
+		this_devstate = ast_devstate_val(cc_devstate_str);
+		if (this_devstate != AST_DEVICE_UNKNOWN) {
+			cc_state_to_devstate_map[state] = this_devstate;
+		}
+	}
+}
+
+/*!
+ * \internal
+ * \brief initializes cc_state_to_devstate_map from ccss.conf
+ *
+ * \details
+ * The cc_state_to_devstate_map[] is already initialized with all the
+ * default values. This will update that structure with any changes
+ * from the ccss.conf file. The configuration parameters in ccss.conf
+ * should use any valid device state form that is recognized by
+ * ast_devstate_val() function.
+ */
+static void initialize_cc_devstate_map(void)
+{
+	struct ast_config *cc_config;
+	struct ast_flags config_flags = { 0, };
+
+	cc_config = ast_config_load2("ccss.conf", "ccss", config_flags);
+	if (!cc_config || cc_config == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_WARNING,
+			"Could not find valid ccss.conf file. Using cc_[state]_devstate defaults\n");
+		return;
+	}
+
+	initialize_cc_devstate_map_helper(cc_config, CC_AVAILABLE, "cc_available_devstate");
+	initialize_cc_devstate_map_helper(cc_config, CC_CALLER_OFFERED, "cc_caller_offered_devstate");
+	initialize_cc_devstate_map_helper(cc_config, CC_CALLER_REQUESTED, "cc_caller_requested_devstate");
+	initialize_cc_devstate_map_helper(cc_config, CC_ACTIVE, "cc_active_devstate");
+	initialize_cc_devstate_map_helper(cc_config, CC_CALLEE_READY, "cc_callee_ready_devstate");
+	initialize_cc_devstate_map_helper(cc_config, CC_CALLER_BUSY, "cc_caller_busy_devstate");
+	initialize_cc_devstate_map_helper(cc_config, CC_RECALLING, "cc_recalling_devstate");
+	initialize_cc_devstate_map_helper(cc_config, CC_COMPLETE, "cc_complete_devstate");
+	initialize_cc_devstate_map_helper(cc_config, CC_FAILED, "cc_failed_devstate");
+
+	ast_config_destroy(cc_config);
 }
 
 static void cc_cli_print_monitor_stats(struct ast_cc_monitor *monitor, int fd, int parent_id)
@@ -4202,9 +4461,15 @@ int ast_cc_init(void)
 	res |= ast_register_application2(cccancel_app, cccancel_exec, NULL, NULL, NULL);
 	res |= ast_cc_monitor_register(&generic_monitor_cbs);
 	res |= ast_cc_agent_register(&generic_agent_callbacks);
+
 	ast_cli_register_multiple(cc_cli, ARRAY_LEN(cc_cli));
 	cc_logger_level = ast_logger_register_level(CC_LOGGER_LEVEL_NAME);
 	dialed_cc_interface_counter = 1;
 	initialize_cc_max_requests();
+
+	/* Read the map and register the device state callback for generic agents */
+	initialize_cc_devstate_map();
+	res |= ast_devstate_prov_add("ccss", ccss_device_state);
+
 	return res;
 }

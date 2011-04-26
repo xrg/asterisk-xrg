@@ -170,8 +170,7 @@ static int pitchshift_cb(struct ast_audiohook *audiohook, struct ast_channel *ch
 	}
 	if ((audiohook->status == AST_AUDIOHOOK_STATUS_DONE) ||
 		(f->frametype != AST_FRAME_VOICE) ||
-		((f->subclass.codec != AST_FORMAT_SLINEAR) &&
-		(f->subclass.codec != AST_FORMAT_SLINEAR16))) {
+		!(ast_format_is_slinear(&f->subclass.format))) {
 		return -1;
 	}
 
@@ -209,7 +208,7 @@ static int pitchshift_helper(struct ast_channel *chan, const char *cmd, char *da
 			return 0;
 		}
 
-		ast_audiohook_init(&shift->audiohook, AST_AUDIOHOOK_TYPE_MANIPULATE, "pitch_shift");
+		ast_audiohook_init(&shift->audiohook, AST_AUDIOHOOK_TYPE_MANIPULATE, "pitch_shift", AST_AUDIOHOOK_MANIPULATE_ALL_RATES);
 		shift->audiohook.manipulate_callback = pitchshift_cb;
 		datastore->data = shift;
 		new = 1;
@@ -481,7 +480,7 @@ static int pitch_shift(struct ast_frame *f, float amount, struct fft_data *fft)
 		return 0;
 	}
 	for (samples = 0; samples < f->samples; samples += 32) {
-		smb_pitch_shift(amount, 32, MAX_FRAME_LENGTH, 32, ast_format_rate(f->subclass.codec), fun+samples, fun+samples, fft);
+		smb_pitch_shift(amount, 32, MAX_FRAME_LENGTH, 32, ast_format_rate(&f->subclass.format), fun+samples, fun+samples, fft);
 	}
 
 	return 0;

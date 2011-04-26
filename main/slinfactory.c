@@ -36,23 +36,17 @@ void ast_slinfactory_init(struct ast_slinfactory *sf)
 {
 	memset(sf, 0, sizeof(*sf));
 	sf->offset = sf->hold;
-	sf->output_format = AST_FORMAT_SLINEAR;
+	ast_format_set(&sf->output_format, AST_FORMAT_SLINEAR, 0);
 }
 
-int ast_slinfactory_init_rate(struct ast_slinfactory *sf, unsigned int sample_rate) 
+int ast_slinfactory_init_with_format(struct ast_slinfactory *sf, const struct ast_format *slin_out)
 {
 	memset(sf, 0, sizeof(*sf));
 	sf->offset = sf->hold;
-	switch (sample_rate) {
-	case 8000:
-		sf->output_format = AST_FORMAT_SLINEAR;
-		break;
-	case 16000:
-		sf->output_format = AST_FORMAT_SLINEAR16;
-		break;
-	default:
+	if (!ast_format_is_slinear(slin_out)) {
 		return -1;
 	}
+	ast_format_copy(&sf->output_format, slin_out);
 
 	return 0;
 }
@@ -85,19 +79,22 @@ int ast_slinfactory_feed(struct ast_slinfactory *sf, struct ast_frame *f)
 		return 0;
 	}
 
-	if (f->subclass.codec != sf->output_format) {
-		if (sf->trans && f->subclass.codec != sf->format) {
+	if (ast_format_cmp(&f->subclass.format, &sf->output_format) == AST_FORMAT_CMP_NOT_EQUAL) {
+		if (sf->trans && (ast_format_cmp(&f->subclass.format, &sf->format) == AST_FORMAT_CMP_NOT_EQUAL)) {
 			ast_translator_free_path(sf->trans);
 			sf->trans = NULL;
 		}
 
 		if (!sf->trans) {
-			if (!(sf->trans = ast_translator_build_path(sf->output_format, f->subclass.codec))) {
-				ast_log(LOG_WARNING, "Cannot build a path from %s to %s\n", ast_getformatname(f->subclass.codec),
-					ast_getformatname(sf->output_format));
+			if (!(sf->trans = ast_translator_build_path(&sf->output_format, &f->subclass.format))) {
+				ast_log(LOG_WARNING, "Cannot build a path from %s (%d)to %s (%d)\n",
+					ast_getformatname(&f->subclass.format),
+					f->subclass.format.id,
+					ast_getformatname(&sf->output_format),
+					sf->output_format.id);
 				return 0;
 			}
-			sf->format = f->subclass.codec;
+			ast_format_copy(&sf->format, &f->subclass.format);
 		}
 
 		if (!(begin_frame = ast_translate(sf->trans, f, 0))) {

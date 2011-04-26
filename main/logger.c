@@ -1103,20 +1103,18 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	if (!(buf = ast_str_thread_get(&log_buf, LOG_BUF_INIT_SIZE)))
 		return;
 
-	if (AST_RWLIST_EMPTY(&logchannels)) {
+	if (level != __LOG_VERBOSE && AST_RWLIST_EMPTY(&logchannels)) {
 		/*
 		 * we don't have the logger chain configured yet,
 		 * so just log to stdout
 		 */
-		if (level != __LOG_VERBOSE) {
-			int result;
-			va_start(ap, fmt);
-			result = ast_str_set_va(&buf, BUFSIZ, fmt, ap); /* XXX BUFSIZ ? */
-			va_end(ap);
-			if (result != AST_DYNSTR_BUILD_FAILED) {
-				term_filter_escapes(ast_str_buffer(buf));
-				fputs(ast_str_buffer(buf), stdout);
-			}
+		int result;
+		va_start(ap, fmt);
+		result = ast_str_set_va(&buf, BUFSIZ, fmt, ap); /* XXX BUFSIZ ? */
+		va_end(ap);
+		if (result != AST_DYNSTR_BUILD_FAILED) {
+			term_filter_escapes(ast_str_buffer(buf));
+			fputs(ast_str_buffer(buf), stdout);
 		}
 		return;
 	}
@@ -1258,7 +1256,7 @@ char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 			char asteriskpath[256];
 			if (!(dli.dli_fname = ast_utils_which("asterisk", asteriskpath, sizeof(asteriskpath)))) {
 				/* This will fail to find symbols */
-				ast_log(LOG_DEBUG, "Failed to find asterisk binary for debug symbols.\n");
+				ast_debug(1, "Failed to find asterisk binary for debug symbols.\n");
 				dli.dli_fname = "asterisk";
 			}
 		}
@@ -1378,7 +1376,7 @@ void ast_backtrace(void)
 	if ((strings = ast_bt_get_symbols(bt->addresses, bt->num_frames))) {
 		ast_debug(1, "Got %d backtrace record%c\n", bt->num_frames, bt->num_frames != 1 ? 's' : ' ');
 		for (i = 3; i < bt->num_frames - 2; i++) {
-			ast_log(LOG_DEBUG, "#%d: [%p] %s\n", i - 3, bt->addresses[i], strings[i]);
+			ast_debug(1, "#%d: [%p] %s\n", i - 3, bt->addresses[i], strings[i]);
 		}
 
 		/* MALLOC_DEBUG will erroneously report an error here, unless we undef the macro. */

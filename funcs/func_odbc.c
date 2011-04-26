@@ -172,7 +172,7 @@ static SQLHSTMT generic_execute(struct odbc_obj *obj, void *data)
 	}
 
 	res = SQLExecDirect(stmt, (unsigned char *)sql, SQL_NTS);
-	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+	if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO) && (res != SQL_NO_DATA)) {
 		if (res == SQL_ERROR) {
 			int i;
 			SQLINTEGER nativeerror=0, numfields=0;
@@ -304,29 +304,30 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 			pbx_builtin_setvar_helper(chan, varname, NULL);
 		}
 		pbx_builtin_setvar_helper(chan, "VALUE", NULL);
+	}
 
-		/*!\note
-		 * Okay, this part is confusing.  Transactions belong to a single database
-		 * handle.  Therefore, when working with transactions, we CANNOT failover
-		 * to multiple DSNs.  We MUST have a single handle all the way through the
-		 * transaction, or else we CANNOT enforce atomicity.
-		 */
-		for (dsn = 0; dsn < 5; dsn++) {
+	/*!\note
+	 * Okay, this part is confusing.  Transactions belong to a single database
+	 * handle.  Therefore, when working with transactions, we CANNOT failover
+	 * to multiple DSNs.  We MUST have a single handle all the way through the
+	 * transaction, or else we CANNOT enforce atomicity.
+	 */
+	for (dsn = 0; dsn < 5; dsn++) {
+		if (!ast_strlen_zero(query->writehandle[dsn])) {
 			if (transactional) {
 				/* This can only happen second time through or greater. */
 				ast_log(LOG_WARNING, "Transactions do not work well with multiple DSNs for 'writehandle'\n");
 			}
 
-			if (!ast_strlen_zero(query->writehandle[dsn])) {
-				if ((obj = ast_odbc_retrieve_transaction_obj(chan, query->writehandle[dsn]))) {
-					transactional = 1;
-				} else {
-					obj = ast_odbc_request_obj(query->writehandle[dsn], 0);
-					transactional = 0;
-				}
-				if (obj && (stmt = ast_odbc_direct_execute(obj, generic_execute, ast_str_buffer(buf)))) {
-					break;
-				}
+			if ((obj = ast_odbc_retrieve_transaction_obj(chan, query->writehandle[dsn]))) {
+				transactional = 1;
+			} else {
+				obj = ast_odbc_request_obj(query->writehandle[dsn], 0);
+				transactional = 0;
+			}
+
+			if (obj && (stmt = ast_odbc_direct_execute(obj, generic_execute, ast_str_buffer(buf)))) {
+				break;
 			}
 
 			if (obj && !transactional) {
@@ -336,12 +337,34 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 		}
 	}
 
+	if (stmt) {
+		SQLRowCount(stmt, &rows);
+	}
+
 	if (stmt && rows == 0 && ast_str_strlen(insertbuf) != 0) {
 		SQLCloseCursor(stmt);
 		SQLFreeHandle(SQL_HANDLE_STMT, stmt);
-		for (dsn = 0; dsn < 5; dsn++) {
+		if (obj && !transactional) {
+			ast_odbc_release_obj(obj);
+			obj = NULL;
+		}
+
+		for (transactional = 0, dsn = 0; dsn < 5; dsn++) {
 			if (!ast_strlen_zero(query->writehandle[dsn])) {
-				obj = ast_odbc_request_obj(query->writehandle[dsn], 0);
+				if (transactional) {
+					/* This can only happen second time through or greater. */
+					ast_log(LOG_WARNING, "Transactions do not work well with multiple DSNs for 'writehandle'\n");
+				} else if (obj) {
+					ast_odbc_release_obj(obj);
+					obj = NULL;
+				}
+
+				if ((obj = ast_odbc_retrieve_transaction_obj(chan, query->writehandle[dsn]))) {
+					transactional = 1;
+				} else {
+					obj = ast_odbc_request_obj(query->writehandle[dsn], 0);
+					transactional = 0;
+				}
 				if (obj) {
 					stmt = ast_odbc_direct_execute(obj, generic_execute, ast_str_buffer(insertbuf));
 				}
@@ -351,12 +374,9 @@ static int acf_odbc_write(struct ast_channel *chan, const char *cmd, char *s, co
 				SQLRowCount(stmt, &rows);
 				break;
 			}
-			ast_odbc_release_obj(obj);
-			obj = NULL;
 		}
 	} else if (stmt) {
 		status = "SUCCESS";
-		SQLRowCount(stmt, &rows);
 	}
 
 	AST_RWLIST_UNLOCK(&queries);
@@ -586,7 +606,7 @@ static int acf_odbc_read(struct ast_channel *chan, const char *cmd, char *s, cha
 
 			if (y == 0) {
 				char colname[256];
-				SQLULEN maxcol;
+				SQLULEN maxcol = 0;
 
 				res = SQLDescribeCol(stmt, x + 1, (unsigned char *)colname, sizeof(colname), &collength, NULL, &maxcol, NULL, NULL);
 				ast_debug(3, "Got collength of %d and maxcol of %d for column '%s' (offset %d)\n", (int)collength, (int)maxcol, colname, x);
@@ -1194,6 +1214,8 @@ static char *cli_odbc_read(struct ast_cli_entry *e, int cmd, struct ast_cli_args
 			}
 			for (;;) {
 				for (x = 0; x < colcount; x++) {
+					maxcol = 0;
+
 					res = SQLDescribeCol(stmt, x + 1, (unsigned char *)colname, sizeof(colname), &collength, NULL, &maxcol, NULL, NULL);
 					if (((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) || collength == 0) {
 						snprintf(colname, sizeof(colname), "field%d", x);

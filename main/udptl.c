@@ -170,8 +170,6 @@ struct ast_udptl {
 	 */
 	int local_max_ifp;
 
-	int verbose;
-
 	unsigned int tx_seq_no;
 	unsigned int rx_seq_no;
 	unsigned int rx_expected_seq_no;
@@ -218,38 +216,29 @@ static int decode_length(uint8_t *buf, unsigned int limit, unsigned int *len, un
 	}
 	*pvalue = (buf[*len] & 0x3F) << 14;
 	(*len)++;
-	/* Indicate we have a fragment */
+	/* We have a fragment.  Currently we don't process fragments. */
+	ast_debug(1, "UDPTL packet with length greater than 16K received, decoding will fail\n");
 	return 1;
 }
 /*- End of function --------------------------------------------------------*/
 
 static int decode_open_type(uint8_t *buf, unsigned int limit, unsigned int *len, const uint8_t **p_object, unsigned int *p_num_octets)
 {
-	unsigned int octet_cnt;
-	unsigned int octet_idx;
-	unsigned int i;
-	int length; /* a negative length indicates the limit has been reached in decode_length. */
-	const uint8_t **pbuf;
+	unsigned int octet_cnt = 0;
 
-	for (octet_idx = 0, *p_num_octets = 0; ; octet_idx += octet_cnt) {
-		octet_cnt = 0;
-		if ((length = decode_length(buf, limit, len, &octet_cnt)) < 0)
+	if (decode_length(buf, limit, len, &octet_cnt) != 0)
+		return -1;
+
+	if (octet_cnt > 0) {
+		/* Make sure the buffer contains at least the number of bits requested */
+		if ((*len + octet_cnt) > limit)
 			return -1;
-		if (octet_cnt > 0) {
-			*p_num_octets += octet_cnt;
 
-			pbuf = &p_object[octet_idx];
-			i = 0;
-			/* Make sure the buffer contains at least the number of bits requested */
-			if ((*len + octet_cnt) > limit)
-				return -1;
-
-			*pbuf = &buf[*len];
-			*len += octet_cnt;
-		}
-		if (length == 0)
-			break;
+		*p_num_octets = octet_cnt;
+		*p_object = &buf[*len];
+		*len += octet_cnt;
 	}
+
 	return 0;
 }
 /*- End of function --------------------------------------------------------*/
@@ -332,12 +321,12 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, unsigned int len)
 	unsigned int count;
 	int total_count;
 	int seq_no;
-	const uint8_t *ifp;
-	const uint8_t *data;
-	unsigned int ifp_len;
+	const uint8_t *ifp = NULL;
+	const uint8_t *data = NULL;
+	unsigned int ifp_len = 0;
 	int repaired[16];
-	const uint8_t *bufs[16];
-	unsigned int lengths[16];
+	const uint8_t *bufs[ARRAY_LEN(s->f) - 1];
+	unsigned int lengths[ARRAY_LEN(s->f) - 1];
 	int span;
 	int entries;
 	int ifp_no;
@@ -367,13 +356,13 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, unsigned int len)
 			do {
 				if ((stat2 = decode_length(buf, len, &ptr, &count)) < 0)
 					return -1;
-				for (i = 0; i < count; i++) {
+				for (i = 0; i < count && total_count + i < ARRAY_LEN(bufs); i++) {
 					if ((stat1 = decode_open_type(buf, len, &ptr, &bufs[total_count + i], &lengths[total_count + i])) != 0)
 						return -1;
 				}
-				total_count += count;
+				total_count += i;
 			}
-			while (stat2 > 0);
+			while (stat2 > 0 && total_count < ARRAY_LEN(bufs));
 			/* Step through in reverse order, so we go oldest to newest */
 			for (i = total_count; i > 0; i--) {
 				if (seq_no - i >= s->rx_seq_no) {
@@ -381,7 +370,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, unsigned int len)
 					/* Decode the secondary IFP packet */
 					//fprintf(stderr, "Secondary %d, len %d\n", seq_no - i, lengths[i - 1]);
 					s->f[ifp_no].frametype = AST_FRAME_MODEM;
-					s->f[ifp_no].subclass.codec = AST_MODEM_T38;
+					s->f[ifp_no].subclass.integer = AST_MODEM_T38;
 
 					s->f[ifp_no].mallocd = 0;
 					s->f[ifp_no].seqno = seq_no - i;
@@ -436,6 +425,9 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, unsigned int len)
 		if (ptr + 1 > len)
 			return -1;
 		entries = buf[ptr++];
+		if (entries > MAX_FEC_ENTRIES) {
+			return -1;
+		}
 		s->rx[x].fec_entries = entries;
 
 		/* Decode the elements */
@@ -483,7 +475,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, unsigned int len)
 			if (repaired[l]) {
 				//fprintf(stderr, "Fixed packet %d, len %d\n", j, l);
 				s->f[ifp_no].frametype = AST_FRAME_MODEM;
-				s->f[ifp_no].subclass.codec = AST_MODEM_T38;
+				s->f[ifp_no].subclass.integer = AST_MODEM_T38;
 			
 				s->f[ifp_no].mallocd = 0;
 				s->f[ifp_no].seqno = j;
@@ -504,7 +496,7 @@ static int udptl_rx_packet(struct ast_udptl *s, uint8_t *buf, unsigned int len)
 	if (seq_no >= s->rx_seq_no) {
 		/* Decode the primary IFP packet */
 		s->f[ifp_no].frametype = AST_FRAME_MODEM;
-		s->f[ifp_no].subclass.codec = AST_MODEM_T38;
+		s->f[ifp_no].subclass.integer = AST_MODEM_T38;
 		
 		s->f[ifp_no].mallocd = 0;
 		s->f[ifp_no].seqno = seq_no;
@@ -630,9 +622,6 @@ static int udptl_build_packet(struct ast_udptl *s, uint8_t *buf, unsigned int bu
 		}
 		break;
 	}
-
-	if (s->verbose)
-		fprintf(stderr, "\n");
 
 	s->tx_seq_no++;
 	return len;
@@ -1062,7 +1051,7 @@ int ast_udptl_write(struct ast_udptl *s, struct ast_frame *f)
 		return 0;
 	
 	if ((f->frametype != AST_FRAME_MODEM) ||
-	    (f->subclass.codec != AST_MODEM_T38)) {
+	    (f->subclass.integer != AST_MODEM_T38)) {
 		ast_log(LOG_WARNING, "(%s): UDPTL can only send T.38 data.\n",
 			LOG_TAG(s));
 		return -1;

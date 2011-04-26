@@ -1387,7 +1387,7 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 	struct timeval now;
 	struct ast_str *out = ast_str_thread_get(&ast_str_thread_global_buf, 16);
 	char cdrtime[256];
-	char nf[256], wf[256], rf[256];
+	char nf[256];
 	struct ast_str *write_transpath = ast_str_alloca(256);
 	struct ast_str *read_transpath = ast_str_alloca(256);
 	long elapsed_seconds=0;
@@ -1438,6 +1438,8 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 		"       LinkedID: %s\n"
 		"      Caller ID: %s\n"
 		" Caller ID Name: %s\n"
+		"Connected Line ID: %s\n"
+		"Connected Line ID Name: %s\n"
 		"    DNID Digits: %s\n"
 		"       Language: %s\n"
 		"          State: %s (%d)\n"
@@ -1466,12 +1468,14 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 		c->name, c->tech->type, c->uniqueid, c->linkedid,
 		S_COR(c->caller.id.number.valid, c->caller.id.number.str, "(N/A)"),
 		S_COR(c->caller.id.name.valid, c->caller.id.name.str, "(N/A)"),
+		S_COR(c->connected.id.number.valid, c->connected.id.number.str, "(N/A)"),
+		S_COR(c->connected.id.name.valid, c->connected.id.name.str, "(N/A)"),
 		S_OR(c->dialed.number.str, "(N/A)"),
 		c->language,	
 		ast_state2str(c->_state), c->_state, c->rings, 
-		ast_getformatname_multiple(nf, sizeof(nf), c->nativeformats), 
-		ast_getformatname_multiple(wf, sizeof(wf), c->writeformat), 
-		ast_getformatname_multiple(rf, sizeof(rf), c->readformat),
+		ast_getformatname_multiple(nf, sizeof(nf), c->nativeformats),
+		ast_getformatname(&c->writeformat),
+		ast_getformatname(&c->readformat),
 		c->writetrans ? "Yes" : "No",
 		ast_translate_path_to_str(c->writetrans, &write_transpath),
 		c->readtrans ? "Yes" : "No",
@@ -1875,20 +1879,30 @@ static int word_match(const char *cmd, const char *cli_word)
 		return -1;
 	if (!strchr(cli_rsvd, cli_word[0])) /* normal match */
 		return (strcasecmp(cmd, cli_word) == 0) ? 1 : -1;
-	/* regexp match, takes [foo|bar] or {foo|bar} */
 	l = strlen(cmd);
 	/* wildcard match - will extend in the future */
 	if (l > 0 && cli_word[0] == '%') {
 		return 1;	/* wildcard */
 	}
+
+	/* Start a search for the command entered against the cli word in question */
 	pos = strcasestr(cli_word, cmd);
-	if (pos == NULL) /* not found, say ok if optional */
-		return cli_word[0] == '[' ? 0 : -1;
-	if (pos == cli_word)	/* no valid match at the beginning */
-		return -1;
-	if (strchr(cli_rsvd, pos[-1]) && strchr(cli_rsvd, pos[l]))
-		return 1;	/* valid match */
-	return -1;	/* not found */
+	while (pos) {
+
+		/*
+		 *Check if the word matched with is surrounded by reserved characters on both sides
+		 * and isn't at the beginning of the cli_word since that would make it check in a location we shouldn't know about.
+		 * If it is surrounded by reserved chars and isn't at the beginning, it's a match.
+		 */
+		if (pos != cli_word && strchr(cli_rsvd, pos[-1]) && strchr(cli_rsvd, pos[l])) {
+			return 1;	/* valid match */
+		}
+
+		/* Ok, that one didn't match, strcasestr to the next appearance of the command and start over.*/
+		pos = strcasestr(pos + 1, cmd);
+	}
+	/* If no matches were found over the course of the while loop, we hit the end of the string. It's a mismatch. */
+	return -1;
 }
 
 /*! \brief if word is a valid prefix for token, returns the pos-th

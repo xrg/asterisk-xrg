@@ -17,6 +17,8 @@
 #include "asterisk.h"
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
+#include "asterisk/config.h"
+#include "asterisk/netsock2.h"
 #include <time.h>
 
 #include "ooq931.h"
@@ -53,6 +55,7 @@ EXTERN int ooQ931Decode
    int offset, x;
    int rv = ASN_OK;
    char number[128];
+   char *display = NULL;
    /* OOCTXT *pctxt = &gH323ep.msgctxt; */
    OOCTXT *pctxt = call->msgctxt;
 
@@ -164,9 +167,15 @@ EXTERN int ooQ931Decode
       }
       if(ie->discriminator == Q931DisplayIE)
       {
-         OOTRACEDBGB1("   Display IE = {\n");
-         OOTRACEDBGB2("      %s\n", ie->data);
-         OOTRACEDBGB1("   }\n");
+	 if (!(display = memAllocZ(pctxt, ie->length + 1))) {
+		OOTRACEERR4("Can't alloc DisplayIE buffer for %n bytes, (%s, %s)\n", ie->length,
+				call->callType, call->callToken);
+	 } else {
+            memcpy(display, ie->data,ie->length);
+            OOTRACEDBGB1("   Display IE = {\n");
+            OOTRACEDBGB2("      %s\n", display);
+            OOTRACEDBGB1("   }\n");
+	 }
       }
 
       if(ie->discriminator == Q931KeypadIE)
@@ -847,7 +856,7 @@ int ooSetFastStartResponse(OOH323CallData *pCall, Q931Message *pQ931msg,
    /* OOCTXT *pctxt = &gH323ep.msgctxt;    */
    OOCTXT *pctxt = pCall->msgctxt;   
    int ret = 0, i=0, j=0, remoteMediaPort=0, remoteMediaControlPort = 0, dir=0;
-   char remoteMediaIP[20], remoteMediaControlIP[20];
+   char remoteMediaIP[2+8*4+7], remoteMediaControlIP[2+8*4+7];
    DListNode *pNode = NULL;
    H245OpenLogicalChannel *olc = NULL, printOlc;
    ooH323EpCapability *epCap = NULL;
@@ -1451,7 +1460,9 @@ int ooSendAlerting(OOH323CallData *call)
       OOTRACEERR3("Error: Failed to enqueue Alerting message to outbound queue. (%s, %s)\n", call->callType, call->callToken);
    }
 
-   ooSendTCSandMSD(call);
+   if (call->h225version >= 4) {
+	ooSendTCSandMSD(call);
+   }
    memReset (call->msgctxt);
 
    return ret;
@@ -1464,6 +1475,7 @@ int ooSendProgress(OOH323CallData *call)
    H225VendorIdentifier *vendor;
    Q931Message *q931msg=NULL;
    H225TransportAddress_ipAddress *h245IpAddr;
+   H225TransportAddress_ip6Address *h245Ip6Addr;
    OOCTXT *pctxt = call->msgctxt;
 
    ret = ooCreateQ931Message(pctxt, &q931msg, Q931ProgressMsg);
@@ -1560,6 +1572,23 @@ int ooSendProgress(OOH323CallData *call)
        !OO_TESTFLAG (call->flags, OO_M_TUNNELING) &&
        !call->h245listener && ooCreateH245Listener(call) == OO_OK)
    {
+     if (call->versionIP == 6) {
+      progress->m.h245AddressPresent = TRUE;
+      progress->h245Address.t = T_H225TransportAddress_ip6Address;
+   
+      h245Ip6Addr = (H225TransportAddress_ip6Address*)
+         memAllocZ (pctxt, sizeof(H225TransportAddress_ip6Address));
+      if(!h245Ip6Addr)
+      {
+         OOTRACEERR3("Error:Memory - ooSendProgress - h245Ip6Addr"
+                     "(%s, %s)\n", call->callType, call->callToken);
+         return OO_FAILED;
+      }
+      inet_pton(AF_INET6, call->localIP, h245Ip6Addr->ip.data);
+      h245Ip6Addr->ip.numocts=16;
+      h245Ip6Addr->port = *(call->h245listenport);
+      progress->h245Address.u.ip6Address = h245Ip6Addr;
+     } else {
       progress->m.h245AddressPresent = TRUE;
       progress->h245Address.t = T_H225TransportAddress_ipAddress;
    
@@ -1567,14 +1596,15 @@ int ooSendProgress(OOH323CallData *call)
          memAllocZ (pctxt, sizeof(H225TransportAddress_ipAddress));
       if(!h245IpAddr)
       {
-         OOTRACEERR3("Error:Memory - ooAcceptCall - h245IpAddr"
+         OOTRACEERR3("Error:Memory - ooSendProgress - h245IpAddr"
                      "(%s, %s)\n", call->callType, call->callToken);
          return OO_FAILED;
       }
-      ooSocketConvertIpToNwAddr(call->localIP, h245IpAddr->ip.data);
+      inet_pton(AF_INET, call->localIP, h245IpAddr->ip.data);
       h245IpAddr->ip.numocts=4;
       h245IpAddr->port = *(call->h245listenport);
       progress->h245Address.u.ipAddress = h245IpAddr;
+     }
    }
 
    OOTRACEDBGA3("Built Progress (%s, %s)\n", call->callType, call->callToken);
@@ -1588,7 +1618,9 @@ int ooSendProgress(OOH323CallData *call)
    if (!OO_TESTFLAG(call->flags, OO_M_TUNNELING) && call->h245listener)
       ooSendStartH245Facility(call);
 
-   ooSendTCSandMSD(call);
+   if (call->h225version >= 4) {
+	ooSendTCSandMSD(call);
+   }
    memReset (call->msgctxt);
 
    return ret;
@@ -1603,6 +1635,7 @@ int ooSendStartH245Facility(OOH323CallData *call)
    /* OOCTXT *pctxt = &gH323ep.msgctxt; */
    OOCTXT *pctxt = call->msgctxt;
    H225TransportAddress_ipAddress *h245IpAddr;
+   H225TransportAddress_ip6Address *h245Ip6Addr;
 
    OOTRACEDBGA3("Building Facility message (%s, %s)\n", call->callType,
                  call->callToken);
@@ -1663,19 +1696,35 @@ int ooSendStartH245Facility(OOH323CallData *call)
    }
 
    facility->m.h245AddressPresent = TRUE;
-   facility->h245Address.t = T_H225TransportAddress_ipAddress;
+   if (call->versionIP == 6) {
+    facility->h245Address.t = T_H225TransportAddress_ip6Address;
 
-   h245IpAddr = (H225TransportAddress_ipAddress*)
+    h245Ip6Addr = (H225TransportAddress_ip6Address*)
+   	memAllocZ (pctxt, sizeof(H225TransportAddress_ip6Address));
+    if(!h245Ip6Addr) {
+         OOTRACEERR3("Error:Memory - ooSendFacility - h245Ip6Addr"
+                     "(%s, %s)\n", call->callType, call->callToken);
+         return OO_FAILED;
+    }
+    inet_pton(AF_INET6, call->localIP, h245Ip6Addr->ip.data);
+    h245Ip6Addr->ip.numocts=16;
+    h245Ip6Addr->port = *(call->h245listenport);
+    facility->h245Address.u.ip6Address = h245Ip6Addr;
+   } else {
+    facility->h245Address.t = T_H225TransportAddress_ipAddress;
+
+    h245IpAddr = (H225TransportAddress_ipAddress*)
    	memAllocZ (pctxt, sizeof(H225TransportAddress_ipAddress));
-   if(!h245IpAddr) {
+    if(!h245IpAddr) {
          OOTRACEERR3("Error:Memory - ooSendFacility - h245IpAddr"
                      "(%s, %s)\n", call->callType, call->callToken);
          return OO_FAILED;
+    }
+    inet_pton(AF_INET, call->localIP, h245IpAddr->ip.data);
+    h245IpAddr->ip.numocts=4;
+    h245IpAddr->port = *(call->h245listenport);
+    facility->h245Address.u.ipAddress = h245IpAddr;
    }
-   ooSocketConvertIpToNwAddr(call->localIP, h245IpAddr->ip.data);
-   h245IpAddr->ip.numocts=4;
-   h245IpAddr->port = *(call->h245listenport);
-   facility->h245Address.u.ipAddress = h245IpAddr;
 
    OOTRACEDBGA3("Built Facility message to send (%s, %s)\n", call->callType,
                  call->callToken);
@@ -1807,6 +1856,7 @@ int ooAcceptCall(OOH323CallData *call)
    int ret = 0, i=0;
    H225Connect_UUIE *connect;
    H225TransportAddress_ipAddress *h245IpAddr;
+   H225TransportAddress_ip6Address *h245Ip6Addr;
    H225VendorIdentifier *vendor;
    Q931Message *q931msg=NULL;
    /* OOCTXT *pctxt = &gH323ep.msgctxt;   */
@@ -1957,28 +2007,49 @@ int ooAcceptCall(OOH323CallData *call)
    }
 
 
-   /* Add h245 listener address. Do not add H245 listener address in case
-      of fast-start. */
+   /* Add h245 listener address. */
+   /* Do not add H245 listener address in case
+      of fast-start. why? */
+   /* May 20110205 */
+   /* Send h245 listener addr any case if H245 connection isn't established */
    if (/* (!OO_TESTFLAG(call->flags, OO_M_FASTSTART) || 
         call->remoteFastStartOLCs.count == 0) && */
        !OO_TESTFLAG (call->flags, OO_M_TUNNELING) &&
-       !call->h245listener && ooCreateH245Listener(call) == OO_OK)
+       ( (!call->h245listener && ooCreateH245Listener(call) == OO_OK) ||
+         !call->pH245Channel))
    {
       connect->m.h245AddressPresent = TRUE;
-      connect->h245Address.t = T_H225TransportAddress_ipAddress;
+      if (call->versionIP == 6) {
+       connect->h245Address.t = T_H225TransportAddress_ip6Address;
    
-      h245IpAddr = (H225TransportAddress_ipAddress*)
+       h245Ip6Addr = (H225TransportAddress_ip6Address*)
+         memAllocZ (pctxt, sizeof(H225TransportAddress_ip6Address));
+       if(!h245Ip6Addr)
+       {
+         OOTRACEERR3("Error:Memory - ooAcceptCall - h245Ip6Addr"
+                     "(%s, %s)\n", call->callType, call->callToken);
+         return OO_FAILED;
+       }
+       inet_pton(AF_INET6, call->localIP, h245Ip6Addr->ip.data);
+       h245Ip6Addr->ip.numocts=16;
+       h245Ip6Addr->port = *(call->h245listenport);
+       connect->h245Address.u.ip6Address = h245Ip6Addr;
+      } else {
+       connect->h245Address.t = T_H225TransportAddress_ipAddress;
+   
+       h245IpAddr = (H225TransportAddress_ipAddress*)
          memAllocZ (pctxt, sizeof(H225TransportAddress_ipAddress));
-      if(!h245IpAddr)
-      {
+       if(!h245IpAddr)
+       {
          OOTRACEERR3("Error:Memory - ooAcceptCall - h245IpAddr"
                      "(%s, %s)\n", call->callType, call->callToken);
          return OO_FAILED;
+       }
+       inet_pton(AF_INET, call->localIP, h245IpAddr->ip.data);
+       h245IpAddr->ip.numocts=4;
+       h245IpAddr->port = *(call->h245listenport);
+       connect->h245Address.u.ipAddress = h245IpAddr;
       }
-      ooSocketConvertIpToNwAddr(call->localIP, h245IpAddr->ip.data);
-      h245IpAddr->ip.numocts=4;
-      h245IpAddr->port = *(call->h245listenport);
-      connect->h245Address.u.ipAddress = h245IpAddr;
    }
 
    OOTRACEDBGA3("Built H.225 Connect message (%s, %s)\n", call->callType,
@@ -1997,6 +2068,7 @@ int ooAcceptCall(OOH323CallData *call)
       return OO_FAILED;
    }
    /* memReset(&gH323ep.msgctxt); */
+   ooSendTCSandMSD(call);
    memReset(call->msgctxt);
 
    call->callState = OO_CALL_CONNECTED;
@@ -2110,10 +2182,11 @@ int ooH323MakeCall(char *dest, char *callToken, ooCallOptions *opts)
    OOCTXT *pctxt;
    OOH323CallData *call;
    int ret=OO_OK, i=0, irand=0;
-   char tmp[30]="\0";
+   char tmp[2+8*4+7]="\0";
    char *ip=NULL, *port = NULL;
    struct timeval tv;
    struct timespec ts;
+   struct ast_sockaddr m_addr;
 
    if(!dest)
    {
@@ -2157,7 +2230,7 @@ int ooH323MakeCall(char *dest, char *callToken, ooCallOptions *opts)
    }
 
 
-   ret = ooParseDestination(call, dest, tmp, 24, &call->remoteAliases);
+   ret = ooParseDestination(call, dest, tmp, 2+8*4+7, &call->remoteAliases);
    if(ret != OO_OK)
    {
       OOTRACEERR2("Error: Failed to parse the destination string %s for "
@@ -2169,10 +2242,15 @@ int ooH323MakeCall(char *dest, char *callToken, ooCallOptions *opts)
    /* Check whether we have ip address */
    if(!ooUtilsIsStrEmpty(tmp)) {
       ip = tmp;
-      port = strchr(tmp, ':');
+      port = strrchr(tmp, ':');
       *port = '\0';
       port++;
       strcpy(call->remoteIP, ip);
+      ast_parse_arg(ip, PARSE_ADDR, &m_addr);
+      if (ast_sockaddr_is_ipv6(&m_addr))
+	call->versionIP = 6;
+      else
+	call->versionIP = 4;
       call->remotePort = atoi(port);
    }
 
@@ -2245,7 +2323,16 @@ int ooH323CallAdmitted(OOH323CallData *call)
 
       if(gH323ep.h323Callbacks.onOutgoingCall) {
          /* Outgoing call callback function */
-         gH323ep.h323Callbacks.onOutgoingCall(call);
+         if (gH323ep.h323Callbacks.onOutgoingCall(call) != OO_OK) {
+           OOTRACEERR3("ERROR:Failed to setup media to (%s,%d)\n", 
+		      call->callType, call->callToken);
+           if(call->callState< OO_CALL_CLEAR)
+           {
+             call->callState = OO_CALL_CLEAR;
+             call->callEndReason = OO_REASON_UNKNOWN;
+           }
+           return OO_FAILED;
+	 }
       }
       
       ret = ooH323MakeCall_helper(call);
@@ -2278,9 +2365,8 @@ int ooH323MakeCall_helper(OOH323CallData *call)
    H225Setup_UUIE *setup;
 
    ASN1DynOctStr *pFS=NULL;
-   H225TransportAddress_ipAddress *destCallSignalIpAddress;
-
-   H225TransportAddress_ipAddress *srcCallSignalIpAddress;
+   H225TransportAddress_ipAddress *destCallSignalIpAddress,*srcCallSignalIpAddress;
+   H225TransportAddress_ip6Address *destCallSignalIp6Address,*srcCallSignalIp6Address;
    ooH323EpCapability *epCap=NULL;
    OOCTXT *pctxt = NULL;
    H245OpenLogicalChannel *olc, printOlc;
@@ -2449,41 +2535,77 @@ int ooH323MakeCall_helper(OOH323CallData *call)
    setup->sourceInfo.undefinedNode = FALSE;
 
    /* Populate the destination Call Signal Address */
-   setup->destCallSignalAddress.t=T_H225TransportAddress_ipAddress;
-   destCallSignalIpAddress = (H225TransportAddress_ipAddress*)memAlloc(pctxt,
+   setup->m.destCallSignalAddressPresent=TRUE;
+   setup->activeMC=FALSE;
+   if (call->versionIP == 6) {
+    setup->destCallSignalAddress.t=T_H225TransportAddress_ip6Address;
+    destCallSignalIp6Address = (H225TransportAddress_ip6Address*)memAlloc(pctxt,
+                                  sizeof(H225TransportAddress_ip6Address));
+    if(!destCallSignalIp6Address)
+    {
+      OOTRACEERR3("Error:Memory -  ooH323MakeCall_helper - "
+                 "destCallSignal6Address. (%s, %s)\n", call->callType, 
+                 call->callToken);
+      return OO_FAILED;
+    }
+    inet_pton(AF_INET6, call->remoteIP, destCallSignalIp6Address->ip.data);
+
+    destCallSignalIp6Address->ip.numocts=16;
+    destCallSignalIp6Address->port = call->remotePort;
+
+    setup->destCallSignalAddress.u.ip6Address = destCallSignalIp6Address;
+   } else {
+    setup->destCallSignalAddress.t=T_H225TransportAddress_ipAddress;
+    destCallSignalIpAddress = (H225TransportAddress_ipAddress*)memAlloc(pctxt,
                                   sizeof(H225TransportAddress_ipAddress));
-   if(!destCallSignalIpAddress)
-   {
+    if(!destCallSignalIpAddress)
+    {
       OOTRACEERR3("Error:Memory -  ooH323MakeCall_helper - "
                  "destCallSignalAddress. (%s, %s)\n", call->callType, 
                  call->callToken);
       return OO_FAILED;
+    }
+    inet_pton(AF_INET, call->remoteIP, destCallSignalIpAddress->ip.data);
+
+    destCallSignalIpAddress->ip.numocts=4;
+    destCallSignalIpAddress->port = call->remotePort;
+
+    setup->destCallSignalAddress.u.ipAddress = destCallSignalIpAddress;
    }
-   ooSocketConvertIpToNwAddr(call->remoteIP, destCallSignalIpAddress->ip.data);
-
-   destCallSignalIpAddress->ip.numocts=4;
-   destCallSignalIpAddress->port = call->remotePort;
-
-   setup->destCallSignalAddress.u.ipAddress = destCallSignalIpAddress;
-   setup->m.destCallSignalAddressPresent=TRUE;
-   setup->activeMC=FALSE;
 
    /* Populate the source Call Signal Address */
-   setup->sourceCallSignalAddress.t=T_H225TransportAddress_ipAddress;
-   srcCallSignalIpAddress = (H225TransportAddress_ipAddress*)memAlloc(pctxt,
+   setup->m.sourceCallSignalAddressPresent=TRUE;
+   if (call->versionIP == 6) {
+    setup->sourceCallSignalAddress.t=T_H225TransportAddress_ip6Address;
+    srcCallSignalIp6Address = (H225TransportAddress_ip6Address*)memAlloc(pctxt,
+                                  sizeof(H225TransportAddress_ip6Address));
+    if(!srcCallSignalIp6Address)
+    {
+      OOTRACEERR3("Error:Memory - ooH323MakeCall_helper - srcCallSignal6Address"
+                  "(%s, %s)\n", call->callType, call->callToken);
+      return OO_FAILED;
+    }
+    inet_pton(AF_INET6, call->localIP, srcCallSignalIp6Address->ip.data);
+
+    srcCallSignalIp6Address->ip.numocts=16;
+    srcCallSignalIp6Address->port= call->pH225Channel->port;
+    setup->sourceCallSignalAddress.u.ip6Address = srcCallSignalIp6Address;
+   } else {
+    setup->sourceCallSignalAddress.t=T_H225TransportAddress_ipAddress;
+    srcCallSignalIpAddress = (H225TransportAddress_ipAddress*)memAlloc(pctxt,
                                   sizeof(H225TransportAddress_ipAddress));
-   if(!srcCallSignalIpAddress)
-   {
+    if(!srcCallSignalIpAddress)
+    {
       OOTRACEERR3("Error:Memory - ooH323MakeCall_helper - srcCallSignalAddress"
                   "(%s, %s)\n", call->callType, call->callToken);
       return OO_FAILED;
-   }
-   ooSocketConvertIpToNwAddr(call->localIP, srcCallSignalIpAddress->ip.data);
+    }
+    inet_pton(AF_INET, call->localIP, srcCallSignalIpAddress->ip.data);
 
-   srcCallSignalIpAddress->ip.numocts=4;
-   srcCallSignalIpAddress->port= call->pH225Channel->port;
-   setup->sourceCallSignalAddress.u.ipAddress = srcCallSignalIpAddress;
-   setup->m.sourceCallSignalAddressPresent=TRUE;
+    srcCallSignalIpAddress->ip.numocts=4;
+    srcCallSignalIpAddress->port= call->pH225Channel->port;
+    setup->sourceCallSignalAddress.u.ipAddress = srcCallSignalIpAddress;
+   }
    /* No fast start */
    if(!OO_TESTFLAG(call->flags, OO_M_FASTSTART))
    {
@@ -2721,11 +2843,8 @@ int ooH323MakeCall_helper(OOH323CallData *call)
 
    /* For H.323 version 4 and higher, if fast connect, tunneling should be 
       supported.
+      why?
    */
-   if(OO_TESTFLAG(call->flags, OO_M_FASTSTART)) {
-      q931msg->userInfo->h323_uu_pdu.h245Tunneling = TRUE;
-      OO_SETFLAG(call->flags, OO_M_TUNNELING);
-   }
 
    OOTRACEDBGA3("Built SETUP message (%s, %s)\n", call->callType, 
                  call->callToken);
@@ -2832,8 +2951,9 @@ int ooH323ForwardCall(char* callToken, char *dest)
    H225Facility_UUIE *facility=NULL;
    OOCTXT *pctxt = &gH323ep.msgctxt;
    OOH323CallData *call;
-   char ip[30]="\0", *pcPort=NULL;
+   char ip[2+8*4+7]="\0", *pcPort=NULL;
    H225TransportAddress_ipAddress *fwdCallSignalIpAddress;
+   H225TransportAddress_ip6Address *fwdCallSignalIp6Address;
 
    call= ooFindCallByToken(callToken);
    if(!call)
@@ -2852,7 +2972,7 @@ int ooH323ForwardCall(char* callToken, char *dest)
      return OO_FAILED;
    }
 
-   ret = ooParseDestination(call, dest, ip, 20, 
+   ret = ooParseDestination(call, dest, ip, 2+8*4+7, 
                                              &call->pCallFwdData->aliases);
    if(ret != OO_OK)
    {
@@ -2864,7 +2984,7 @@ int ooH323ForwardCall(char* callToken, char *dest)
 
    if(!ooUtilsIsStrEmpty(ip))
    {
-      pcPort = strchr(ip, ':');
+      pcPort = strrchr(ip, ':');
       if(pcPort)
       {
          *pcPort = '\0';
@@ -2928,21 +3048,39 @@ int ooH323ForwardCall(char* callToken, char *dest)
    if(!ooUtilsIsStrEmpty(call->pCallFwdData->ip))
    {
       facility->m.alternativeAddressPresent = TRUE;
-      facility->alternativeAddress.t=T_H225TransportAddress_ipAddress;
-      fwdCallSignalIpAddress = (H225TransportAddress_ipAddress*)memAlloc(pctxt,
+      if (call->versionIP == 6) {
+       facility->alternativeAddress.t=T_H225TransportAddress_ip6Address;
+       fwdCallSignalIp6Address = (H225TransportAddress_ip6Address*)memAlloc(pctxt,
+                                  sizeof(H225TransportAddress_ip6Address));
+       if(!fwdCallSignalIp6Address)
+       {
+         OOTRACEERR3("Error:Memory - ooH323ForwardCall - fwdCallSignal6Address"
+                     "(%s, %s)\n", call->callType, call->callToken);
+         return OO_FAILED;
+       }
+       inet_pton(AF_INET6, call->pCallFwdData->ip, 
+                                          fwdCallSignalIp6Address->ip.data);
+
+       fwdCallSignalIp6Address->ip.numocts=16;
+       fwdCallSignalIp6Address->port = call->pCallFwdData->port;
+       facility->alternativeAddress.u.ip6Address = fwdCallSignalIp6Address;
+      } else {
+       facility->alternativeAddress.t=T_H225TransportAddress_ipAddress;
+       fwdCallSignalIpAddress = (H225TransportAddress_ipAddress*)memAlloc(pctxt,
                                   sizeof(H225TransportAddress_ipAddress));
-      if(!fwdCallSignalIpAddress)
-      {
+       if(!fwdCallSignalIpAddress)
+       {
          OOTRACEERR3("Error:Memory - ooH323ForwardCall - fwdCallSignalAddress"
                      "(%s, %s)\n", call->callType, call->callToken);
          return OO_FAILED;
-      }
-      ooSocketConvertIpToNwAddr(call->pCallFwdData->ip, 
+       }
+       inet_pton(AF_INET, call->pCallFwdData->ip, 
                                           fwdCallSignalIpAddress->ip.data);
 
-      fwdCallSignalIpAddress->ip.numocts=4;
-      fwdCallSignalIpAddress->port = call->pCallFwdData->port;
-      facility->alternativeAddress.u.ipAddress = fwdCallSignalIpAddress;
+       fwdCallSignalIpAddress->ip.numocts=4;
+       fwdCallSignalIpAddress->port = call->pCallFwdData->port;
+       facility->alternativeAddress.u.ipAddress = fwdCallSignalIpAddress;
+      }
    }
 
    if(call->pCallFwdData->aliases)
@@ -3456,6 +3594,7 @@ int ooParseDestination
    char tmp[256], buf[30];
    char *alias=NULL;
    OOCTXT *pctxt = call->pctxt;
+   struct ast_sockaddr tmpaddr;
    parsedIP[0] = '\0';
 
    OOTRACEINFO2("Parsing destination %s\n", dest);
@@ -3482,6 +3621,19 @@ int ooParseDestination
       }
          
       strcpy(parsedIP, buf);
+      return OO_OK;
+   }
+
+   if (!ast_parse_arg(dest, PARSE_ADDR, &tmpaddr)) {
+      if(strlen(dest)+7>len)
+      {
+         OOTRACEERR1("Error:Insufficient buffer space for parsed ip - "
+                     "ooParseDestination\n");
+         return OO_FAILED;
+      }
+      strcpy(parsedIP, ast_sockaddr_stringify_addr(&tmpaddr));
+      strcat(parsedIP, ":");
+      strcat(parsedIP, ast_sockaddr_stringify_port(&tmpaddr));
       return OO_OK;
    }
 

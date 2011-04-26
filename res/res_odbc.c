@@ -1218,13 +1218,14 @@ struct odbc_obj *_ast_odbc_request_obj2(const char *name, struct ast_flags flags
 		if (obj) {
 			ast_assert(ao2_ref(obj, 0) > 1);
 		}
-		if (!obj && (class->count < class->limit) &&
+		if (!obj && (ast_atomic_fetchadd_int(&class->count, +1) < class->limit) &&
 				(time(NULL) > class->last_negative_connect.tv_sec + class->negative_connection_cache.tv_sec)) {
 			obj = ao2_alloc(sizeof(*obj), odbc_obj_destructor);
 			if (!obj) {
 				class->count--;
 				ao2_ref(class, -1);
 				ast_debug(3, "Unable to allocate object\n");
+				ast_atomic_fetchadd_int(&class->count, -1);
 				return NULL;
 			}
 			ast_assert(ao2_ref(obj, 0) == 1);
@@ -1235,14 +1236,18 @@ struct odbc_obj *_ast_odbc_request_obj2(const char *name, struct ast_flags flags
 			if (odbc_obj_connect(obj) == ODBC_FAIL) {
 				ast_log(LOG_WARNING, "Failed to connect to %s\n", name);
 				ao2_ref(obj, -1);
-				ast_assert(ao2_ref(class, 0) > 0);
 				obj = NULL;
+				ast_assert(ao2_ref(class, 0) > 0);
+				ast_atomic_fetchadd_int(&class->count, -1);
 			} else {
 				obj->used = 1;
 				ao2_link(obj->parent->obj_container, obj);
-				ast_atomic_fetchadd_int(&obj->parent->count, +1);
 			}
 		} else {
+			/* If construction fails due to the limit (or negative timecache), reverse our increment. */
+			if (!obj) {
+				ast_atomic_fetchadd_int(&class->count, -1);
+			}
 			/* Object is not constructed, so delete outstanding reference to class. */
 			ao2_ref(class, -1);
 			class = NULL;
@@ -1435,15 +1440,15 @@ static odbc_status odbc_obj_disconnect(struct odbc_obj *obj)
 
 	if (obj->parent) {
 		if (res == SQL_SUCCESS || res == SQL_SUCCESS_WITH_INFO) {
-			ast_log(LOG_DEBUG, "Disconnected %d from %s [%s]\n", res, obj->parent->name, obj->parent->dsn);
+			ast_debug(1, "Disconnected %d from %s [%s]\n", res, obj->parent->name, obj->parent->dsn);
 		} else {
-			ast_log(LOG_DEBUG, "res_odbc: %s [%s] already disconnected\n", obj->parent->name, obj->parent->dsn);
+			ast_debug(1, "res_odbc: %s [%s] already disconnected\n", obj->parent->name, obj->parent->dsn);
 		}
 	}
 
 	if ((res = SQLFreeHandle(SQL_HANDLE_DBC, obj->con) == SQL_SUCCESS)) {
 		obj->con = NULL;
-		ast_log(LOG_DEBUG, "Database handle deallocated\n");
+		ast_debug(1, "Database handle deallocated\n");
 	} else {
 		SQLGetDiagRec(SQL_HANDLE_DBC, obj->con, 1, state, &err, msg, 100, &mlen);
 		ast_log(LOG_WARNING, "Unable to deallocate database handle? %d errno=%d %s\n", res, (int)err, msg);

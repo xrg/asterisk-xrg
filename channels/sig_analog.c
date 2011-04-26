@@ -518,23 +518,31 @@ static void analog_all_subchannels_hungup(struct analog_pvt *p)
 	}
 }
 
-#if 0
 static void analog_unlock_private(struct analog_pvt *p)
 {
 	if (p->calls->unlock_private) {
 		p->calls->unlock_private(p->chan_pvt);
 	}
 }
-#endif
 
-#if 0
 static void analog_lock_private(struct analog_pvt *p)
 {
 	if (p->calls->lock_private) {
 		p->calls->lock_private(p->chan_pvt);
 	}
 }
-#endif
+
+static void analog_deadlock_avoidance_private(struct analog_pvt *p)
+{
+	if (p->calls->deadlock_avoidance_private) {
+		p->calls->deadlock_avoidance_private(p->chan_pvt);
+	} else {
+		/* Fallback to manual avoidance if callback not present. */
+		analog_unlock_private(p);
+		usleep(1);
+		analog_lock_private(p);
+	}
+}
 
 /*!
  * \internal
@@ -563,12 +571,7 @@ static void analog_lock_sub_owner(struct analog_pvt *pvt, enum analog_sub sub_id
 			break;
 		}
 		/* We must unlock the private to avoid the possibility of a deadlock */
-		if (pvt->calls->deadlock_avoidance_private) {
-			pvt->calls->deadlock_avoidance_private(pvt->chan_pvt);
-		} else {
-			/* Don't use 100% CPU if required callback not present. */
-			usleep(1);
-		}
+		analog_deadlock_avoidance_private(pvt);
 	}
 }
 
@@ -2007,10 +2010,13 @@ static void *__analog_ss_thread(void *data)
 		}
 		if ((p->sig == ANALOG_SIG_FEATDMF) || (p->sig == ANALOG_SIG_FEATDMF_TA)) {
 			analog_wink(p, idx);
-			/* some switches require a minimum guard time between
-			the last FGD wink and something that answers
-			immediately. This ensures it */
-			if (ast_safe_sleep(chan,100)) {
+			/*
+			 * Some switches require a minimum guard time between the last
+			 * FGD wink and something that answers immediately.  This
+			 * ensures it.
+			 */
+			if (ast_safe_sleep(chan, 100)) {
+				ast_hangup(chan);
 				goto quit;
 			}
 		}
@@ -3019,7 +3025,6 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 			break;
 		}
 		break;
-#ifdef ANALOG_EVENT_RINGBEGIN
 	case ANALOG_EVENT_RINGBEGIN:
 		switch (p->sig) {
 		case ANALOG_SIG_FXSLS:
@@ -3029,9 +3034,10 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				analog_set_ringtimeout(p, p->ringt_base);
 			}
 			break;
+		default:
+			break;
 		}
 		break;
-#endif
 	case ANALOG_EVENT_RINGEROFF:
 		if (p->inalarm) break;
 		ast->rings++;

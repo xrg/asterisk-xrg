@@ -9,6 +9,15 @@ dateformat=M-D-Y	; M,D,Y in any order (6 chars max)
 			; Use M for month, D for day, Y for year, A for 12-hour time.
 keepalive=120
 
+;authtimeout = 30       ; authtimeout specifies the maximum number of seconds a
+			; client has to authenticate.  If the client does not
+			; authenticate beofre this timeout expires, the client
+                        ; will be disconnected.  (default: 30 seconds)
+
+;authlimit = 50         ; authlimit specifies the maximum number of
+			; unauthenticated sessions that will be allowed to
+                        ; connect at any given time. (default: 50)
+
 ;vmexten=8500		; Systemwide voicemailmain pilot number
 			; It must be in the same context as the calling
 			; device/line
@@ -25,10 +34,11 @@ keepalive=120
 ;
 ;regcontext=skinnyregistrations
 
-;allow=all		; see doc/rtp-packetization for framing options
+;allow=all		; see https://wiki.asterisk.org/wiki/display/AST/RTP+Packetization
+			; for framing options
 ;disallow=
 
-; See qos.tex or Quality of Service section of asterisk.pdf for a description of these parameters.
+; See https://wiki.asterisk.org/wiki/display/AST/IP+Quality+of+Service for a description of these parameters.
 ;tos=cs3		; Sets TOS for signaling packets.
 ;tos_audio=ef		; Sets TOS for RTP audio packets.
 ;tos_video=af41		; Sets TOS for RTP video packets.

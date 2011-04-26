@@ -1811,10 +1811,10 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 							}                                                                                                            \
 						}                                                                                                                \
 					}
-					
+
 #define	NEW_MATCHER_RECURSE	           \
 					if (p->next_char && (*(str + 1) || (p->next_char->x[0] == '/' && p->next_char->x[1] == 0)                 \
-        	                                       || p->next_char->x[0] == '!')) {                                          \
+		                                       || p->next_char->x[0] == '!')) {                                          \
 						if (*(str + 1) || p->next_char->x[0] == '!') {                                                         \
 							new_find_extension(str + 1, score, p->next_char, length + 1, spec + p->specificity, callerid, label, action); \
 							if (score->exten)  {                                                                             \
@@ -1825,7 +1825,7 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 							new_find_extension("/", score, p->next_char, length + 1, spec + p->specificity, callerid, label, action);	 \
 							if (score->exten || ((action == E_CANMATCH || action == E_MATCHMORE) && score->canmatch)) {      \
 						        ast_debug(4,"returning a (can/more) match--- %s\n", score->exten ? score->exten->exten :     \
-        	                               "NULL");                                                                        \
+		                               "NULL");                                                                        \
 								return; /* the first match is all we need */                                                 \
 							}												                                                 \
 						}                                                                                                    \
@@ -1837,7 +1837,7 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 							return;                                                                                          \
 						}												                                                     \
 					}
-					
+
 					NEW_MATCHER_CHK_MATCH;
 					NEW_MATCHER_RECURSE;
 				}
@@ -1846,7 +1846,7 @@ static void new_find_extension(const char *str, struct scoreboard *score, struct
 					NEW_MATCHER_CHK_MATCH;
 					NEW_MATCHER_RECURSE;
 				}
-			} else if (p->x[0] == 'X') { 
+			} else if (p->x[0] == 'X') {
 				if (p->x[1] == 0 && *str >= '0' && *str <= '9' ) {
 					NEW_MATCHER_CHK_MATCH;
 					NEW_MATCHER_RECURSE;
@@ -2054,7 +2054,7 @@ static struct match_char *add_exten_to_pattern_tree(struct ast_context *con, str
 		return 0;
 	}
 #ifdef NEED_DEBUG
-	ast_log(LOG_DEBUG, "Adding exten %s%c%s to tree\n", s1, e1->matchcid ? '/' : ' ', e1->matchcid ? e1->cidmatch : "");
+	ast_debug(1, "Adding exten %s%c%s to tree\n", s1, e1->matchcid ? '/' : ' ', e1->matchcid ? e1->cidmatch : "");
 #endif
 	m1 = con->pattern_tree; /* each pattern starts over at the root of the pattern tree */
 	m0 = &con->pattern_tree;
@@ -2180,9 +2180,9 @@ static void create_match_char_tree(struct ast_context *con)
 #ifdef NEED_DEBUG
 	int biggest_bucket, resizes, numobjs, numbucks;
 
-	ast_log(LOG_DEBUG,"Creating Extension Trie for context %s(%p)\n", con->name, con);
+	ast_debug(1, "Creating Extension Trie for context %s(%p)\n", con->name, con);
 	ast_hashtab_get_stats(con->root_table, &biggest_bucket, &resizes, &numobjs, &numbucks);
-	ast_log(LOG_DEBUG,"This tree has %d objects in %d bucket lists, longest list=%d objects, and has resized %d times\n",
+	ast_debug(1, "This tree has %d objects in %d bucket lists, longest list=%d objects, and has resized %d times\n",
 			numobjs, numbucks, biggest_bucket, resizes);
 #endif
 	t1 = ast_hashtab_start_traversal(con->root_table);
@@ -2701,7 +2701,7 @@ struct ast_exten *pbx_find_extension(struct ast_channel *chan,
 	if (!tmp->pattern_tree && tmp->root_table) {
 		create_match_char_tree(tmp);
 #ifdef NEED_DEBUG
-		ast_log(LOG_DEBUG, "Tree Created in context %s:\n", context);
+		ast_debug(1, "Tree Created in context %s:\n", context);
 		log_match_char_tree(tmp->pattern_tree," ");
 #endif
 	}
@@ -4348,9 +4348,11 @@ static int handle_statechange(void *datap)
 	struct ao2_iterator cb_iter;
 
 	if (ao2_container_count(hintdevices) == 0) {
+		ast_free(sc);
 		return 0;
 	}
 	if (!(cmpdevice = ast_malloc(sizeof(*cmpdevice) + strlen(sc->dev)))) {
+		ast_free(sc);
 		return -1;
 	}
 	strcpy(cmpdevice->hintdevice, sc->dev);
@@ -4414,6 +4416,7 @@ static int handle_statechange(void *datap)
 	if (cmpdevice) {
 		ast_free(cmpdevice);
 	}
+	ast_free(sc);
 	return 0;
 }
 
@@ -4764,7 +4767,7 @@ static int collect_digits(struct ast_channel *c, int waittime, char *buf, int bu
 		   keep reading digits until we can't possibly get a right answer anymore.  */
 		digit = ast_waitfordigit(c, waittime);
 		if (c->_softhangup & AST_SOFTHANGUP_ASYNCGOTO) {
-			c->_softhangup &= ~AST_SOFTHANGUP_ASYNCGOTO;
+			ast_channel_clear_softhangup(c, AST_SOFTHANGUP_ASYNCGOTO);
 		} else {
 			if (!digit)	/* No entry */
 				break;
@@ -4841,16 +4844,16 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 				set_ext_pri(c, "T", 0); /* 0 will become 1 with the c->priority++; at the end */
 				/* If the AbsoluteTimeout is not reset to 0, we'll get an infinite loop */
 				memset(&c->whentohangup, 0, sizeof(c->whentohangup));
-				c->_softhangup &= ~AST_SOFTHANGUP_TIMEOUT;
+				ast_channel_clear_softhangup(c, AST_SOFTHANGUP_TIMEOUT);
 			} else if ((c->_softhangup & AST_SOFTHANGUP_TIMEOUT)
 				&& ast_exists_extension(c, c->context, "e", 1,
 					S_COR(c->caller.id.number.valid, c->caller.id.number.str, NULL))) {
 				pbx_builtin_raise_exception(c, "ABSOLUTETIMEOUT");
 				/* If the AbsoluteTimeout is not reset to 0, we'll get an infinite loop */
 				memset(&c->whentohangup, 0, sizeof(c->whentohangup));
-				c->_softhangup &= ~AST_SOFTHANGUP_TIMEOUT;
+				ast_channel_clear_softhangup(c, AST_SOFTHANGUP_TIMEOUT);
 			} else if (c->_softhangup & AST_SOFTHANGUP_ASYNCGOTO) {
-				c->_softhangup &= ~AST_SOFTHANGUP_ASYNCGOTO;
+				ast_channel_clear_softhangup(c, AST_SOFTHANGUP_ASYNCGOTO);
 				continue;
 			} else if (ast_check_hangup(c)) {
 				ast_debug(1, "Extension %s, priority %d returned normally even though call was hung up\n",
@@ -4898,7 +4901,7 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 				}
 
 				if (c->_softhangup & AST_SOFTHANGUP_ASYNCGOTO) {
-					c->_softhangup &= ~AST_SOFTHANGUP_ASYNCGOTO;
+					ast_channel_clear_softhangup(c, AST_SOFTHANGUP_ASYNCGOTO);
 					continue;
 				} else if ((c->_softhangup & AST_SOFTHANGUP_TIMEOUT)
 					&& ast_exists_extension(c, c->context, "T", 1,
@@ -4906,7 +4909,7 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 					set_ext_pri(c, "T", 1);
 					/* If the AbsoluteTimeout is not reset to 0, we'll get an infinite loop */
 					memset(&c->whentohangup, 0, sizeof(c->whentohangup));
-					c->_softhangup &= ~AST_SOFTHANGUP_TIMEOUT;
+					ast_channel_clear_softhangup(c, AST_SOFTHANGUP_TIMEOUT);
 					continue;
 				} else {
 					if (c->cdr)
@@ -4948,7 +4951,7 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 			}
 		} else if (c->_softhangup & AST_SOFTHANGUP_TIMEOUT) {
 			/* If we get this far with AST_SOFTHANGUP_TIMEOUT, then we know that the "T" extension is next. */
-			c->_softhangup &= ~AST_SOFTHANGUP_TIMEOUT;
+			ast_channel_clear_softhangup(c, AST_SOFTHANGUP_TIMEOUT);
 		} else {	/* keypress received, get more digits for a full extension */
 			int waittime = 0;
 			if (digit)
@@ -6623,7 +6626,7 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 				if (!dpc->total_items++)
 					manager_dpsendack(s, m);
 				astman_append(s, "Event: ListDialplan\r\n%s", actionidtext);
-				astman_append(s, "Context: %s\r\nSwitch: %s/%s\r\nRegistrar: %s\r\n", ast_get_context_name(c), ast_get_switch_name(sw), ast_get_switch_data(sw), ast_get_switch_registrar(sw));	
+				astman_append(s, "Context: %s\r\nSwitch: %s/%s\r\nRegistrar: %s\r\n", ast_get_context_name(c), ast_get_switch_name(sw), ast_get_switch_data(sw), ast_get_switch_registrar(sw));
 				astman_append(s, "\r\n");
 				ast_debug(3, "manager_show_dialplan: Found Switch : %s \n", ast_get_switch_name(sw));
 			}
@@ -8503,7 +8506,7 @@ static int ast_pbx_outgoing_cdr_failed(void)
 	return 0;  /* success */
 }
 
-int ast_pbx_outgoing_exten(const char *type, format_t format, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel)
+int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, void *data, int timeout, const char *context, const char *exten, int priority, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **channel)
 {
 	struct ast_channel *chan;
 	struct async_stat *as;
@@ -8520,7 +8523,7 @@ int ast_pbx_outgoing_exten(const char *type, format_t format, void *data, int ti
 		oh.vars = vars;
 		oh.parent_channel = NULL;
 
-		chan = __ast_request_and_dial(type, format, NULL, data, timeout, reason, cid_num, cid_name, &oh);
+		chan = __ast_request_and_dial(type, cap, NULL, data, timeout, reason, cid_num, cid_name, &oh);
 		if (channel) {
 			*channel = chan;
 			if (chan)
@@ -8610,7 +8613,7 @@ int ast_pbx_outgoing_exten(const char *type, format_t format, void *data, int ti
 			res = -1;
 			goto outgoing_exten_cleanup;
 		}
-		chan = ast_request_and_dial(type, format, NULL, data, timeout, reason, cid_num, cid_name);
+		chan = ast_request_and_dial(type, cap, NULL, data, timeout, reason, cid_num, cid_name);
 		if (channel) {
 			*channel = chan;
 			if (chan)
@@ -8669,7 +8672,7 @@ static void *ast_pbx_run_app(void *data)
 	return NULL;
 }
 
-int ast_pbx_outgoing_app(const char *type, format_t format, void *data, int timeout, const char *app, const char *appdata, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel)
+int ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, void *data, int timeout, const char *app, const char *appdata, int *reason, int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars, const char *account, struct ast_channel **locked_channel)
 {
 	struct ast_channel *chan;
 	struct app_tmp *tmp;
@@ -8687,7 +8690,7 @@ int ast_pbx_outgoing_app(const char *type, format_t format, void *data, int time
 		goto outgoing_app_cleanup;
 	}
 	if (synchronous) {
-		chan = __ast_request_and_dial(type, format, NULL, data, timeout, reason, cid_num, cid_name, &oh);
+		chan = __ast_request_and_dial(type, cap, NULL, data, timeout, reason, cid_num, cid_name, &oh);
 		if (chan) {
 			ast_set_variables(chan, vars);
 			if (account)
@@ -8752,7 +8755,7 @@ int ast_pbx_outgoing_app(const char *type, format_t format, void *data, int time
 			res = -1;
 			goto outgoing_app_cleanup;
 		}
-		chan = __ast_request_and_dial(type, format, NULL, data, timeout, reason, cid_num, cid_name, &oh);
+		chan = __ast_request_and_dial(type, cap, NULL, data, timeout, reason, cid_num, cid_name, &oh);
 		if (!chan) {
 			ast_free(as);
 			res = -1;

@@ -92,33 +92,59 @@
 ;          Send out the specified digits as keypad digits.
 ;
 ; PRI Dialplan: The ISDN-level Type Of Number (TON) or numbering plan, used for
-; the dialed number.  For most installations, leaving this as 'unknown' (the
-; default) works in the most cases.  In some very unusual circumstances, you
-; may need to set this to 'dynamic' or 'redundant'.  Note that if you set one
-; of the others, you will be unable to dial another class of numbers.  For
-; example, if you set 'national', you will be unable to dial local or
-; international numbers.
-;
-; PRI Local Dialplan:  Only RARELY used for PRI (sets the calling number's
-; numbering plan).  In North America, the typical use is sending the 10 digit
-; callerID number and setting the prilocaldialplan to 'national' (the default).
-; Only VERY rarely will you need to change this.
-;
-; Neither pridialplan nor prilocaldialplan can be changed on reload.
+; the dialed number.  Leaving this as 'unknown' (the default) works for most
+; cases.  In some very unusual circumstances, you may need to set this to
+; 'dynamic' or 'redundant'.
 ;
 ; unknown:        Unknown
 ; private:        Private ISDN
 ; local:          Local ISDN
 ; national:       National ISDN
 ; international:  International ISDN
-; dynamic:        Dynamically selects the appropriate dialplan
+; dynamic:        Dynamically selects the appropriate dialplan using the
+;                 prefix settings.
 ; redundant:      Same as dynamic, except that the underlying number is not
 ;                 changed (not common)
 ;
+; pridialplan cannot be changed on reload.
 ;pridialplan=unknown
+;
+; PRI Local Dialplan:  Only RARELY used for PRI (sets the calling number's
+; numbering plan).  In North America, the typical use is sending the 10 digit
+; callerID number and setting the prilocaldialplan to 'national' (the default).
+; Only VERY rarely will you need to change this.
+;
+; unknown:        Unknown
+; private:        Private ISDN
+; local:          Local ISDN
+; national:       National ISDN
+; international:  International ISDN
+; from_channel:   Use the CALLERID(ton) value from the channel.
+; dynamic:        Dynamically selects the appropriate dialplan using the
+;                 prefix settings.
+; redundant:      Same as dynamic, except that the underlying number is not
+;                 changed (not common)
+;
+; prilocaldialplan cannot be changed on reload.
 ;prilocaldialplan=national
 ;
-; pridialplan may be also set at dialtime, by prefixing the dialled number with
+; PRI Connected Line Dialplan:  Sets the connected party number's numbering plan.
+;
+; unknown:        Unknown
+; private:        Private ISDN
+; local:          Local ISDN
+; national:       National ISDN
+; international:  International ISDN
+; from_channel:   Use the CONNECTEDLINE(ton) value from the channel.
+; dynamic:        Dynamically selects the appropriate dialplan using the
+;                 prefix settings.
+; redundant:      Same as dynamic, except that the underlying number is not
+;                 changed (not common)
+;
+; pricpndialplan cannot be changed on reload.
+;pricpndialplan=from_channel
+;
+; pridialplan may be also set at dialtime, by prefixing the dialed number with
 ; one of the following letters:
 ; U - Unknown
 ; I - International
@@ -129,7 +155,7 @@
 ; R - Reserved (should probably never be used but is included for completeness)
 ;
 ; Additionally, you may also set the following NPI bits (also by prefixing the
-; dialled string with one of the following letters):
+; dialed string with one of the following letters):
 ; u - Unknown
 ; e - E.163/E.164 (ISDN/telephony)
 ; x - X.121 (Data)
@@ -139,10 +165,11 @@
 ; r - Reserved (should probably never be used but is included for completeness)
 ;
 ; You may also set the prilocaldialplan in the same way, but by prefixing the
-; Caller*ID Number, rather than the dialled number.  Please note that telcos
-; which require this kind of additional manipulation of the TON/NPI are *rare*.
-; Most telco PRIs will work fine simply by setting pridialplan to unknown or
-; dynamic.
+; Caller*ID Number rather than the dialed number.
+
+; Please note that telcos which require this kind of additional manipulation
+; of the TON/NPI are *rare*.  Most telco PRIs will work fine simply by
+; setting pridialplan to unknown or dynamic.
 ;
 ;
 ; PRI caller ID prefixes based on the given TON/NPI (dialplan)
@@ -178,7 +205,37 @@
 ; yes or both: both directions
 ;
 ;overlapdial=yes
+
+; Send/receive ISDN display IE options.  The display options are a comma separated
+; list of the following options:
 ;
+; block:        Do not pass display text data.
+;               Q.SIG: Default for send/receive.
+;               ETSI CPE: Default for send.
+; name_initial: Use display text in SETUP/CONNECT messages as the party name.
+;               Default for all other modes.
+; name_update:  Use display text in other messages (NOTIFY/FACILITY) for COLP name
+;               update.
+; name:         Combined name_initial and name_update options.
+; text:         Pass any unused display text data as an arbitrary display message
+;               during a call.  Sent text goes out in an INFORMATION message.
+;
+; * Default is an empty string for legacy behavior.
+; * The name options are not recommended for Q.SIG since Q.SIG already
+;   supports names.
+; * The send block is the only recommended setting for CPE mode since Q.931 uses
+;   the display IE only in the network to user direction.
+;
+; display_send and display_receive cannot be changed on reload.
+;
+;display_send=
+;display_receive=
+
+; Allow sending an ISDN Malicious Caller ID (MCID) request on this span.
+; Default disabled
+;
+;mcid_send=yes
+
 ; Allow inband audio (progress) when a call is DISCONNECTed by the far end of a PRI
 ;
 ;inbanddisconnect=yes
@@ -439,7 +496,7 @@ usecallerid=yes
 ;     polarity    = polarity reversal signals the start
 ;     polarity_IN = polarity reversal signals the start, for India,
 ;                   for dtmf dialtone detection; using DTMF.
-;                   (see doc/India-CID.txt)
+;     (see https://wiki.asterisk.org/wiki/display/AST/Caller+ID+in+India)
 ;     dtmf        = causes monitor loop to look for dtmf energy on the
 ;                   incoming channel to initate cid acquisition
 ;
@@ -524,13 +581,28 @@ callwaiting=yes
 ; Allow incoming ISDN call waiting calls.
 ; A call waiting call is a SETUP message with no B channel selected.
 ;allow_call_waiting_calls=no
-;
+
 ; Configure the ISDN span to indicate MWI for the list of mailboxes.
 ; You can give a comma separated list of up to 8 mailboxes per span.
 ; An empty list disables MWI.
 ; The default is an empty list.
 ;mwi_mailboxes=mailbox_number[@context]{,mailbox_number[@context]}
 ;
+; Configure the ISDN span voicemail numbers for MWI mailboxes.  What number
+; to call for a user to retrieve voicemail messages.
+;
+; You can give a comma separated list of numbers.  The position of the number
+; corresponds to the position in mwi_mailboxes.  If a position is empty then
+; the last number is reused.
+;
+; For example:
+;  mwi_vm_numbers=700,,800,,900
+; is equivalent to:
+;  mwi_vm_numbers=700,700,800,800,900
+;
+; The default is no number.
+;mwi_vm_numbers=
+
 ; Whether or not restrict outgoing caller ID (will be sent as ANI only, not
 ; available for the user)
 ; Mostly use with FXS ports
@@ -762,6 +834,11 @@ pickupgroup=1
 ; should we use the caller ID from incoming call on DAHDI transfer?
 ;
 ;useincomingcalleridondahditransfer = yes
+;
+; Add a description for the channel which can be shown through the Asterisk
+; console  when executing the 'dahdi show channels' command is run.
+;
+;description=Phone located in lobby
 ;
 ; AMA flags affects the recording of Call Detail Records.  If specified
 ; it may be 'default', 'omit', 'billing', or 'documentation'.
@@ -1011,10 +1088,13 @@ pickupgroup=1
 ;
 ;
 ;callerid="Green Phone"<(256) 428-6121>
+;description=Reception Phone			; add a description for 'dahdi show channels'
 ;channel => 1
 ;callerid="Black Phone"<(256) 428-6122>
+;description=Courtesy Phone
 ;channel => 2
 ;callerid="CallerID Phone" <(630) 372-1564>
+;description=					; reset the description for following channels
 ;channel => 3
 ;callerid="Pac Tel Phone" <(256) 428-6124>
 ;channel => 4
@@ -1189,7 +1269,7 @@ pickupgroup=1
 ;channel = 25-47
 ;
 ; For more information on setting up SS7, see the README file in libss7 or
-; the doc/ss7.txt file in the Asterisk source tree.
+; https://wiki.asterisk.org/wiki/display/AST/Signaling+System+Number+7
 ; ----------------- SS7 Options ----------------------------------------
 
 ; ---------------- Options for use with signalling=mfcr2 --------------

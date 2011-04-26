@@ -71,7 +71,7 @@ float casdr1, casdi1, casdr2, casdi2;
 
 #define AST_CALLERID_UNKNOWN	"<unknown>"
 
-static inline void gen_tones(unsigned char *buf, int len, format_t codec, float ddr1, float ddi1, float ddr2, float ddi2, float *cr1, float *ci1, float *cr2, float *ci2)
+static inline void gen_tones(unsigned char *buf, int len, struct ast_format *codec, float ddr1, float ddi1, float ddr2, float ddi2, float *cr1, float *ci1, float *cr2, float *ci2)
 {
 	int x;
 	float t;
@@ -93,7 +93,7 @@ static inline void gen_tones(unsigned char *buf, int len, format_t codec, float 
 	}
 }
 
-static inline void gen_tone(unsigned char *buf, int len, format_t codec, float ddr1, float ddi1, float *cr1, float *ci1)
+static inline void gen_tone(unsigned char *buf, int len, struct ast_format *codec, float ddr1, float ddi1, float *cr1, float *ci1)
 {
 	int x;
 	float t;
@@ -255,7 +255,7 @@ void callerid_get_dtmf(char *cidstring, char *number, int *flags)
 	}
 }
 
-int ast_gen_cas(unsigned char *outbuf, int sendsas, int len, format_t codec)
+int ast_gen_cas(unsigned char *outbuf, int sendsas, int len, struct ast_format *codec)
 {
 	int pos = 0;
 	int saslen = 2400;
@@ -300,7 +300,7 @@ static unsigned short calc_crc(unsigned short crc, unsigned char data)
    	return crc;
 }
 
-int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, format_t codec)
+int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, struct ast_format *codec)
 {
 	int mylen = len;
 	int olen;
@@ -539,7 +539,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, f
 }
 
 
-int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, format_t codec)
+int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, struct ast_format *codec)
 {
 	int mylen = len;
 	int olen;
@@ -568,9 +568,22 @@ int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, form
 			return -1;
 		}
 		if (res == 1) {
-			/* Ignore invalid bytes */
-			if (b > 0xff)
-				continue;
+			if (b > 0xff) {
+				if (cid->sawflag != 5) {
+					/* Ignore invalid bytes */
+					continue;
+				}
+				/*
+				 * We can tollerate an error on the checksum character since the
+				 * checksum character is the last character in the message and
+				 * it validates the message.
+				 *
+				 * Remove character error flags.
+				 * Bit 8 : Parity error
+				 * Bit 9 : Framing error
+				 */
+				b &= 0xff;
+			}
 			switch (cid->sawflag) {
 			case 0: /* Look for flag */
 				if (b == 'U')
@@ -791,7 +804,7 @@ static int callerid_genmsg(char *msg, int size, const char *number, const char *
 	
 }
 
-int ast_callerid_vmwi_generate(unsigned char *buf, int active, int type, format_t codec,
+int ast_callerid_vmwi_generate(unsigned char *buf, int active, int type, struct ast_format *codec,
 			       const char* name, const char* number, int flags)
 {
 	char msg[256];
@@ -879,7 +892,7 @@ int ast_callerid_vmwi_generate(unsigned char *buf, int active, int type, format_
 	return bytes;
 }
 
-int callerid_generate(unsigned char *buf, const char *number, const char *name, int flags, int callwaiting, format_t codec)
+int callerid_generate(unsigned char *buf, const char *number, const char *name, int flags, int callwaiting, struct ast_format *codec)
 {
 	int bytes = 0;
 	int x, sum;
@@ -1038,7 +1051,7 @@ int ast_callerid_parse(char *instr, char **name, char **location)
 	return 0;
 }
 
-static int __ast_callerid_generate(unsigned char *buf, const char *name, const char *number, int callwaiting, format_t codec)
+static int __ast_callerid_generate(unsigned char *buf, const char *name, const char *number, int callwaiting, struct ast_format *codec)
 {
 	if (ast_strlen_zero(name))
 		name = NULL;
@@ -1047,12 +1060,12 @@ static int __ast_callerid_generate(unsigned char *buf, const char *name, const c
 	return callerid_generate(buf, number, name, 0, callwaiting, codec);
 }
 
-int ast_callerid_generate(unsigned char *buf, const char *name, const char *number, format_t codec)
+int ast_callerid_generate(unsigned char *buf, const char *name, const char *number, struct ast_format *codec)
 {
 	return __ast_callerid_generate(buf, name, number, 0, codec);
 }
 
-int ast_callerid_callwaiting_generate(unsigned char *buf, const char *name, const char *number, format_t codec)
+int ast_callerid_callwaiting_generate(unsigned char *buf, const char *name, const char *number, struct ast_format *codec)
 {
 	return __ast_callerid_generate(buf, name, number, 1, codec);
 }

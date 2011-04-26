@@ -37,6 +37,10 @@ AC_SUBST(CONFIG_LDFLAGS)
 # specify output header file
 AC_CONFIG_HEADER(include/asterisk/autoconfig.h)
 
+# Note: AC_PROG_CC *must* be specified before AC_USE_SYSTEM_EXTENSIONS or any
+# other macro that uses the C compiler, or the default order will be used.
+AC_PROG_CC([gcc cc])
+
 AC_USE_SYSTEM_EXTENSIONS	dnl note- does not work on FreeBSD
 
 # System default paths
@@ -69,12 +73,12 @@ esac
 
 case "${host_os}" in
      freebsd*)
-     AC_PREFIX_DEFAULT([/usr/local])
+     ac_default_prefix=/usr/local
      CPPFLAGS=-I/usr/local/include
      LDFLAGS=-L/usr/local/lib
      ;;
      openbsd*)
-     AC_PREFIX_DEFAULT([/usr/local])
+     ac_default_prefix=/usr/local
      if test ${prefix} = '/usr/local' || test ${prefix} = 'NONE'; then
         if test ${sysconfdir} = '${prefix}/etc'; then
            astetcdir=/etc/asterisk
@@ -87,7 +91,7 @@ case "${host_os}" in
      LDFLAGS=-L/usr/local/lib
      ;;
      darwin*)
-     AC_PREFIX_DEFAULT([/usr/local])
+     ac_default_prefix=/usr/local
      if test ${prefix} = 'NONE'; then
         astlibdir='/Library/Application Support/Asterisk/Modules'
         astvarlibdir='/Library/Application Support/Asterisk'
@@ -111,7 +115,7 @@ case "${host_os}" in
      fi
      ;;
      *)
-     AC_PREFIX_DEFAULT([/usr])
+     ac_default_prefix=/usr
      if test ${prefix} = '/usr' || test ${prefix} = 'NONE'; then
         if test ${sysconfdir} = '${prefix}/etc'; then
            sysconfdir=/etc
@@ -215,7 +219,6 @@ then
 fi
 
 # Checks for programs.
-AC_PROG_CC
 AC_PROG_CXX
 AC_PROG_CPP
 AC_PROG_CXXCPP
@@ -411,6 +414,8 @@ AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
 AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
+AST_EXT_LIB_SETUP_DEPENDENT([PRI_MWI_V2], [ISDN PRI Message Waiting Indication (Fixed)], [PRI], [pri])
+AST_EXT_LIB_SETUP_DEPENDENT([PRI_DISPLAY_TEXT], [ISDN PRI user display text IE contents during call], [PRI], [pri])
 AST_EXT_LIB_SETUP_DEPENDENT([PRI_MWI], [ISDN PRI Message Waiting Indication], [PRI], [pri])
 AST_EXT_LIB_SETUP_DEPENDENT([PRI_MCID], [ISDN PRI Malicious Call ID], [PRI], [pri])
 AST_EXT_LIB_SETUP_DEPENDENT([PRI_CALL_WAITING], [ISDN PRI call waiting supplementary service], [PRI], [pri])
@@ -913,6 +918,16 @@ else
 	AST_SHADOW_WARNINGS=
 fi
 AC_SUBST(AST_SHADOW_WARNINGS)
+
+AC_MSG_CHECKING(for -march=native)
+if $(${CC} -march=native -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
+	AC_MSG_RESULT(yes)
+	AST_MARCH_NATIVE="-march=native"
+else
+	AC_MSG_RESULT(no)
+	AST_MARCH_NATIVE=
+fi
+AC_SUBST(AST_MARCH_NATIVE)
 
 AC_MSG_CHECKING(for sysinfo)
 AC_LINK_IFELSE(
@@ -1809,6 +1824,8 @@ AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
 
 AST_EXT_LIB_CHECK([PRI], [pri], [pri_connected_line_update], [libpri.h])
+AST_EXT_LIB_CHECK([PRI_MWI_V2], [pri], [pri_mwi_indicate_v2], [libpri.h])
+AST_EXT_LIB_CHECK([PRI_DISPLAY_TEXT], [pri], [pri_display_text], [libpri.h])
 AST_EXT_LIB_CHECK([PRI_MWI], [pri], [pri_mwi_indicate], [libpri.h])
 AST_EXT_LIB_CHECK([PRI_MCID], [pri], [pri_mcid_enable], [libpri.h])
 AST_EXT_LIB_CHECK([PRI_CALL_WAITING], [pri], [pri_connect_ack_enable], [libpri.h])
@@ -1954,7 +1971,7 @@ AST_EXT_LIB_CHECK([CRYPTO], [crypto], [AES_encrypt], [openssl/aes.h])
 
 if test "$PBX_CRYPTO" = "1";
 then
-    AST_EXT_LIB_CHECK([OPENSSL], [ssl], [ssl2_connect], [openssl/ssl.h], [-lcrypto])
+	AST_EXT_LIB_CHECK([OPENSSL], [ssl], [SSL_connect], [openssl/ssl.h], [-lcrypto])
 fi
 
 if test "$PBX_OPENSSL" = "1";

@@ -12,15 +12,29 @@
 --- Functionality changes from Asterisk 1.8 to Asterisk 1.10 -----------------
 ------------------------------------------------------------------------------
 
+Parking
+-------
+ * parkedmusicclass can now be set for non-default parking lots.
+
 Asterisk Manager Interface
 --------------------------
  * PeerStatus now includes Address and Port.
  * Added Hold events for when the remote party puts the call on and off hold
    for chan_dahdi ISDN channels.
+ * Added new action MeetmeListRooms to list active conferences (shows same
+   data as "meetme list" at the CLI).
+ * DAHDIShowChannels, SIPshowpeer, SIPpeers, and IAXpeers now contains a
+   Description field that is set by 'description' in the channel configuration
+   file.
 
 Asterisk HTTP Server
 --------------------------
  * The HTTP Server can bind to IPv6 addresses.
+
+chan_dahdi
+--------------------------
+ * Busy tone patterns featuring 2 silence and 2 tone lengths can now be used
+   with busydetect.  usage example: busypattern=200,200,200,600
 
 CLI Changes
 --------------------------
@@ -28,11 +42,28 @@ CLI Changes
    gtalk.conf.
  * The 'logger reload' command now supports an optional argument, specifying an
    alternate configuration file to use.
+ * 'dialplan add extension' command will now automatically create a context if
+   the specified context does not exist with a message indicated it did so.
+ * 'sip show peers', 'iax show peers', and 'dahdi show peers' now contains a
+   Description field which can be populated with 'description' in the channel
+   configuration files (sip.conf, iax2.conf, and chan_dahdi.conf).
 
 CDR
 --------------------------
  * The filter option in cdr_adaptive_odbc now supports negating the argument,
    thus allowing records which do NOT match the specified filter.
+
+CODECS
+--------------------------
+ * Ability to define custom SILK formats in codecs.conf.
+ * Addition of speex32 audio format with translation.
+
+ConfBridge
+--------------------------
+ * New highly optimized and customizable ConfBridge application capable of
+   mixing audio at sample rates ranging from 8khz-96khz.
+ * CONFBRIDGE dialplan function capable of creating dynamic ConfBridge user
+   and bridge profiles on a channel.
 
 Dialplan Variables
 ------------------
@@ -40,10 +71,42 @@ Dialplan Variables
    ASTAGIDIR, ASTSPOOLDIR, ASTRUNDIR, ASTLOGDIR which hold the equivalent
    variables from asterisk.conf.
 
+Dialplan Functions
+------------------
+ * Addition of the JITTERBUFFER dialplan function. This function allows
+   for jitterbuffering to occur on the read side of a channel.  By using
+   this function conference applications such as ConfBridge and MeetMe can
+   have the rx streams jitterbuffered before conference mixing occurs.
+ * Added DB_KEYS, which lists the next set of keys in the Asterisk database
+   hierarchy.
+
 libpri channel driver (chan_dahdi) DAHDI changes
 --------------------------
  * Added moh_signaling option to specify what to do when the channel's bridged
    peer puts the ISDN channel on hold.
+ * Added display_send and display_receive options to control how the display ie
+   is handled.  To send display text from the dialplan use the SendText()
+   application when the option is enabled.
+ * Added mcid_send option to allow sending a MCID request on a span.
+
+Calendaring
+--------------------------
+ * Added setvar option to calendar.conf to allow setting channel variables on
+   notification channels.
+
+MixMonitor
+--------------------------
+ * Added two new options, r and t with file name arguments to record 
+   single direction (unmixed) audio recording separate from the bidirectional
+   (mixed) recording.  The mixed file name argument is optional now as long
+   as at least one recording option is used.
+
+FollowMe
+--------------------------
+ * Added a new option, l, which will disable local call optimization for
+   channels involved with the FollowMe thread.  Use this option to improve
+   compatability for a FollowMe call with certain dialplan apps, options, and
+   functions.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.8 ----------------

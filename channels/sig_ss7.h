@@ -84,6 +84,20 @@ enum sig_ss7_law {
 	SIG_SS7_ALAW
 };
 
+/*! Call establishment life cycle level for simple comparisons. */
+enum sig_ss7_call_level {
+	/*! Call does not exist. */
+	SIG_SS7_CALL_LEVEL_IDLE,
+	/*! Call is present but has no response yet. (SETUP) */
+	SIG_SS7_CALL_LEVEL_SETUP,
+	/*! Call routing is happening. (PROCEEDING) */
+	SIG_SS7_CALL_LEVEL_PROCEEDING,
+	/*! Called party is being alerted of the call. (ALERTING) */
+	SIG_SS7_CALL_LEVEL_ALERTING,
+	/*! Call is connected/answered. (CONNECT) */
+	SIG_SS7_CALL_LEVEL_CONNECT,
+};
+
 struct sig_ss7_linkset;
 
 struct sig_ss7_callback {
@@ -91,6 +105,8 @@ struct sig_ss7_callback {
 	void (* const unlock_private)(void *pvt);
 	/* Lock the private in the signaling private structure. */
 	void (* const lock_private)(void *pvt);
+	/* Do deadlock avoidance for the private signaling structure lock.  */
+	void (* const deadlock_avoidance_private)(void *pvt);
 
 	int (* const set_echocanceller)(void *pvt, int enable);
 	void (* const set_loopback)(void *pvt, int enable);
@@ -119,6 +135,9 @@ struct sig_ss7_chan {
 
 	/*! \brief Opaque libss7 call control structure */
 	struct isup_call *ss7call;
+
+	/*! Call establishment life cycle level for simple comparisons. */
+	enum sig_ss7_call_level call_level;
 
 	int channel;					/*!< Channel Number */
 	int cic;						/*!< CIC associated with channel */
@@ -192,15 +211,8 @@ struct sig_ss7_chan {
 	unsigned int inalarm:1;
 	/*! TRUE if this channel is being used for an outgoing call. */
 	unsigned int outgoing:1;
-	/*!
-	 * \brief TRUE if call is in a proceeding state.
-	 * The call has started working its way through the network.
-	 */
-	unsigned int proceeding:1;
-	/*! \brief TRUE if the call has seen progress through the network. */
+	/*! \brief TRUE if the call has seen inband-information progress through the network. */
 	unsigned int progress:1;
-	/*! \brief TRUE if channel is alerting/ringing */
-	unsigned int alerting:1;
 	/*! \brief TRUE if the call has already gone/hungup */
 	unsigned int alreadyhungup:1;
 	/*! \brief XXX BOOLEAN Purpose??? */

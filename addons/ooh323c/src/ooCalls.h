@@ -97,7 +97,7 @@ typedef struct OOMediaInfo{
    int   cap;
    int   lMediaPort;
    int   lMediaCntrlPort;
-   char  lMediaIP[20];
+   char  lMediaIP[2+8*4+7];
    struct OOMediaInfo *next;
 } OOMediaInfo;
 
@@ -172,18 +172,20 @@ typedef struct OOH323CallData {
    OOCallState          callState;
    OOCallClearReason    callEndReason;
    int			q931cause;
+   ASN1UINT		h225version;
    unsigned             h245ConnectionAttempts;
    OOH245SessionState   h245SessionState;
    int                  dtmfmode;
    int			dtmfcodec;
    OOMediaInfo          *mediaInfo;
    OOCallFwdData        *pCallFwdData;
-   char                 localIP[20];/* Local IP address */
+   char                 localIP[2+8*4+7];/* Local IP address */
+   int			versionIP; /* IP Address family 6 or 4 */
    OOH323Channel*       pH225Channel;
    OOH323Channel*       pH245Channel;
    OOSOCKET             *h245listener;
    int                  *h245listenport;
-   char                 remoteIP[20];/* Remote IP address */
+   char                 remoteIP[2+8*4+7];/* Remote IP address */
    int                  remotePort;
    int                  remoteH245Port;
    char                 *remoteDisplayName;
@@ -213,6 +215,8 @@ typedef struct OOH323CallData {
    ASN1UINT8		requestSequence;
    ASN1UINT		reqFlags;
    ASN1UINT		t38sides;
+   int			T38FarMaxDatagram;
+   int			T38Version;
    H235TimeStamp	alertingTime, connectTime, endTime; /* time data for gatekeeper */
    FastStartResponse    *pFastStartRes; /* fast start response */
    struct OOH323Regex*		rtpMask;

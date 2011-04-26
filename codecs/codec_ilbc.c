@@ -89,7 +89,7 @@ static int ilbctolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	float tmpf[ILBC_SAMPLES];
 
 	if (!f->data.ptr && f->datalen) {
-		ast_log(LOG_DEBUG, "issue 16070, ILIB ERROR. data = NULL datalen = %d src = %s\n", f->datalen, f->src ? f->src : "no src set");
+		ast_debug(1, "issue 16070, ILIB ERROR. data = NULL datalen = %d src = %s\n", f->datalen, f->src ? f->src : "no src set");
 		f->datalen = 0;
 	}
 
@@ -104,12 +104,12 @@ static int ilbctolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Huh?  An ilbc frame that isn't a multiple of 50 bytes long from %s (%d)?\n", f->src, f->datalen);
 		return -1;
 	}
-	
+
 	for (x=0; x < f->datalen ; x += ILBC_FRAME_LEN) {
-		if (pvt->samples + ILBC_SAMPLES > BUFFER_SAMPLES) {	
+		if (pvt->samples + ILBC_SAMPLES > BUFFER_SAMPLES) {
 			ast_log(LOG_WARNING, "Out of buffer space\n");
 			return -1;
-		}		
+		}
 		iLBC_decode(tmpf, plc_mode ? f->data.ptr + x : NULL, &tmp->dec, plc_mode);
 		for ( i=0; i < ILBC_SAMPLES; i++)
 			dst[pvt->samples + i] = tmpf[i];
@@ -166,8 +166,6 @@ static struct ast_frame *lintoilbc_frameout(struct ast_trans_pvt *pvt)
 
 static struct ast_translator ilbctolin = {
 	.name = "ilbctolin", 
-	.srcfmt = AST_FORMAT_ILBC,
-	.dstfmt = AST_FORMAT_SLINEAR,
 	.newpvt = ilbctolin_new,
 	.framein = ilbctolin_framein,
 	.sample = ilbc_sample,
@@ -178,8 +176,6 @@ static struct ast_translator ilbctolin = {
 
 static struct ast_translator lintoilbc = {
 	.name = "lintoilbc", 
-	.srcfmt = AST_FORMAT_SLINEAR,
-	.dstfmt = AST_FORMAT_ILBC,
 	.newpvt = lintoilbc_new,
 	.framein = lintoilbc_framein,
 	.frameout = lintoilbc_frameout,
@@ -201,6 +197,13 @@ static int unload_module(void)
 static int load_module(void)
 {
 	int res;
+
+	ast_format_set(&ilbctolin.src_format, AST_FORMAT_ILBC, 0);
+	ast_format_set(&ilbctolin.dst_format, AST_FORMAT_SLINEAR, 0);
+
+	ast_format_set(&lintoilbc.src_format, AST_FORMAT_SLINEAR, 0);
+	ast_format_set(&lintoilbc.dst_format, AST_FORMAT_ILBC, 0);
+
 
 	res = ast_register_translator(&ilbctolin);
 	if (!res) 

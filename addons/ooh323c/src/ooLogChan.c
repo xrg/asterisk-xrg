@@ -82,7 +82,7 @@ OOLogicalChannel* ooAddNewLogicalChannel(OOH323CallData *call, int channelNo,
       /* If user application has not specified a specific ip and is using 
          multihomed mode, substitute appropriate ip.
       */
-      if(!strcmp(pMediaInfo->lMediaIP, "0.0.0.0"))
+      if(!strcmp(pMediaInfo->lMediaIP, "0.0.0.0") || !strcmp(pMediaInfo->lMediaIP, "::"))
          strcpy(pNewChannel->localIP, call->localIP);
       else
          strcpy(pNewChannel->localIP, pMediaInfo->lMediaIP);
@@ -124,7 +124,7 @@ OOLogicalChannel* ooFindLogicalChannelByLogicalChannelNo(OOH323CallData *call,
    OOLogicalChannel *pLogicalChannel=NULL;
    if(!call->logicalChans)
    {
-      OOTRACEERR3("ERROR: No Open LogicalChannels - Failed "
+      OOTRACEWARN3("ERROR: No Open LogicalChannels - Failed "
                   "FindLogicalChannelByChannelNo (%s, %s\n", call->callType,
                    call->callToken);
       return NULL;

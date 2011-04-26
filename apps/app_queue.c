@@ -238,14 +238,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</variablelist>
 		</description>
 		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
 			<ref type="application">AddQueueMember</ref>
 			<ref type="application">RemoveQueueMember</ref>
 			<ref type="application">PauseQueueMember</ref>
 			<ref type="application">UnpauseQueueMember</ref>
-			<ref type="application">AgentLogin</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
 			<ref type="function">QUEUE_MEMBER_COUNT</ref>
-			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
 			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
 		</see-also>
 	</application>
 	<application name="AddQueueMember" language="en_US">
@@ -274,10 +279,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</variablelist>
 		</description>
 		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
 			<ref type="application">RemoveQueueMember</ref>
 			<ref type="application">PauseQueueMember</ref>
 			<ref type="application">UnpauseQueueMember</ref>
-			<ref type="application">AgentLogin</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
 		</see-also>
 	</application>
 	<application name="RemoveQueueMember" language="en_US">
@@ -303,9 +317,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</description>
 		<see-also>
 			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
 			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
 			<ref type="application">PauseQueueMember</ref>
 			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
 		</see-also>
 	</application>
 	<application name="PauseQueueMember" language="en_US">
@@ -337,7 +360,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Example: PauseQueueMember(,SIP/3000)</para>
 		</description>
 		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
 			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
 		</see-also>
 	</application>
 	<application name="UnpauseQueueMember" language="en_US">
@@ -366,7 +401,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Example: UnpauseQueueMember(,SIP/3000)</para>
 		</description>
 		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
 			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
 		</see-also>
 	</application>
 	<application name="QueueLog" language="en_US">
@@ -386,6 +433,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</description>
 		<see-also>
 			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
 		</see-also>
 	</application>
 	<function name="QUEUE_VARIABLES" language="en_US">
@@ -426,6 +485,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Makes the following queue variables available.</para>
 			<para>Returns <literal>0</literal> if queue is found and setqueuevar is defined, <literal>-1</literal> otherwise.</para>
 		</description>
+		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
+		</see-also>
 	</function>
 	<function name="QUEUE_MEMBER" language="en_US">
 		<synopsis>
@@ -453,6 +527,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Returns the number of members currently associated with the specified <replaceable>queuename</replaceable>.</para>
 		</description>
+		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
+		</see-also>
 	</function>
 	<function name="QUEUE_MEMBER_COUNT" language="en_US">
 		<synopsis>
@@ -466,7 +555,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<warning><para>This function has been deprecated in favor of the <literal>QUEUE_MEMBER()</literal> function</para></warning>
 		</description>
 		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
 			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
 		</see-also>
 	</function>
 	<function name="QUEUE_EXISTS" language="en_US">
@@ -479,6 +580,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Returns 1 if the specified queue exists, 0 if it does not</para>
 		</description>
+		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
+		</see-also>
 	</function>
 	<function name="QUEUE_WAITING_COUNT" language="en_US">
 		<synopsis>
@@ -490,6 +606,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Returns the number of callers currently waiting in the specified <replaceable>queuename</replaceable>.</para>
 		</description>
+		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
+		</see-also>
 	</function>
 	<function name="QUEUE_MEMBER_LIST" language="en_US">
 		<synopsis>
@@ -502,7 +633,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Returns a comma-separated list of members associated with the specified <replaceable>queuename</replaceable>.</para>
 		</description>
 		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
 			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
 		</see-also>
 	</function>
 	<function name="QUEUE_MEMBER_PENALTY" language="en_US">
@@ -516,6 +659,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Gets or sets queue members penalty.</para>
 		</description>
+		<see-also>
+			<ref type="application">Queue</ref>
+			<ref type="application">QueueLog</ref>
+			<ref type="application">AddQueueMember</ref>
+			<ref type="application">RemoveQueueMember</ref>
+			<ref type="application">PauseQueueMember</ref>
+			<ref type="application">UnpauseQueueMember</ref>
+			<ref type="function">QUEUE_VARIABLES</ref>
+			<ref type="function">QUEUE_MEMBER</ref>
+			<ref type="function">QUEUE_MEMBER_COUNT</ref>
+			<ref type="function">QUEUE_EXISTS</ref>
+			<ref type="function">QUEUE_WAITING_COUNT</ref>
+			<ref type="function">QUEUE_MEMBER_LIST</ref>
+			<ref type="function">QUEUE_MEMBER_PENALTY</ref>
+		</see-also>
 	</function>
 	<manager name="Queues" language="en_US">
 		<synopsis>
@@ -680,7 +838,8 @@ enum {
 	QUEUE_STRATEGY_RANDOM,
 	QUEUE_STRATEGY_RRMEMORY,
 	QUEUE_STRATEGY_LINEAR,
-	QUEUE_STRATEGY_WRANDOM
+	QUEUE_STRATEGY_WRANDOM,
+	QUEUE_STRATEGY_RRORDERED,
 };
 
 enum {
@@ -708,6 +867,7 @@ static const struct strategy {
 	{ QUEUE_STRATEGY_RRMEMORY, "roundrobin" },
 	{ QUEUE_STRATEGY_LINEAR, "linear" },
 	{ QUEUE_STRATEGY_WRANDOM, "wrandom"},
+	{ QUEUE_STRATEGY_RRORDERED, "rrordered"},
 };
 
 static const struct autopause {
@@ -1223,6 +1383,7 @@ static int get_member_status(struct call_queue *q, int max_penalty, int min_pena
 				ast_debug(4, "%s is unavailable because his device state is 'ringing'\n", member->membername);
 				break;
 			}
+			goto default_case;
 		case AST_DEVICE_UNKNOWN:
 			if (conditions & QUEUE_EMPTY_UNKNOWN) {
 				ast_debug(4, "%s is unavailable because his device state is 'unknown'\n", member->membername);
@@ -1538,7 +1699,7 @@ static void init_queue(struct call_queue *q)
 	q->autopause = QUEUE_AUTOPAUSE_OFF;
 	q->timeoutpriority = TIMEOUT_PRIORITY_APP;
 	if (!q->members) {
-		if (q->strategy == QUEUE_STRATEGY_LINEAR)
+		if (q->strategy == QUEUE_STRATEGY_LINEAR || q->strategy == QUEUE_STRATEGY_RRORDERED)
 			/* linear strategy depends on order, so we have to place all members in a single bucket */
 			q->members = ao2_container_alloc(1, member_hash_fn, member_cmp_fn);
 		else
@@ -3581,7 +3742,6 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 								ast_moh_stop(qe->chan);
 								ast_indicate(qe->chan, AST_CONTROL_RINGING);
 							}
-							ast_indicate(in, AST_CONTROL_RINGING);
 							break;
 						case AST_CONTROL_OFFHOOK:
 							/* Ignore going off hook */
@@ -3617,7 +3777,7 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 						case AST_CONTROL_REDIRECTING:
 							if (!update_connectedline) {
 								ast_verb(3, "Redirecting update to %s prevented\n", inchan_name);
-							} else {
+							} else if (qe->parent->strategy != QUEUE_STRATEGY_RINGALL) {
 								ast_verb(3, "%s redirecting info has changed, passing it to %s\n", ochan_name, inchan_name);
 								if (ast_channel_redirecting_macro(o->chan, in, f, 1, 1)) {
 									ast_indicate_data(in, AST_CONTROL_REDIRECTING, f->data.ptr, f->datalen);
@@ -3932,6 +4092,7 @@ static int calc_metric(struct call_queue *q, struct member *mem, int pos, struct
 		}
 		tmp->metric += mem->penalty * 1000000 * usepenalty;
 		break;
+	case QUEUE_STRATEGY_RRORDERED:
 	case QUEUE_STRATEGY_RRMEMORY:
 		if (pos < q->rrpos) {
 			tmp->metric = 1000 + pos;
@@ -4254,7 +4415,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			ast_set_flag(&(bridge_config.features_caller), AST_FEATURE_PARKCALL);
 			break;
 		case 'n':
-			if (qe->parent->strategy == QUEUE_STRATEGY_RRMEMORY || qe->parent->strategy == QUEUE_STRATEGY_LINEAR)
+			if (qe->parent->strategy == QUEUE_STRATEGY_RRMEMORY || qe->parent->strategy == QUEUE_STRATEGY_LINEAR || qe->parent->strategy == QUEUE_STRATEGY_RRORDERED)
 				(*tries)++;
 			else
 				*tries = qe->parent->membercount;
@@ -4441,8 +4602,9 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	}
 	ast_channel_unlock(qe->chan);
 	ao2_lock(qe->parent);
-	if (qe->parent->strategy == QUEUE_STRATEGY_RRMEMORY) {
+	if (qe->parent->strategy == QUEUE_STRATEGY_RRMEMORY || qe->parent->strategy == QUEUE_STRATEGY_RRORDERED) {
 		store_next_rr(qe, outgoing);
+
 	}
 	if (qe->parent->strategy == QUEUE_STRATEGY_LINEAR) {
 		store_next_lin(qe, outgoing);
@@ -4791,14 +4953,24 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 
 				gosub_argstart = strchr(gosubexec, ',');
 				if (gosub_argstart) {
+					const char *what_is_s = "s";
 					*gosub_argstart = 0;
-					if (asprintf(&gosub_args, "%s,s,1(%s)", gosubexec, gosub_argstart + 1) < 0) {
+					if (!ast_exists_extension(peer, gosubexec, "s", 1, S_COR(peer->caller.id.number.valid, peer->caller.id.number.str, NULL)) &&
+						 ast_exists_extension(peer, gosubexec, "~~s~~", 1, S_COR(peer->caller.id.number.valid, peer->caller.id.number.str, NULL))) {
+						what_is_s = "~~s~~";
+					}
+					if (asprintf(&gosub_args, "%s,%s,1(%s)", gosubexec, what_is_s, gosub_argstart + 1) < 0) {
 						ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
 						gosub_args = NULL;
 					}
 					*gosub_argstart = ',';
 				} else {
-					if (asprintf(&gosub_args, "%s,s,1", gosubexec) < 0) {
+					const char *what_is_s = "s";
+					if (!ast_exists_extension(peer, gosubexec, "s", 1, S_COR(peer->caller.id.number.valid, peer->caller.id.number.str, NULL)) &&
+						 ast_exists_extension(peer, gosubexec, "~~s~~", 1, S_COR(peer->caller.id.number.valid, peer->caller.id.number.str, NULL))) {
+						what_is_s = "~~s~~";
+					}
+					if (asprintf(&gosub_args, "%s,%s,1", gosubexec, what_is_s) < 0) {
 						ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
 						gosub_args = NULL;
 					}

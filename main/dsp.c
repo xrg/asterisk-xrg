@@ -192,15 +192,7 @@ enum gsamp_thresh {
 #define FAX_TONE_CED_DURATION	2600
 #define FAX_TONE_CED_DB		16
 
-#define SAMPLE_RATE		8000
-
-/* How many samples a frame has.  This constant is used when calculating
- * Goertzel block size for tone_detect.  It is only important if we want to
- * remove (squelch) the tone. In this case it is important to have block
- * size not to exceed size of voice frame.  Otherwise by the moment the tone
- * is detected it is too late to squelch it from previous frames.
- */
-#define SAMPLES_IN_FRAME	160
+#define DEFAULT_SAMPLE_RATE		8000
 
 /* MF goertzel size */
 #define MF_GSIZE		120
@@ -339,10 +331,10 @@ static inline float goertzel_result(goertzel_state_t *s)
 	return (float)r.value * (float)(1 << r.power);
 }
 
-static inline void goertzel_init(goertzel_state_t *s, float freq, int samples)
+static inline void goertzel_init(goertzel_state_t *s, float freq, int samples, unsigned int sample_rate)
 {
 	s->v2 = s->v3 = s->chunky = 0.0;
-	s->fac = (int)(32768.0 * 2.0 * cos(2.0 * M_PI * freq / SAMPLE_RATE));
+	s->fac = (int)(32768.0 * 2.0 * cos(2.0 * M_PI * freq / sample_rate));
 	s->samples = samples;
 }
 
@@ -378,8 +370,7 @@ struct ast_dsp {
 	int ringtimeout;
 	int busymaybe;
 	int busycount;
-	int busy_tonelength;
-	int busy_quietlength;
+	struct ast_dsp_busy_pattern busy_cadence;
 	int historicnoise[DSP_HISTORY];
 	int historicsilence[DSP_HISTORY];
 	goertzel_state_t freqs[7];
@@ -395,6 +386,7 @@ struct ast_dsp {
 	int display_inband_dtmf_warning;
 	float genergy;
 	int mute_fragments;
+	unsigned int sample_rate;
 	fragment_t mute_data[5];
 	digit_detect_state_t digit_state;
 	tone_detect_state_t cng_tone_state;
@@ -411,7 +403,7 @@ static void mute_fragment(struct ast_dsp *dsp, fragment_t *fragment)
 	dsp->mute_data[dsp->mute_fragments++] = *fragment;
 }
 
-static void ast_tone_detect_init(tone_detect_state_t *s, int freq, int duration, int amp)
+static void ast_tone_detect_init(tone_detect_state_t *s, int freq, int duration, int amp, unsigned int sample_rate)
 {
 	int duration_samples;
 	float x;
@@ -420,16 +412,16 @@ static void ast_tone_detect_init(tone_detect_state_t *s, int freq, int duration,
 	s->freq = freq;
 
 	/* Desired tone duration in samples */
-	duration_samples = duration * SAMPLE_RATE / 1000;
+	duration_samples = duration * sample_rate / 1000;
 	/* We want to allow 10% deviation of tone duration */
 	duration_samples = duration_samples * 9 / 10;
 
 	/* If we want to remove tone, it is important to have block size not
 	   to exceed frame size. Otherwise by the moment tone is detected it is too late
- 	   to squelch it from previous frames */
-	s->block_size = SAMPLES_IN_FRAME;
+ 	   to squelch it from previous frames. Block size is 20ms at the given sample rate.*/
+	s->block_size = (20 * sample_rate) / 1000;
 
-	periods_in_block = s->block_size * freq / SAMPLE_RATE;
+	periods_in_block = s->block_size * freq / sample_rate;
 
 	/* Make sure we will have at least 5 periods at target frequency for analisys.
 	   This may make block larger than expected packet and will make squelching impossible
@@ -438,7 +430,7 @@ static void ast_tone_detect_init(tone_detect_state_t *s, int freq, int duration,
 		periods_in_block = 5;
 
 	/* Now calculate final block size. It will contain integer number of periods */
-	s->block_size = periods_in_block * SAMPLE_RATE / freq;
+	s->block_size = periods_in_block * sample_rate / freq;
 
 	/* tone_detect is currently only used to detect fax tones and we
 	   do not need suqlching the fax tones */
@@ -448,7 +440,7 @@ static void ast_tone_detect_init(tone_detect_state_t *s, int freq, int duration,
 	   and thus no tone will be detected in them */
 	s->hits_required = (duration_samples - (s->block_size - 1)) / s->block_size;
 
-	goertzel_init(&s->tone, freq, s->block_size);
+	goertzel_init(&s->tone, freq, s->block_size, sample_rate);
 
 	s->samples_pending = s->block_size;
 	s->hit_count = 0;
@@ -473,19 +465,19 @@ static void ast_tone_detect_init(tone_detect_state_t *s, int freq, int duration,
 
 static void ast_fax_detect_init(struct ast_dsp *s)
 {
-	ast_tone_detect_init(&s->cng_tone_state, FAX_TONE_CNG_FREQ, FAX_TONE_CNG_DURATION, FAX_TONE_CNG_DB);
-	ast_tone_detect_init(&s->ced_tone_state, FAX_TONE_CED_FREQ, FAX_TONE_CED_DURATION, FAX_TONE_CED_DB);
+	ast_tone_detect_init(&s->cng_tone_state, FAX_TONE_CNG_FREQ, FAX_TONE_CNG_DURATION, FAX_TONE_CNG_DB, s->sample_rate);
+	ast_tone_detect_init(&s->ced_tone_state, FAX_TONE_CED_FREQ, FAX_TONE_CED_DURATION, FAX_TONE_CED_DB, s->sample_rate);
 }
 
-static void ast_dtmf_detect_init (dtmf_detect_state_t *s)
+static void ast_dtmf_detect_init (dtmf_detect_state_t *s, unsigned int sample_rate)
 {
 	int i;
 
 	s->lasthit = 0;
 	s->current_hit = 0;
 	for (i = 0;  i < 4;  i++) {
-		goertzel_init(&s->row_out[i], dtmf_row[i], DTMF_GSIZE);
-		goertzel_init(&s->col_out[i], dtmf_col[i], DTMF_GSIZE);
+		goertzel_init(&s->row_out[i], dtmf_row[i], DTMF_GSIZE, sample_rate);
+		goertzel_init(&s->col_out[i], dtmf_col[i], DTMF_GSIZE, sample_rate);
 		s->energy = 0.0;
 	}
 	s->current_sample = 0;
@@ -496,18 +488,18 @@ static void ast_dtmf_detect_init (dtmf_detect_state_t *s)
 	s->misses_to_end = DTMF_MISSES_TO_END;
 }
 
-static void ast_mf_detect_init (mf_detect_state_t *s)
+static void ast_mf_detect_init (mf_detect_state_t *s, unsigned int sample_rate)
 {
 	int i;
 	s->hits[0] = s->hits[1] = s->hits[2] = s->hits[3] = s->hits[4] = 0;
 	for (i = 0;  i < 6;  i++) {
-		goertzel_init (&s->tone_out[i], mf_tones[i], 160);
+		goertzel_init (&s->tone_out[i], mf_tones[i], 160, sample_rate);
 	}
 	s->current_sample = 0;
 	s->current_hit = 0;
 }
 
-static void ast_digit_detect_init(digit_detect_state_t *s, int mf)
+static void ast_digit_detect_init(digit_detect_state_t *s, int mf, unsigned int sample_rate)
 {
 	s->current_digits = 0;
 	s->detected_digits = 0;
@@ -515,9 +507,9 @@ static void ast_digit_detect_init(digit_detect_state_t *s, int mf)
 	s->digits[0] = '\0';
 
 	if (mf) {
-		ast_mf_detect_init(&s->td.mf);
+		ast_mf_detect_init(&s->td.mf, sample_rate);
 	} else {
-		ast_dtmf_detect_init(&s->td.dtmf);
+		ast_dtmf_detect_init(&s->td.dtmf, sample_rate);
 	}
 }
 
@@ -1106,7 +1098,7 @@ int ast_dsp_call_progress(struct ast_dsp *dsp, struct ast_frame *inf)
 		ast_log(LOG_WARNING, "Can't check call progress of non-voice frames\n");
 		return 0;
 	}
-	if (inf->subclass.codec != AST_FORMAT_SLINEAR) {
+	if (!ast_format_is_slinear(&inf->subclass.format)) {
 		ast_log(LOG_WARNING, "Can only check call progress in signed-linear frames\n");
 		return 0;
 	}
@@ -1129,7 +1121,7 @@ static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *
 	accum /= len;
 	if (accum < dsp->threshold) {
 		/* Silent */
-		dsp->totalsilence += len / 8;
+		dsp->totalsilence += len / (dsp->sample_rate / 1000);
 		if (dsp->totalnoise) {
 			/* Move and save history */
 			memmove(dsp->historicnoise + DSP_HISTORY - dsp->busycount, dsp->historicnoise + DSP_HISTORY - dsp->busycount + 1, dsp->busycount * sizeof(dsp->historicnoise[0]));
@@ -1143,7 +1135,7 @@ static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *
 		res = 1;
 	} else {
 		/* Not silent */
-		dsp->totalnoise += len / 8;
+		dsp->totalnoise += len / (dsp->sample_rate / 1000);
 		if (dsp->totalsilence) {
 			int silence1 = dsp->historicsilence[DSP_HISTORY - 1];
 			int silence2 = dsp->historicsilence[DSP_HISTORY - 2];
@@ -1183,9 +1175,14 @@ int ast_dsp_busydetect(struct ast_dsp *dsp)
 	int avgsilence = 0, hitsilence = 0;
 #endif
 	int avgtone = 0, hittone = 0;
-	if (!dsp->busymaybe) {
-		return res;
+
+	/* if we have a 4 length pattern, the way busymaybe is set doesn't help us. */
+	if (dsp->busy_cadence.length != 4) {
+		if (!dsp->busymaybe) {
+			return res;
+		}
 	}
+
 	for (x = DSP_HISTORY - dsp->busycount; x < DSP_HISTORY; x++) {
 #ifndef BUSYDETECT_TONEONLY
 		avgsilence += dsp->historicsilence[x];
@@ -1239,23 +1236,60 @@ int ast_dsp_busydetect(struct ast_dsp *dsp)
 		res = 1;
 #endif
 	}
+
+	/* If we have a 4-length pattern, we can go ahead and just check it in a different way. */
+	if (dsp->busy_cadence.length == 4) {
+		int x;
+		int errors = 0;
+		int errors_max = ((4 * dsp->busycount) / 100.0) * BUSY_PAT_PERCENT;
+
+		for (x = DSP_HISTORY - (dsp->busycount); x < DSP_HISTORY; x += 2) {
+			int temp_error;
+			temp_error = abs(dsp->historicnoise[x] - dsp->busy_cadence.pattern[0]);
+			if ((temp_error * 100) / dsp->busy_cadence.pattern[0] > BUSY_PERCENT) {
+				errors++;
+			}
+
+			temp_error = abs(dsp->historicnoise[x + 1] - dsp->busy_cadence.pattern[2]);
+			if ((temp_error * 100) / dsp->busy_cadence.pattern[2] > BUSY_PERCENT) {
+				errors++;
+			}
+
+			temp_error = abs(dsp->historicsilence[x] - dsp->busy_cadence.pattern[1]);
+			if ((temp_error * 100) / dsp->busy_cadence.pattern[1] > BUSY_PERCENT) {
+				errors++;
+			}
+
+			temp_error = abs(dsp->historicsilence[x + 1] - dsp->busy_cadence.pattern[3]);
+			if ((temp_error * 100) / dsp->busy_cadence.pattern[3] > BUSY_PERCENT) {
+				errors++;
+			}
+		}
+
+		ast_debug(5, "errors = %d  max = %d\n", errors, errors_max);
+
+		if (errors <= errors_max) {
+			return 1;
+		}
+	}
+
 	/* If we know the expected busy tone length, check we are in the range */
-	if (res && (dsp->busy_tonelength > 0)) {
-		if (abs(avgtone - dsp->busy_tonelength) > (dsp->busy_tonelength*BUSY_PAT_PERCENT/100)) {
+	if (res && (dsp->busy_cadence.pattern[0] > 0)) {
+		if (abs(avgtone - dsp->busy_cadence.pattern[0]) > (dsp->busy_cadence.pattern[0]*BUSY_PAT_PERCENT/100)) {
 #ifdef BUSYDETECT_DEBUG
 			ast_debug(5, "busy detector: avgtone of %d not close enough to desired %d\n",
-				avgtone, dsp->busy_tonelength);
+				avgtone, dsp->busy_cadence.pattern[0]);
 #endif
 			res = 0;
 		}
 	}
 #ifndef BUSYDETECT_TONEONLY
 	/* If we know the expected busy tone silent-period length, check we are in the range */
-	if (res && (dsp->busy_quietlength > 0)) {
-		if (abs(avgsilence - dsp->busy_quietlength) > (dsp->busy_quietlength*BUSY_PAT_PERCENT/100)) {
+	if (res && (dsp->busy_cadence.pattern[1] > 0)) {
+		if (abs(avgsilence - dsp->busy_cadence.pattern[1]) > (dsp->busy_cadence.pattern[1] * BUSY_PAT_PERCENT / 100)) {
 #ifdef BUSYDETECT_DEBUG
 		ast_debug(5, "busy detector: avgsilence of %d not close enough to desired %d\n",
-			avgsilence, dsp->busy_quietlength);
+			avgsilence, dsp->busy_cadence.pattern[1]);
 #endif
 			res = 0;
 		}
@@ -1280,7 +1314,7 @@ int ast_dsp_silence(struct ast_dsp *dsp, struct ast_frame *f, int *totalsilence)
 		ast_log(LOG_WARNING, "Can't calculate silence on a non-voice frame\n");
 		return 0;
 	}
-	if (f->subclass.codec != AST_FORMAT_SLINEAR) {
+	if (!ast_format_is_slinear(&f->subclass.format)) {
 		ast_log(LOG_WARNING, "Can only calculate silence on signed-linear frames :(\n");
 		return 0;
 	}
@@ -1298,7 +1332,7 @@ int ast_dsp_noise(struct ast_dsp *dsp, struct ast_frame *f, int *totalnoise)
                ast_log(LOG_WARNING, "Can't calculate noise on a non-voice frame\n");
                return 0;
        }
-       if (f->subclass.codec != AST_FORMAT_SLINEAR) {
+       if (!ast_format_is_slinear(&f->subclass.format)) {
                ast_log(LOG_WARNING, "Can only calculate noise on signed-linear frames :(\n");
                return 0;
        }
@@ -1329,30 +1363,31 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 	odata = af->data.ptr;
 	len = af->datalen;
 	/* Make sure we have short data */
-	switch (af->subclass.codec) {
-	case AST_FORMAT_SLINEAR:
+	if (ast_format_is_slinear(&af->subclass.format)) {
 		shortdata = af->data.ptr;
 		len = af->datalen / 2;
-		break;
-	case AST_FORMAT_ULAW:
-	case AST_FORMAT_TESTLAW:
-		shortdata = alloca(af->datalen * 2);
-		for (x = 0;x < len; x++) {
-			shortdata[x] = AST_MULAW(odata[x]);
+	} else {
+		switch (af->subclass.format.id) {
+		case AST_FORMAT_ULAW:
+		case AST_FORMAT_TESTLAW:
+			shortdata = alloca(af->datalen * 2);
+			for (x = 0;x < len; x++) {
+				shortdata[x] = AST_MULAW(odata[x]);
+			}
+			break;
+		case AST_FORMAT_ALAW:
+			shortdata = alloca(af->datalen * 2);
+			for (x = 0; x < len; x++) {
+				shortdata[x] = AST_ALAW(odata[x]);
+			}
+			break;
+		default:
+			/*Display warning only once. Otherwise you would get hundreds of warnings every second */
+			if (dsp->display_inband_dtmf_warning)
+				ast_log(LOG_WARNING, "Inband DTMF is not supported on codec %s. Use RFC2833\n", ast_getformatname(&af->subclass.format));
+			dsp->display_inband_dtmf_warning = 0;
+			return af;
 		}
-		break;
-	case AST_FORMAT_ALAW:
-		shortdata = alloca(af->datalen * 2);
-		for (x = 0; x < len; x++) {
-			shortdata[x] = AST_ALAW(odata[x]);
-		}
-		break;
-	default:
-		/*Display warning only once. Otherwise you would get hundreds of warnings every second */
-		if (dsp->display_inband_dtmf_warning)
-			ast_log(LOG_WARNING, "Inband DTMF is not supported on codec %s. Use RFC2833\n", ast_getformatname(af->subclass.codec));
-		dsp->display_inband_dtmf_warning = 0;
-		return af;
 	}
 
 	/* Initially we do not want to mute anything */
@@ -1413,7 +1448,7 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 				if (dsp->features & DSP_FEATURE_DIGIT_DETECT) {
 					event = AST_FRAME_DTMF_END;
 					event_digit = dsp->digit_state.digits[0];
-					event_len = dsp->digit_state.digitlen[0] * 1000 / SAMPLE_RATE;
+					event_len = dsp->digit_state.digitlen[0] * 1000 / dsp->sample_rate;
 				}
 				memmove(&dsp->digit_state.digits[0], &dsp->digit_state.digits[1], dsp->digit_state.current_digits);
 				memmove(&dsp->digit_state.digitlen[0], &dsp->digit_state.digitlen[1], dsp->digit_state.current_digits * sizeof(dsp->digit_state.digitlen[0]));
@@ -1479,9 +1514,7 @@ done:
 		memset(shortdata + dsp->mute_data[x].start, 0, sizeof(int16_t) * (dsp->mute_data[x].end - dsp->mute_data[x].start));
 	}
 
-	switch (af->subclass.codec) {
-	case AST_FORMAT_SLINEAR:
-		break;
+	switch (af->subclass.format.id) {
 	case AST_FORMAT_ULAW:
 		for (x = 0; x < len; x++) {
 			odata[x] = AST_LIN2MU((unsigned short) shortdata[x]);
@@ -1491,6 +1524,8 @@ done:
 		for (x = 0; x < len; x++) {
 			odata[x] = AST_LIN2A((unsigned short) shortdata[x]);
 		}
+		/* fall through */
+	default:
 		break;
 	}
 
@@ -1514,7 +1549,7 @@ static void ast_dsp_prog_reset(struct ast_dsp *dsp)
 	dsp->gsamps = 0;
 	for (x = 0; x < ARRAY_LEN(modes[dsp->progmode].freqs); x++) {
 		if (modes[dsp->progmode].freqs[x]) {
-			goertzel_init(&dsp->freqs[x], (float)modes[dsp->progmode].freqs[x], dsp->gsamp_size);
+			goertzel_init(&dsp->freqs[x], (float)modes[dsp->progmode].freqs[x], dsp->gsamp_size, dsp->sample_rate);
 			max = x + 1;
 		}
 	}
@@ -1522,7 +1557,12 @@ static void ast_dsp_prog_reset(struct ast_dsp *dsp)
 	dsp->ringtimeout= 0;
 }
 
-struct ast_dsp *ast_dsp_new(void)
+unsigned int ast_dsp_get_sample_rate(const struct ast_dsp *dsp)
+{
+	return dsp->sample_rate;
+}
+
+static struct ast_dsp *__ast_dsp_new(unsigned int sample_rate)
 {
 	struct ast_dsp *dsp;
 	
@@ -1532,8 +1572,9 @@ struct ast_dsp *ast_dsp_new(void)
 		dsp->busycount = DSP_HISTORY;
 		dsp->digitmode = DSP_DIGITMODE_DTMF;
 		dsp->faxmode = DSP_FAXMODE_DETECT_CNG;
+		dsp->sample_rate = sample_rate;
 		/* Initialize digit detector */
-		ast_digit_detect_init(&dsp->digit_state, dsp->digitmode & DSP_DIGITMODE_MF);
+		ast_digit_detect_init(&dsp->digit_state, dsp->digitmode & DSP_DIGITMODE_MF, dsp->sample_rate);
 		dsp->display_inband_dtmf_warning = 1;
 		/* Initialize initial DSP progress detect parameters */
 		ast_dsp_prog_reset(dsp);
@@ -1541,6 +1582,16 @@ struct ast_dsp *ast_dsp_new(void)
 		ast_fax_detect_init(dsp);
 	}
 	return dsp;
+}
+
+struct ast_dsp *ast_dsp_new(void)
+{
+	return __ast_dsp_new(DEFAULT_SAMPLE_RATE);
+}
+
+struct ast_dsp *ast_dsp_new_with_rate(unsigned int sample_rate)
+{
+	return __ast_dsp_new(sample_rate);
 }
 
 void ast_dsp_set_features(struct ast_dsp *dsp, int features)
@@ -1569,11 +1620,10 @@ void ast_dsp_set_busy_count(struct ast_dsp *dsp, int cadences)
 	dsp->busycount = cadences;
 }
 
-void ast_dsp_set_busy_pattern(struct ast_dsp *dsp, int tonelength, int quietlength)
+void ast_dsp_set_busy_pattern(struct ast_dsp *dsp, const struct ast_dsp_busy_pattern *cadence)
 {
-	dsp->busy_tonelength = tonelength;
-	dsp->busy_quietlength = quietlength;
-	ast_debug(1, "dsp busy pattern set to %d,%d\n", tonelength, quietlength);
+	dsp->busy_cadence = *cadence;
+	ast_debug(1, "dsp busy pattern set to %d,%d,%d,%d\n", cadence->pattern[0], cadence->pattern[1], (cadence->length == 4) ? cadence->pattern[2] : 0, (cadence->length == 4) ? cadence->pattern[3] : 0);
 }
 
 void ast_dsp_digitreset(struct ast_dsp *dsp)
@@ -1630,7 +1680,7 @@ int ast_dsp_set_digitmode(struct ast_dsp *dsp, int digitmode)
 	new = digitmode & (DSP_DIGITMODE_DTMF | DSP_DIGITMODE_MF | DSP_DIGITMODE_MUTECONF | DSP_DIGITMODE_MUTEMAX);
 	if (old != new) {
 		/* Must initialize structures if switching from MF to DTMF or vice-versa */
-		ast_digit_detect_init(&dsp->digit_state, new & DSP_DIGITMODE_MF);
+		ast_digit_detect_init(&dsp->digit_state, new & DSP_DIGITMODE_MF, dsp->sample_rate);
 	}
 	dsp->digitmode = digitmode;
 	return 0;

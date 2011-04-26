@@ -58,6 +58,7 @@ static int lua_reload_extensions(lua_State *L);
 static void lua_free_extensions(void);
 static int lua_sort_extensions(lua_State *L);
 static int lua_register_switches(lua_State *L);
+static int lua_register_hints(lua_State *L);
 static int lua_extension_cmp(lua_State *L);
 static int lua_find_extension(lua_State *L, const char *context, const char *exten, int priority, ast_switch_f *func, int push_func);
 static int lua_pbx_findapp(lua_State *L);
@@ -736,6 +737,9 @@ static int lua_error_function(lua_State *L)
 	 * backtrace to it */
 	message_index = lua_gettop(L);
 
+	/* prepare to prepend a new line to the traceback */
+	lua_pushliteral(L, "\n");
+
 	lua_getglobal(L, "debug");
 	lua_getfield(L, -1, "traceback");
 	lua_remove(L, -2); /* remove the 'debug' table */
@@ -746,6 +750,9 @@ static int lua_error_function(lua_State *L)
 	lua_pushnumber(L, 2);
 
 	lua_call(L, 2, 1);
+
+	/* prepend the new line we prepared above */
+	lua_concat(L, 2);
 
 	return 1;
 }
@@ -787,7 +794,11 @@ static int lua_sort_extensions(lua_State *L)
 		int context_name = context - 1;
 		int context_order;
 
+		/* copy the context_name to be used as the key for the
+		 * context_order table in the extensions_order table later */
 		lua_pushvalue(L, context_name);
+
+		/* create the context_order table */
 		lua_newtable(L);
 		context_order = lua_gettop(L);
 
@@ -886,6 +897,86 @@ static int lua_register_switches(lua_State *L)
 	return 0;
 }
 
+/*!
+ * \brief Register dialplan hints for our pbx_lua contexs.
+ *
+ * In the event of an error, an error string will be pushed onto the lua stack.
+ *
+ * \retval 0 success
+ * \retval 1 failure
+ */
+static int lua_register_hints(lua_State *L)
+{
+	int hints;
+	struct ast_context *con = NULL;
+
+	/* create the hash table for our contexts */
+	/* XXX do we ever need to destroy this? pbx_config does not */
+	if (!local_table)
+		local_table = ast_hashtab_create(17, ast_hashtab_compare_contexts, ast_hashtab_resize_java, ast_hashtab_newsize_java, ast_hashtab_hash_contexts, 0);
+
+	/* load the 'hints' table */
+	lua_getglobal(L, "hints");
+	hints = lua_gettop(L);
+	if (lua_isnil(L, -1)) {
+		/* hints table not found, move along */
+		lua_pop(L, 1);
+		return 0;
+	}
+
+	/* iterate through the hints table and register each context and
+	 * the hints that go along with it
+	 */
+	for (lua_pushnil(L); lua_next(L, hints); lua_pop(L, 1)) {
+		int context = lua_gettop(L);
+		int context_name = context - 1;
+		const char *context_str = lua_tostring(L, context_name);
+
+		/* find or create this context */
+		con = ast_context_find_or_create(&local_contexts, local_table, context_str, registrar);
+		if (!con) {
+			/* remove hints table and context key and value */
+			lua_pop(L, 3);
+			lua_pushstring(L, "Failed to find or create context\n");
+			return 1;
+		}
+
+		/* register each hint */
+		for (lua_pushnil(L); lua_next(L, context); lua_pop(L, 1)) {
+			const char *hint_value = lua_tostring(L, -1);
+			const char *hint_name;
+
+			/* the hint value is not a string, ignore it */
+			if (!hint_value) {
+				continue;
+			}
+
+			/* copy the name then convert it to a string */
+			lua_pushvalue(L, -2);
+			if (!(hint_name = lua_tostring(L, -1))) {
+				/* ignore non-string value */
+				lua_pop(L, 1);
+				continue;
+			}
+
+			if (ast_add_extension2(con, 0, hint_name, PRIORITY_HINT, NULL, NULL, hint_value, NULL, NULL, registrar)) {
+				/* remove hints table, hint name, hint value,
+				 * key copy, context name, and contex table */
+				lua_pop(L, 6);
+				lua_pushstring(L, "Error creating hint\n");
+				return 1;
+			}
+
+			/* pop the name copy */
+			lua_pop(L, 1);
+		}
+	}
+
+	/* remove the hints table */
+	lua_pop(L, 1);
+
+	return 0;
+}
 
 /*!
  * \brief [lua_CFunction] Compare two extensions (for access from lua, don't
@@ -920,6 +1011,7 @@ static int lua_extension_cmp(lua_State *L)
 static char *lua_read_extensions_file(lua_State *L, long *size)
 {
 	FILE *f;
+	int error_func;
 	char *data;
 	char *path = alloca(strlen(config) + strlen(ast_config_AST_CONFIG_DIR) + 2);
 	sprintf(path, "%s/%s", ast_config_AST_CONFIG_DIR, config);
@@ -934,10 +1026,20 @@ static char *lua_read_extensions_file(lua_State *L, long *size)
 		return NULL;
 	}
 
-	fseek(f, 0l, SEEK_END);
+	if (fseek(f, 0l, SEEK_END)) {
+		fclose(f);
+		lua_pushliteral(L, "error determining the size of the config file");
+		return NULL;
+	}
+
 	*size = ftell(f);
 
-	fseek(f, 0l, SEEK_SET);
+	if (fseek(f, 0l, SEEK_SET)) {
+		*size = 0;
+		fclose(f);
+		lua_pushliteral(L, "error reading config file");
+		return NULL;
+	}
 
 	if (!(data = ast_malloc(*size))) {
 		*size = 0;
@@ -947,18 +1049,27 @@ static char *lua_read_extensions_file(lua_State *L, long *size)
 	}
 
 	if (fread(data, sizeof(char), *size, f) != *size) {
-		ast_log(LOG_WARNING, "fread() failed: %s\n", strerror(errno));
+		*size = 0;
+		fclose(f);
+		lua_pushliteral(L, "problem reading configuration file");
+		return NULL;
 	}
 	fclose(f);
 
+	lua_pushcfunction(L, &lua_error_function);
+	error_func = lua_gettop(L);
+
 	if (luaL_loadbuffer(L, data, *size, "extensions.lua")
-			|| lua_pcall(L, 0, LUA_MULTRET, 0)
+			|| lua_pcall(L, 0, LUA_MULTRET, error_func)
 			|| lua_sort_extensions(L)
-			|| lua_register_switches(L)) {
+			|| lua_register_switches(L)
+			|| lua_register_hints(L)) {
 		ast_free(data);
 		data = NULL;
 		*size = 0;
 	}
+
+	lua_remove(L, error_func);
 	return data;
 }
 
@@ -1467,7 +1578,7 @@ static int load_module(void)
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Lua PBX Switch",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Lua PBX Switch",
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload,

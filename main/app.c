@@ -30,10 +30,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
 #endif
-#include <regex.h>
-#include <sys/file.h> /* added this to allow to compile, sorry! */
-#include <signal.h>
+#include <regex.h>          /* for regcomp(3) */
+#include <sys/file.h>       /* for flock(2) */
+#include <signal.h>         /* for pthread_sigmask(3) */
 #include <stdlib.h>         /* for closefrom(3) */
+#include <sys/types.h>
+#include <sys/wait.h>       /* for waitpid(2) */
+#ifndef HAVE_CLOSEFROM
+#include <dirent.h>         /* for opendir(3)   */
+#endif
 #ifdef HAVE_CAP
 #include <sys/capability.h>
 #endif /* HAVE_CAP */
@@ -51,6 +56,41 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/threadstorage.h"
 
 AST_THREADSTORAGE_PUBLIC(ast_str_thread_global_buf);
+
+static pthread_t shaun_of_the_dead_thread = AST_PTHREADT_NULL;
+
+struct zombie {
+	pid_t pid;
+	AST_LIST_ENTRY(zombie) list;
+};
+
+static AST_LIST_HEAD_STATIC(zombies, zombie);
+
+static void *shaun_of_the_dead(void *data)
+{
+	struct zombie *cur;
+	int status;
+	for (;;) {
+		if (!AST_LIST_EMPTY(&zombies)) {
+			/* Don't allow cancellation while we have a lock. */
+			pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+			AST_LIST_LOCK(&zombies);
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&zombies, cur, list) {
+				if (waitpid(cur->pid, &status, WNOHANG) != 0) {
+					AST_LIST_REMOVE_CURRENT(list);
+					ast_free(cur);
+				}
+			}
+			AST_LIST_TRAVERSE_SAFE_END
+			AST_LIST_UNLOCK(&zombies);
+			pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+		}
+		pthread_testcancel();
+		/* Wait for 60 seconds, without engaging in a busy loop. */
+		ast_poll(NULL, 0, AST_LIST_FIRST(&zombies) ? 5000 : 60000);
+	}
+	return NULL;
+}
 
 
 #define AST_MAX_FORMATS 10
@@ -405,15 +445,15 @@ struct linear_state {
 	int fd;
 	int autoclose;
 	int allowoverride;
-	int origwfmt;
+	struct ast_format origwfmt;
 };
 
 static void linear_release(struct ast_channel *chan, void *params)
 {
 	struct linear_state *ls = params;
 
-	if (ls->origwfmt && ast_set_write_format(chan, ls->origwfmt)) {
-		ast_log(LOG_WARNING, "Unable to restore channel '%s' to format '%d'\n", chan->name, ls->origwfmt);
+	if (ls->origwfmt.id && ast_set_write_format(chan, &ls->origwfmt)) {
+		ast_log(LOG_WARNING, "Unable to restore channel '%s' to format '%d'\n", chan->name, ls->origwfmt.id);
 	}
 
 	if (ls->autoclose) {
@@ -429,11 +469,12 @@ static int linear_generator(struct ast_channel *chan, void *data, int len, int s
 	struct linear_state *ls = data;
 	struct ast_frame f = {
 		.frametype = AST_FRAME_VOICE,
-		.subclass.codec = AST_FORMAT_SLINEAR,
 		.data.ptr = buf + AST_FRIENDLY_OFFSET / 2,
 		.offset = AST_FRIENDLY_OFFSET,
 	};
 	int res;
+
+	ast_format_set(&f.subclass.format, AST_FORMAT_SLINEAR, 0);
 
 	len = samples * 2;
 	if (len > sizeof(buf) - AST_FRIENDLY_OFFSET) {
@@ -467,9 +508,9 @@ static void *linear_alloc(struct ast_channel *chan, void *params)
 		ast_clear_flag(chan, AST_FLAG_WRITE_INT);
 	}
 
-	ls->origwfmt = chan->writeformat;
+	ast_format_copy(&ls->origwfmt, &chan->writeformat);
 
-	if (ast_set_write_format(chan, AST_FORMAT_SLINEAR)) {
+	if (ast_set_write_format_by_id(chan, AST_FORMAT_SLINEAR)) {
 		ast_log(LOG_WARNING, "Unable to set '%s' to linear format (write)\n", chan->name);
 		ast_free(ls);
 		ls = params = NULL;
@@ -701,10 +742,11 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 	int totalsilence = 0;
 	int dspsilence = 0;
 	int olddspsilence = 0;
-	int rfmt = 0;
+	struct ast_format rfmt;
 	struct ast_silence_generator *silgen = NULL;
 	char prependfile[80];
 
+	ast_format_clear(&rfmt);
 	if (silencethreshold < 0) {
 		silencethreshold = global_silence_threshold;
 	}
@@ -775,8 +817,8 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 			return -1;
 		}
 		ast_dsp_set_threshold(sildet, silencethreshold);
-		rfmt = chan->readformat;
-		res = ast_set_read_format(chan, AST_FORMAT_SLINEAR);
+		ast_format_copy(&rfmt, &chan->readformat);
+		res = ast_set_read_format_by_id(chan, AST_FORMAT_SLINEAR);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Unable to set to linear mode, giving up\n");
 			ast_dsp_free(sildet);
@@ -965,8 +1007,8 @@ static int __ast_play_and_record(struct ast_channel *chan, const char *playfile,
 			ast_filedelete(prependfile, sfmt[x]);
 		}
 	}
-	if (rfmt && ast_set_read_format(chan, rfmt)) {
-		ast_log(LOG_WARNING, "Unable to restore format %s to channel '%s'\n", ast_getformatname(rfmt), chan->name);
+	if (rfmt.id && ast_set_read_format(chan, &rfmt)) {
+		ast_log(LOG_WARNING, "Unable to restore format %s to channel '%s'\n", ast_getformatname(&rfmt), chan->name);
 	}
 	if (outmsg == 2) {
 		ast_stream_and_wait(chan, "auth-thankyou", "");
@@ -1439,9 +1481,9 @@ static int ast_unlock_path_flock(const char *path)
 		snprintf(s, strlen(path) + 19, "%s/lock", path);
 		unlink(s);
 		path_lock_destroy(p);
-		ast_log(LOG_DEBUG, "Unlocked path '%s'\n", path);
+		ast_debug(1, "Unlocked path '%s'\n", path);
 	} else {
-		ast_log(LOG_DEBUG, "Failed to unlock path '%s': "
+		ast_debug(1, "Failed to unlock path '%s': "
 				"lock not found\n", path);
 	}
 
@@ -2061,6 +2103,21 @@ int ast_safe_fork(int stop_reaper)
 	if (pid != 0) {
 		/* Fork failed or parent */
 		pthread_sigmask(SIG_SETMASK, &old_set, NULL);
+		if (!stop_reaper && pid > 0) {
+			struct zombie *cur = ast_calloc(1, sizeof(*cur));
+			if (cur) {
+				cur->pid = pid;
+				AST_LIST_LOCK(&zombies);
+				AST_LIST_INSERT_TAIL(&zombies, cur, list);
+				AST_LIST_UNLOCK(&zombies);
+				if (shaun_of_the_dead_thread == AST_PTHREADT_NULL) {
+					if (ast_pthread_create_background(&shaun_of_the_dead_thread, NULL, shaun_of_the_dead, NULL)) {
+						ast_log(LOG_ERROR, "Shaun of the Dead wants to kill zombies, but can't?!!\n");
+						shaun_of_the_dead_thread = AST_PTHREADT_NULL;
+					}
+				}
+			}
+		}
 		return pid;
 	} else {
 		/* Child */

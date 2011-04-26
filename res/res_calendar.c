@@ -53,6 +53,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
     	<description>
 			<para>Check the specified calendar's current busy status.</para>
 		</description>
+		<see-also>
+			<ref type="function">CALENDAR_EVENT</ref>
+			<ref type="function">CALENDAR_QUERY</ref>
+			<ref type="function">CALENDAR_QUERY_RESULT</ref>
+			<ref type="function">CALENDAR_WRITE</ref>
+		</see-also>
 	</function>
 	<function name="CALENDAR_EVENT" language="en_US">
 		<synopsis>
@@ -79,6 +85,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Whenever a calendar event notification call is made, the event data
 			may be accessed with this function.</para>
 		</description>
+		<see-also>
+			<ref type="function">CALENDAR_BUSY</ref>
+			<ref type="function">CALENDAR_QUERY</ref>
+			<ref type="function">CALENDAR_QUERY_RESULT</ref>
+			<ref type="function">CALENDAR_WRITE</ref>
+		</see-also>
 	</function>
 	<function name="CALENDAR_QUERY" language="en_US">
 		<synopsis>Query a calendar server and store the data on a channel
@@ -98,6 +110,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Get a list of events in the currently accessible timeframe of the <replaceable>calendar</replaceable>
 			The function returns the id for accessing the result with CALENDAR_QUERY_RESULT()</para>
 		</description>
+		<see-also>
+			<ref type="function">CALENDAR_BUSY</ref>
+			<ref type="function">CALENDAR_EVENT</ref>
+			<ref type="function">CALENDAR_QUERY_RESULT</ref>
+			<ref type="function">CALENDAR_WRITE</ref>
+		</see-also>
 	</function>
 	<function name="CALENDAR_QUERY_RESULT" language="en_US">
 		<synopsis>
@@ -133,6 +151,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			will return the data for that field. If multiple events matched the query, and <replaceable>entry</replaceable>
 			is provided, information from that event will be returned.</para>
 		</description>
+		<see-also>
+			<ref type="function">CALENDAR_BUSY</ref>
+			<ref type="function">CALENDAR_EVENT</ref>
+			<ref type="function">CALENDAR_QUERY</ref>
+			<ref type="function">CALENDAR_WRITE</ref>
+		</see-also>
 	</function>
 	<function name="CALENDAR_WRITE" language="en_US">
 		<synopsis>Write an event to a calendar</synopsis>
@@ -159,6 +183,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Example: CALENDAR_WRITE(calendar,field1,field2,field3)=val1,val2,val3</para>
 			<para>The field and value arguments can easily be set/passed using the HASHKEYS() and HASH() functions</para>
 		</description>
+		<see-also>
+			<ref type="function">CALENDAR_BUSY</ref>
+			<ref type="function">CALENDAR_EVENT</ref>
+			<ref type="function">CALENDAR_QUERY</ref>
+			<ref type="function">CALENDAR_QUERY_RESULT</ref>
+		</see-also>
 	</function>
 
 ***/
@@ -283,6 +313,10 @@ static void calendar_destructor(void *obj)
 	}
 	ast_calendar_clear_events(cal);
 	ast_string_field_free_memory(cal);
+	if (cal->vars) {
+		ast_variables_destroy(cal->vars);
+		cal->vars = NULL;
+	}
 	ao2_ref(cal->events, -1);
 	ao2_unlock(cal);
 }
@@ -339,7 +373,7 @@ static enum ast_device_state calendarstate(const char *data)
 static struct ast_calendar *build_calendar(struct ast_config *cfg, const char *cat, const struct ast_calendar_tech *tech)
 {
 	struct ast_calendar *cal;
-	struct ast_variable *v;
+	struct ast_variable *v, *last = NULL;
 	int new_calendar = 0;
 
 	if (!(cal = find_calendar(cat))) {
@@ -393,6 +427,26 @@ static struct ast_calendar *build_calendar(struct ast_config *cfg, const char *c
 			cal->refresh = atoi(v->value);
 		} else if (!strcasecmp(v->name, "timeframe")) {
 			cal->timeframe = atoi(v->value);
+		} else if (!strcasecmp(v->name, "setvar")) {
+			char *name, *value;
+			struct ast_variable *var;
+
+			if ((name = (value = ast_strdup(v->value)))) {
+				strsep(&value, "=");
+				if (value) {
+					if ((var = ast_variable_new(ast_strip(name), ast_strip(value), ""))) {
+						if (last) {
+							last->next = var;
+						} else {
+							cal->vars = var;
+						}
+						last = var;
+					}
+				} else {
+					ast_log(LOG_WARNING, "Malformed argument. Should be '%s: variable=value'\n", v->name);
+				}
+				ast_free(name);
+			}
 		}
 	}
 
@@ -636,10 +690,11 @@ static void *do_notify(void *data)
 {
 	struct ast_calendar_event *event = data;
 	struct ast_dial *dial = NULL;
-	struct ast_str *apptext = NULL;
+	struct ast_str *apptext = NULL, *tmpstr;
 	struct ast_datastore *datastore;
 	enum ast_dial_result res;
 	struct ast_channel *chan = NULL;
+	struct ast_variable *itervar;
 	char *tech, *dest;
 	char buf[8];
 
@@ -672,8 +727,12 @@ static void *do_notify(void *data)
 	}
 
 	chan->tech = &null_tech;
-	chan->nativeformats = chan->writeformat = chan->rawwriteformat =
-		chan->readformat = chan->rawreadformat = AST_FORMAT_SLINEAR;
+	ast_format_set(&chan->writeformat, AST_FORMAT_SLINEAR, 0);
+	ast_format_set(&chan->readformat, AST_FORMAT_SLINEAR, 0);
+	ast_format_set(&chan->rawwriteformat, AST_FORMAT_SLINEAR, 0);
+	ast_format_set(&chan->rawreadformat, AST_FORMAT_SLINEAR, 0);
+	/* clear native formats and set to slinear. write format is signlear so just use that to set it */
+	ast_format_cap_set(chan->nativeformats, &chan->writeformat);
 
 	if (!(datastore = ast_datastore_alloc(&event_notification_datastore, NULL))) {
 		ast_log(LOG_ERROR, "Could not allocate datastore, notification not being sent!\n");
@@ -685,6 +744,15 @@ static void *do_notify(void *data)
 
 	ao2_ref(event, +1);
 	res = ast_channel_datastore_add(chan, datastore);
+
+	if (!(tmpstr = ast_str_create(32))) {
+		goto notify_cleanup;
+	}
+
+	for (itervar = event->owner->vars; itervar; itervar = itervar->next) {
+		ast_str_substitute_variables(&tmpstr, 0, chan, itervar->value);
+		pbx_builtin_setvar_helper(chan, itervar->name, tmpstr->str);
+	}
 
 	if (!(apptext = ast_str_create(32))) {
 		goto notify_cleanup;
@@ -716,6 +784,9 @@ static void *do_notify(void *data)
 notify_cleanup:
 	if (apptext) {
 		ast_free(apptext);
+	}
+	if (tmpstr) {
+		ast_free(tmpstr);
 	}
 	if (dial) {
 		ast_dial_destroy(dial);
@@ -1488,7 +1559,7 @@ static char *handle_show_calendar(struct ast_cli_entry *e, int cmd, struct ast_c
 		ast_cli(a->fd, FORMAT2, "Description", event->description);
 		ast_cli(a->fd, FORMAT2, "Organizer", event->organizer);
 		ast_cli(a->fd, FORMAT2, "Location", event->location);
-		ast_cli(a->fd, FORMAT2, "Cartegories", event->categories);
+		ast_cli(a->fd, FORMAT2, "Categories", event->categories);
 		ast_cli(a->fd, "%-12.12s: %d\n", "Priority", event->priority);
 		ast_cli(a->fd, FORMAT2, "UID", event->uid);
 		ast_cli(a->fd, FORMAT2, "Start", epoch_to_string(buf, sizeof(buf), event->start));

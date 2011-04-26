@@ -57,11 +57,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MAX_PREFIX 80
 #define DEFAULT_PORT 8088
 #define DEFAULT_TLS_PORT 8089
+#define DEFAULT_SESSION_LIMIT 100
 
 /* See http.h for more information about the SSL implementation */
 #if defined(HAVE_OPENSSL) && (defined(HAVE_FUNOPEN) || defined(HAVE_FOPENCOOKIE))
 #define	DO_SSL	/* comment in/out if you want to support ssl */
 #endif
+
+static int session_limit = DEFAULT_SESSION_LIMIT;
+static int session_count = 0;
 
 static struct ast_tls_config http_tls_cfg;
 
@@ -110,6 +114,14 @@ static struct {
 	{ "svg", "image/svg+xml" },
 	{ "svgz", "image/svg+xml" },
 	{ "gif", "image/gif" },
+	{ "html", "text/html" },
+	{ "htm", "text/html" },
+	{ "css", "text/css" },
+	{ "cnf", "text/plain" },
+	{ "cfg", "text/plain" },
+	{ "bin", "application/octet-stream" },
+	{ "sbn", "application/octet-stream" },
+	{ "ld", "application/octet-stream" },
 };
 
 struct http_uri_redirect {
@@ -270,7 +282,7 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 
 	ast_str_set(&http_header, 0, "Content-type: %s\r\n"
 		"ETag: %s\r\n"
-		"Last-Modified: %s",
+		"Last-Modified: %s\r\n",
 		mtype,
 		etag,
 		timebuf);
@@ -361,7 +373,7 @@ static struct ast_http_uri staticuri = {
 };
 
 
-/* send http/1.1 responce */
+/* send http/1.1 response */
 /* free content variable and close socket*/
 void ast_http_send(struct ast_tcptls_session_instance *ser,
 	enum ast_http_method method, int status_code, const char *status_title,
@@ -379,7 +391,7 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 
 	ast_strftime(timebuf, sizeof(timebuf), "%a, %d %b %Y %H:%M:%S GMT", ast_localtime(&now, &tm, "GMT"));
 
-	/* calc conetnt length */
+	/* calc content length */
 	if (out) {
 		content_length += strlen(ast_str_buffer(out));
 	}
@@ -396,7 +408,8 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 		"Connection: close\r\n"
 		"%s"
 		"Content-Length: %d\r\n"
-		"%s\r\n\r\n",
+		"%s"
+		"\r\n",
 		status_code, status_title ? status_title : "OK",
 		ast_get_version(),
 		timebuf,
@@ -451,7 +464,7 @@ void ast_http_auth(struct ast_tcptls_session_instance *ser, const char *realm,
 
 	ast_str_set(&http_headers, 0,
 		"WWW-authenticate: Digest algorithm=MD5, realm=\"%s\", nonce=\"%08lx\", qop=\"auth\", opaque=\"%08lx\"%s\r\n"
-		"Content-type: text/html",
+		"Content-type: text/html\r\n",
 		realm ? realm : "Asterisk",
 		nonce,
 		opaque,
@@ -473,7 +486,7 @@ void ast_http_auth(struct ast_tcptls_session_instance *ser, const char *realm,
 	return;
 }
 
-/* send http error responce and close socket*/
+/* send http error response and close socket*/
 void ast_http_error(struct ast_tcptls_session_instance *ser, int status_code, const char *status_title, const char *text)
 {
 	struct ast_str *http_headers = ast_str_create(40);
@@ -485,7 +498,7 @@ void ast_http_error(struct ast_tcptls_session_instance *ser, int status_code, co
 		return;
 	}
 
-	ast_str_set(&http_headers, 0, "Content-type: text/html");
+	ast_str_set(&http_headers, 0, "Content-type: text/html\r\n");
 
 	ast_str_set(&out, 0,
 		"<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\r\n"
@@ -569,24 +582,6 @@ void ast_http_uri_unlink_all_with_key(const char *key)
 }
 
 /*
- * Decode special characters in http uri.
- * We have ast_uri_decode to handle %XX sequences, but spaces
- * are encoded as a '+' so we need to replace them beforehand.
- */
-static void http_decode(char *s)
-{
-	char *t;
-
-	for (t = s; *t; t++) {
-		if (*t == '+') {
-			*t = ' ';
-		}
-	}
-
-	ast_uri_decode(s);
-}
-
-/*
  * get post variables from client Request Entity-Body, if content type is
  * application/x-www-form-urlencoded
  */
@@ -627,11 +622,11 @@ struct ast_variable *ast_http_get_post_vars(
 	while ((val = strsep(&buf, "&"))) {
 		var = strsep(&val, "=");
 		if (val) {
-			http_decode(val);
+			ast_uri_decode(val, ast_uri_http_legacy);
 		} else  {
 			val = "";
 		}
-		http_decode(var);
+		ast_uri_decode(var, ast_uri_http_legacy);
 		if ((v = ast_variable_new(var, val, ""))) {
 			if (post_vars) {
 				prev->next = v;
@@ -655,6 +650,8 @@ static int handle_uri(struct ast_tcptls_session_instance *ser, char *uri,
 	struct ast_variable *get_vars = NULL, *v, *prev = NULL;
 	struct http_uri_redirect *redirect;
 
+	ast_debug(2, "HTTP Request URI is %s \n", uri);
+
 	strsep(&params, "?");
 	/* Extract arguments from the request and store them in variables. */
 	if (params) {
@@ -663,11 +660,11 @@ static int handle_uri(struct ast_tcptls_session_instance *ser, char *uri,
 		while ((val = strsep(&params, "&"))) {
 			var = strsep(&val, "=");
 			if (val) {
-				http_decode(val);
+				ast_uri_decode(val, ast_uri_http_legacy);
 			} else  {
 				val = "";
 			}
-			http_decode(var);
+			ast_uri_decode(var, ast_uri_http_legacy);
 			if ((v = ast_variable_new(var, val, ""))) {
 				if (get_vars) {
 					prev->next = v;
@@ -678,7 +675,7 @@ static int handle_uri(struct ast_tcptls_session_instance *ser, char *uri,
 			}
 		}
 	}
-	http_decode(uri);
+	ast_uri_decode(uri, ast_uri_http_legacy);
 
 	AST_RWLIST_RDLOCK(&uri_redirects);
 	AST_RWLIST_TRAVERSE(&uri_redirects, redirect, entry) {
@@ -797,9 +794,7 @@ static struct ast_variable *parse_cookies(char *cookies)
 			continue;
 		}
 
-		if (option_debug) {
-			ast_log(LOG_DEBUG, "mmm ... cookie!  Name: '%s'  Value: '%s'\n", name, val);
-		}
+		ast_debug(1, "HTTP Cookie, Name: '%s'  Value: '%s'\n", name, val);
 
 		var = ast_variable_new(name, val, __FILE__);
 		var->next = vars;
@@ -837,6 +832,10 @@ static void *httpd_helper_thread(void *data)
 	struct ast_variable *tail = headers;
 	char *uri, *method;
 	enum ast_http_method http_method = AST_HTTP_UNKNOWN;
+
+	if (ast_atomic_fetchadd_int(&session_count, +1) >= session_limit) {
+		goto done;
+	}
 
 	if (!fgets(buf, sizeof(buf), ser->f)) {
 		goto done;
@@ -903,17 +902,19 @@ static void *httpd_helper_thread(void *data)
 
 	if (!*uri) {
 		ast_http_error(ser, 400, "Bad Request", "Invalid Request");
-		return NULL;
+		goto done;
 	}
 
 	handle_uri(ser, uri, http_method, headers);
 
-	/* Clean up all the header information pulled as well */
+done:
+	ast_atomic_fetchadd_int(&session_count, -1);
+
+	/* clean up all the header information */
 	if (headers) {
 		ast_variables_destroy(headers);
 	}
 
-done:
 	if (ser->f) {
 		fclose(ser->f);
 	}
@@ -1053,6 +1054,12 @@ static int __ast_http_load(int reload)
 				}
 			} else if (!strcasecmp(v->name, "redirect")) {
 				add_redirect(v->value);
+			} else if (!strcasecmp(v->name, "sessionlimit")) {
+				if (ast_parse_arg(v->value, PARSE_INT32|PARSE_DEFAULT|PARSE_IN_RANGE,
+							&session_limit, DEFAULT_SESSION_LIMIT, 1, INT_MAX)) {
+					ast_log(LOG_WARNING, "Invalid %s '%s' at line %d of http.conf\n",
+							v->name, v->value, v->lineno);
+				}
 			} else {
 				ast_log(LOG_WARNING, "Ignoring unknown option '%s' in http.conf\n", v->name);
 			}

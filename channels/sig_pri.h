@@ -144,6 +144,22 @@ enum sig_pri_moh_event {
 	SIG_PRI_MOH_EVENT_NUM
 };
 
+/*! Call establishment life cycle level for simple comparisons. */
+enum sig_pri_call_level {
+	/*! Call does not exist. */
+	SIG_PRI_CALL_LEVEL_IDLE,
+	/*! Call is present but has no response yet. (SETUP) */
+	SIG_PRI_CALL_LEVEL_SETUP,
+	/*! Call is collecting digits for overlap dialing. (SETUP ACKNOWLEDGE) */
+	SIG_PRI_CALL_LEVEL_OVERLAP,
+	/*! Call routing is happening. (PROCEEDING) */
+	SIG_PRI_CALL_LEVEL_PROCEEDING,
+	/*! Called party is being alerted of the call. (ALERTING) */
+	SIG_PRI_CALL_LEVEL_ALERTING,
+	/*! Call is connected/answered. (CONNECT) */
+	SIG_PRI_CALL_LEVEL_CONNECT,
+};
+
 struct sig_pri_span;
 
 struct sig_pri_callback {
@@ -151,6 +167,8 @@ struct sig_pri_callback {
 	void (* const unlock_private)(void *pvt);
 	/* Lock the private in the signalling private structure.  ... */
 	void (* const lock_private)(void *pvt);
+	/* Do deadlock avoidance for the private signaling structure lock.  */
+	void (* const deadlock_avoidance_private)(void *pvt);
 	/* Function which is called back to handle any other DTMF events that are received.  Called by analog_handle_event.  Why is this
 	 * important to use, instead of just directly using events received before they are passed into the library?  Because sometimes,
 	 * (CWCID) the library absorbs DTMF events received. */
@@ -183,6 +201,16 @@ struct sig_pri_callback {
 	void (* const update_span_devstate)(struct sig_pri_span *pri);
 
 	void (* const open_media)(void *pvt);
+
+	/*!
+	 * \brief Post an AMI B channel association event.
+	 *
+	 * \param pvt Private structure of the user of this module.
+	 * \param chan Channel associated with the private pointer
+	 *
+	 * \return Nothing
+	 */
+	void (* const ami_channel_event)(void *pvt, struct ast_channel *chan);
 
 	/*! Reference the parent module. */
 	void (*module_ref)(void);
@@ -274,14 +302,22 @@ struct sig_pri_chan {
 	unsigned int holding_aoce:1;     /*!< received AOC-E msg from asterisk. holding for disconnect/release */
 #endif	/* defined(HAVE_PRI_AOC_EVENTS) */
 	unsigned int inalarm:1;
-	unsigned int alerting:1;		/*!< TRUE if channel is alerting/ringing */
 	unsigned int alreadyhungup:1;	/*!< TRUE if the call has already gone/hungup */
 	unsigned int isidlecall:1;		/*!< TRUE if this is an idle call */
-	unsigned int proceeding:1;		/*!< TRUE if call is in a proceeding state */
-	unsigned int progress:1;		/*!< TRUE if the call has seen progress through the network */
+	unsigned int progress:1;		/*!< TRUE if the call has seen inband-information progress through the network */
 	unsigned int resetting:1;		/*!< TRUE if this channel is being reset/restarted */
-	unsigned int setup_ack:1;		/*!< TRUE if this channel has received a SETUP_ACKNOWLEDGE */
 
+	/*!
+	 * \brief TRUE when this channel is allocated.
+	 *
+	 * \details
+	 * Needed to hold an outgoing channel allocation before the
+	 * owner pointer is created.
+	 *
+	 * \note This is one of several items to check to see if a
+	 * channel is available for use.
+	 */
+	unsigned int allocated:1;
 	unsigned int outgoing:1;
 	unsigned int digital:1;
 	/*! \brief TRUE if this interface has no B channel.  (call hold and call waiting) */
@@ -296,6 +332,8 @@ struct sig_pri_chan {
 	struct sig_pri_span *pri;
 	q931_call *call;				/*!< opaque libpri call control structure */
 
+	/*! Call establishment life cycle level for simple comparisons. */
+	enum sig_pri_call_level call_level;
 	int prioffset;					/*!< channel number in span */
 	int logicalspan;				/*!< logical span number within trunk group */
 	int mastertrunkgroup;			/*!< what trunk group is our master */
@@ -321,12 +359,22 @@ struct sig_pri_chan {
 #if defined(HAVE_PRI_MWI)
 /*! Maximum number of mailboxes per span. */
 #define SIG_PRI_MAX_MWI_MAILBOXES			8
+/*! Typical maximum length of mwi voicemail controlling number */
+#define SIG_PRI_MAX_MWI_VM_NUMBER_LEN		10	/* digits in number */
 /*! Typical maximum length of mwi mailbox number */
 #define SIG_PRI_MAX_MWI_MBOX_NUMBER_LEN		10	/* digits in number */
 /*! Typical maximum length of mwi mailbox context */
 #define SIG_PRI_MAX_MWI_CONTEXT_LEN			10
 /*!
- * \brief Maximum mwi_mailbox string length.
+ * \brief Maximum mwi_vm_numbers string length.
+ * \details
+ * max_length = #mailboxes * (vm_number + ',')
+ * The last ',' is a null terminator instead.
+ */
+#define SIG_PRI_MAX_MWI_VM_NUMBER_STR	(SIG_PRI_MAX_MWI_MAILBOXES \
+	* (SIG_PRI_MAX_MWI_VM_NUMBER_LEN + 1))
+/*!
+ * \brief Maximum mwi_mailboxs string length.
  * \details
  * max_length = #mailboxes * (mbox_number + '@' + context + ',')
  * The last ',' is a null terminator instead.
@@ -344,6 +392,8 @@ struct sig_pri_mbox {
 	const char *number;
 	/*! \brief Mailbox context. */
 	const char *context;
+	/*! \brief Voicemail controlling number. */
+	const char *vm_number;
 };
 #endif	/* defined(HAVE_PRI_MWI) */
 
@@ -387,8 +437,13 @@ struct sig_pri_span {
 	 * appended to the initial_user_tag[].
 	 */
 	unsigned int append_msn_to_user_tag:1;
+#if defined(HAVE_PRI_MCID)
+	/*! \brief TRUE if allow sending MCID request on this span. */
+	unsigned int mcid_send:1;
+#endif	/* defined(HAVE_PRI_MCID) */
 	int dialplan;							/*!< Dialing plan */
 	int localdialplan;						/*!< Local dialing plan */
+	int cpndialplan;						/*!< Connected party dialing plan */
 	char internationalprefix[10];			/*!< country access code ('00' for european dialplans) */
 	char nationalprefix[10];				/*!< area access code ('0' for european dialplans) */
 	char localprefix[20];					/*!< area access code + area code ('0'+area code for european dialplans) */
@@ -396,6 +451,10 @@ struct sig_pri_span {
 	char unknownprefix[20];					/*!< for unknown dialplans */
 	enum sig_pri_moh_signaling moh_signaling;
 	long resetinterval;						/*!< Interval (in seconds) for resetting unused channels */
+#if defined(HAVE_PRI_DISPLAY_TEXT)
+	unsigned long display_flags_send;		/*!< PRI_DISPLAY_OPTION_xxx flags for display text sending */
+	unsigned long display_flags_receive;	/*!< PRI_DISPLAY_OPTION_xxx flags for display text receiving */
+#endif	/* defined(HAVE_PRI_DISPLAY_TEXT) */
 #if defined(HAVE_PRI_MWI)
 	/*! \brief Active MWI mailboxes */
 	struct sig_pri_mbox mbox[SIG_PRI_MAX_MWI_MAILBOXES];
@@ -406,6 +465,12 @@ struct sig_pri_span {
 	 * \note String is split apart when span is started.
 	 */
 	char mwi_mailboxes[SIG_PRI_MAX_MWI_MAILBOX_STR];
+	/*!
+	 * \brief Comma separated list of voicemail access controlling numbers for MWI.
+	 * \note Format: vm_number{,vm_number}
+	 * \note String is split apart when span is started.
+	 */
+	char mwi_vm_numbers[SIG_PRI_MAX_MWI_VM_NUMBER_STR];
 #endif	/* defined(HAVE_PRI_MWI) */
 	/*!
 	 * \brief Initial user tag for party id's sent from this device driver.
@@ -524,6 +589,7 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 
 int sig_pri_answer(struct sig_pri_chan *p, struct ast_channel *ast);
 
+int sig_pri_is_chan_available(struct sig_pri_chan *pvt);
 int sig_pri_available(struct sig_pri_chan **pvt, int is_specific_channel);
 
 void sig_pri_init_pri(struct sig_pri_span *pri);
@@ -535,6 +601,7 @@ int sig_pri_digit_begin(struct sig_pri_chan *pvt, struct ast_channel *ast, char 
 void sig_pri_stop_pri(struct sig_pri_span *pri);
 int sig_pri_start_pri(struct sig_pri_span *pri);
 
+void sig_pri_set_alarm(struct sig_pri_chan *p, int in_alarm);
 void sig_pri_chan_alarm_notify(struct sig_pri_chan *p, int noalarm);
 
 void pri_event_alarm(struct sig_pri_span *pri, int index, int before_start_pri);
@@ -548,6 +615,11 @@ void sig_pri_chan_delete(struct sig_pri_chan *doomed);
 
 int pri_is_up(struct sig_pri_span *pri);
 
+struct mansession;
+int sig_pri_ami_show_spans(struct mansession *s, const char *show_cmd, struct sig_pri_span *pri, const int *dchannels, const char *action_id);
+
+void sig_pri_cli_show_channels_header(int fd);
+void sig_pri_cli_show_channels(int fd, struct sig_pri_span *pri);
 void sig_pri_cli_show_spans(int fd, int span, struct sig_pri_span *pri);
 
 void sig_pri_cli_show_span(int fd, int *dchannels, struct sig_pri_span *pri);
@@ -560,11 +632,14 @@ int pri_maintenance_bservice(struct pri *pri, struct sig_pri_chan *p, int change
 #endif	/* defined(HAVE_PRI_SERVICE_MESSAGES) */
 
 void sig_pri_fixup(struct ast_channel *oldchan, struct ast_channel *newchan, struct sig_pri_chan *pchan);
+#if defined(HAVE_PRI_DISPLAY_TEXT)
+void sig_pri_sendtext(struct sig_pri_chan *pchan, const char *text);
+#endif	/* defined(HAVE_PRI_DISPLAY_TEXT) */
 
 int sig_pri_cc_agent_init(struct ast_cc_agent *agent, struct sig_pri_chan *pvt_chan);
 int sig_pri_cc_agent_start_offer_timer(struct ast_cc_agent *agent);
 int sig_pri_cc_agent_stop_offer_timer(struct ast_cc_agent *agent);
-void sig_pri_cc_agent_req_ack(struct ast_cc_agent *agent);
+void sig_pri_cc_agent_req_rsp(struct ast_cc_agent *agent, enum ast_cc_agent_response_reason reason);
 int sig_pri_cc_agent_status_req(struct ast_cc_agent *agent);
 int sig_pri_cc_agent_stop_ringing(struct ast_cc_agent *agent);
 int sig_pri_cc_agent_party_b_free(struct ast_cc_agent *agent);

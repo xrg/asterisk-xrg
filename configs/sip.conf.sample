@@ -179,8 +179,8 @@ udpbindaddr=0.0.0.0             ; IP address to bind UDP listen socket to (0.0.0
 ;
 ; Note also that while Asterisk currently will parse an Allow header to learn
 ; what methods an endpoint supports, the only actual use for this currently
-; is for determining if Asterisk may send connected line UPDATE requests. Its
-; use may be expanded in the future.
+; is for determining if Asterisk may send connected line UPDATE requests and
+; MESSAGE requests. Its use may be expanded in the future.
 ;
 ; disallowed_methods = UPDATE
 
@@ -202,6 +202,16 @@ tcpbindaddr=0.0.0.0             ; IP address for TCP server to bind to (0.0.0.0 
                                 ; For details how to construct a certificate for SIP see 
                                 ; http://tools.ietf.org/html/draft-ietf-sip-domain-certs
 
+;tcpauthtimeout = 30            ; tcpauthtimeout specifies the maximum number
+				; of seconds a client has to authenticate.  If
+				; the client does not authenticate beofre this
+				; timeout expires, the client will be
+                                ; disconnected. (default: 30 seconds)
+
+;tcpauthlimit = 100             ; tcpauthlimit specifies the maximum number of
+				; unauthenticated sessions that will be allowed
+                                ; to connect at any given time. (default: 100)
+
 srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; Note: Asterisk only uses the first host
                                 ; in SRV records
@@ -217,7 +227,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; and multiline formatted headers for strict
                                 ; SIP compatibility (defaults to "yes")
 
-; See qos.tex or Quality of Service section of asterisk.pdf for a description of these parameters.
+; See https://wiki.asterisk.org/wiki/display/AST/IP+Quality+of+Service for a description of these parameters.
 ;tos_sip=cs3                    ; Sets TOS for SIP packets.
 ;tos_audio=ef                   ; Sets TOS for RTP audio packets.
 ;tos_video=af41                 ; Sets TOS for RTP video packets.
@@ -236,6 +246,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;maxforwards=70			; Setting for the SIP Max-Forwards: header (loop prevention)
 				; Default value is 70
 ;qualifyfreq=60                 ; Qualification: How often to check for the host to be up in seconds
+				; and reported in milliseconds with sip show settings.
                                 ; Set to low value if you use low timeout for NAT of UDP sessions
 				; Default: 60
 ;qualifygap=100			; Number of milliseconds between each group of peers being qualified
@@ -273,7 +284,8 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 
 ;disallow=all                   ; First disallow all codecs
 ;allow=ulaw                     ; Allow codecs in order of preference
-;allow=ilbc                     ; see doc/rtp-packetization for framing options
+;allow=ilbc                     ; see https://wiki.asterisk.org/wiki/display/AST/RTP+Packetization
+				; for framing options
 ;
 ; This option specifies a preference for which music on hold class this channel
 ; should listen to when put on hold if the music class has not been set on the
@@ -447,7 +459,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;        you should have their certificate installed here so the code can
 ;        verify the authenticity of their certificate.
 
-;tlscadir=</path/to/ca/dir>
+;tlscapath=</path/to/ca/dir>
 ;        A directory full of CA certificates.  The files must be named with
 ;        the CA subject name hash value.
 ;        (see man SSL_CTX_load_verify_locations for more info)
@@ -869,8 +881,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 
 ;----------------------------------------- REALTIME SUPPORT ------------------------
 ; For additional information on ARA, the Asterisk Realtime Architecture,
-; please read realtime.txt and extconfig.txt in the /doc directory of the
-; source code.
+; please read https://wiki.asterisk.org/wiki/display/AST/Realtime+Database+Configuration
 ;
 ;rtcachefriends=yes             ; Cache realtime friends by adding them to the internal list
                                 ; just like friends added from the config file only on a
@@ -1013,6 +1024,10 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;   Asterisk only matches on IP/port, not on names. This is mostly used for SIP
 ;   trunks.
 ;
+; Use remotesecret for outbound authentication, and secret for authenticating
+; inbound requests. For historical reasons, if no remotesecret is supplied for an
+; outbound registration or call, the secret will be used. 
+;
 ; For device names, we recommend using only a-z, numerics (0-9) and underscore
 ;
 ; For local phones, type=friend works most of the time
@@ -1095,6 +1110,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; use_q850_reason
 ; maxforwards
 ; encryption
+; description		; Used to provide a description of the peer in console output
 
 ;[sip_proxy]
 ; For incoming calls only. Example: FWD (Free World Dialup)
@@ -1190,6 +1206,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;context=from-sip                ; Where to start in the dialplan when this phone calls
 ;callerid=John Doe <1234>        ; Full caller ID, to override the phones config
                                  ; on incoming calls to Asterisk
+;description=Courtesy Phone      ; Description of the peer. Shown when doing 'sip show peers'.
 ;host=192.168.0.23               ; we have a static but private IP address
                                  ; No registration allowed
 ;nat=no                          ; there is not NAT between phone and Asterisk
