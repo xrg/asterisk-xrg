@@ -1479,6 +1479,35 @@ static char *handle_show_calendars(struct ast_cli_entry *e, int cmd, struct ast_
 #undef FORMAT
 }
 
+/*! \brief CLI command to list of all calendars types currently loaded on the backend */
+static char *handle_show_calendars_types(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+#define FORMAT "%-10.10s %-30.30s\n"
+        struct ast_calendar_tech *iter;
+
+
+	switch(cmd) {
+	case CLI_INIT:
+		e->command = "calendar show types";
+		e->usage =
+			"Usage: calendar show types\n"
+			"       Lists all registered calendars types.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_cli(a->fd, FORMAT, "Type", "Description");
+	AST_LIST_LOCK(&techs);
+	AST_LIST_TRAVERSE(&techs, iter, list) {
+		ast_cli(a->fd, FORMAT, iter->type, iter->description);
+	}
+	AST_LIST_UNLOCK(&techs);
+
+	return CLI_SUCCESS;
+#undef FORMAT
+}
+
 static char *epoch_to_string(char *buf, size_t buflen, time_t epoch)
 {
 	struct ast_tm tm;
@@ -1599,6 +1628,7 @@ static struct ast_cli_entry calendar_cli[] = {
 	AST_CLI_DEFINE(handle_show_calendar, "Display information about a calendar"),
 	AST_CLI_DEFINE(handle_show_calendars, "Show registered calendars"),
 	AST_CLI_DEFINE(handle_dump_sched, "Dump calendar sched context"),
+	AST_CLI_DEFINE(handle_show_calendars_types, "Show all calendar types loaded"),
 };
 
 static int calendar_event_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
@@ -1706,7 +1736,7 @@ static void *do_refresh(void *data)
 	for (;;) {
 		struct timeval now = ast_tvnow();
 		struct timespec ts = {0,};
-		int res, wait;
+		int wait;
 
 		ast_mutex_lock(&refreshlock);
 
@@ -1715,7 +1745,7 @@ static void *do_refresh(void *data)
 		}
 
 		ts.tv_sec = (now.tv_sec + wait / 1000) + 1;
-		res = ast_cond_timedwait(&refresh_condition, &refreshlock, &ts);
+		ast_cond_timedwait(&refresh_condition, &refreshlock, &ts);
 
 		ast_mutex_unlock(&refreshlock);
 
@@ -1742,10 +1772,9 @@ static int unload_module(void)
 	ao2_callback(calendars, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL);
 
 	AST_LIST_LOCK(&techs);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&techs, tech, list) {
+	AST_LIST_TRAVERSE(&techs, tech, list) {
 		ast_unload_resource(tech->module, 0);
 	}
-	AST_LIST_TRAVERSE_SAFE_END;
 	AST_LIST_UNLOCK(&techs);
 
 	return 0;

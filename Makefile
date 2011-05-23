@@ -543,7 +543,6 @@ installdirs:
 	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)"
 	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cdr-csv"
 	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cdr-custom"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cel-csv"
 	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cel-custom"
 	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)"
 	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/documentation"
@@ -914,7 +913,7 @@ nmenuselect: menuselect-tree
 MAKE_MENUSELECT=CC="$(BUILD_CC)" CXX="" LD="" AR="" RANLIB="" CFLAGS="" $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
 
 
-menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml build_tools/cflags-devmode.xml sounds/sounds.xml build_tools/embed_modules.xml utils/utils.xml agi/agi.xml configure
+menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml build_tools/cflags-devmode.xml sounds/sounds.xml build_tools/embed_modules.xml utils/utils.xml agi/agi.xml configure makeopts
 	@echo "Generating input for menuselect ..."
 	@echo "<?xml version=\"1.0\"?>" > $@
 	@echo >> $@

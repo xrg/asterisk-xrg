@@ -4638,7 +4638,9 @@ static int create_addr(const char *peername, struct ast_channel *c, struct socka
 			return -1;
 		}
 		ast_sockaddr_to_sin(&sin_tmp, sin);
-		sin->sin_port = htons(IAX_DEFAULT_PORTNO);
+		if (sin->sin_port == 0) {
+			sin->sin_port = htons(IAX_DEFAULT_PORTNO);
+		}
 		/* use global iax prefs for unknown peer/user */
 		/* But move the calling channel's native codec to the top of the preference list */
 		memcpy(&ourprefs, &prefs, sizeof(ourprefs));
@@ -5434,7 +5436,7 @@ static int iax2_queryoption(struct ast_channel *c, int option, void *data, int *
 
 static struct ast_frame *iax2_read(struct ast_channel *c) 
 {
-	ast_log(LOG_NOTICE, "I should never be called!\n");
+	ast_debug(1, "I should never be called!\n");
 	return &ast_null_frame;
 }
 
@@ -6161,7 +6163,6 @@ static int iax2_trunk_queue(struct chan_iax2_pvt *pvt, struct iax_frame *fr)
 	struct iax2_trunk_peer *tpeer;
 	void *tmp, *ptr;
 	struct timeval now;
-	int res;
 	struct ast_iax2_meta_trunk_entry *met;
 	struct ast_iax2_meta_trunk_mini *mtm;
 
@@ -6217,7 +6218,7 @@ static int iax2_trunk_queue(struct chan_iax2_pvt *pvt, struct iax_frame *fr)
 		/* if we have enough for a full MTU, ship it now without waiting */
 		if (global_max_trunk_mtu > 0 && tpeer->trunkdatalen + f->datalen + 4 >= global_max_trunk_mtu) {
 			now = ast_tvnow();
-			res = send_trunk(tpeer, &now); 
+			send_trunk(tpeer, &now); 
 			trunk_untimed ++; 
 		}
 
@@ -9357,7 +9358,6 @@ static void *iax_park_thread(void *stuff)
 	struct iax_dual *d;
 	struct ast_frame *f;
 	int ext;
-	int res;
 	d = stuff;
 	chan1 = d->chan1;
 	chan2 = d->chan2;
@@ -9365,7 +9365,7 @@ static void *iax_park_thread(void *stuff)
 	f = ast_read(chan1);
 	if (f)
 		ast_frfree(f);
-	res = ast_park_call(chan1, chan2, 0, d->parkexten, &ext);
+	ast_park_call(chan1, chan2, 0, d->parkexten, &ext);
 	ast_hangup(chan2);
 	ast_log(LOG_NOTICE, "Parked on extension '%d'\n", ext);
 	return NULL;

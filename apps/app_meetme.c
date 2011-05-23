@@ -780,13 +780,13 @@ struct ast_conf_user {
 	char usrvalue[50];                      /*!< Custom User Value */
 	char namerecloc[PATH_MAX];		/*!< Name Recorded file Location */
 	time_t jointime;                        /*!< Time the user joined the conference */
- 	time_t kicktime;                        /*!< Time the user will be kicked from the conference */
- 	struct timeval start_time;              /*!< Time the user entered into the conference */
- 	long timelimit;                         /*!< Time limit for the user to be in the conference L(x:y:z) */
- 	long play_warning;                      /*!< Play a warning when 'y' ms are left */
- 	long warning_freq;                      /*!< Repeat the warning every 'z' ms */
- 	const char *warning_sound;              /*!< File to play as warning if 'y' is defined */
- 	const char *end_sound;                  /*!< File to play when time is up. */
+	time_t kicktime;                        /*!< Time the user will be kicked from the conference */
+	struct timeval start_time;              /*!< Time the user entered into the conference */
+	long timelimit;                         /*!< Time limit for the user to be in the conference L(x:y:z) */
+	long play_warning;                      /*!< Play a warning when 'y' ms are left */
+	long warning_freq;                      /*!< Repeat the warning every 'z' ms */
+	const char *warning_sound;              /*!< File to play as warning if 'y' is defined */
+	const char *end_sound;                  /*!< File to play when time is up. */
 	struct volume talk;
 	struct volume listen;
 	AST_LIST_ENTRY(ast_conf_user) list;
@@ -2246,7 +2246,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 	int talkreq_manager = 0;
 	int using_pseudo = 0;
 	int duration = 20;
-	int hr, min, sec;
 	int sent_event = 0;
 	int checked = 0;
 	int announcement_played = 0;
@@ -2733,7 +2732,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 		ao2_ref(item, -1);
 	}
 
-	if (ast_test_flag64(confflags, CONFFLAG_WAITMARKED && !conf->markedusers))
+	if (ast_test_flag64(confflags, CONFFLAG_WAITMARKED) && !conf->markedusers)
 		dahdic.confmode = DAHDI_CONF_CONF;
 	else if (ast_test_flag64(confflags, CONFFLAG_MONITOR))
 		dahdic.confmode = DAHDI_CONF_CONFMON | DAHDI_CONF_LISTENER;
@@ -2918,6 +2917,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
  						res = ast_streamfile(chan, user->end_sound, chan->language);
  						res = ast_waitstream(chan, "");
  					}
+					if (ast_test_flag64(confflags, CONFFLAG_KICK_CONTINUE)) {
+						ret = 0;
+					} else {
+						ret = -1;
+					}
  					break;
  				}
  				
@@ -3803,9 +3807,6 @@ bailoutandtrynormal:
 	if (user->user_no) {
 		/* Only cleanup users who really joined! */
 		now = ast_tvnow();
-		hr = (now.tv_sec - user->jointime) / 3600;
-		min = ((now.tv_sec - user->jointime) % 3600) / 60;
-		sec = (now.tv_sec - user->jointime) % 60;
 
 		if (sent_event) {
 			ast_manager_event(chan, EVENT_FLAG_CALL, "MeetmeLeave",
@@ -3907,7 +3908,7 @@ static struct ast_conference *find_conf_realtime(struct ast_channel *chan, char 
 			ast_localtime(&now, &tm, NULL);
 			ast_strftime(currenttime, sizeof(currenttime), DATE_FORMAT, &tm);
 
-			ast_debug(1, "Looking for conference %s that starts after %s\n", confno, eatime);
+			ast_debug(1, "Looking for conference %s that starts after %s\n", confno, currenttime);
 
 			var = ast_load_realtime("meetme", "confno",
 				confno, "starttime <= ", currenttime, "endtime >= ",
@@ -6454,7 +6455,6 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 		AST_APP_ARG(options);
 	);
 	char *opts[SLA_TRUNK_OPT_ARG_ARRAY_SIZE] = { NULL, };
-	char *conf_opt_args[OPT_ARG_ARRAY_SIZE] = { NULL, };
 	struct ast_flags opt_flags = { 0 };
 	char *parse;
 
@@ -6517,7 +6517,6 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 	if (ast_test_flag(&opt_flags, SLA_TRUNK_OPT_MOH)) {
 		ast_indicate(chan, -1);
 		ast_set_flag64(&conf_flags, CONFFLAG_MOH);
-		conf_opt_args[OPT_ARG_MOH_CLASS] = opts[SLA_TRUNK_OPT_ARG_MOH_CLASS];
 	} else
 		ast_indicate(chan, AST_CONTROL_RINGING);
 

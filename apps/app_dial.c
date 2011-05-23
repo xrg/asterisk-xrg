@@ -2243,6 +2243,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 				 * No hint name available.  We have a connected name supplied by
 				 * the dialplan we can use instead.
 				 */
+				caller.id.name.valid = 1;
 				caller.id.name = chan->connected.id.name;
 			}
 			ast_channel_set_caller_event(tc, &caller, NULL);
@@ -2256,6 +2257,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 				 * We have a connected name supplied by the dialplan we can
 				 * use instead.
 				 */
+				caller.id.name.valid = 1;
 				caller.id.name = chan->connected.id.name;
 				ast_channel_set_caller_event(tc, &caller, NULL);
 			}
@@ -2399,8 +2401,11 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 	 * to which the datastore was moved hangs up, it will attempt to free this
 	 * datastore again, causing a crash
 	 */
-	if (!ast_channel_datastore_remove(chan, datastore))
+	ast_channel_lock(chan);
+	if (!ast_channel_datastore_remove(chan, datastore)) {
 		ast_datastore_free(datastore);
+	}
+	ast_channel_unlock(chan);
 	if (!peer) {
 		if (result) {
 			res = result;

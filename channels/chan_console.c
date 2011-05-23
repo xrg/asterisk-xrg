@@ -172,13 +172,14 @@ AST_RWLOCK_DEFINE_STATIC(active_lock);
  * \brief Global jitterbuffer configuration 
  *
  * \note Disabled by default.
+ * \note Values shown here match the defaults shown in console.conf.sample
  */
 static struct ast_jb_conf default_jbconf = {
 	.flags = 0,
-	.max_size = -1,
-	.resync_threshold = -1,
-	.impl = "",
-	.target_extra = -1,
+	.max_size = 200,
+	.resync_threshold = 1000,
+	.impl = "fixed",
+	.target_extra = 40,
 };
 static struct ast_jb_conf global_jbconf;
 
@@ -725,7 +726,7 @@ static char *cli_console_autoanswer(struct ast_cli_entry *e, int cmd,
 
 	unref_pvt(pvt);
 
-	return CLI_SUCCESS;
+	return res;
 }
 
 static char *cli_console_flash(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)

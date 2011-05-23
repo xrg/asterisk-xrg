@@ -991,6 +991,7 @@ static int set_fax_t38_caps(struct ast_channel *chan, struct ast_fax_session_det
 	case T38_STATE_UNKNOWN:
 		details->caps |= AST_FAX_TECH_T38;
 		break;
+	case T38_STATE_REJECTED:
 	case T38_STATE_UNAVAILABLE:
 		details->caps |= AST_FAX_TECH_AUDIO;
 		break;
@@ -1510,6 +1511,7 @@ static int receivefax_exec(struct ast_channel *chan, const char *data)
 	);
 	struct ast_flags opts = { 0, };
 	struct manager_event_info info;
+	enum ast_t38_state t38state;
 
 	/* initialize output channel variables */
 	pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
@@ -1631,7 +1633,8 @@ static int receivefax_exec(struct ast_channel *chan, const char *data)
 		details->option.statusevents = AST_FAX_OPTFLAG_TRUE;
 	}
 
-	if ((ast_channel_get_t38_state(chan) == T38_STATE_UNAVAILABLE) ||
+	t38state = ast_channel_get_t38_state(chan);
+	if ((t38state == T38_STATE_UNAVAILABLE) || (t38state == T38_STATE_REJECTED) ||
 	    ast_test_flag(&opts, OPT_ALLOWAUDIO) ||
 	    ast_test_flag(&opts, OPT_FORCE_AUDIO)) {
 		details->option.allow_audio = AST_FAX_OPTFLAG_TRUE;
@@ -1972,6 +1975,7 @@ static int sendfax_exec(struct ast_channel *chan, const char *data)
 	);
 	struct ast_flags opts = { 0, };
 	struct manager_event_info info;
+	enum ast_t38_state t38state;
 
 	/* initialize output channel variables */
 	pbx_builtin_setvar_helper(chan, "FAXSTATUS", "FAILED");
@@ -2112,7 +2116,8 @@ static int sendfax_exec(struct ast_channel *chan, const char *data)
 		details->option.statusevents = AST_FAX_OPTFLAG_TRUE;
 	}
 
-	if ((ast_channel_get_t38_state(chan) == T38_STATE_UNAVAILABLE) ||
+	t38state = ast_channel_get_t38_state(chan);
+	if ((t38state == T38_STATE_UNAVAILABLE) || (t38state == T38_STATE_REJECTED) ||
 	    ast_test_flag(&opts, OPT_ALLOWAUDIO) ||
 	    ast_test_flag(&opts, OPT_FORCE_AUDIO)) {
 		details->option.allow_audio = AST_FAX_OPTFLAG_TRUE;
@@ -2266,9 +2271,7 @@ static char *fax_session_tab_complete(struct ast_cli_args *a)
 		}
 		ao2_ref(s, -1);
 	}
-	if (ao2_iterator_destroy != NULL) {
-		ao2_iterator_destroy(&i);
-	}
+	ao2_iterator_destroy(&i);
 	return name;
 }
 
@@ -2502,9 +2505,7 @@ static char *cli_fax_show_sessions(struct ast_cli_entry *e, int cmd, struct ast_
 			ast_log(LOG_ERROR, "error printing filenames for 'fax show sessions' command");
 			ao2_unlock(s);
 			ao2_ref(s, -1);
-			if (ao2_iterator_destroy != NULL) {
-				ao2_iterator_destroy(&i);
-			}
+			ao2_iterator_destroy(&i);
 			return CLI_FAILURE;
 		}
 
@@ -2518,9 +2519,7 @@ static char *cli_fax_show_sessions(struct ast_cli_entry *e, int cmd, struct ast_
 		ao2_unlock(s);
 		ao2_ref(s, -1);
 	}
-	if (ao2_iterator_destroy != NULL) {
-		ao2_iterator_destroy(&i);
-	}
+	ao2_iterator_destroy(&i);
 	session_count = ao2_container_count(faxregistry.container);
 	ast_cli(a->fd, "\n%d FAX sessions\n\n", session_count);
 

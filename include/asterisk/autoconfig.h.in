@@ -576,6 +576,9 @@
    library. */
 #undef HAVE_PRI_CCSS
 
+/* Define to 1 if you have the ISDN PRI Date/time ie send policy library. */
+#undef HAVE_PRI_DATETIME_SEND
+
 /* Define to 1 if you have the ISDN PRI user display text IE contents during
    call library. */
 #undef HAVE_PRI_DISPLAY_TEXT

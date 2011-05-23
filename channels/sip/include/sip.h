@@ -212,6 +212,7 @@
 #define DEFAULT_ALWAYSAUTHREJECT  TRUE  /*!< Don't reject authentication requests always */
 #define DEFAULT_AUTH_OPTIONS  FALSE
 #define DEFAULT_REGEXTENONQUALIFY FALSE
+#define DEFAULT_LEGACY_USEROPTION_PARSING FALSE
 #define DEFAULT_T1MIN             100   /*!< 100 MS for minimal roundtrip time */
 #define DEFAULT_MAX_CALL_BITRATE (384)  /*!< Max bitrate for video */
 #ifndef DEFAULT_USERAGENT
@@ -594,7 +595,8 @@ enum t38state {
 	T38_DISABLED = 0,     /*!< Not enabled */
 	T38_LOCAL_REINVITE,   /*!< Offered from local - REINVITE */
 	T38_PEER_REINVITE,    /*!< Offered from peer - REINVITE */
-	T38_ENABLED           /*!< Negotiated (enabled) */
+	T38_ENABLED,          /*!< Negotiated (enabled) */
+	T38_REJECTED          /*!< Refused */
 };
 
 /*! \brief Parameters to know status of transfer */
@@ -683,6 +685,7 @@ struct sip_settings {
 	int allow_external_domains; /*!< Accept calls to external SIP domains? */
 	int callevents;             /*!< Whether we send manager events or not */
 	int regextenonqualify;      /*!< Whether to add/remove regexten when qualifying peers */
+	int legacy_useroption_parsing; /*!< Whether to strip useroptions in URI via semicolons */
 	int matchexternaddrlocally;   /*!< Match externaddr/externhost setting against localnet setting */
 	char regcontext[AST_MAX_CONTEXT];  /*!< Context for auto-extensions */
 	unsigned int disallowed_methods;   /*!< methods that we should never try to use */

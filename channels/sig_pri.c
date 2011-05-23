@@ -6242,18 +6242,29 @@ static void *pri_dchannel(void *vpri)
 					e->ringing.call);
 				sig_pri_cc_generic_check(pri, chanpos, AST_CC_CCNR);
 				sig_pri_set_echocanceller(pri->pvts[chanpos], 1);
+				sig_pri_lock_owner(pri, chanpos);
+				if (pri->pvts[chanpos]->owner) {
+					ast_setstate(pri->pvts[chanpos]->owner, AST_STATE_RINGING);
+					ast_channel_unlock(pri->pvts[chanpos]->owner);
+				}
 				pri_queue_control(pri, chanpos, AST_CONTROL_RINGING);
 				if (pri->pvts[chanpos]->call_level < SIG_PRI_CALL_LEVEL_ALERTING) {
 					pri->pvts[chanpos]->call_level = SIG_PRI_CALL_LEVEL_ALERTING;
 				}
 
-				if (
+				if (!pri->pvts[chanpos]->progress
+					&& !pri->pvts[chanpos]->no_b_channel
 #ifdef PRI_PROGRESS_MASK
-					e->ringing.progressmask & PRI_PROG_INBAND_AVAILABLE
+					&& (e->ringing.progressmask
+						& (PRI_PROG_CALL_NOT_E2E_ISDN | PRI_PROG_INBAND_AVAILABLE))
 #else
-					e->ringing.progress == 8
+					&& e->ringing.progress == 8
 #endif
 					) {
+					/* Bring voice path up */
+					pri_queue_control(pri, chanpos, AST_CONTROL_PROGRESS);
+					pri->pvts[chanpos]->progress = 1;
+					sig_pri_set_dialing(pri->pvts[chanpos], 0);
 					sig_pri_open_media(pri->pvts[chanpos]);
 				}
 
@@ -6305,7 +6316,8 @@ static void *pri_dchannel(void *vpri)
 				if (!pri->pvts[chanpos]->progress
 					&& !pri->pvts[chanpos]->no_b_channel
 #ifdef PRI_PROGRESS_MASK
-					&& (e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE)
+					&& (e->proceeding.progressmask
+						& (PRI_PROG_CALL_NOT_E2E_ISDN | PRI_PROG_INBAND_AVAILABLE))
 #else
 					&& e->proceeding.progress == 8
 #endif
@@ -6347,7 +6359,8 @@ static void *pri_dchannel(void *vpri)
 				if (!pri->pvts[chanpos]->progress
 					&& !pri->pvts[chanpos]->no_b_channel
 #ifdef PRI_PROGRESS_MASK
-					&& (e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE)
+					&& (e->proceeding.progressmask
+						& (PRI_PROG_CALL_NOT_E2E_ISDN | PRI_PROG_INBAND_AVAILABLE))
 #else
 					&& e->proceeding.progress == 8
 #endif
@@ -6355,9 +6368,9 @@ static void *pri_dchannel(void *vpri)
 					/* Bring voice path up */
 					pri_queue_control(pri, chanpos, AST_CONTROL_PROGRESS);
 					pri->pvts[chanpos]->progress = 1;
-					sig_pri_set_dialing(pri->pvts[chanpos], 0);
 					sig_pri_open_media(pri->pvts[chanpos]);
 				}
+				sig_pri_set_dialing(pri->pvts[chanpos], 0);
 				sig_pri_unlock_private(pri->pvts[chanpos]);
 				break;
 			case PRI_EVENT_FACILITY:
@@ -7179,8 +7192,6 @@ int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 
 	sig_pri_span_devstate_changed(p->pri);
 	pri_rel(p->pri);
-
-	ast->tech_pvt = NULL;
 	return 0;
 }
 
@@ -8569,6 +8580,9 @@ int sig_pri_start_pri(struct sig_pri_span *pri)
 	pri_display_options_send(pri->pri, pri->display_flags_send);
 	pri_display_options_receive(pri->pri, pri->display_flags_receive);
 #endif	/* defined(HAVE_PRI_DISPLAY_TEXT) */
+#if defined(HAVE_PRI_DATETIME_SEND)
+	pri_date_time_send_option(pri->pri, pri->datetime_send);
+#endif	/* defined(HAVE_PRI_DATETIME_SEND) */
 
 	pri->resetpos = -1;
 	if (ast_pthread_create_background(&pri->master, NULL, pri_dchannel, pri)) {

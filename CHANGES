@@ -15,6 +15,7 @@
 Parking
 -------
  * parkedmusicclass can now be set for non-default parking lots.
+ * ParkedCall application can now specify a specific parkinglot.
 
 Asterisk Manager Interface
 --------------------------
@@ -26,6 +27,7 @@ Asterisk Manager Interface
  * DAHDIShowChannels, SIPshowpeer, SIPpeers, and IAXpeers now contains a
    Description field that is set by 'description' in the channel configuration
    file.
+ * Added Uniqueid header to UserEvent.
 
 Asterisk HTTP Server
 --------------------------
@@ -79,6 +81,9 @@ Dialplan Functions
    have the rx streams jitterbuffered before conference mixing occurs.
  * Added DB_KEYS, which lists the next set of keys in the Asterisk database
    hierarchy.
+ * Added STRREPLACE function.  This function let's the user search a variable
+   for a given string to replace with another string as many times as the
+   user specifies or just throughout the whole string.
 
 libpri channel driver (chan_dahdi) DAHDI changes
 --------------------------
@@ -93,6 +98,8 @@ Calendaring
 --------------------------
  * Added setvar option to calendar.conf to allow setting channel variables on
    notification channels.
+ * Added "calendar show types" CLI command to list registered calendar
+   connectors.
 
 MixMonitor
 --------------------------
@@ -106,6 +113,24 @@ FollowMe
  * Added a new option, l, which will disable local call optimization for
    channels involved with the FollowMe thread.  Use this option to improve
    compatability for a FollowMe call with certain dialplan apps, options, and
+   functions.
+
+CEL
+--------------------------
+ * cel_pgsql now supports the 'extra' column for data added using the
+   CELGenUserEvent() application.
+
+pbx_lua
+--------------------------
+ * Support for defining hints has been added to pbx_lua.  See the 'hints' table
+   in the sample extensions.lua file for syntax details.
+ * Applications that perform jumps in the dialplan such as Goto will now
+   execute properly.  When pbx_lua detects that the context, extension, or
+   priority we are executing on has changed it will immediatly return control
+   to the asterisk PBX engine.  Currently the engine cannot detect a Goto to
+   the priority after the currently executing priority.
+ * An autoservice is now started by default for pbx_lua channels.  It can be
+   stopped and restarted using the autoservice_stop() and autoservice_start()
    functions.
 
 ------------------------------------------------------------------------------
@@ -177,6 +202,7 @@ SIP Changes
    res_stun_monitor module support in chan_sip.
  * Addition of the 'auth_options_requests' option for turning on and off
    authentication for OPTIONS requests in chan_sip.
+ * Add T38 support for REJECTED state where T.38 Negotiation is explicitly rejected.
 
 
 IAX2 Changes
@@ -283,6 +309,8 @@ Applications
  * Added 'D' command to ExternalIVR full details in doc/externalivr.txt
  * Added 'v' option to MeetMe to play voicemail greetings when a user joins/leaves
    a MeetMe conference
+ * Added ability to include '@parkinglot' to ParkedCall extension in order to specify
+   a specific parkinglot on which to search the extension.
 
 Dialplan Functions
 ------------------

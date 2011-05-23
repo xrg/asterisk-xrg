@@ -159,7 +159,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 
 /*! \brief Welcome message when starting a CLI interface */
 #define WELCOME_MESSAGE \
-    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2010 Digium, Inc. and others.\n" \
+    ast_verbose("Asterisk %s, Copyright (C) 1999 - 2011 Digium, Inc. and others.\n" \
                 "Created by Mark Spencer <markster@digium.com>\n" \
                 "Asterisk comes with ABSOLUTELY NO WARRANTY; type 'core show warranty' for details.\n" \
                 "This is free software, with components licensed under the GNU General Public\n" \
@@ -365,11 +365,10 @@ const char *ast_file_version_find(const char *file)
 	struct file_version *iterator;
 
 	AST_RWLIST_WRLOCK(&file_versions);
-	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&file_versions, iterator, list) {
+	AST_RWLIST_TRAVERSE(&file_versions, iterator, list) {
 		if (!strcasecmp(iterator->file, file))
 			break;
- 	}
-	AST_RWLIST_TRAVERSE_SAFE_END;
+	}
 	AST_RWLIST_UNLOCK(&file_versions);
 	if (iterator)
 		return iterator->version;
@@ -580,9 +579,9 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 {
 	uint64_t physmem, freeram;
 	uint64_t freeswap = 0;
-	int totalswap = 0;
 	int nprocs = 0;
 	long uptime = 0;
+	int totalswap = 0;
 #if defined(HAVE_SYSINFO)
 	struct sysinfo sys_info;
 	sysinfo(&sys_info);
@@ -665,7 +664,7 @@ static char *handle_show_sysinfo(struct ast_cli_entry *e, int cmd, struct ast_cl
 #if defined(HAVE_SYSINFO)
 	ast_cli(a->fd, "  Buffer RAM:                %" PRIu64 " KiB\n", ((uint64_t) sys_info.bufferram * sys_info.mem_unit) / 1024);
 #endif
-#if defined (HAVE_SYSCTL) && defined(HAVE_SWAPCTL)
+#if defined (HAVE_SYSCTL) || defined(HAVE_SWAPCTL)
 	ast_cli(a->fd, "  Total Swap Space:          %u KiB\n", totalswap);
 	ast_cli(a->fd, "  Free Swap Space:           %" PRIu64 " KiB\n\n", freeswap);
 #endif
@@ -2570,7 +2569,13 @@ static char *cli_complete(EditLine *editline, int ch)
 static int ast_el_initialize(void)
 {
 	HistEvent ev;
-	char *editor = getenv("AST_EDITOR");
+	char *editor, *editrc = getenv("EDITRC");
+
+	if (!(editor = getenv("AST_EDITMODE"))) {
+		if (!(editor = getenv("AST_EDITOR"))) {
+			editor = "emacs";
+		}
+	}
 
 	if (el != NULL)
 		el_end(el);
@@ -2581,7 +2586,7 @@ static int ast_el_initialize(void)
 	el_set(el, EL_PROMPT, cli_prompt);
 
 	el_set(el, EL_EDITMODE, 1);		
-	el_set(el, EL_EDITOR, editor ? editor : "emacs");		
+	el_set(el, EL_EDITOR, editor);
 	el_hist = history_init();
 	if (!el || !el_hist)
 		return -1;
@@ -2598,6 +2603,18 @@ static int ast_el_initialize(void)
 	el_set(el, EL_BIND, "?", "ed-complete", NULL);
 	/* Bind ^D to redisplay */
 	el_set(el, EL_BIND, "^D", "ed-redisplay", NULL);
+	/* Bind Delete to delete char left */
+	el_set(el, EL_BIND, "\\e[3~", "ed-delete-next-char", NULL);
+	/* Bind Home and End to move to line start and end */
+	el_set(el, EL_BIND, "\\e[1~", "ed-move-to-beg", NULL);
+	el_set(el, EL_BIND, "\\e[4~", "ed-move-to-end", NULL);
+	/* Bind C-left and C-right to move by word (not all terminals) */
+	el_set(el, EL_BIND, "\\eOC", "vi-next-word", NULL);
+	el_set(el, EL_BIND, "\\eOD", "vi-prev-word", NULL);
+
+	if (editrc) {
+		el_source(el, editrc);
+	}
 
 	return 0;
 }

@@ -2531,7 +2531,7 @@ struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const
 	if (info == NULL)
 		return NULL;
 
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&chan->datastores, datastore, entry) {
+	AST_LIST_TRAVERSE(&chan->datastores, datastore, entry) {
 		if (datastore->info != info) {
 			continue;
 		}
@@ -2546,7 +2546,6 @@ struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END;
 
 	return datastore;
 }
@@ -3821,6 +3820,8 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		f = &ast_null_frame;
 		chan->fdno = -1;
 		goto done;
+	} else if (chan->fds[AST_JITTERBUFFER_FD] > -1 && chan->fdno == AST_JITTERBUFFER_FD) {
+		ast_clear_flag(chan, AST_FLAG_EXCEPTION);
 	}
 
 	/* Check for pending read queue */
@@ -3881,7 +3882,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			}
 			/* Clear the exception flag */
 			ast_clear_flag(chan, AST_FLAG_EXCEPTION);
-		} else if (chan->tech->read)
+		} else if (chan->tech && chan->tech->read)
 			f = chan->tech->read(chan);
 		else
 			ast_log(LOG_WARNING, "No read routine on channel %s\n", chan->name);
@@ -4322,7 +4323,9 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 		awesome_frame = ast_frdup(&frame);
 
 		/* who knows what we will get back! the anticipation is killing me. */
-		if (!(awesome_frame = ast_framehook_list_read_event(chan->framehooks, &frame))) {
+		if (!(awesome_frame = ast_framehook_list_write_event(chan->framehooks, awesome_frame))
+			|| awesome_frame->frametype != AST_FRAME_CONTROL) {
+
 			res = 0;
 			goto indicate_cleanup;
 		}
@@ -7269,6 +7272,8 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	char caller_warning = 0;
 	char callee_warning = 0;
 
+	*fo = NULL;
+
 	if (c0->_bridge) {
 		ast_log(LOG_WARNING, "%s is already in a bridge with %s\n",
 			c0->name, c0->_bridge->name);
@@ -7293,9 +7298,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		ast_log(LOG_WARNING, "failed to copy native formats\n");
 		return -1;
 	}
-
-
-	*fo = NULL;
 
 	if (ast_tvzero(config->start_time)) {
 		config->start_time = ast_tvnow();

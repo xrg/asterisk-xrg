@@ -280,14 +280,15 @@ static const char * const lbostr[] = {
 "-22.5db (CSU)"
 };
 
-/*! Global jitterbuffer configuration - by default, jb is disabled */
+/*! Global jitterbuffer configuration - by default, jb is disabled
+ *  \note Values shown here match the defaults shown in chan_dahdi.conf.sample */
 static struct ast_jb_conf default_jbconf =
 {
 	.flags = 0,
-	.max_size = -1,
-	.resync_threshold = -1,
-	.impl = "",
-	.target_extra = -1,
+	.max_size = 200,
+	.resync_threshold = 1000,
+	.impl = "fixed",
+	.target_extra = 40,
 };
 static struct ast_jb_conf global_jbconf;
 
@@ -6135,46 +6136,10 @@ static int dahdi_hangup(struct ast_channel *ast)
 		p->cid_subaddr[0] = '\0';
 	}
 
-#ifdef HAVE_PRI
+#if defined(HAVE_PRI)
 	if (dahdi_sig_pri_lib_handles(p->sig)) {
 		x = 1;
-		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
-		dahdi_confmute(p, 0);
-		p->muting = 0;
-		restore_gains(p);
-		if (p->dsp) {
-			ast_dsp_free(p->dsp);
-			p->dsp = NULL;
-		}
-		p->ignoredtmf = 0;
-		revert_fax_buffers(p, ast);
-		dahdi_setlinear(p->subs[SUB_REAL].dfd, 0);
-		p->law = p->law_default;
-		law = p->law_default;
-		res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_SETLAW, &law);
-		dahdi_disable_ec(p);
-		update_conf(p);
-		reset_conf(p);
-		sig_pri_hangup(p->sig_pvt, ast);
-		p->subs[SUB_REAL].owner = NULL;
-		p->subs[SUB_REAL].needbusy = 0;
-		p->owner = NULL;
-		p->cid_tag[0] = '\0';
-		p->ringt = 0;/* Probably not used in this mode.  Reset anyway. */
-		p->distinctivering = 0;/* Probably not used in this mode. Reset anyway. */
-		p->confirmanswer = 0;/* Probably not used in this mode. Reset anyway. */
-		p->outgoing = 0;
-		p->digital = 0;
-		p->faxhandled = 0;
-		p->pulsedial = 0;/* Probably not used in this mode. Reset anyway. */
-		goto hangup_out;
-	}
-#endif
-
-#if defined(HAVE_SS7)
-	if (p->sig == SIG_SS7) {
-		x = 1;
-		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
+		ast_channel_setoption(ast, AST_OPTION_AUDIO_MODE, &x, sizeof(char), 0);
 
 		dahdi_confmute(p, 0);
 		p->muting = 0;
@@ -6188,7 +6153,69 @@ static int dahdi_hangup(struct ast_channel *ast)
 		/* Real channel, do some fixup */
 		p->subs[SUB_REAL].owner = NULL;
 		p->subs[SUB_REAL].needbusy = 0;
-		p->polarity = POLARITY_IDLE;
+		dahdi_setlinear(p->subs[SUB_REAL].dfd, 0);
+
+		p->owner = NULL;
+		p->cid_tag[0] = '\0';
+		p->ringt = 0;/* Probably not used in this mode.  Reset anyway. */
+		p->distinctivering = 0;/* Probably not used in this mode. Reset anyway. */
+		p->confirmanswer = 0;/* Probably not used in this mode. Reset anyway. */
+		p->outgoing = 0;
+		p->digital = 0;
+		p->faxhandled = 0;
+		p->pulsedial = 0;/* Probably not used in this mode. Reset anyway. */
+
+		revert_fax_buffers(p, ast);
+
+		p->law = p->law_default;
+		law = p->law_default;
+		res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_SETLAW, &law);
+		if (res < 0) {
+			ast_log(LOG_WARNING, "Unable to set law on channel %d to default: %s\n",
+				p->channel, strerror(errno));
+		}
+
+		sig_pri_hangup(p->sig_pvt, ast);
+
+		tone_zone_play_tone(p->subs[SUB_REAL].dfd, -1);
+		dahdi_disable_ec(p);
+
+		x = 0;
+		ast_channel_setoption(ast, AST_OPTION_TDD, &x, sizeof(char), 0);
+		p->didtdd = 0;/* Probably not used in this mode. Reset anyway. */
+
+		p->rdnis[0] = '\0';
+		update_conf(p);
+		reset_conf(p);
+
+		/* Restore data mode */
+		x = 0;
+		ast_channel_setoption(ast, AST_OPTION_AUDIO_MODE, &x, sizeof(char), 0);
+
+		if (num_restart_pending == 0) {
+			restart_monitor();
+		}
+		goto hangup_out;
+	}
+#endif	/* defined(HAVE_PRI) */
+
+#if defined(HAVE_SS7)
+	if (p->sig == SIG_SS7) {
+		x = 1;
+		ast_channel_setoption(ast, AST_OPTION_AUDIO_MODE, &x, sizeof(char), 0);
+
+		dahdi_confmute(p, 0);
+		p->muting = 0;
+		restore_gains(p);
+		if (p->dsp) {
+			ast_dsp_free(p->dsp);
+			p->dsp = NULL;
+		}
+		p->ignoredtmf = 0;
+
+		/* Real channel, do some fixup */
+		p->subs[SUB_REAL].owner = NULL;
+		p->subs[SUB_REAL].needbusy = 0;
 		dahdi_setlinear(p->subs[SUB_REAL].dfd, 0);
 
 		p->owner = NULL;
@@ -6205,28 +6232,30 @@ static int dahdi_hangup(struct ast_channel *ast)
 		p->law = p->law_default;
 		law = p->law_default;
 		res = ioctl(p->subs[SUB_REAL].dfd, DAHDI_SETLAW, &law);
-		if (res < 0)
-			ast_log(LOG_WARNING, "Unable to set law on channel %d to default: %s\n", p->channel, strerror(errno));
+		if (res < 0) {
+			ast_log(LOG_WARNING, "Unable to set law on channel %d to default: %s\n",
+				p->channel, strerror(errno));
+		}
 
 		sig_ss7_hangup(p->sig_pvt, ast);
 
 		tone_zone_play_tone(p->subs[SUB_REAL].dfd, -1);
 		dahdi_disable_ec(p);
+
 		x = 0;
-		ast_channel_setoption(ast,AST_OPTION_TONE_VERIFY,&x,sizeof(char),0);
-		ast_channel_setoption(ast,AST_OPTION_TDD,&x,sizeof(char),0);
+		ast_channel_setoption(ast, AST_OPTION_TDD, &x, sizeof(char), 0);
 		p->didtdd = 0;/* Probably not used in this mode. Reset anyway. */
+
 		update_conf(p);
 		reset_conf(p);
 
 		/* Restore data mode */
 		x = 0;
-		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
+		ast_channel_setoption(ast, AST_OPTION_AUDIO_MODE, &x, sizeof(char), 0);
 
-		if (num_restart_pending == 0)
+		if (num_restart_pending == 0) {
 			restart_monitor();
-
-		ast->tech_pvt = NULL;
+		}
 		goto hangup_out;
 	}
 #endif	/* defined(HAVE_SS7) */
@@ -6440,6 +6469,7 @@ static int dahdi_hangup(struct ast_channel *ast)
 			break;
 		default:
 			tone_zone_play_tone(p->subs[SUB_REAL].dfd, -1);
+			break;
 		}
 		if (p->sig)
 			dahdi_disable_ec(p);
@@ -6473,8 +6503,8 @@ static int dahdi_hangup(struct ast_channel *ast)
 	p->cidcwexpire = 0;
 	p->cid_suppress_expire = 0;
 	p->oprmode = 0;
-	ast->tech_pvt = NULL;
 hangup_out:
+	ast->tech_pvt = NULL;
 	ast_free(p->cidspill);
 	p->cidspill = NULL;
 
@@ -12492,6 +12522,9 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 #if defined(HAVE_PRI_MCID)
 						pris[span].pri.mcid_send = conf->pri.pri.mcid_send;
 #endif	/* defined(HAVE_PRI_MCID) */
+#if defined(HAVE_PRI_DATETIME_SEND)
+						pris[span].pri.datetime_send = conf->pri.pri.datetime_send;
+#endif	/* defined(HAVE_PRI_DATETIME_SEND) */
 
 						for (x = 0; x < PRI_MAX_TIMERS; x++) {
 							pris[span].pri.pritimers[x] = conf->pri.pri.pritimers[x];
@@ -16783,6 +16816,40 @@ static unsigned long dahdi_display_text_option(const char *value)
 #endif	/* defined(HAVE_PRI_DISPLAY_TEXT) */
 #endif	/* defined(HAVE_PRI) */
 
+#if defined(HAVE_PRI)
+#if defined(HAVE_PRI_DATETIME_SEND)
+/*!
+ * \internal
+ * \brief Determine the configured date/time send policy option.
+ * \since 1.10
+ *
+ * \param value Configuration value string.
+ *
+ * \return Configured date/time send policy option.
+ */
+static int dahdi_datetime_send_option(const char *value)
+{
+	int option;
+
+	option = PRI_DATE_TIME_SEND_DEFAULT;
+
+	if (ast_false(value)) {
+		option = PRI_DATE_TIME_SEND_NO;
+	} else if (!strcasecmp(value, "date")) {
+		option = PRI_DATE_TIME_SEND_DATE;
+	} else if (!strcasecmp(value, "date_hh")) {
+		option = PRI_DATE_TIME_SEND_DATE_HH;
+	} else if (!strcasecmp(value, "date_hhmm")) {
+		option = PRI_DATE_TIME_SEND_DATE_HHMM;
+	} else if (!strcasecmp(value, "date_hhmmss")) {
+		option = PRI_DATE_TIME_SEND_DATE_HHMMSS;
+	}
+
+	return option;
+}
+#endif	/* defined(HAVE_PRI_DATETIME_SEND) */
+#endif	/* defined(HAVE_PRI) */
+
 /*! process_dahdi() - ignore keyword 'channel' and similar */
 #define PROC_DAHDI_OPT_NOCHAN  (1 << 0)
 /*! process_dahdi() - No warnings on non-existing cofiguration keywords */
@@ -17603,6 +17670,10 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 			} else if (!strcasecmp(v->name, "mcid_send")) {
 				confp->pri.pri.mcid_send = ast_true(v->value);
 #endif	/* defined(HAVE_PRI_MCID) */
+#if defined(HAVE_PRI_DATETIME_SEND)
+			} else if (!strcasecmp(v->name, "datetime_send")) {
+				confp->pri.pri.datetime_send = dahdi_datetime_send_option(v->value);
+#endif	/* defined(HAVE_PRI_DATETIME_SEND) */
 #endif /* HAVE_PRI */
 #if defined(HAVE_SS7)
 			} else if (!strcasecmp(v->name, "ss7type")) {
