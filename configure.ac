@@ -1142,6 +1142,8 @@ if test "${USE_GSM}" != "no"; then
 fi
 
 AST_EXT_LIB_CHECK([ICONV], [iconv], [iconv_open], [iconv.h])
+# GNU libiconv #define's iconv_open to libiconv_open, so we need to search for that symbol
+AST_EXT_LIB_CHECK([ICONV], [iconv], [libiconv_open], [iconv.h])
 # Some versions of Linux package iconv in glibc
 AST_EXT_LIB_CHECK([ICONV], [c], [iconv_close], [iconv.h])
 
@@ -2019,7 +2021,7 @@ then
 fi
 
 AST_EXT_TOOL_CHECK([GMIME], [gmime-config], [--cflags], [--libs], [#include <gmime/gmime.h>], [gboolean q = g_mime_check_version(0,0,0);])
-if test "x${PBX_GMIME}" = "x0"; then
+if test "x${PBX_GMIME}" = "x0" -a "${PKGCONFIG}" != "No"; then
 	# Later versions of GMime use pkg-config
 	for ver in 2.0 2.2 2.4; do
 		if ! ${PKGCONFIG} --exists gmime-$ver; then
@@ -2177,7 +2179,7 @@ fi
 AC_SUBST(PBX_LAUNCHD)
 
 PBX_GTK2=0
-if test ! "x${PKGCONFIG}" = xNo; then
+if test "${PKGCONFIG}" != "No"; then
    GTK2_INCLUDE=$(${PKGCONFIG} gtk+-2.0 --cflags 2>/dev/null)
    GTK2_LIB=$(${PKGCONFIG} gtk+-2.0 --libs)
    PBX_GTK2=1

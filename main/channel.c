@@ -612,6 +612,55 @@ static struct ast_cli_entry cli_channel[] = {
 	AST_CLI_DEFINE(handle_cli_core_show_channeltype,  "Give more details on that channel type")
 };
 
+static struct ast_frame *kill_read(struct ast_channel *chan)
+{
+	/* Hangup channel. */
+	return NULL;
+}
+
+static struct ast_frame *kill_exception(struct ast_channel *chan)
+{
+	/* Hangup channel. */
+	return NULL;
+}
+
+static int kill_write(struct ast_channel *chan, struct ast_frame *frame)
+{
+	/* Hangup channel. */
+	return -1;
+}
+
+static int kill_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
+{
+	/* No problem fixing up the channel. */
+	return 0;
+}
+
+static int kill_hangup(struct ast_channel *chan)
+{
+	chan->tech_pvt = NULL;
+	return 0;
+}
+
+/*!
+ * \brief Kill the channel channel driver technology descriptor.
+ *
+ * \details
+ * The purpose of this channel technology is to encourage the
+ * channel to hangup as quickly as possible.
+ *
+ * \note Used by DTMF atxfer and zombie channels.
+ */
+const struct ast_channel_tech ast_kill_tech = {
+	.type = "Kill",
+	.description = "Kill channel (should not see this)",
+	.read = kill_read,
+	.exception = kill_exception,
+	.write = kill_write,
+	.fixup = kill_fixup,
+	.hangup = kill_hangup,
+};
+
 #ifdef CHANNEL_TRACE
 /*! \brief Destructor for the channel trace datastore */
 static void ast_chan_trace_destroy_cb(void *data)
@@ -1069,7 +1118,7 @@ static struct ast_channel * attribute_malloc __attribute__((format(printf, 13, 0
 __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char *cid_name,
 		       const char *acctcode, const char *exten, const char *context,
 		       const char *linkedid, const int amaflag, const char *file, int line,
-		       const char *function, const char *name_fmt, va_list ap1, va_list ap2)
+		       const char *function, const char *name_fmt, va_list ap)
 {
 	struct ast_channel *tmp;
 	int x;
@@ -1214,7 +1263,7 @@ __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char
 		 * uses them to build the string, instead of forming the va_lists internally from the vararg ... list.
 		 * This new function was written so this can be accomplished.
 		 */
-		ast_string_field_build_va(tmp, name, name_fmt, ap1, ap2);
+		ast_string_field_build_va(tmp, name, name_fmt, ap);
 		tech = ast_strdupa(tmp->name);
 		if ((slash = strchr(tech, '/'))) {
 			if ((slash2 = strchr(slash + 1, '/'))) {
@@ -1313,15 +1362,13 @@ struct ast_channel *__ast_channel_alloc(int needqueue, int state, const char *ci
 					const char *file, int line, const char *function,
 					const char *name_fmt, ...)
 {
-	va_list ap1, ap2;
+	va_list ap;
 	struct ast_channel *result;
 
-	va_start(ap1, name_fmt);
-	va_start(ap2, name_fmt);
+	va_start(ap, name_fmt);
 	result = __ast_channel_alloc_ap(needqueue, state, cid_num, cid_name, acctcode, exten, context,
-					linkedid, amaflag, file, line, function, name_fmt, ap1, ap2);
-	va_end(ap1);
-	va_end(ap2);
+					linkedid, amaflag, file, line, function, name_fmt, ap);
+	va_end(ap);
 
 	return result;
 }
@@ -2811,12 +2858,16 @@ int ast_hangup(struct ast_channel *chan)
 		"Uniqueid: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"Cause: %d\r\n"
 		"Cause-txt: %s\r\n",
 		chan->name,
 		chan->uniqueid,
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, "<unknown>"),
 		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, "<unknown>"),
+		S_COR(chan->connected.id.number.valid, chan->connected.id.number.str, "<unknown>"),
+		S_COR(chan->connected.id.name.valid, chan->connected.id.name.str, "<unknown>"),
 		chan->hangupcause,
 		ast_cause2str(chan->hangupcause)
 		);
@@ -6613,6 +6664,12 @@ int ast_do_masquerade(struct ast_channel *original)
 		goto done;
 	}
 
+	/*
+	 * We just hung up the physical side of the channel.  Set the
+	 * new zombie to use the kill channel driver for safety.
+	 */
+	clonechan->tech = &ast_kill_tech;
+
 	/* Mangle the name of the clone channel */
 	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig); /* quick, hide the brains! */
 	__ast_change_name_nolink(clonechan, zombn);
@@ -6897,10 +6954,14 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 		"ChannelStateDesc: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"Uniqueid: %s\r\n",
 		chan->name, chan->_state, ast_state2str(chan->_state),
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
 		S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, ""),
+		S_COR(chan->connected.id.number.valid, chan->connected.id.number.str, ""),
+		S_COR(chan->connected.id.name.valid, chan->connected.id.name.str, ""),
 		chan->uniqueid);
 
 	return 0;
@@ -9521,16 +9582,14 @@ struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_
 				      const char *linkedid, const int amaflag,
 				      const char *name_fmt, ...)
 {
-	va_list ap1, ap2;
+	va_list ap;
 	struct ast_channel *result;
 
 
-	va_start(ap1, name_fmt);
-	va_start(ap2, name_fmt);
+	va_start(ap, name_fmt);
 	result = __ast_channel_alloc_ap(needqueue, state, cid_num, cid_name, acctcode, exten, context,
-					linkedid, amaflag, __FILE__, __LINE__, __FUNCTION__, name_fmt, ap1, ap2);
-	va_end(ap1);
-	va_end(ap2);
+					linkedid, amaflag, __FILE__, __LINE__, __FUNCTION__, name_fmt, ap);
+	va_end(ap);
 
 	return result;
 }

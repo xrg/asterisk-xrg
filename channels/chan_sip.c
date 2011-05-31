@@ -1928,6 +1928,7 @@ static int sip_cc_monitor_request_cc(struct ast_cc_monitor *monitor, int *availa
 		ast_get_ccnr_available_timer(monitor->interface->config_params);
 
 	sip_pvt_lock(monitor_instance->subscription_pvt);
+	ast_set_flag(&monitor_instance->subscription_pvt->flags[0], SIP_OUTGOING);
 	create_addr(monitor_instance->subscription_pvt, monitor_instance->peername, 0, 1, NULL);
 	ast_sip_ouraddrfor(&monitor_instance->subscription_pvt->sa, &monitor_instance->subscription_pvt->ourip, monitor_instance->subscription_pvt);
 	monitor_instance->subscription_pvt->subscribed = CALL_COMPLETION;
@@ -2500,7 +2501,7 @@ static int sip_check_authtimeout(time_t start)
 */
 static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_session_instance *tcptls_session)
 {
-	int res, cl, timeout = -1, authenticated = 0, flags;
+	int res, cl, timeout = -1, authenticated = 0, flags, after_poll = 0, need_poll = 1;
 	time_t start;
 	struct sip_request req = { 0, } , reqcpy = { 0, };
 	struct sip_threadinfo *me = NULL;
@@ -2613,6 +2614,7 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 		/* handle the socket event, check for both reads from the socket fd,
 		 * and writes from alert_pipe fd */
 		if (fds[0].revents) { /* there is data on the socket to be read */
+			after_poll = 1;
 
 			fds[0].revents = 0;
 
@@ -2653,22 +2655,35 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 					timeout = -1;
 				}
 
-				res = ast_wait_for_input(tcptls_session->fd, timeout);
-				if (res < 0) {
-					ast_debug(2, "SIP %s server :: ast_wait_for_input returned %d\n", tcptls_session->ssl ? "SSL": "TCP", res);
-					goto cleanup;
-				} else if (res == 0) {
-					/* timeout */
-					ast_debug(2, "SIP %s server timed out\n", tcptls_session->ssl ? "SSL": "TCP");
-					goto cleanup;
+				/* special polling behavior is required for TLS
+				 * sockets because of the buffering done in the
+				 * TLS layer */
+				if (!tcptls_session->ssl || need_poll) {
+					need_poll = 0;
+					after_poll = 1;
+					res = ast_wait_for_input(tcptls_session->fd, timeout);
+					if (res < 0) {
+						ast_debug(2, "SIP TCP server :: ast_wait_for_input returned %d\n", res);
+						goto cleanup;
+					} else if (res == 0) {
+						/* timeout */
+						ast_debug(2, "SIP TCP server timed out\n");
+						goto cleanup;
+					}
 				}
 
 				ast_mutex_lock(&tcptls_session->lock);
 				if (!fgets(buf, sizeof(buf), tcptls_session->f)) {
 					ast_mutex_unlock(&tcptls_session->lock);
-					goto cleanup;
+					if (after_poll) {
+						goto cleanup;
+					} else {
+						need_poll = 1;
+						continue;
+					}
 				}
 				ast_mutex_unlock(&tcptls_session->lock);
+				after_poll = 0;
 				if (me->stop) {
 					 goto cleanup;
 				}
@@ -2687,30 +2702,40 @@ static void *_sip_tcp_helper_thread(struct sip_pvt *pvt, struct ast_tcptls_sessi
 						}
 
 						if (timeout == 0) {
-							ast_debug(2, "SIP %s server timed out", tcptls_session->ssl ? "SSL": "TCP");
+							ast_debug(2, "SIP %s server timed out\n", tcptls_session->ssl ? "SSL": "TCP");
 							goto cleanup;
 						}
 					} else {
 						timeout = -1;
 					}
 
-					res = ast_wait_for_input(tcptls_session->fd, timeout);
-					if (res < 0) {
-						ast_debug(2, "SIP %s server :: ast_wait_for_input returned %d\n", tcptls_session->ssl ? "SSL": "TCP", res);
-						goto cleanup;
-					} else if (res == 0) {
-						/* timeout */
-						ast_debug(2, "SIP %s server timed out", tcptls_session->ssl ? "SSL": "TCP");
-						goto cleanup;
+					if (!tcptls_session->ssl || need_poll) {
+						need_poll = 0;
+						after_poll = 1;
+						res = ast_wait_for_input(tcptls_session->fd, timeout);
+						if (res < 0) {
+							ast_debug(2, "SIP TCP server :: ast_wait_for_input returned %d\n", res);
+							goto cleanup;
+						} else if (res == 0) {
+							/* timeout */
+							ast_debug(2, "SIP TCP server timed out\n");
+							goto cleanup;
+						}
 					}
 
 					ast_mutex_lock(&tcptls_session->lock);
 					if (!(bytes_read = fread(buf, 1, MIN(sizeof(buf) - 1, cl), tcptls_session->f))) {
 						ast_mutex_unlock(&tcptls_session->lock);
-						goto cleanup;
+						if (after_poll) {
+							goto cleanup;
+						} else {
+							need_poll = 1;
+							continue;
+						}
 					}
 					buf[bytes_read] = '\0';
 					ast_mutex_unlock(&tcptls_session->lock);
+					after_poll = 0;
 					if (me->stop) {
 						goto cleanup;
 					}
@@ -13550,7 +13575,8 @@ static int parse_ok_contact(struct sip_pvt *pvt, struct sip_request *req)
 }
 
 /*! \brief parse uri in a way that allows semicolon stripping if legacy mode is enabled */
-static int parse_uri_legacy_check(char *uri, const char *scheme, char **user, char **pass, char **domain, char **transport) {
+static int parse_uri_legacy_check(char *uri, const char *scheme, char **user, char **pass, char **domain, char **transport)
+{
 	int ret = parse_uri(uri, scheme, user, pass, domain, transport);
 	if (sip_cfg.legacy_useroption_parsing) { /* if legacy mode is active, strip semis from the user field */
 		char *p;
@@ -13589,6 +13615,13 @@ static int __set_address_from_contact(const char *fullcontact, struct ast_sockad
 		to find transport, port address and hostname. If there's a port number, we have to
 		assume that the domain part is a host name and only look for an A/AAAA record in DNS.
 	*/
+
+	/* If we took in an invalid URI, domain may not have been initialized */
+	/* ast_sockaddr_resolve requires an initialized domain string. */
+	if (ast_strlen_zero(domain)) {
+		ast_log(LOG_WARNING, "Invalid URI: parse_uri failed to acquire domain\n");
+		return -1;
+	}
 
 	if (ast_sockaddr_resolve_first(addr, domain, 0)) {
 		ast_log(LOG_WARNING, "Invalid host name in Contact: (can't "
@@ -20106,6 +20139,27 @@ static void handle_response_notify(struct sip_pvt *p, int resp, const char *rest
 /* \brief Handle SIP response in SUBSCRIBE transaction */
 static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, int seqno)
 {
+	if (p->subscribed == CALL_COMPLETION) {
+		struct sip_monitor_instance *monitor_instance;
+
+		if (resp < 300) {
+			return;
+		}
+
+		/* Final failure response received. */
+		monitor_instance = ao2_callback(sip_monitor_instances, 0,
+			find_sip_monitor_instance_by_subscription_pvt, p);
+		if (monitor_instance) {
+			ast_cc_monitor_failed(monitor_instance->core_id,
+				monitor_instance->device_name,
+				"Received error response to our SUBSCRIBE");
+		}
+		return;
+	}
+
+	if (p->subscribed != MWI_NOTIFICATION) {
+		return;
+	}
 	if (!p->mwi) {
 		return;
 	}
@@ -20837,16 +20891,6 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 
 			gettag(req, "To", tag, sizeof(tag));
 			ast_string_field_set(p, theirtag, tag);
-		}
-
-		if (sipmethod == SIP_SUBSCRIBE && resp >= 400) {
-			struct sip_monitor_instance *monitor_instance = ao2_callback(sip_monitor_instances,
-					0, find_sip_monitor_instance_by_subscription_pvt, p);
-			if (monitor_instance) {
-				ast_cc_monitor_failed(monitor_instance->core_id, monitor_instance->device_name,
-						"Received error response to our SUBSCRIBE");
-				return;
-			}
 		}
 
 		switch(resp) {
@@ -23997,6 +24041,8 @@ static int handle_cc_subscribe(struct sip_pvt *p, struct sip_request *req)
 		*param_separator = '\0';
 	}
 
+	p->subscribed = CALL_COMPLETION;
+
 	if (!(agent = find_sip_cc_agent_by_subscribe_uri(uri))) {
 		if (!expires) {
 			/* Typically, if a 0 Expires reaches us and we can't find
@@ -24028,7 +24074,6 @@ static int handle_cc_subscribe(struct sip_pvt *p, struct sip_request *req)
 	agent_pvt->subscribe_pvt = dialog_ref(p, "SIP CC agent gains reference to subscription dialog");
 	ast_cc_agent_accept_request(agent->core_id, "SIP caller %s has requested CC via SUBSCRIBE",
 			agent->device_name);
-	p->subscribed = CALL_COMPLETION;
 
 	/* We don't send a response here. That is done in the agent's ack callback or in the
 	 * agent destructor, should a failure occur before we have responded

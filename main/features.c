@@ -478,58 +478,15 @@ struct ast_dial_features {
 };
 
 #if defined(ATXFER_NULL_TECH)
-static struct ast_frame *null_read(struct ast_channel *chan)
-{
-	/* Hangup channel. */
-	return NULL;
-}
-
-static struct ast_frame *null_exception(struct ast_channel *chan)
-{
-	/* Hangup channel. */
-	return NULL;
-}
-
-static int null_write(struct ast_channel *chan, struct ast_frame *frame)
-{
-	/* Hangup channel. */
-	return -1;
-}
-
-static int null_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
-{
-	/* No problem fixing up the channel. */
-	return 0;
-}
-
-static int null_hangup(struct ast_channel *chan)
-{
-	chan->tech_pvt = NULL;
-	return 0;
-}
-
-static const struct ast_channel_tech null_tech = {
-	.type = "NULL",
-	.description = "NULL channel driver for atxfer",
-	.capabilities = -1,
-	.read = null_read,
-	.exception = null_exception,
-	.write = null_write,
-	.fixup = null_fixup,
-	.hangup = null_hangup,
-};
-#endif	/* defined(ATXFER_NULL_TECH) */
-
-#if defined(ATXFER_NULL_TECH)
 /*!
  * \internal
- * \brief Set the channel technology to the NULL technology.
+ * \brief Set the channel technology to the kill technology.
  *
  * \param chan Channel to change technology.
  *
  * \return Nothing
  */
-static void set_null_chan_tech(struct ast_channel *chan)
+static void set_kill_chan_tech(struct ast_channel *chan)
 {
 	int idx;
 
@@ -546,8 +503,8 @@ static void set_null_chan_tech(struct ast_channel *chan)
 		chan->tech_pvt = NULL;
 	}
 
-	/* Install the NULL technology and wake up anyone waiting on it. */
-	chan->tech = &null_tech;
+	/* Install the kill technology and wake up anyone waiting on it. */
+	chan->tech = &ast_kill_tech;
 	for (idx = 0; idx < AST_MAX_FDS; ++idx) {
 		switch (idx) {
 		case AST_ALERT_FD:
@@ -1220,11 +1177,15 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 		"Timeout: %ld\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"Uniqueid: %s\r\n",
 		pu->parkingexten, pu->chan->name, pu->parkinglot->name, event_from ? event_from : "",
 		(long)pu->start.tv_sec + (long)(pu->parkingtime/1000) - (long)time(NULL),
 		S_COR(pu->chan->caller.id.number.valid, pu->chan->caller.id.number.str, "<unknown>"),
 		S_COR(pu->chan->caller.id.name.valid, pu->chan->caller.id.name.str, "<unknown>"),
+		S_COR(pu->chan->connected.id.number.valid, pu->chan->connected.id.number.str, "<unknown>"),
+		S_COR(pu->chan->connected.id.name.valid, pu->chan->connected.id.name.str, "<unknown>"),
 		pu->chan->uniqueid
 		);
 
@@ -3146,7 +3107,7 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller,
 				 * Get rid of caller's physical technology so it is free for
 				 * other calls.
 				 */
-				set_null_chan_tech(caller);
+				set_kill_chan_tech(caller);
 #endif	/* defined(ATXFER_NULL_TECH) */
 			} else {
 				/* caller is not hungup so monitor it. */
@@ -4099,12 +4060,16 @@ static void post_manager_event(const char *s, struct parkeduser *pu)
 		"Parkinglot: %s\r\n"
 		"CallerIDNum: %s\r\n"
 		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
 		"UniqueID: %s\r\n",
 		pu->parkingexten, 
 		pu->chan->name,
 		pu->parkinglot->name,
 		S_COR(pu->chan->caller.id.number.valid, pu->chan->caller.id.number.str, "<unknown>"),
 		S_COR(pu->chan->caller.id.name.valid, pu->chan->caller.id.name.str, "<unknown>"),
+		S_COR(pu->chan->connected.id.number.valid, pu->chan->connected.id.number.str, "<unknown>"),
+		S_COR(pu->chan->connected.id.name.valid, pu->chan->connected.id.name.str, "<unknown>"),
 		pu->chan->uniqueid
 		);
 }
@@ -4597,10 +4562,14 @@ static int park_exec_full(struct ast_channel *chan, const char *data)
 			"Channel: %s\r\n"
 			"From: %s\r\n"
 			"CallerIDNum: %s\r\n"
-			"CallerIDName: %s\r\n",
+			"CallerIDName: %s\r\n"
+			"ConnectedLineNum: %s\r\n"
+			"ConnectedLineName: %s\r\n",
 			pu->parkingexten, pu->chan->name, chan->name,
 			S_COR(pu->chan->caller.id.number.valid, pu->chan->caller.id.number.str, "<unknown>"),
-			S_COR(pu->chan->caller.id.name.valid, pu->chan->caller.id.name.str, "<unknown>")
+			S_COR(pu->chan->caller.id.name.valid, pu->chan->caller.id.name.str, "<unknown>"),
+			S_COR(pu->chan->connected.id.number.valid, pu->chan->connected.id.number.str, "<unknown>"),
+			S_COR(pu->chan->connected.id.name.valid, pu->chan->connected.id.name.str, "<unknown>")
 			);
 
 		ast_free(pu);
@@ -4818,6 +4787,10 @@ static struct ast_parkinglot *build_parkinglot(char *name, struct ast_variable *
 			ast_copy_string(parkinglot->parking_con, confvar->value, sizeof(parkinglot->parking_con));
 		} else if (!strcasecmp(confvar->name, "parkext")) {
 			ast_copy_string(parkinglot->parkext, confvar->value, sizeof(parkinglot->parkext));
+		} else if (!strcasecmp(confvar->name, "parkinghints")) {
+			parkinglot->parkaddhints = ast_true(confvar->value);
+		} else if (!strcasecmp(confvar->name, "parkedmusicclass")) {
+			ast_copy_string(parkinglot->mohclass, confvar->value, sizeof(parkinglot->mohclass));
 		} else if (!strcasecmp(confvar->name, "parkingtime")) {
 			if ((sscanf(confvar->value, "%30d", &parkinglot->parkingtime) != 1) || (parkinglot->parkingtime < 1)) {
 				ast_log(LOG_WARNING, "%s is not a valid parkingtime\n", confvar->value);
@@ -5678,12 +5651,16 @@ static int manager_parking_status(struct mansession *s, const struct message *m)
 				"Timeout: %ld\r\n"
 				"CallerIDNum: %s\r\n"
 				"CallerIDName: %s\r\n"
+				"ConnectedLineNum: %s\r\n"
+				"ConnectedLineName: %s\r\n"
 				"%s"
 				"\r\n",
 				cur->parkingnum, cur->chan->name, cur->peername,
 				(long) cur->start.tv_sec + (long) (cur->parkingtime / 1000) - (long) time(NULL),
 				S_COR(cur->chan->caller.id.number.valid, cur->chan->caller.id.number.str, ""),	/* XXX in other places it is <unknown> */
 				S_COR(cur->chan->caller.id.name.valid, cur->chan->caller.id.name.str, ""),
+				S_COR(cur->chan->connected.id.number.valid, cur->chan->connected.id.number.str, ""),	/* XXX in other places it is <unknown> */
+				S_COR(cur->chan->connected.id.name.valid, cur->chan->connected.id.name.str, ""),
 				idText);
 		}
 		AST_LIST_UNLOCK(&curlot->parkings);
@@ -5809,20 +5786,14 @@ int ast_pickup_call(struct ast_channel *chan)
 		ast_log(LOG_NOTICE, "pickup %s attempt by %s\n", target->name, chan->name);
 
 		res = ast_do_pickup(chan, target);
+		ast_channel_unlock(target);
 		if (!res) {
 			if (!ast_strlen_zero(pickupsound)) {
-				/*!
-				 * \todo We are not the bridge thread when we inject this sound
-				 * so we need to hold the target channel lock while the sound is
-				 * played.  A better way needs to be found as this pauses the
-				 * system.
-				 */
-				ast_stream_and_wait(target, pickupsound, "");
+				pbx_builtin_setvar_helper(target, "BRIDGE_PLAY_SOUND", pickupsound);
 			}
 		} else {
 			ast_log(LOG_WARNING, "pickup %s failed by %s\n", target->name, chan->name);
 		}
-		ast_channel_unlock(target);
 		target = ast_channel_unref(target);
 	}
 
