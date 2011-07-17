@@ -47,12 +47,6 @@
 %{?_without_ffmpeg:	%global build_ffmpeg 0}
 %{?_with_ffmpeg:	%global build_ffmpeg 1}
 
-%if %mdkversion < 200900
-%define build_dahdi	0
-%define build_osp	0
-%define build_pri	0
-%endif
-
 # Note: at Mandriva/Mageia there is no /var/lib64 ..
 %define astvardir	/var/lib/asterisk
 %define modulesdir	%{_libdir}/asterisk/modules
@@ -159,11 +153,7 @@ BuildRequires: neon-devel
 BuildRequires: libical-devel
 BuildRequires: libxml2-devel
 %if %{build_imap}
-%if %mdkversion < 200900
-BuildRequires: imap-devel
-%else
 BuildRequires:	c-client-devel
-%endif
 %endif
 %if %{build_misdn}
 BuildRequires:	libmisdn-devel >= 1:3.4
@@ -547,11 +537,7 @@ for i in `find . -type d -name CVS` `find . -type f -name .cvs\*` `find . -type 
     if [ -e "$i" ]; then rm -rf $i; fi >&/dev/null
 done
 
-%if %mdkversion < 200900
-cp contrib/mandriva/menuselect.makeopts.2008 ./menuselect.makeopts
-%else
 cp contrib/mandriva/menuselect.makeopts ./
-%endif
 
 chmod -x contrib/scripts/dbsep.cgi
 
@@ -901,10 +887,8 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_readfile.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_read.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_record.so
-%if %mdkversion >= 200900
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_rpt.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_timerfd.so
-%endif
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_saycounted.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sayunixtime.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_senddtmf.so
@@ -1151,12 +1135,10 @@ fi
 # *-*
 # %attr(0750,asterisk,asterisk) /var/lib/asterisk/firmware
 
-%if %mdkversion >= 200900
 %files plugins-ais
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/ais.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_ais.so
-%endif
 
 %files plugins-alsa
 %defattr(-,root,root,-)
@@ -1187,13 +1169,11 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_dahdi.so
 %endif
 
-%if %mdkversion >= 200900
 %files plugins-fax
 %defattr(-,root,root,-)
 # attr(0755,root,root) %{_libdir}/asterisk/modules/app_fax.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_fax.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_fax_spandsp.so
-%endif
 
 %files plugins-festival
 %defattr(-,root,root,-)
