@@ -1,6 +1,5 @@
 #define git_repodir /home/panosl/panos/build
 %define git_repo asterisk
-%define git_head master
 
 %define _requires_exceptions perl(Carp::Heavy)
 
