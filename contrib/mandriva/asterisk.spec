@@ -947,6 +947,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_sln.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren14.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren7.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/format_attr_silk.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_aes.so
 #%attr(0755,root,root) %{_libdir}/asterisk/modules/func_connectedline.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav_gsm.so
@@ -972,6 +973,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_global.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_groupcount.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_iconv.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/func_jitterbuffer.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_lock.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_logic.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_math.so
@@ -1002,7 +1004,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_clioriginate.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_convert.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_crypto.so
-# attr(0755,root,root) %{_libdir}/asterisk/modules/res_http_post.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_http_post.so
 # attr(0755,root,root) %{_libdir}/asterisk/modules/res_indications.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_limit.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_monitor.so
