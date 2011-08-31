@@ -9355,10 +9355,10 @@ static int sip_register(const char *value, int lineno)
 	}
 
 	ao2_t_link(registry_list, reg, "link reg to registry_list");
-        if (lineno == 0)
+        if (lineno == 0){
                 AST_SCHED_REPLACE(reg->expire, sched, 100, sip_reregister, reg);
-
-	ao2_t_ref(reg, -1, "unref the reg pointer");
+        }else
+	    ao2_t_ref(reg, -1, "unref the reg pointer");
 	return 0;
 }
 
@@ -20784,7 +20784,7 @@ static char *sip_registry_resched(struct ast_cli_entry *e, int cmd, struct ast_c
 /*! \brief  Dynamically add a SIP Registry */
 static char *sip_registry_add(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	
+	char buf[256];
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "sip registry add";
@@ -20800,7 +20800,8 @@ static char *sip_registry_add(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 		return CLI_SHOWUSAGE;
 		
 
-	if (sip_register(a->argv[3],0)==0) {
+	ast_copy_string(buf, a->argv[3], sizeof(buf));
+	if (sip_register(buf,0)==0) {
 		ast_cli(a->fd, "SIP registration added.\n");
 		return CLI_SUCCESS;
 	}else
