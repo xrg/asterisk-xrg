@@ -104,7 +104,9 @@ BuildRequires:	libidn-devel
 BuildRequires:	libiksemel-devel
 BuildRequires:	libilbc-devel
 BuildRequires:	libjack-devel
+%if %{_host_vendor} == mandriva
 BuildRequires:	libnbs-devel
+%endif
 BuildRequires:	libncurses-devel
 BuildRequires:	libogg-devel
 %if %{build_osp}
@@ -596,7 +598,9 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --without-misdn \
     --without-suppserv \
 %endif
+%if %{_host_vendor} == mandriva
     --with-nbs=%{_prefix} \
+%endif
     --with-ncurses=%{_prefix} \
     --with-netsnmp=%{_prefix} \
     --with-newt=%{_prefix} \
