@@ -923,7 +923,7 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_iax2.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_local.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_mgcp.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_nbs.so
+# attr(0755,root,root) %{_libdir}/asterisk/modules/chan_nbs.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_phone.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_sip.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/codec_adpcm.so
