@@ -1152,7 +1152,7 @@ static int require_pgsql(const char *database, const char *tablename, va_list ap
 						ast_log(LOG_WARNING, "Column '%s' should be at least %d long, but is only %d long.\n", column->name, size, column->len);
 						res = -1;
 					}
-				} else if (strncmp(colunm->type, "text", 4) == 0){
+				} else if (strncmp(column->type, "text", 4) == 0){
 				    if (type != RQ_CHAR)
 					    ast_log(LOG_WARNING, "Column '%s' is of the incorrect type: (need %d but saw %s)\n",
 						    column->name, type, column->type);
