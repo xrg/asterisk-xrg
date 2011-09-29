@@ -734,8 +734,12 @@ static int update_pgsql(const char *database, const char *tablename, const char 
 	/* Create the first part of the query using the first parameter/value pairs we just extracted
 	   If there is only 1 set, then we have our query. Otherwise, loop thru the list and concat */
 	
-	sparams[nparams++]=newval;
-	ast_str_set(&sql, 0, "UPDATE %s SET %s = $%d", tablename, newparam, nparams);
+	
+	if (newval && strcmp(newval,"(null)")){
+		sparams[nparams++]=newval;
+		ast_str_set(&sql, 0, "UPDATE %s SET %s = $%d", tablename, newparam, nparams);
+	}else
+		ast_str_set(&sql, 0, "UPDATE %s SET %s = NULL", tablename, newparam);
 	
 	while ((newparam = va_arg(ap, const char *))) {
 		if (nparams >= (sizeof(sparams) -1) ) {
@@ -745,9 +749,12 @@ static int update_pgsql(const char *database, const char *tablename, const char 
 			return -1;
 		}
 		newval = va_arg(ap, const char *);
-		sparams[nparams++]=newval;
-		ast_str_append(&sql, 0, ", %s = $%d", newparam,
-				 nparams);
+		if (newval && strcmp(newval,"(null)")){
+			sparams[nparams++]=newval;
+			ast_str_append(&sql, 0, ", %s = $%d", newparam,
+					nparams);
+		}else
+			ast_str_append(&sql, 0, ", %s = NULL", newparam);
 	}
 	va_end(ap);
 	sparams[nparams++]=lookup;
