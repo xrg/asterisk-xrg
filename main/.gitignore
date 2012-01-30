@@ -1,0 +1,11 @@
+*.d
+*.dylib*
+*.exports
+*.gcda
+*.gcno
+*.i
+*.o
+*.s
+*.so*
+asterisk
+version.c

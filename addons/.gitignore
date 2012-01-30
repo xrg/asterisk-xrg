@@ -1,0 +1,12 @@
+*.a
+*.d
+*.eo
+*.eoo
+*.i
+*.makeopts
+*.moduleinfo
+*.s
+*.so
+*.exports
+modules.link
+mp3
