@@ -28,7 +28,6 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 
 #include "asterisk/_private.h"
-#include "asterisk/version.h"
 #include "asterisk/format.h"
 #include "asterisk/format_cap.h"
 #include "asterisk/frame.h"
@@ -470,7 +469,7 @@ static int joint_copy_helper(const struct ast_format_cap *cap1, const struct ast
 	if (!append) {
 		ast_format_cap_remove_all(result);
 	}
-	it = ao2_iterator_init(cap1->formats, cap2->nolock ? AO2_ITERATOR_DONTLOCK : 0);
+	it = ao2_iterator_init(cap1->formats, cap1->nolock ? AO2_ITERATOR_DONTLOCK : 0);
 	while ((tmp = ao2_iterator_next(&it))) {
 		data.format = tmp;
 		ao2_callback(cap2->formats,
@@ -521,8 +520,6 @@ struct ast_format_cap *ast_format_cap_get_type(const struct ast_format_cap *cap,
 	}
 	result = ast_format_cap_destroy(result);
 
-	/* Remember to always free the NULL before returning it. */
-	ast_free(NULL);
 	return NULL;
 }
 

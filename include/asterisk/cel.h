@@ -188,10 +188,22 @@ const char *ast_cel_get_ama_flag_name(enum ast_cel_ama_flag flag);
 void ast_cel_check_retire_linkedid(struct ast_channel *chan);
 
 /*!
+ * \brief Inform CEL that a new linkedid is being used
+ * \since 11
+ *
+ * \retval -1 error
+ * \retval 0 success
+ */
+int ast_cel_linkedid_ref(const char *linkedid);
+
+/*!
  * \brief Create a fake channel from data in a CEL event
  *
- * This function creates a fake channel containing the serialized channel data 
- * in the given cel event.  It must be released with ast_channel_release.
+ * \note
+ * This function creates a fake channel containing the
+ * serialized channel data in the given cel event.  It should be
+ * released with ast_channel_unref() but could be released with
+ * ast_channel_release().
  *
  * \param event the CEL event
  *

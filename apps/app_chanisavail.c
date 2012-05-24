@@ -27,6 +27,10 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -148,7 +152,9 @@ static int chanavail_exec(struct ast_channel *chan, const char *data)
 			}
 			*number = '\0';
 			number++;
-			
+
+			status = AST_DEVICE_UNKNOWN;
+
 			if (string_compare) {
 				/* ast_parse_device_state checks for "SIP/1234" as a channel name.
 				   ast_device_state will ask the SIP driver for the channel state. */

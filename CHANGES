@@ -9,13 +9,98 @@
 ==============================================================================
 
 ------------------------------------------------------------------------------
---- Functionality changes from Asterisk 1.8 to Asterisk 1.10 -----------------
+--- Functionality changes since Asterisk 10.5.0 ------------------------------
 ------------------------------------------------------------------------------
+
+SIP Changes
+-------------
+ * In previous versions of Asterisk, a SIP peer's LastMsgsSent value was
+   presented as part of the response to an AMI or CLI 'sip show peer [peer]'.
+   This was removed in Asterisk 10 as the variable was no longer used for its
+   original internal purpose of determining whether or not MWI notifications had
+   been sent to a peer; however, it was determined that the value is still
+   useful for reporting purposes.
+
+   The LastMsgsSent value has been re-added with the same functionality as in
+   previous versions of Asterisk.
+
+------------------------------------------------------------------------------
+--- Functionality changes since Asterisk 10.3.0 ------------------------------
+------------------------------------------------------------------------------
+
+Gosub changes
+-------------
+ * A new function, STACK_PEEK, has been added, to correlate for functionality
+   available in AEL in 1.4 that disappeared in 10.  STACK_PEEK permits the
+   user to see the location of the calling Gosub from within the subroutine.
+
+Background DNS Update Manager
+-----------------------------
+ * The default verbosity for ast_verb() messages has been increased to 6. This
+   should help reduce the 'doing dnsmgr_lookup for' message from spamming the
+   CLI.
+
+Queue changes
+-------------
+ * Default value for 'ignorebusy' flag on queue members is now 1 instead of 0
+   to get the default behavior in line with 1.8. The only way to change this
+   flag in 10 is to use the QUEUE_MEMBER function to change ignorebusy unless
+   using realtime queue members (in which case it can be manipualted on the
+   database normally).
+
+------------------------------------------------------------------------------
+--- Functionality changes since Asterisk 10.1.0 ------------------------------
+------------------------------------------------------------------------------
+
+Followme changes
+-------------
+ * A new option, 'I' has been added to app_followme.
+   By setting this option, Asterisk will not update the caller with
+   connected line changes when they occur.  This is similar to app_dial
+   and app_queue.
+ * The 'N' option is now ignored if the call is already answered.
+
+RTP changes
+-------------
+ * A new option, 'probation' has been added to rtp.conf
+   RTP in strictrtp mode can now require more than 1 packet to exit learning
+   mode with a new source (and by default requires 4). The probation option
+   allows the user to change the required number of packets in sequence to any
+   desired value. Use a value of 1 to essentially restore the old behavior.
+   Also, with strictrtp on, Asterisk will now drop all packets until learning
+   mode has successfully exited. These changes are based on how pjmedia handles
+   media sources and source changes.
+
+Text Messaging
+--------------
+ * MESSAGE(from) for incoming SIP messages now returns "display-name" <uri>
+   instead of simply the uri.  This is the format that MessageSend() can use
+   in the from parameter for outgoing SIP messages.
+
+------------------------------------------------------------------------------
+--- Functionality changes from Asterisk 1.8 to Asterisk 10 -------------------
+------------------------------------------------------------------------------
+
+Text Messaging
+--------------
+ * Asterisk now has protocol independent support for processing text messages
+   outside of a call.  Messages are routed through the Asterisk dialplan.
+   SIP MESSAGE and XMPP are currently supported.  There are options in
+   jabber.conf and sip.conf to allow enabling these features.
+     -> jabber.conf: see the "sendtodialplan" and "context" options.
+     -> sip.conf: see the "accept_outofcall_message", "auth_message_requests"
+        and "outofcall_message_context" options.
+   The MESSAGE() dialplan function and MessageSend() application have been
+   added to go along with this functionality.  More detailed usage information
+   can be found on the Asterisk wiki (http://wiki.asterisk.org/).
+ * If real-time text support (T.140) is negotiated, it will be preferred for
+   sending text via the SendText application. For example, via SIP, messages
+   that were once sent via the SIP MESSAGE request would be sent via RTP if
+   T.140 text is negotiated for a call.
 
 Parking
 -------
  * parkedmusicclass can now be set for non-default parking lots.
- * ParkedCall application can now specify a specific parkinglot.
 
 Asterisk Manager Interface
 --------------------------
@@ -28,6 +113,13 @@ Asterisk Manager Interface
    Description field that is set by 'description' in the channel configuration
    file.
  * Added Uniqueid header to UserEvent.
+ * Added new action FilterAdd to control event filters for the current session.
+   This requires the system permission and uses the same filter syntax as
+   filters that can be defined in manager.conf
+ * The Unlink event is now a Bridge event with Bridgestatus: Unlink. Previous
+   versions had some instances of the event converted, but others were left
+   as-is. All Unlink events should now be converted to Bridge events. The AMI
+   protocol version number was incremented to 1.2 as a result of this change.
 
 Asterisk HTTP Server
 --------------------------
@@ -59,6 +151,18 @@ CODECS
 --------------------------
  * Ability to define custom SILK formats in codecs.conf.
  * Addition of speex32 audio format with translation.
+ * CELT codec pass-through support and ability to define
+   custom CELT formats in codecs.conf.
+ * Ability to read raw signed linear files with sample rates
+   ranging from 8khz - 192khz.  The new file extensions introduced
+   are .sln12, .sln24, .sln32, .sln44, .sln48, .sln96, .sln192.
+ * Due to protocol limitations, channel drivers other than SIP (eg. IAX2, MGCP,
+   Skinny, H.323, etc) can still only support the following codecs:
+   Audio: ulaw, alaw, slin, slin16, g719, g722, g723, g726, g726aal2, g729, gsm,
+          siren7, siren14, speex, speex16, ilbc, lpc10, adpcm
+   Video: h261, h263, h263p, h264, mpeg4
+   Image: jpeg, png
+   Text:  red, t140
 
 ConfBridge
 --------------------------
@@ -66,6 +170,14 @@ ConfBridge
    mixing audio at sample rates ranging from 8khz-96khz.
  * CONFBRIDGE dialplan function capable of creating dynamic ConfBridge user
    and bridge profiles on a channel.
+ * CONFBRIDGE_INFO dialplan function capable of retrieving information 
+   about a conference such as locked status and number of parties, admins,
+   and marked users.
+ * Addition of video_mode option in confbridge.conf for adding video support
+   into a bridge profile.
+ * Addition of the follow_talker video_mode in confbridge.conf.  This video
+   mode dynamically switches the video feed to always display the loudest talker
+   supplying video in the conference.
 
 Dialplan Variables
 ------------------
@@ -85,6 +197,8 @@ Dialplan Functions
    for a given string to replace with another string as many times as the
    user specifies or just throughout the whole string.
  * Added option to CHANNEL(pickupgroup) allow reading and setting the pickupgroup of channel.
+ * Mark VALID_EXTEN() deprecated in favor of DIALPLAN_EXISTS()
+ * Added extensions to chan_ooh323 in function CHANNEL()
 
 libpri channel driver (chan_dahdi) DAHDI changes
 --------------------------
@@ -127,12 +241,85 @@ pbx_lua
    in the sample extensions.lua file for syntax details.
  * Applications that perform jumps in the dialplan such as Goto will now
    execute properly.  When pbx_lua detects that the context, extension, or
-   priority we are executing on has changed it will immediatly return control
+   priority we are executing on has changed it will immediately return control
    to the asterisk PBX engine.  Currently the engine cannot detect a Goto to
    the priority after the currently executing priority.
  * An autoservice is now started by default for pbx_lua channels.  It can be
    stopped and restarted using the autoservice_stop() and autoservice_start()
    functions.
+
+res_fax
+--------------------------
+ * The ReceiveFAXStatus and SendFAXStatus manager events have been consolidated
+   into a FAXStatus event with an 'Operation' header that will be either
+   'send', 'receive', or 'gateway'.
+ * T.38 gateway functionality has been added to res_fax (and res_fax_spandsp).
+   Set FAXOPT(gateway)=yes to enable this functionality on a channel. This
+   feature will handle converting a fax call between an audio T.30 fax terminal
+   and an IFP T.38 fax terminal.
+
+SIP Changes
+-----------
+ * Add T38 support for REJECTED state where T.38 Negotiation is explicitly rejected.
+ * Add option encryption_taglen to set auth taglen only 32 and 80 are supported currently.
+ * SIP now generates security events using the Security Events Framework for REGISTER and INVITE.
+
+Queue changes
+-------------
+ * Added general option negative_penalty_invalid default off. when set
+   members are seen as invalid/logged out when there penalty is negative.
+   for realtime members when set remove from queue will set penalty to -1.
+ * Added queue option autopausedelay when autopause is enabled it will be
+   delayed for this number of seconds since last successful call if there
+   was no prior call the agent will be autopaused immediately.
+ * Added member option ignorebusy this when set and ringinuse is not
+   will allow per member control of multiple calls as ringinuse does for
+   the Queue.
+ * Added global option check_state_unknown to enforce checking of device state
+   when the device state is unknown app_queue will see unknown as available.
+
+Applications
+------------
+ * Added 'v' option to MeetMe to play voicemail greetings when a user joins/leaves
+   a MeetMe conference
+
+Asterisk Database
+-----------------
+ * The internal Asterisk database has been switched from Berkeley DB 1.86 to
+   SQLite 3. An existing Berkeley astdb file can be converted with the astdb2sqlite3
+   utility in the UTILS section of menuselect. If an existing astdb is found and no
+   astdb.sqlite3 exists, astdb2sqlite3 will be compiled automatically. Asterisk will
+   convert an existing astdb to the SQLite3 version automatically at runtime.
+
+Asterisk Modules
+----------------
+ * Modules marked as deprecated are no longer marked as building by default. Enabling
+   these modules is still available via menuselect.
+
+IAX2 Changes
+------------
+ * authdebug is now disabled by default. To enable this functionaility again
+   set authdebug = yes in iax.conf.
+
+RTP Changes
+-----------
+ * The rtp.conf setting "strictrtp" is now enabled by default. In previous
+   releases it was disabled.
+
+PBX Core
+--------
+ * The PBX core previously made a call with a non-existing extension test for
+   extension s@default and jump there if the extension existed.
+   This was a bad default behaviour and violated the principle of least surprise.
+   It has therefore been changed in this release. It may affect some
+   applications and configurations that rely on this behaviour. Most channel
+   drivers have avoided this for many releases by testing whether the extension
+   called exists before starting the PBX and generating a local error.
+   This behaviour still exists and works as before.
+
+   Extension "s" is used when no extension is given in a channel driver,
+   like immediate answer in DAHDI or calling to a domain with no user part
+   in a SIP uri.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 1.6.2 to Asterisk 1.8 ----------------
@@ -140,6 +327,11 @@ pbx_lua
 
 SIP Changes
 -----------
+ * Due to potential username discovery vulnerabilities, the 'nat' setting in sip.conf
+   now defaults to force_rport. It is very important that phones requiring nat=no be
+   specifically set as such instead of relying on the default setting. If at all
+   possible, all devices should have nat settings configured in the general section as
+   opposed to configuring nat per-device.
  * Added preferred_codec_only option in sip.conf. This feature limits the joint
    codecs sent in response to an INVITE to the single most preferred codec.
  * Added SIP_CODEC_OUTBOUND dialplan variable which can be used to set the codec
@@ -169,7 +361,9 @@ SIP Changes
    and enables symmetric RTP support.
  * Slave SIP channels now set HASH(SIP_CAUSE,<slave-channel-name>) on each
    response.  This permits the master channel to know how each channel dialled
-   in a multi-channel setup resolved in an individual way.
+   in a multi-channel setup resolved in an individual way. This carries a
+   performance penalty and can be disabled in sip.conf using the
+   'storesipcause' option.
  * Added 'externtcpport' and 'externtlsport' options to allow custom port
    configuration for the externip and externhost options when tcp or tls is used.
  * Added support for message body (stored in content variable) to SIP NOTIFY message
@@ -203,7 +397,6 @@ SIP Changes
    res_stun_monitor module support in chan_sip.
  * Addition of the 'auth_options_requests' option for turning on and off
    authentication for OPTIONS requests in chan_sip.
- * Add T38 support for REJECTED state where T.38 Negotiation is explicitly rejected.
 
 
 IAX2 Changes
@@ -308,10 +501,7 @@ Applications
    notices a change.
  * Voicemail now includes rdnis within msgXXXX.txt file.
  * Added 'D' command to ExternalIVR full details in doc/externalivr.txt
- * Added 'v' option to MeetMe to play voicemail greetings when a user joins/leaves
-   a MeetMe conference
- * Added ability to include '@parkinglot' to ParkedCall extension in order to specify
-   a specific parkinglot on which to search the extension.
+ * ParkedCall and Park can now specify the parking lot to use.
 
 Dialplan Functions
 ------------------
@@ -393,6 +583,8 @@ Dialplan Variables
    features.conf that should be the base for dynamic parkinglots.
  * Added PARKINGDYNCONTEXT which tells what context a newly created dynamic
    parkinglot should have.
+ * Added PARKINGDYNEXTEN which tells what parking exten a newly created dynamic
+   parkinglot should have.
  * Added PARKINGDYNPOS which holds what parking positions a dynamic parkinglot
    should have.
 
@@ -410,7 +602,7 @@ Queue changes
  * A new option, 'I' has been added to both app_queue and app_dial.
    By setting this option, Asterisk will not update the caller with
    connected line changes or redirecting party changes when they occur.
- * A 'relative-peroidic-announce' option has been added to queues.conf.  When
+ * A 'relative-periodic-announce' option has been added to queues.conf.  When
    enabled, this option will cause periodic announce times to be calculated
    from the end of announcements rather than from the beginning.
  * The autopause option in queues.conf can be passed a new value, "all." The

@@ -27,6 +27,10 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -42,8 +46,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			Transfer caller to remote extension.
 		</synopsis>
 		<syntax>
-			<parameter name="dest" required="true" argsep="/">
-				<argument name="Tech" />
+			<parameter name="dest" required="true" argsep="">
+				<argument name="Tech/" />
 				<argument name="destination" required="true" />
 			</parameter>
 		</syntax>

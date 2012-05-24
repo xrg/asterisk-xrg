@@ -23,7 +23,9 @@
 /*** MODULEINFO
 	<depend>neon</depend>
 	<depend>ical</depend>
+	<support_level>core</support_level>
 ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -131,6 +133,7 @@ static icalcomponent *fetch_icalendar(struct icalendar_pvt *pvt)
 
 	if (!pvt) {
 		ast_log(LOG_ERROR, "There is no private!\n");
+		return NULL;
 	}
 
 	if (!(response = ast_str_create(512))) {
@@ -258,10 +261,12 @@ static void icalendar_add_event(icalcomponent *comp, struct icaltime_span *span,
 			return;
 		}
 		data = icalproperty_get_attendee(prop);
-		if (!ast_strlen_zero(data)) {
-			attendee->data = ast_strdup(data);;
-			AST_LIST_INSERT_TAIL(&event->attendees, attendee, next);
+		if (ast_strlen_zero(data)) {
+			ast_free(attendee);
+			continue;
 		}
+		attendee->data = ast_strdup(data);;
+		AST_LIST_INSERT_TAIL(&event->attendees, attendee, next);
 	}
 
 
@@ -297,7 +302,7 @@ static void icalendar_add_event(icalcomponent *comp, struct icaltime_span *span,
 		/* XXX Technically you can check RELATED to see if the event fires from the END of the event
 		 * But, I'm not sure I've ever seen anyone implement it in calendaring software, so I'm ignoring for now */
 		tmp = icaltime_add(start, trigger.duration);
-		event->alarm = icaltime_as_timet_with_zone(tmp, utc);
+		event->alarm = icaltime_as_timet_with_zone(tmp, icaltime_get_timezone(start));
 	}
 
 	ao2_link(pvt->events, event);

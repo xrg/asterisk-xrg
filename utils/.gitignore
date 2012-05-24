@@ -1,7 +1,13 @@
+*.o
+*.d
+*.i
+*.s
+*.exports
 aelbison.c
 aelparse
 aelparse.c
-astcanary
+astdb2sqlite3
+astdb2bdb
 ast_expr2.c
 ast_expr2f.c
 astman
@@ -18,9 +24,9 @@ lock.c
 md5.c
 muted
 pbx_ael.c
-poll.c
 pval.c
 refcounter
+poll.c
 sha1.c
 smsq
 stereorize
@@ -29,3 +35,5 @@ streamplayer
 strings.c
 threadstorage.c
 utils.c
+*.gcno
+*.gcda

@@ -24,6 +24,10 @@
  * \ingroup functions
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -250,6 +254,22 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						The channel is either on hold or a call waiting call.</para>
 					</enum>
 				</enumlist>
+				<para><emphasis>chan_ooh323</emphasis> provides the following additional options:</para>
+				<enumlist>
+					<enum name="faxdetect">
+						<para>Fax Detect [R/W]</para>
+						<para>Returns 0 or 1</para>
+						<para>Write yes or no</para>
+					</enum>
+					<enum name="t38support">
+						<para>t38support [R/W]</para>
+						<para>Returns 0 or 1</para>
+						<para>Write yes or no</para>
+					</enum>
+					<enum name="h323id">
+						<para>Returns h323id [R]</para>
+					</enum>
+				</enumlist>
 			</parameter>
 		</syntax>
 		<description>
@@ -444,7 +464,7 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 			ret = ast_channel_trace_disable(chan);
 		else {
 			ret = -1;
-			ast_log(LOG_WARNING, "Invalid value for CHANNEL(trace).");
+			ast_log(LOG_WARNING, "Invalid value for CHANNEL(trace).\n");
 		}
 		ast_channel_unlock(chan);
 	}

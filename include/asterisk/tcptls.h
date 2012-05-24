@@ -128,6 +128,7 @@ struct ast_tcptls_session_args {
 	struct ast_tls_config *tls_cfg; /*!< points to the SSL configuration if any */
 	int accept_fd;
 	int poll_timeout;
+	/*! Server accept_fn thread ID used for external shutdown requests. */
 	pthread_t master;
 	void *(*accept_fn)(void *); /*!< the function in charge of doing the accept */
 	void (*periodic_fn)(void *);/*!< something we may want to run before after select on the accept socket */
@@ -146,6 +147,7 @@ struct ast_tcptls_session_instance {
 	int client;
 	struct ast_sockaddr remote_address;
 	struct ast_tcptls_session_args *parent;
+	/*! XXX Why do we still use this lock when this struct is allocated as an ao2 object which has its own lock? */
 	ast_mutex_t lock;
 };
 
@@ -169,6 +171,13 @@ struct ast_tcptls_session_instance *ast_tcptls_client_create(struct ast_tcptls_s
 void *ast_tcptls_server_root(void *);
 
 /*!
+ * \brief Closes a tcptls session instance's file and/or file descriptor.
+ * The tcptls_session will be set to NULL and it's file descriptor will be set to -1
+ * by this function.
+ */
+void ast_tcptls_close_session_file(struct ast_tcptls_session_instance *tcptls_session);
+
+/*!
  * \brief This is a generic (re)start routine for a TCP server,
  * which does the socket/bind/listen and starts a thread for handling
  * accept().
@@ -181,7 +190,24 @@ void ast_tcptls_server_start(struct ast_tcptls_session_args *desc);
  * \version 1.6.1 changed desc parameter to be of ast_tcptls_session_args type
  */
 void ast_tcptls_server_stop(struct ast_tcptls_session_args *desc);
+
+/*!
+ * \brief Set up an SSL server
+ *
+ * \param cfg Configuration for the SSL server
+ * \retval 1 Success
+ * \retval 0 Failure
+ */
 int ast_ssl_setup(struct ast_tls_config *cfg);
+
+/*!
+ * \brief free resources used by an SSL server
+ *
+ * \note This only needs to be called if ast_ssl_setup() was
+ * directly called first.
+ * \param cfg Configuration for the SSL server
+ */
+void ast_ssl_teardown(struct ast_tls_config *cfg);
 
 /*!
  * \brief Used to parse conf files containing tls/ssl options.

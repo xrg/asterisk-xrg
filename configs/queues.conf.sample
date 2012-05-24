@@ -61,6 +61,17 @@ monitor-type = MixMonitor
 ;
 ;shared_lastcall=no
 ;
+; Negative_penalty_invalid will treat members with a negative penalty as logged off
+;
+;negative_penalty_invalid = no
+;
+; app_queue allows calls to members in a "Unknown" state to be treated as available
+; setting check_state_unknown = yes will cause app_queue to query the channel driver
+; to better determine the state this only applies to queues with ringinuse or ignorebusy
+; set appropriately.
+;
+;check_state_unknown = no
+;
 ;[markq]
 ;
 ; A sample call queue
@@ -83,7 +94,7 @@ monitor-type = MixMonitor
 ; A strategy may be specified.  Valid strategies include:
 ;
 ; ringall - ring all available channels until one answers (default)
-; leastrecent - ring interface which was least recently called by this queue
+; leastrecent - ring interface which was least recently hung up by this queue
 ; fewestcalls - ring the one with fewest completed calls from this queue
 ; random - ring random interface
 ; rrmemory - round robin with memory, remember where we left off last ring pass
@@ -196,6 +207,10 @@ monitor-type = MixMonitor
 ; all: Memeber will be paused in all queues he/she is a member
 ;autopause=yes
 ;
+; Autopausedelay delay autopause for autopausedelay seconds from the
+; last call if a member has not taken a call the delay has no effect.
+;autopausedelay=60
+;
 ; Maximum number of people waiting in the queue (0 for unlimited)
 ;
 ;maxlen = 0
@@ -233,12 +248,18 @@ monitor-type = MixMonitor
 ; QUEUESRVLEVELPERF current service level performance
 ;
 ;setqueuevar=no
-;
+
 ; if set, run this macro when connected to the queue member
 ; you can override this macro by setting the macro option on
 ; the queue application
 ;
-; membermacro=somemacro
+;membermacro=macro_name[,arg1[,...][,argN]]
+
+; if set, run this gosub when connected to the queue member
+; you can override this gosub by setting the gosub option on
+; the queue application
+;
+;membergosub=gosub_context_name[,arg1[,...][,argN]]
 
 ; How often to announce queue position and/or estimated
 ; holdtime to caller (0=off)
@@ -318,6 +339,8 @@ monitor-type = MixMonitor
 ;queue-callswaiting = queue-callswaiting
 			;	("The current est. holdtime is")
 ;queue-holdtime = queue-holdtime
+			;	("minute.")
+;queue-minute = queue-minute
 			;	("minutes.")
 ;queue-minutes = queue-minutes
 			;	("seconds.")
@@ -373,7 +396,16 @@ monitor-type = MixMonitor
 ;
 ; You can specify a post recording command to be executed after the end of
 ; recording by calling (from the dialplan)
+;
 ;   Set(MONITOR_EXEC=mv /var/spool/asterisk/monitor/^{MONITOR_FILENAME} /tmp/^{MONITOR_FILENAME})
+;
+; or
+;
+;   Set(MONITOR_EXEC=mv /var/spool/asterisk/monitor/^{MIXMONITOR_FILENAME} /tmp/^{MIXMONITOR_FILENAME})
+;
+; If you choose to use the latter, you will not be able to switch the monitor-type back to Monitor
+; without changing this in the dialplan.
+;
 ;
 ; The command specified within the contents of MONITOR_EXEC will be executed when
 ; the recording is over. Any strings matching ^{X} will be unescaped to ${X} and
@@ -444,6 +476,7 @@ monitor-type = MixMonitor
 ; If this is set to yes, the following manager events will be generated:
 ; QueueMemberStatus
 ; (may generate a WHOLE LOT of extra manager events)
+; The default value is yes and this can not be set globally.
 ;
 ; eventmemberstatus = no
 ;
@@ -454,8 +487,10 @@ monitor-type = MixMonitor
 ;
 ; If you want the queue to avoid sending calls to members whose devices are
 ; known to be 'in use' (via the channel driver supporting that device state)
-; uncomment this option. (Note: only the SIP channel driver currently is able
-; to report 'in use'.)
+; uncomment this option. This can be controlled on a per member basis by
+; setting 'ignorebusy' in the QUEUE_MEMBER function. (Note: only the SIP
+; channel driver currently is able to report 'in use'.) (Note: if this option
+; is set to 'no' it will override the per-member 'ignorebusy' setting.
 ;
 ; ringinuse = no
 ;

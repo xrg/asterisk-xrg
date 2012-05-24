@@ -30,7 +30,8 @@
  */
 
 /*** MODULEINFO
-        <use>res_pktccops</use>
+        <use type="module">res_pktccops</use>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"
@@ -1305,7 +1306,7 @@ static int mgcp_senddigit_begin(struct ast_channel *ast, char digit)
 		ast_debug(1, "Sending DTMF using inband/hybrid\n");
 		res = -1; /* Let asterisk play inband indications */
 	} else if (p->dtmfmode & MGCP_DTMF_RFC2833) {
-		ast_debug(1, "Sending DTMF using RFC2833");
+		ast_debug(1, "Sending DTMF using RFC2833\n");
 		ast_rtp_instance_dtmf_begin(sub->rtp, digit);
 	} else {
 		ast_log(LOG_ERROR, "Don't know about DTMF_MODE %d\n", p->dtmfmode);
@@ -1455,6 +1456,10 @@ static int mgcp_indicate(struct ast_channel *ast, int ind, const void *data, siz
 	case AST_CONTROL_BUSY:
 		transmit_notify_request(sub, "L/bz");
 		break;
+	case AST_CONTROL_INCOMPLETE:
+		/* We do not currently support resetting of the Interdigit Timer, so treat
+		 * Incomplete control frames as a congestion response
+		 */
 	case AST_CONTROL_CONGESTION:
 		transmit_notify_request(sub, sub->parent->ncs ? "L/cg" : "G/cg");
 		break;
@@ -3128,7 +3133,8 @@ static void *mgcp_ss(void *data)
 			sub->next->owner && ast_bridged_channel(sub->next->owner)) {
 			/* This is a three way call, the main call being a real channel,
 			   and we're parking the first call. */
-			ast_masq_park_call(ast_bridged_channel(sub->next->owner), chan, 0, NULL);
+			ast_masq_park_call_exten(ast_bridged_channel(sub->next->owner), chan,
+				p->dtmf_buf, chan->context, 0, NULL);
 			ast_verb(3, "Parking call to '%s'\n", chan->name);
 			break;
 		} else if (!ast_strlen_zero(p->lastcallerid) && !strcmp(p->dtmf_buf, "*60")) {

@@ -37,8 +37,8 @@ endif
 
 OPTIMIZE?=-O6
 ifneq ($(findstring darwin,$(OSARCH)),)
-  ifeq ($(shell /usr/bin/sw_vers -productVersion | cut -c1-4),10.6)
-    # Snow Leopard has an issue with this optimization flag on large files (like chan_sip)
+  ifeq ($(shell if test `/usr/bin/sw_vers -productVersion | cut -c4` -gt 5; then echo 6; else echo 0; fi),6)
+    # Snow Leopard/Lion has an issue with this optimization flag on large files (like chan_sip)
     OPTIMIZE+=-fno-inline-functions
   endif
 endif
@@ -85,17 +85,21 @@ ifeq ($(findstring DONT_OPTIMIZE,$(MENUSELECT_CFLAGS))$(AST_DEVMODE),DONT_OPTIMI
 COMPILE_DOUBLE=yes
 endif
 
+ifeq ($(findstring BUILD_NATIVE,$(MENUSELECT_CFLAGS)),BUILD_NATIVE)
+    _ASTCFLAGS+=-march=native
+endif
+
 %.o: %.s
 	$(ECHO_PREFIX) echo "   [AS] $< -> $@"
 ifeq ($(COMPILE_DOUBLE),yes)
-	$(CMD_PREFIX) $(CC) -o /dev/null -c $< $(OPTIMIZE) $(CC_CFLAGS)
+	$(CMD_PREFIX) $(CC) -o /dev/null -c $< $(CC_CFLAGS) $(OPTIMIZE)
 endif
 	$(CMD_PREFIX) $(CC) -o $@ -c $< $(CC_CFLAGS)
 
 %.o: %.i
 	$(ECHO_PREFIX) echo "   [CCi] $< -> $@"
 ifeq ($(COMPILE_DOUBLE),yes)
-	$(CMD_PREFIX) $(CC) -o /dev/null -c $< $(OPTIMIZE) $(CC_CFLAGS)
+	$(CMD_PREFIX) $(CC) -o /dev/null -c $< $(CC_CFLAGS) $(OPTIMIZE)
 endif
 	$(CMD_PREFIX) $(CC) -o $@ -c $< $(CC_CFLAGS)
 
@@ -112,7 +116,7 @@ endif
 %.oo: %.ii
 	$(ECHO_PREFIX) echo "   [CXXi] $< -> $@"
 ifeq ($(COMPILE_DOUBLE),yes)
-	$(CMD_PREFIX) $(CXX) -o /dev/null -c $< $(OPTIMIZE) $(CXX_CFLAGS)
+	$(CMD_PREFIX) $(CXX) -o /dev/null -c $< $(CXX_CFLAGS) $(OPTIMIZE)
 endif
 	$(CMD_PREFIX) $(CXX) -o $@ -c $< $(CXX_CFLAGS)
 

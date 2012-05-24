@@ -28,6 +28,7 @@
 
 /*** MODULEINFO
 	<depend>res_odbc</depend>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
@@ -437,6 +438,8 @@ static void odbc_log(const struct ast_event *event, void *userdata)
 					ast_copy_string(colbuf, record.peer, sizeof(colbuf));
 				} else if (strcmp(entry->celname, "amaflags") == 0) {
 					snprintf(colbuf, sizeof(colbuf), "%d", record.amaflag);
+				} else if (strcmp(entry->celname, "extra") == 0) {
+					ast_copy_string(colbuf, record.extra, sizeof(colbuf));
 				} else {
 					colbuf[0] = 0;
 				}
@@ -465,6 +468,11 @@ static void odbc_log(const struct ast_event *event, void *userdata)
 				case SQL_CHAR:
 				case SQL_VARCHAR:
 				case SQL_LONGVARCHAR:
+#ifdef HAVE_ODBC_WCHAR
+				case SQL_WCHAR:
+				case SQL_WVARCHAR:
+				case SQL_WLONGVARCHAR:
+#endif
 				case SQL_BINARY:
 				case SQL_VARBINARY:
 				case SQL_LONGVARBINARY:

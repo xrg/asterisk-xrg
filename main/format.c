@@ -30,7 +30,6 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 
 #include "asterisk/_private.h"
-#include "asterisk/version.h"
 #include "asterisk/format.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/lock.h"
@@ -106,23 +105,6 @@ int ast_format_get_video_mark(const struct ast_format *format)
 	return format->fattr.rtp_marker_bit;
 }
 
-static int has_interface(const struct ast_format *format)
-{
-	struct interface_ao2_wrapper *wrapper;
-	struct interface_ao2_wrapper tmp_wrapper = {
-		.id = format->id,
-	};
-
-	ast_rwlock_rdlock(&ilock);
-	if (!(wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_NOLOCK)))) {
-		ast_rwlock_unlock(&ilock);
-		return 0;
-	}
-	ast_rwlock_unlock(&ilock);
-	ao2_ref(wrapper, -1);
-	return 1;
-}
-
 static struct interface_ao2_wrapper *find_interface(const struct ast_format *format)
 {
 	struct interface_ao2_wrapper *wrapper;
@@ -131,13 +113,22 @@ static struct interface_ao2_wrapper *find_interface(const struct ast_format *for
 	};
 
 	ast_rwlock_rdlock(&ilock);
-	if (!(wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_NOLOCK)))) {
-		ast_rwlock_unlock(&ilock);
-		return NULL;
-	}
+	wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_NOLOCK));
 	ast_rwlock_unlock(&ilock);
 
 	return wrapper;
+}
+
+static int has_interface(const struct ast_format *format)
+{
+	struct interface_ao2_wrapper *wrapper;
+
+	wrapper = find_interface(format);
+	if (!wrapper) {
+		return 0;
+	}
+	ao2_ref(wrapper, -1);
+	return 1;
 }
 
 /*! \internal
@@ -748,6 +739,15 @@ int ast_format_rate(const struct ast_format *format)
 		} else {
 			return 8000;
 		}
+	case AST_FORMAT_CELT:
+	{
+		int samplerate;
+		if (!(ast_format_get_value(format,
+			CELT_ATTR_KEY_SAMP_RATE,
+			&samplerate))) {
+			return samplerate;
+		}
+	}
 	default:
 		return 8000;
 	}
@@ -859,7 +859,6 @@ static char *show_codec_n(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 		if (f_list[x].format.id == format_id) {
 			found = 1;
 			ast_cli(a->fd, "%11u %s\n", (unsigned int) format_id, f_list[x].desc);
-			break;
 		}
 	}
 
@@ -1041,7 +1040,7 @@ static int format_list_init(void)
 	return 0;
 }
 
-int ast_format_list_init()
+int ast_format_list_init(void)
 {
 	if (ast_rwlock_init(&format_list_array_lock)) {
 		return -1;
@@ -1064,7 +1063,7 @@ init_list_cleanup:
 	return -1;
 }
 
-int ast_format_attr_init()
+int ast_format_attr_init(void)
 {
 	ast_cli_register_multiple(my_clis, ARRAY_LEN(my_clis));
 	if (ast_rwlock_init(&ilock)) {
@@ -1072,7 +1071,6 @@ int ast_format_attr_init()
 	}
 
 	if (!(interfaces = ao2_container_alloc(283, interface_hash_cb, interface_cmp_cb))) {
-		ast_rwlock_destroy(&ilock);
 		goto init_cleanup;
 	}
 	return 0;
@@ -1083,6 +1081,32 @@ init_cleanup:
 		ao2_ref(interfaces, -1);
 	}
 	return -1;
+}
+
+static int custom_celt_format(struct ast_format_list *entry, unsigned int maxbitrate, unsigned int framesize)
+{
+	if (!entry->samplespersecond) {
+		ast_log(LOG_WARNING, "Custom CELT format definition '%s' requires sample rate to be defined.\n", entry->name);
+	}
+	ast_format_set(&entry->format, AST_FORMAT_CELT, 0);
+	if (!has_interface(&entry->format)) {
+		return -1;
+	}
+
+	snprintf(entry->desc, sizeof(entry->desc), "CELT Custom Format %dkhz", entry->samplespersecond/1000);
+
+	ast_format_append(&entry->format,
+		CELT_ATTR_KEY_SAMP_RATE, entry->samplespersecond,
+		CELT_ATTR_KEY_MAX_BITRATE, maxbitrate,
+		CELT_ATTR_KEY_FRAME_SIZE, framesize,
+		AST_FORMAT_ATTR_END);
+
+	entry->fr_len = 80;
+	entry->min_ms = 20;
+	entry->max_ms = 20;
+	entry->inc_ms = 20;
+	entry->def_ms = 20;
+	return 0;
 }
 
 static int custom_silk_format(struct ast_format_list *entry, unsigned int maxbitrate, int usedtx, int usefec, int packetloss_percentage)
@@ -1144,6 +1168,8 @@ static int conf_process_format_name(const char *name, enum ast_format_id *id)
 {
 	if (!strcasecmp(name, "silk")) {
 		*id = AST_FORMAT_SILK;
+	} else if (!strcasecmp(name, "celt")) {
+		*id = AST_FORMAT_CELT;
 	} else {
 		*id = 0;
 		return -1;
@@ -1163,8 +1189,14 @@ static int conf_process_sample_rate(const char *rate, unsigned int *result)
 		*result = 24000;
 	} else if (!strcasecmp(rate, "32000")) {
 		*result = 32000;
+	} else if (!strcasecmp(rate, "44100")) {
+		*result = 44100;
 	} else if (!strcasecmp(rate, "48000")) {
 		*result = 48000;
+	} else if (!strcasecmp(rate, "96000")) {
+		*result = 96000;
+	} else if (!strcasecmp(rate, "192000")) {
+		*result = 192000;
 	} else {
 		*result = 0;
 		return -1;
@@ -1184,6 +1216,7 @@ static int load_format_config(void)
 	struct {
 		enum ast_format_id id;
 		unsigned int maxbitrate;
+		unsigned int framesize;
 		unsigned int packetloss_percentage;
 		int usefec;
 		int usedtx;
@@ -1221,6 +1254,11 @@ static int load_format_config(void)
 					ast_log(LOG_WARNING, "maxbitrate '%s' at line %d of %s is not supported.\n",
 						var->value, var->lineno, FORMAT_CONFIG);
 				}
+			} else if (!strcasecmp(var->name, "framesize")) {
+				if (sscanf(var->value, "%30u", &settings.framesize) != 1) {
+					ast_log(LOG_WARNING, "framesize '%s' at line %d of %s is not supported.\n",
+						var->value, var->lineno, FORMAT_CONFIG);
+				}
 			} else if (!strcasecmp(var->name, "dtx")) {
 				settings.usedtx = ast_true(var->value) ? 1 : 0;
 			} else if (!strcasecmp(var->name, "fec")) {
@@ -1236,6 +1274,11 @@ static int load_format_config(void)
 		switch (settings.id) {
 		case AST_FORMAT_SILK:
 			if (!(custom_silk_format(&entry, settings.maxbitrate, settings.usedtx, settings.usefec, settings.packetloss_percentage))) {
+				add_it = 1;
+			}
+			break;
+		case AST_FORMAT_CELT:
+			if (!(custom_celt_format(&entry, settings.maxbitrate, settings.framesize))) {
 				add_it = 1;
 			}
 			break;
@@ -1262,17 +1305,23 @@ int ast_format_attr_reg_interface(const struct ast_format_attr_interface *interf
 		.id = interface->id,
 	};
 
-	/* check for duplicates first*/
+	/*
+	 * Grab the write lock before checking for duplicates in
+	 * anticipation of adding a new interface and to prevent a
+	 * duplicate from sneaking in between the check and add.
+	 */
 	ast_rwlock_wrlock(&ilock);
+
+	/* check for duplicates first*/
 	if ((wrapper = ao2_find(interfaces, &tmp_wrapper, (OBJ_POINTER | OBJ_NOLOCK)))) {
 		ast_rwlock_unlock(&ilock);
 		ast_log(LOG_WARNING, "Can not register attribute interface for format id %d, interface already exists.\n", interface->id);
 		ao2_ref(wrapper, -1);
 		return -1;
 	}
-	ast_rwlock_unlock(&ilock);
 
 	if (!(wrapper = ao2_alloc(sizeof(*wrapper), interface_destroy_cb))) {
+		ast_rwlock_unlock(&ilock);
 		return -1;
 	}
 
@@ -1280,9 +1329,8 @@ int ast_format_attr_reg_interface(const struct ast_format_attr_interface *interf
 	wrapper->id = interface->id;
 	ast_rwlock_init(&wrapper->wraplock);
 
-	/* use the write lock whenever the interface container is modified */
-	ast_rwlock_wrlock(&ilock);
-	ao2_link(interfaces, wrapper);
+	/* The write lock is already held. */
+	ao2_link_nolock(interfaces, wrapper);
 	ast_rwlock_unlock(&ilock);
 
 	ao2_ref(wrapper, -1);

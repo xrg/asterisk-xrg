@@ -152,8 +152,13 @@ int ast_sockaddr_cmp_addr(const struct ast_sockaddr *a, const struct ast_sockadd
 #define AST_SOCKADDR_STR_ADDR		(1 << 0)
 #define AST_SOCKADDR_STR_PORT		(1 << 1)
 #define AST_SOCKADDR_STR_BRACKETS	(1 << 2)
-#define AST_SOCKADDR_STR_HOST		AST_SOCKADDR_STR_ADDR | AST_SOCKADDR_STR_BRACKETS
-#define AST_SOCKADDR_STR_DEFAULT	AST_SOCKADDR_STR_ADDR | AST_SOCKADDR_STR_PORT
+#define AST_SOCKADDR_STR_REMOTE		(1 << 3)
+#define AST_SOCKADDR_STR_HOST		(AST_SOCKADDR_STR_ADDR | AST_SOCKADDR_STR_BRACKETS)
+#define AST_SOCKADDR_STR_DEFAULT	(AST_SOCKADDR_STR_ADDR | AST_SOCKADDR_STR_PORT)
+#define AST_SOCKADDR_STR_ADDR_REMOTE     (AST_SOCKADDR_STR_ADDR | AST_SOCKADDR_STR_REMOTE)
+#define AST_SOCKADDR_STR_HOST_REMOTE     (AST_SOCKADDR_STR_HOST | AST_SOCKADDR_STR_REMOTE)
+#define AST_SOCKADDR_STR_DEFAULT_REMOTE  (AST_SOCKADDR_STR_DEFAULT | AST_SOCKADDR_STR_REMOTE)
+#define AST_SOCKADDR_STR_FORMAT_MASK     (AST_SOCKADDR_STR_ADDR | AST_SOCKADDR_STR_PORT | AST_SOCKADDR_STR_BRACKETS)
 
 /*!
  * \since 1.8
@@ -180,6 +185,14 @@ int ast_sockaddr_cmp_addr(const struct ast_sockaddr *a, const struct ast_sockadd
  *    a.b.c.d for IPv4
  *    [a:b:c:...:d] for IPv6.
  * AST_SOCKADDR_STR_PORT: port only
+ *
+ * \note The string pointer returned by this function will point to a string that
+ * will be changed whenever any form of ast_sockaddr_stringify_fmt is called on that
+ * thread. Because of this, it is important that if you use this function, you use the
+ * string before another use of this function is made elsewhere in the same thread.
+ * The easiest way to accomplish this is by immediately copying the string to a buffer
+ * with something like ast_strdupa.
+ *
  * \retval "(null)" \a addr is null
  * \retval "" An error occurred during processing
  * \retval string The stringified form of the address
@@ -203,6 +216,23 @@ static inline char *ast_sockaddr_stringify(const struct ast_sockaddr *addr)
  * \since 1.8
  *
  * \brief
+ * Wrapper around ast_sockaddr_stringify_fmt() with default format
+ *
+ * \note This address will be suitable for passing to a remote machine via the
+ * application layer. For example, the scope-id on a link-local IPv6 address
+ * will be stripped.
+ *
+ * \return same as ast_sockaddr_stringify_fmt()
+ */
+static inline char *ast_sockaddr_stringify_remote(const struct ast_sockaddr *addr)
+{
+	return ast_sockaddr_stringify_fmt(addr, AST_SOCKADDR_STR_DEFAULT_REMOTE);
+}
+
+/*!
+ * \since 1.8
+ *
+ * \brief
  * Wrapper around ast_sockaddr_stringify_fmt() to return an address only
  *
  * \return same as ast_sockaddr_stringify_fmt()
@@ -210,6 +240,23 @@ static inline char *ast_sockaddr_stringify(const struct ast_sockaddr *addr)
 static inline char *ast_sockaddr_stringify_addr(const struct ast_sockaddr *addr)
 {
 	return ast_sockaddr_stringify_fmt(addr, AST_SOCKADDR_STR_ADDR);
+}
+
+/*!
+ * \since 1.8
+ *
+ * \brief
+ * Wrapper around ast_sockaddr_stringify_fmt() to return an address only
+ *
+ * \note This address will be suitable for passing to a remote machine via the
+ * application layer. For example, the scope-id on a link-local IPv6 address
+ * will be stripped.
+ *
+ * \return same as ast_sockaddr_stringify_fmt()
+ */
+static inline char *ast_sockaddr_stringify_addr_remote(const struct ast_sockaddr *addr)
+{
+	return ast_sockaddr_stringify_fmt(addr, AST_SOCKADDR_STR_ADDR_REMOTE);
 }
 
 /*!
@@ -224,6 +271,24 @@ static inline char *ast_sockaddr_stringify_addr(const struct ast_sockaddr *addr)
 static inline char *ast_sockaddr_stringify_host(const struct ast_sockaddr *addr)
 {
 	return ast_sockaddr_stringify_fmt(addr, AST_SOCKADDR_STR_HOST);
+}
+
+/*!
+ * \since 1.8
+ *
+ * \brief
+ * Wrapper around ast_sockaddr_stringify_fmt() to return an address only,
+ * suitable for a URL (with brackets for IPv6).
+ *
+ * \note This address will be suitable for passing to a remote machine via the
+ * application layer. For example, the scope-id on a link-local IPv6 address
+ * will be stripped.
+ *
+ * \return same as ast_sockaddr_stringify_fmt()
+ */
+static inline char *ast_sockaddr_stringify_host_remote(const struct ast_sockaddr *addr)
+{
+	return ast_sockaddr_stringify_fmt(addr, AST_SOCKADDR_STR_HOST_REMOTE);
 }
 
 /*!
@@ -396,7 +461,7 @@ int ast_sockaddr_is_ipv4(const struct ast_sockaddr *addr);
 int ast_sockaddr_is_ipv4_mapped(const struct ast_sockaddr *addr);
 
 /*!
- * \since 1.10
+ * \since 10.0
  *
  * \brief
  * Determine if an IPv4 address is a multicast address
@@ -408,6 +473,20 @@ int ast_sockaddr_is_ipv4_mapped(const struct ast_sockaddr *addr);
  * \return non-zero if this is a multicast address
  */
 int ast_sockaddr_is_ipv4_multicast(const struct ast_sockaddr *addr);
+
+/*!
+ * \since 1.8
+ *
+ * \brief
+ * Determine if this is a link-local IPv6 address
+ *
+ * \warning You should rarely need this function. Only use if you know what
+ * you're doing.
+ *
+ * \retval 1 This is a link-local IPv6 address.
+ * \retval 0 This is link-local IPv6 address.
+ */
+int ast_sockaddr_is_ipv6_link_local(const struct ast_sockaddr *addr);
 
 /*!
  * \since 1.8

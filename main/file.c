@@ -29,6 +29,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <math.h>
 
 #include "asterisk/_private.h"	/* declare ast_file_init() */
@@ -286,28 +287,55 @@ static int exts_compare(const char *exts, const char *type)
 	return 0;
 }
 
+/*! \internal \brief Close the file stream by canceling any pending read / write callbacks */
+static void filestream_close(struct ast_filestream *f)
+{
+	enum ast_format_type format_type = AST_FORMAT_GET_TYPE(f->fmt->format.id);
+
+	if (!f->owner) {
+		return;
+	}
+
+	/* Stop a running stream if there is one */
+	switch (format_type)
+	{
+	case AST_FORMAT_TYPE_AUDIO:
+		f->owner->stream = NULL;
+		AST_SCHED_DEL(f->owner->sched, f->owner->streamid);
+		ast_settimeout(f->owner, 0, NULL, NULL);
+		break;
+	case AST_FORMAT_TYPE_VIDEO:
+		f->owner->vstream = NULL;
+		AST_SCHED_DEL(f->owner->sched, f->owner->vstreamid);
+		break;
+	default:
+		ast_log(AST_LOG_WARNING, "Unable to schedule deletion of filestream with unsupported type %s\n", f->fmt->name);
+		break;
+	}
+}
+
 static void filestream_destructor(void *arg)
 {
 	struct ast_filestream *f = arg;
+	int status;
+	int pid = -1;
 
 	/* Stop a running stream if there is one */
-	if (f->owner) {
-		if (AST_FORMAT_GET_TYPE(f->fmt->format.id) == AST_FORMAT_TYPE_AUDIO) {
-			f->owner->stream = NULL;
-			AST_SCHED_DEL(f->owner->sched, f->owner->streamid);
-			ast_settimeout(f->owner, 0, NULL, NULL);
-		} else {
-			f->owner->vstream = NULL;
-			AST_SCHED_DEL(f->owner->sched, f->owner->vstreamid);
-		}
-	}
+	filestream_close(f);
+
 	/* destroy the translator on exit */
 	if (f->trans)
 		ast_translator_free_path(f->trans);
 
 	if (f->realfilename && f->filename) {
-		if (ast_safe_fork(0) == 0) {
+		pid = ast_safe_fork(0);
+		if (!pid) {
 			execl("/bin/mv", "mv", "-f", f->filename, f->realfilename, SENTINEL);
+			_exit(1);
+		}
+		else if (pid > 0) {
+			/* Block the parent until the move is complete.*/
+			waitpid(pid, &status, 0);
 		}
 	}
 
@@ -938,22 +966,10 @@ int ast_stream_rewind(struct ast_filestream *fs, off_t ms)
 int ast_closestream(struct ast_filestream *f)
 {
 	/* This used to destroy the filestream, but it now just decrements a refcount.
-	 * We need to force the stream to quit queuing frames now, because we might
+	 * We close the stream in order to quit queuing frames now, because we might
 	 * change the writeformat, which could result in a subsequent write error, if
 	 * the format is different. */
-
-	/* Stop a running stream if there is one */
-	if (f->owner) {
-		if (AST_FORMAT_GET_TYPE(f->fmt->format.id) == AST_FORMAT_TYPE_AUDIO) {
-			f->owner->stream = NULL;
-			AST_SCHED_DEL(f->owner->sched, f->owner->streamid);
-			ast_settimeout(f->owner, 0, NULL, NULL);
-		} else {
-			f->owner->vstream = NULL;
-			AST_SCHED_DEL(f->owner->sched, f->owner->vstreamid);
-		}
-	}
-
+	filestream_close(f);
 	ao2_ref(f, -1);
 	return 0;
 }
@@ -996,6 +1012,7 @@ int ast_streamfile(struct ast_channel *chan, const char *filename, const char *p
 	struct ast_filestream *fs;
 	struct ast_filestream *vfs=NULL;
 	char fmt[256];
+	off_t pos;
 	int seekattempt;
 	int res;
 
@@ -1008,12 +1025,17 @@ int ast_streamfile(struct ast_channel *chan, const char *filename, const char *p
 	/* check to see if there is any data present (not a zero length file),
 	 * done this way because there is no where for ast_openstream_full to
 	 * return the file had no data. */
-	seekattempt = fseek(fs->f, -1, SEEK_END);
-	if (seekattempt && errno == EINVAL) {
-		/* Zero-length file, as opposed to a pipe */
-		return 0;
+	pos = ftello(fs->f);
+	seekattempt = fseeko(fs->f, -1, SEEK_END);
+	if (seekattempt) {
+		if (errno == EINVAL) {
+			/* Zero-length file, as opposed to a pipe */
+			return 0;
+		} else {
+			ast_seekstream(fs, 0, SEEK_SET);
+		}
 	} else {
-		ast_seekstream(fs, 0, SEEK_SET);
+		fseeko(fs->f, pos, SEEK_SET);
 	}
 
 	vfs = ast_openvstream(chan, filename, preflang);
@@ -1336,6 +1358,7 @@ static int waitstream_core(struct ast_channel *c, const char *breakon,
 				case AST_CONTROL_CONNECTED_LINE:
 				case AST_CONTROL_REDIRECTING:
 				case AST_CONTROL_AOC:
+				case AST_CONTROL_UPDATE_RTP_PEER:
 				case -1:
 					/* Unimportant */
 					break;
@@ -1401,6 +1424,7 @@ int ast_stream_and_wait(struct ast_channel *chan, const char *file, const char *
 {
 	int res = 0;
 	if (!ast_strlen_zero(file)) {
+		ast_test_suite_event_notify("PLAYBACK", "Message: %s\r\nChannel: %s", file, chan->name);
 		res = ast_streamfile(chan, file, chan->language);
 		if (!res) {
 			res = ast_waitstream(chan, digits);

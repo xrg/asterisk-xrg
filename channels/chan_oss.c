@@ -35,6 +35,7 @@
 
 /*** MODULEINFO
 	<depend>oss</depend>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"
@@ -753,6 +754,7 @@ static int oss_indicate(struct ast_channel *c, int cond, const void *data, size_
 	int res = 0;
 
 	switch (cond) {
+	case AST_CONTROL_INCOMPLETE:
 	case AST_CONTROL_BUSY:
 	case AST_CONTROL_CONGESTION:
 	case AST_CONTROL_RINGING:

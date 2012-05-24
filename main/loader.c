@@ -96,6 +96,15 @@ struct ast_module {
 
 static AST_LIST_HEAD_STATIC(module_list, ast_module);
 
+const char *ast_module_name(const struct ast_module *mod)
+{
+	if (!mod || !mod->info) {
+		return NULL;
+	}
+
+	return mod->info->name;
+}
+
 /*
  * module_list is cleared by its constructor possibly after
  * we start accumulating embedded modules, so we need to
@@ -230,7 +239,9 @@ void __ast_module_user_hangup_all(struct ast_module *mod)
 
 	AST_LIST_LOCK(&mod->users);
 	while ((u = AST_LIST_REMOVE_HEAD(&mod->users, entry))) {
-		ast_softhangup(u->chan, AST_SOFTHANGUP_APPUNLOAD);
+		if (u->chan) {
+			ast_softhangup(u->chan, AST_SOFTHANGUP_APPUNLOAD);
+		}
 		ast_atomic_fetchadd_int(&mod->usecount, -1);
 		ast_free(u);
 	}
@@ -869,6 +880,12 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 	} else {
 		res = start_resource(mod);
 	}
+
+	/* Now make sure that the list is sorted */
+	AST_LIST_LOCK(&module_list);
+	AST_LIST_REMOVE(&module_list, mod, entry);
+	AST_LIST_INSERT_SORTALPHA(&module_list, mod, entry, resource);
+	AST_LIST_UNLOCK(&module_list);
 
 	return res;
 }

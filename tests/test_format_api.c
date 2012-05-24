@@ -28,6 +28,7 @@
 
 /*** MODULEINFO
 	<depend>TEST_FRAMEWORK</depend>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
@@ -574,7 +575,6 @@ static int container_test1_helper(struct ast_format_cap *cap1, struct ast_format
 		if (!video || !audio || !text || !image) {
 			ast_test_status_update(test, "failed to add all\n");
 			res = AST_TEST_FAIL;
-			ast_format_cap_iter_end(cap_joint);
 			goto test3_cleanup;
 		}
 	}

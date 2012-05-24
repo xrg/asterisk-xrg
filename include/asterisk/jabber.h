@@ -157,6 +157,7 @@ struct aji_client {
 	char name_space[256];
 	char sid[10]; /* Session ID */
 	char mid[6]; /* Message ID */
+	char context[AST_MAX_CONTEXT];
 	iksid *jid;
 	iksparser *p;
 	iksfilter *f;
@@ -179,6 +180,7 @@ struct aji_client {
 	int message_timeout;
 	int authorized;
 	int distribute_events;
+	int send_to_dialplan;
 	struct ast_flags flags;
 	int component; /* 0 client,  1 component */
 	struct aji_buddy_container buddies;
@@ -211,7 +213,12 @@ int ast_aji_invite_chat(struct aji_client *client, char *user, char *room, char 
 /*! Join/leave existing Chat session */
 int ast_aji_join_chat(struct aji_client *client, char *room, char *nick);
 int ast_aji_leave_chat(struct aji_client *client, char *room, char *nick);
+/*! Get a client via its name. Increases refcount of client by 1 */
 struct aji_client *ast_aji_get_client(const char *name);
 struct aji_client_container *ast_aji_get_clients(void);
+/*! Destructor function for buddies to be used with ASTOBJ_UNREF */
+void ast_aji_buddy_destroy(struct aji_buddy *obj);
+/*! Destructor function for clients to be used with ASTOBJ_UNREF after calls to ast_aji_get_client */
+void ast_aji_client_destroy(struct aji_client *obj);
 
 #endif

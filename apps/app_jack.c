@@ -37,6 +37,7 @@
 /*** MODULEINFO
 	<depend>jack</depend>
 	<depend>resample</depend>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"
@@ -903,8 +904,14 @@ static int enable_jack_hook(struct ast_channel *chan, char *data)
 return_error:
 	ast_channel_unlock(chan);
 
-	if (jack_data)
+	if (jack_data) {
 		destroy_jack_data(jack_data);
+	}
+
+	if (datastore) {
+		datastore->data = NULL;
+		ast_datastore_free(datastore);
+	}
 
 	return -1;
 }

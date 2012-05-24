@@ -33,8 +33,9 @@ endif
 AST_LIBS += $(OPENSSL_LIB)
 AST_LIBS += $(BKTR_LIB)
 AST_LIBS += $(LIBXML2_LIB) 
+AST_LIBS += $(SQLITE3_LIB)
 
-ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi kfreebsd-gnu),)
+ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi kfreebsd-gnu linux-gnueabihf),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
   AST_LIBS+=-ldl
   endif
@@ -53,7 +54,7 @@ endif
 ifneq ($(findstring darwin,$(OSARCH)),)
   AST_LIBS+=-lresolv
   ASTLINK=-Xlinker -macosx_version_min -Xlinker 10.4 -Xlinker -undefined -Xlinker dynamic_lookup -force_flat_namespace
-  ifeq ($(shell /usr/bin/sw_vers -productVersion | cut -c1-4),10.6)
+  ifeq ($(shell if test `/usr/bin/sw_vers -productVersion | cut -c4` -gt 5; then echo 6; else echo 0; fi),6)
     ASTLINK+=/usr/lib/bundle1.o
   endif
 else
@@ -105,14 +106,12 @@ ASTLINK+=-Wl,--version-script,asterisk.exports
   endif
 endif
 
+.PHONY: CHECK_SUBDIR
 CHECK_SUBDIR:	# do nothing, just make sure that we recurse in the subdir/
 
 editline/libedit.a: CHECK_SUBDIR
 	cd editline && test -f config.h || CFLAGS="$(PTHREAD_CFLAGS) $(subst $(ASTTOPDIR),../../,$(_ASTCFLAGS:-Werror=) $(ASTCFLAGS))" LDFLAGS="$(_ASTLDFLAGS) $(ASTLDFLAGS)" ./configure --build=$(BUILD_PLATFORM) --host=$(HOST_PLATFORM) --with-ncurses=$(NCURSES_DIR) --with-curses=$(CURSES_DIR) --with-termcap=$(TERMCAP_DIR) --with-tinfo=$(TINFO_DIR)
 	$(MAKE) -C editline libedit.a
-
-db1-ast/libdb1.a: CHECK_SUBDIR
-	_ASTCFLAGS="$(_ASTCFLAGS) -Wno-strict-aliasing" ASTCFLAGS="$(ASTCFLAGS)" $(MAKE) -C db1-ast libdb1.a
 
 ifneq ($(findstring REBUILD_PARSERS,$(MENUSELECT_CFLAGS)),)
 ast_expr2.c ast_expr2.h: ast_expr2.y
@@ -142,6 +141,8 @@ testexpr2: ast_expr2f.c ast_expr2.c ast_expr2.h
 	$(CC) -g -c -Iinclude -DSTANDALONE ast_expr2.c
 	$(CC) -g -o testexpr2 ast_expr2f.o ast_expr2.o -lm
 	rm ast_expr2.o ast_expr2f.o 
+
+db.o: _ASTCFLAGS+=$(SQLITE3_INCLUDE)
 
 ifneq ($(findstring ENABLE_UPLOADS,$(MENUSELECT_CFLAGS)),)
 http.o: _ASTCFLAGS+=$(GMIME_INCLUDE)
@@ -177,13 +178,13 @@ endif
 
 $(OBJS): _ASTCFLAGS+=-DAST_MODULE=\"core\"
 
-$(MAIN_TGT): $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS)
+$(MAIN_TGT): $(OBJS) editline/libedit.a $(AST_EMBED_LDSCRIPTS)
 	@$(CC) -c -o buildinfo.o $(_ASTCFLAGS) buildinfo.c $(ASTCFLAGS)
-	$(ECHO_PREFIX) echo "   [LD] $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS) -> $@"
+	$(ECHO_PREFIX) echo "   [LD] $(OBJS) editline/libedit.a $(AST_EMBED_LDSCRIPTS) -> $@"
 ifneq ($(findstring chan_h323,$(MENUSELECT_CHANNELS)),)
-	$(CMD_PREFIX) $(CC) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(_ASTLDFLAGS) $(ASTLDFLAGS) $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS) buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(GMIMELDFLAGS)
+	$(CMD_PREFIX) $(CC) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(_ASTLDFLAGS) $(ASTLDFLAGS) $(OBJS) editline/libedit.a $(AST_EMBED_LDSCRIPTS) buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(GMIMELDFLAGS)
 else
-	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(_ASTLDFLAGS) $(ASTLDFLAGS) $(H323LDFLAGS) $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS) buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(H323LDLIBS) $(GMIMELDFLAGS)
+	$(CMD_PREFIX) $(CXX) $(STATIC_BUILD) -o $@ $(ASTLINK) $(AST_EMBED_LDFLAGS) $(_ASTLDFLAGS) $(ASTLDFLAGS) $(H323LDFLAGS) $(OBJS) editline/libedit.a $(AST_EMBED_LDSCRIPTS) buildinfo.o $(AST_LIBS) $(AST_EMBED_LIBS) $(H323LDLIBS) $(GMIMELDFLAGS)
 endif
 
 ifeq ($(GNU_LD),1)
@@ -194,9 +195,7 @@ endif
 
 clean::
 	rm -f asterisk
-	rm -f db1-ast/.*.d
 	rm -f asterisk.exports
 	@if [ -f editline/Makefile ]; then $(MAKE) -C editline distclean ; fi
-	@$(MAKE) -C db1-ast clean
 	@$(MAKE) -C stdtime clean
 	rm -f libresample/src/*.o

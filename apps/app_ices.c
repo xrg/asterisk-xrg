@@ -26,6 +26,10 @@
  *
  * \ingroup applications
  */
+
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
  
 #include "asterisk.h"
 
@@ -93,7 +97,7 @@ static int icesencode(char *filename, int fd)
 	execl(path_BIN "ices2", "ices", filename, SENTINEL);
 	execlp("ices2", "ices", filename, SENTINEL);
 
-	ast_debug(1, "Couldn't find ices version 2, attempting to use ices version 1.");
+	ast_debug(1, "Couldn't find ices version 2, attempting to use ices version 1.\n");
 
 	execl(path_LOCAL "ices", "ices", filename, SENTINEL);
 	execl(path_BIN "ices", "ices", filename, SENTINEL);

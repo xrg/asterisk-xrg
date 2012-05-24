@@ -33,7 +33,8 @@
 /*** MODULEINFO
 	<depend>speex</depend>
 	<depend>speex_preprocess</depend>
-	<use>speexdsp</use>
+	<use type="external">speexdsp</use>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"

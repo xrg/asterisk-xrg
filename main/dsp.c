@@ -201,9 +201,9 @@ enum gsamp_thresh {
 #define DTMF_GSIZE		102
 
 /* How many successive hits needed to consider begin of a digit */
-#define DTMF_HITS_TO_BEGIN	2
+#define DTMF_HITS_TO_BEGIN	4
 /* How many successive misses needed to consider end of a digit */
-#define DTMF_MISSES_TO_END	3
+#define DTMF_MISSES_TO_END	4
 
 /*!
  * \brief The default silence threshold we will use if an alternate
@@ -467,6 +467,11 @@ static void ast_fax_detect_init(struct ast_dsp *s)
 {
 	ast_tone_detect_init(&s->cng_tone_state, FAX_TONE_CNG_FREQ, FAX_TONE_CNG_DURATION, FAX_TONE_CNG_DB, s->sample_rate);
 	ast_tone_detect_init(&s->ced_tone_state, FAX_TONE_CED_FREQ, FAX_TONE_CED_DURATION, FAX_TONE_CED_DB, s->sample_rate);
+	if (s->faxmode & DSP_FAXMODE_DETECT_SQUELCH) {
+		s->cng_tone_state.squelch = 1;
+		s->ced_tone_state.squelch = 1;
+	}
+
 }
 
 static void ast_dtmf_detect_init (dtmf_detect_state_t *s, unsigned int sample_rate)
@@ -715,41 +720,40 @@ static int dtmf_detect(struct ast_dsp *dsp, digit_detect_state_t *s, int16_t amp
 			}
 		} 
 
-		if (s->td.dtmf.current_hit) {
-			/* We are in the middle of a digit already */
-			if (hit != s->td.dtmf.current_hit) {
-				s->td.dtmf.misses++;
-				if (s->td.dtmf.misses == s->td.dtmf.misses_to_end) {
-					/* There were enough misses to consider digit ended */
-					s->td.dtmf.current_hit = 0;
+		if (hit == s->td.dtmf.lasthit) {
+			if (s->td.dtmf.current_hit) {
+				/* We are in the middle of a digit already */
+				if (hit) {
+					if (hit != s->td.dtmf.current_hit) {
+						/* Look for a start of a new digit.
+						   This is because hits_to_begin may be smaller than misses_to_end
+						   and we may find the beginning of new digit before we consider last one ended. */
+						s->td.dtmf.current_hit = 0;
+					} else {
+						/* Current hit was same as last, so increment digit duration (of last digit) */
+						s->digitlen[s->current_digits - 1] += DTMF_GSIZE;
+					}
+				} else {
+					/* No Digit */
+					s->td.dtmf.misses++;
+					if (s->td.dtmf.misses == s->td.dtmf.misses_to_end) {
+						/* There were enough misses to consider digit ended */
+						s->td.dtmf.current_hit = 0;
+					}
 				}
-			} else {
-				s->td.dtmf.misses = 0;
-				/* Current hit was same as last, so increment digit duration (of last digit) */
-				s->digitlen[s->current_digits - 1] += DTMF_GSIZE;
-			}
-		}
-
-		/* Look for a start of a new digit no matter if we are already in the middle of some
-		   digit or not. This is because hits_to_begin may be smaller than misses_to_end
-		   and we may find begin of new digit before we consider last one ended. */
-		if (hit) {
-			if (hit == s->td.dtmf.lasthit) {
+			} else if (hit) {
+				/* Detecting new digit */
 				s->td.dtmf.hits++;
-			} else {
-				s->td.dtmf.hits = 1;
-			}
-
-			if (s->td.dtmf.hits == s->td.dtmf.hits_to_begin && hit != s->td.dtmf.current_hit) {
-				store_digit(s, hit);
-				s->td.dtmf.current_hit = hit;
-				s->td.dtmf.misses = 0;
+				if (s->td.dtmf.hits == s->td.dtmf.hits_to_begin) {
+					store_digit(s, hit);
+					s->td.dtmf.current_hit = hit;
+				}
 			}
 		} else {
-			s->td.dtmf.hits = 0;
+			s->td.dtmf.hits = 1;
+			s->td.dtmf.misses = 1;
+			s->td.dtmf.lasthit = hit;
 		}
-
-		s->td.dtmf.lasthit = hit;
 
 		/* If we had a hit in this block, include it into mute fragment */
 		if (squelch && hit) {
@@ -1103,7 +1107,7 @@ int ast_dsp_call_progress(struct ast_dsp *dsp, struct ast_frame *inf)
 	return __ast_dsp_call_progress(dsp, inf->data.ptr, inf->datalen / 2);
 }
 
-static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *totalsilence, int *totalnoise)
+static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *totalsilence, int *totalnoise, int *frames_energy)
 {
 	int accum;
 	int x;
@@ -1162,6 +1166,9 @@ static int __ast_dsp_silence_noise(struct ast_dsp *dsp, short *s, int len, int *
 	}
 	if (totalnoise) {
 		*totalnoise = dsp->totalnoise;
+	}
+	if (frames_energy) {
+		*frames_energy = accum;
 	}
 	return res;
 }
@@ -1303,40 +1310,65 @@ int ast_dsp_busydetect(struct ast_dsp *dsp)
 	return res;
 }
 
-int ast_dsp_silence(struct ast_dsp *dsp, struct ast_frame *f, int *totalsilence)
+static int ast_dsp_silence_noise_with_energy(struct ast_dsp *dsp, struct ast_frame *f, int *total, int *frames_energy, int noise)
 {
 	short *s;
 	int len;
-	
+	int x;
+	unsigned char *odata;
+
+	if (!f) {
+		return 0;
+	}
+
 	if (f->frametype != AST_FRAME_VOICE) {
 		ast_log(LOG_WARNING, "Can't calculate silence on a non-voice frame\n");
 		return 0;
 	}
 	if (!ast_format_is_slinear(&f->subclass.format)) {
-		ast_log(LOG_WARNING, "Can only calculate silence on signed-linear frames :(\n");
-		return 0;
+		odata = f->data.ptr;
+		len = f->datalen;
+		switch (f->subclass.format.id) {
+			case AST_FORMAT_ULAW:
+				s = alloca(len * 2);
+				for (x = 0;x < len; x++) {
+					s[x] = AST_MULAW(odata[x]);
+				}
+				break;
+			case AST_FORMAT_ALAW:
+				s = alloca(len * 2);
+				for (x = 0;x < len; x++) {
+					s[x] = AST_ALAW(odata[x]);
+				}
+				break;
+			default:
+				ast_log(LOG_WARNING, "Can only calculate silence on signed-linear, alaw or ulaw frames :(\n");
+			return 0;
+		}
+	} else {
+		s = f->data.ptr;
+		len = f->datalen/2;
 	}
-	s = f->data.ptr;
-	len = f->datalen/2;
-	return __ast_dsp_silence_noise(dsp, s, len, totalsilence, NULL);
+	if (noise) {
+		return __ast_dsp_silence_noise(dsp, s, len, NULL, total, frames_energy);
+	} else {
+		return __ast_dsp_silence_noise(dsp, s, len, total, NULL, frames_energy);
+	}
+}
+
+int ast_dsp_silence_with_energy(struct ast_dsp *dsp, struct ast_frame *f, int *totalsilence, int *frames_energy)
+{
+	return ast_dsp_silence_noise_with_energy(dsp, f, totalsilence, frames_energy, 0);
+}
+
+int ast_dsp_silence(struct ast_dsp *dsp, struct ast_frame *f, int *totalsilence)
+{
+	return ast_dsp_silence_noise_with_energy(dsp, f, totalsilence, NULL, 0);
 }
 
 int ast_dsp_noise(struct ast_dsp *dsp, struct ast_frame *f, int *totalnoise)
 {
-       short *s;
-       int len;
-
-       if (f->frametype != AST_FRAME_VOICE) {
-               ast_log(LOG_WARNING, "Can't calculate noise on a non-voice frame\n");
-               return 0;
-       }
-       if (!ast_format_is_slinear(&f->subclass.format)) {
-               ast_log(LOG_WARNING, "Can only calculate noise on signed-linear frames :(\n");
-               return 0;
-       }
-       s = f->data.ptr;
-       len = f->datalen/2;
-       return __ast_dsp_silence_noise(dsp, s, len, NULL, totalnoise);
+	return ast_dsp_silence_noise_with_energy(dsp, f, totalnoise, NULL, 1);
 }
 
 
@@ -1393,7 +1425,7 @@ struct ast_frame *ast_dsp_process(struct ast_channel *chan, struct ast_dsp *dsp,
 
 	/* Need to run the silence detection stuff for silence suppression and busy detection */
 	if ((dsp->features & DSP_FEATURE_SILENCE_SUPPRESS) || (dsp->features & DSP_FEATURE_BUSY_DETECT)) {
-		res = __ast_dsp_silence_noise(dsp, shortdata, len, &silence, NULL);
+		res = __ast_dsp_silence_noise(dsp, shortdata, len, &silence, NULL, NULL);
 	}
 
 	if ((dsp->features & DSP_FEATURE_SILENCE_SUPPRESS) && silence) {
@@ -1690,9 +1722,9 @@ int ast_dsp_set_digitmode(struct ast_dsp *dsp, int digitmode)
 int ast_dsp_set_faxmode(struct ast_dsp *dsp, int faxmode)
 {
 	if (dsp->faxmode != faxmode) {
+		dsp->faxmode = faxmode;
 		ast_fax_detect_init(dsp);
 	}
-	dsp->faxmode = faxmode;
 	return 0;
 }
 

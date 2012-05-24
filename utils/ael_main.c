@@ -6,6 +6,11 @@
  *   it was copied from;
  * - fixing the formatting
  */
+
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 #include <locale.h>
@@ -418,6 +423,36 @@ void ast_context_destroy(void)
 {
 	if( !no_comp)
 		printf("Executed ast_context_destroy();\n");
+}
+
+const char *ast_get_context_name(struct ast_context *con);
+const char *ast_get_context_name(struct ast_context *con)
+{
+	return con ? con->name : NULL;
+}
+
+struct ast_exten *ast_walk_context_extensions(struct ast_context *con, struct ast_exten *exten);
+struct ast_exten *ast_walk_context_extensions(struct ast_context *con, struct ast_exten *exten)
+{
+	return NULL;
+}
+
+struct ast_include *ast_walk_context_includes(struct ast_context *con, struct ast_include *inc);
+struct ast_include *ast_walk_context_includes(struct ast_context *con, struct ast_include *inc)
+{
+	return NULL;
+}
+
+struct ast_ignorepat *ast_walk_context_ignorepats(struct ast_context *con, struct ast_ignorepat *ip);
+struct ast_ignorepat *ast_walk_context_ignorepats(struct ast_context *con, struct ast_ignorepat *ip)
+{
+	return NULL;
+}
+
+struct ast_sw *ast_walk_context_switches(struct ast_context *con, struct ast_sw *sw);
+struct ast_sw *ast_walk_context_switches(struct ast_context *con, struct ast_sw *sw)
+{
+	return NULL;
 }
 
 void filter_leading_space_from_exprs(char *str)

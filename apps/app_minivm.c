@@ -141,6 +141,10 @@
  * Back: \ref App_minivm
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -1251,6 +1255,8 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 
 	if (ast_strlen_zero(email)) {
 		ast_log(LOG_WARNING, "No address to send message to.\n");
+		ast_free(str1);
+		ast_free(str2);
 		return -1;	
 	}
 
@@ -1305,10 +1311,17 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	}
 	if (!p) {
 		ast_log(LOG_WARNING, "Unable to open temporary file '%s'\n", tmp);
+		ast_free(str1);
+		ast_free(str2);
 		return -1;
 	}
 	/* Allocate channel used for chanvar substitution */
 	ast = ast_dummy_channel_alloc();
+	if (!ast) {
+		ast_free(str1);
+		ast_free(str2);
+		return -1;
+	}
 
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
 
@@ -1469,8 +1482,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	ast_safe_system(tmp2);
 	ast_debug(1, "Sent message to %s with command '%s' - %s\n", vmu->email, global_mailcmd, template->attachment ? "(media attachment)" : "");
 	ast_debug(3, "Actual command used: %s\n", tmp2);
-	if (ast)
-		ast = ast_channel_release(ast);
+	ast = ast_channel_unref(ast);
 	ast_free(str1);
 	ast_free(str2);
 	return 0;
@@ -1599,7 +1611,7 @@ static int vm_delete(char *file)
 /*!\internal
  * \brief Record voicemail message & let caller review or re-record it, or set options if applicable */
 static int play_record_review(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime, char *fmt,
-			      int outsidecaller, struct minivm_account *vmu, int *duration, const char *unlockdir,
+			      int outsidecaller, struct minivm_account *vmu, int *duration, int *sound_duration, const char *unlockdir,
 			      signed char record_gain)
 {
 	int cmd = 0;
@@ -1649,7 +1661,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &record_gain, sizeof(record_gain), 0);
 			if (ast_test_flag(vmu, MVM_OPERATOR))
 				canceldtmf = "0";
-			cmd = ast_play_and_record_full(chan, playfile, recordfile, maxtime, fmt, duration, global_silencethreshold, global_maxsilence, unlockdir, acceptdtmf, canceldtmf);
+			cmd = ast_play_and_record_full(chan, playfile, recordfile, maxtime, fmt, duration, sound_duration, global_silencethreshold, global_maxsilence, unlockdir, acceptdtmf, canceldtmf);
 			if (record_gain)
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &zero_gain, sizeof(zero_gain), 0);
 			if (cmd == -1) /* User has hung up, no options to give */
@@ -1838,6 +1850,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	FILE *txt;
 	int res = 0, txtdes;
 	int duration = 0;
+	int sound_duration = 0;
 	char date[256];
 	char tmpdir[PATH_MAX];
 	char ext_context[256] = "";
@@ -1913,7 +1926,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	/* Store information */
 	ast_debug(2, "Open file for metadata: %s\n", tmptxtfile);
 
-	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
+	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, &sound_duration, NULL, options->record_gain);
 
 	txt = fdopen(txtdes, "w+");
 	if (!txt) {
@@ -1954,8 +1967,8 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			ast_mutex_unlock(&minivmloglock);
 		}
 
-		if (duration < global_vmminmessage) {
-			ast_verb(3, "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, global_vmminmessage);
+		if (sound_duration < global_vmminmessage) {
+			ast_verb(3, "Recording was %d seconds long but needs to be at least %d - abandoning\n", sound_duration, global_vmminmessage);
 			fclose(txt);
 			ast_filedelete(tmptxtfile, NULL);
 			unlink(tmptxtfile);
@@ -2532,7 +2545,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, const char *data)
 	}
 	snprintf(filename,sizeof(filename), "%s%s/%s/%s", MVM_SPOOL_DIR, vmu->domain, vmu->username, message);
 	/* Maybe we should check the result of play_record_review ? */
-	play_record_review(chan, prompt, filename, global_maxgreet, default_vmformat, 0, vmu, &duration, NULL, FALSE);
+	play_record_review(chan, prompt, filename, global_maxgreet, default_vmformat, 0, vmu, &duration, NULL, NULL, FALSE);
 
 	ast_debug(1, "Recorded new %s message in %s (duration %d)\n", message, filename, duration);
 

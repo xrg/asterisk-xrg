@@ -32,6 +32,10 @@
  * \ingroup channel_drivers
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -798,7 +802,7 @@ static void send_client(int size, const unsigned char *data, struct unistimsessi
 {
 	unsigned int tick;
 	int buf_pos;
-	unsigned short *sdata = (unsigned short *) data;
+	unsigned short seq = ntohs(++pte->seq_server);
 
 	ast_mutex_lock(&pte->lock);
 	buf_pos = pte->last_buf_available;
@@ -808,7 +812,7 @@ static void send_client(int size, const unsigned char *data, struct unistimsessi
 		ast_mutex_unlock(&pte->lock);
 		return;
 	}
-	sdata[1] = ntohs(++(pte->seq_server));
+	memcpy((void *)data + sizeof(unsigned short), (void *)&seq, sizeof(unsigned short));
 	pte->wsabufsend[buf_pos].len = size;
 	memcpy(pte->wsabufsend[buf_pos].buf, data, size);
 
@@ -878,6 +882,7 @@ static struct unistimsession *create_client(const struct sockaddr_in *addr_from)
 
 	memcpy(&s->sin, addr_from, sizeof(struct sockaddr_in));
 	get_to_address(unistimsock, &s->sout);
+	s->sout.sin_family = AF_INET;
 	if (unistimdebug) {
 		ast_verb(0, "Creating a new entry for the phone from %s received via server ip %s\n",
 			 ast_inet_ntoa(addr_from->sin_addr), ast_inet_ntoa(s->sout.sin_addr));
@@ -1553,14 +1558,13 @@ static void rcv_mac_addr(struct unistimsession *pte, const unsigned char *buf)
 	int tmp, i = 0;
 	char addrmac[19];
 	int res = 0;
-	if (unistimdebug)
-		ast_verb(0, "Mac Address received : ");
 	for (tmp = 15; tmp < 15 + SIZE_HEADER; tmp++) {
 		sprintf(&addrmac[i], "%.2x", (unsigned char) buf[tmp]);
 		i += 2;
 	}
-	if (unistimdebug)
-		ast_verb(0, "%s\n", addrmac);
+	if (unistimdebug) {
+		ast_verb(0, "Mac Address received : %s\n", addrmac);
+	}
 	strcpy(pte->macaddr, addrmac);
 	res = unistim_register(pte);
 	if (!res) {
@@ -3244,7 +3248,7 @@ static void key_main_page(struct unistimsession *pte, char keycode)
 		if (!ast_strlen_zero(pte->device->call_forward)) {
 			/* Cancel call forwarding */
 			memmove(pte->device->call_forward + 1, pte->device->call_forward,
-					sizeof(pte->device->call_forward));
+					sizeof(pte->device->call_forward) - 1);
 			pte->device->call_forward[0] = '\0';
 			Sendicon(TEXT_LINE0, FAV_ICON_NONE, pte);
 			pte->device->output = OUTPUT_HANDSET;   /* Seems to be reseted somewhere */
@@ -4211,6 +4215,10 @@ static int unistim_indicate(struct ast_channel *ast, int ind, const void *data,
 			break;
 		}
 		return -1;
+	case AST_CONTROL_INCOMPLETE:
+		/* Overlapped dialing is not currently supported for UNIStim.  Treat an indication
+		 * of incomplete as congestion
+		 */
 	case AST_CONTROL_CONGESTION:
 		if (ast->_state != AST_STATE_UP) {
 			sub->alreadygone = 1;
@@ -5024,7 +5032,7 @@ static int ParseBookmark(const char *text, struct unistim_device *d)
 			ast_log(LOG_WARNING, "Invalid position %d for bookmark : already used\n:", p);
 			return 0;
 		}
-		memmove(line, line + 2, sizeof(line));
+		memmove(line, line + 2, sizeof(line) - 2);
 	} else {
 		/* No position specified, looking for a free slot */
 		for (p = 0; p <= 5; p++) {
@@ -5192,7 +5200,7 @@ static struct unistim_device *build_device(const char *cat, const struct ast_var
 		else if (!strcasecmp(v->name, "contrast")) {
 			d->contrast = atoi(v->value);
 			if ((d->contrast < 0) || (d->contrast > 15)) {
-				ast_log(LOG_WARNING, "constrast must be beetween 0 and 15");
+				ast_log(LOG_WARNING, "contrast must be beetween 0 and 15\n");
 				d->contrast = 8;
 			}
 		} else if (!strcasecmp(v->name, "nat"))

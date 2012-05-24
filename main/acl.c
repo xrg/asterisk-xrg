@@ -408,6 +408,9 @@ struct ast_ha *ast_append_ha(const char *sense, const char *stuff, struct ast_ha
 	}
 
 	if (!(ha = ast_calloc(1, sizeof(*ha)))) {
+		if (error) {
+			*error = 1;
+		}
 		return ret;
 	}
 
@@ -530,7 +533,11 @@ int ast_apply_ha(const struct ast_ha *ha, const struct ast_sockaddr *addr)
 			if (ast_sockaddr_is_ipv6(addr)) {
 				if (ast_sockaddr_is_ipv4_mapped(addr)) {
 					/* IPv4 ACLs apply to IPv4-mapped addresses */
-					ast_sockaddr_ipv4_mapped(addr, &mapped_addr);
+					if (!ast_sockaddr_ipv4_mapped(addr, &mapped_addr)) {
+						ast_log(LOG_ERROR, "%s provided to ast_sockaddr_ipv4_mapped could not be converted. That shouldn't be possible.\n",
+							ast_sockaddr_stringify(addr));
+						continue;
+					}
 					addr_to_use = &mapped_addr;
 				} else {
 					/* An IPv4 ACL does not apply to an IPv6 address */
@@ -583,7 +590,7 @@ static int resolve_first(struct ast_sockaddr *addr, const char *name, int flag,
 	return 0;
 }
 
-int ast_get_ip_or_srv(struct ast_sockaddr *addr, const char *value, const char *service)
+int ast_get_ip_or_srv(struct ast_sockaddr *addr, const char *hostname, const char *service)
 {
 	char srv[256];
 	char host[256];
@@ -591,13 +598,13 @@ int ast_get_ip_or_srv(struct ast_sockaddr *addr, const char *value, const char *
 	int tportno;
 
 	if (service) {
-		snprintf(srv, sizeof(srv), "%s.%s", service, value);
+		snprintf(srv, sizeof(srv), "%s.%s", service, hostname);
 		if ((srv_ret = ast_get_srv(NULL, host, sizeof(host), &tportno, srv)) > 0) {
-			value = host;
+			hostname = host;
 		}
 	}
 
-	if (resolve_first(addr, value, PARSE_PORT_FORBID, addr->ss.ss_family) != 0) {
+	if (resolve_first(addr, hostname, PARSE_PORT_FORBID, addr->ss.ss_family) != 0) {
 		return -1;
 	}
 
@@ -686,9 +693,9 @@ const char *ast_tos2str(unsigned int tos)
 	return "unknown";
 }
 
-int ast_get_ip(struct ast_sockaddr *addr, const char *value)
+int ast_get_ip(struct ast_sockaddr *addr, const char *hostname)
 {
-	return ast_get_ip_or_srv(addr, value, NULL);
+	return ast_get_ip_or_srv(addr, hostname, NULL);
 }
 
 int ast_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us)
@@ -734,6 +741,7 @@ int ast_find_ourip(struct ast_sockaddr *ourip, const struct ast_sockaddr *bindad
 {
 	char ourhost[MAXHOSTNAMELEN] = "";
 	struct ast_sockaddr root;
+	int res, port = ast_sockaddr_port(ourip);
 
 	/* just use the bind address if it is nonzero */
 	if (!ast_sockaddr_is_any(bindaddr)) {
@@ -746,6 +754,8 @@ int ast_find_ourip(struct ast_sockaddr *ourip, const struct ast_sockaddr *bindad
 		ast_log(LOG_WARNING, "Unable to get hostname\n");
 	} else {
 		if (resolve_first(ourip, ourhost, PARSE_PORT_FORBID, family) == 0) {
+			/* reset port since resolve_first wipes this out */
+			ast_sockaddr_set_port(ourip, port);
 			return 0;
 		}
 	}
@@ -753,8 +763,12 @@ int ast_find_ourip(struct ast_sockaddr *ourip, const struct ast_sockaddr *bindad
 	/* A.ROOT-SERVERS.NET. */
 	if (!resolve_first(&root, "A.ROOT-SERVERS.NET", PARSE_PORT_FORBID, 0) &&
 	    !ast_ouraddrfor(&root, ourip)) {
+		/* reset port since resolve_first wipes this out */
+		ast_sockaddr_set_port(ourip, port);
 		return 0;
 	}
-	return get_local_address(ourip);
+	res = get_local_address(ourip);
+	ast_sockaddr_set_port(ourip, port);
+	return res;
 }
 

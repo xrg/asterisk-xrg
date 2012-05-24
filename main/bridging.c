@@ -41,6 +41,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/file.h"
 #include "asterisk/module.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/test.h"
 
 static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
 
@@ -49,6 +50,8 @@ static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
 
 /* Grow rate of bridge array of channels */
 #define BRIDGE_ARRAY_GROW 32
+
+static void cleanup_video_mode(struct ast_bridge *bridge);
 
 /*! Default DTMF keys for built in features */
 static char builtin_features_dtmf[AST_BRIDGE_BUILTIN_END][MAXIMUM_DTMF_FEATURE_STRING];
@@ -457,6 +460,8 @@ static void destroy_bridge(void *obj)
 	/* Drop the array of channels */
 	ast_free(bridge->array);
 
+	cleanup_video_mode(bridge);
+
 	return;
 }
 
@@ -735,12 +740,13 @@ static enum ast_bridge_channel_state bridge_channel_join_multithreaded(struct as
 
 	ao2_unlock(bridge_channel->bridge);
 
+	ao2_lock(bridge_channel);
 	/* Wait for data to either come from the channel or us to be signalled */
 	if (!bridge_channel->suspended) {
+		ao2_unlock(bridge_channel);
 		ast_debug(10, "Going into a multithreaded waitfor for bridge channel %p of bridge %p\n", bridge_channel, bridge_channel->bridge);
 		chan = ast_waitfor_nandfds(&bridge_channel->chan, 1, fds, nfds, NULL, &outfd, &ms);
 	} else {
-		ao2_lock(bridge_channel);
 		ast_debug(10, "Going into a multithreaded signal wait for bridge channel %p of bridge %p\n", bridge_channel, bridge_channel->bridge);
 		ast_cond_wait(&bridge_channel->cond, ao2_object_get_lockaddr(bridge_channel));
 		ao2_unlock(bridge_channel);
@@ -773,9 +779,10 @@ static enum ast_bridge_channel_state bridge_channel_join_singlethreaded(struct a
 /*! \brief Internal function that suspends a channel from a bridge */
 static void bridge_channel_suspend(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
+	ao2_lock(bridge_channel);
 	bridge_channel->suspended = 1;
-
 	bridge_array_remove(bridge, bridge_channel->chan);
+	ao2_unlock(bridge_channel);
 
 	if (bridge->technology->suspend) {
 		bridge->technology->suspend(bridge, bridge_channel);
@@ -787,13 +794,17 @@ static void bridge_channel_suspend(struct ast_bridge *bridge, struct ast_bridge_
 /*! \brief Internal function that unsuspends a channel from a bridge */
 static void bridge_channel_unsuspend(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
-	bridge_channel->suspended =0;
-
+	ao2_lock(bridge_channel);
+	bridge_channel->suspended = 0;
 	bridge_array_add(bridge, bridge_channel->chan);
+	ast_cond_signal(&bridge_channel->cond);
+	ao2_unlock(bridge_channel);
 
 	if (bridge->technology->unsuspend) {
 		bridge->technology->unsuspend(bridge, bridge_channel);
 	}
+
+
 
 	return;
 }
@@ -861,6 +872,12 @@ static void bridge_channel_feature(struct ast_bridge *bridge, struct ast_bridge_
 	/* If a hook was actually matched execute it on this channel, otherwise stream up the DTMF to the other channels */
 	if (hook) {
 		hook->callback(bridge, bridge_channel, hook->hook_pvt);
+		/* If we are handing the channel off to an external hook for ownership,
+		 * we are not guaranteed what kind of state it will come back in.  If
+		 * the channel hungup, we need to detect that here. */
+		if (bridge_channel->chan && ast_check_hangup_locked(bridge_channel->chan)) {
+			ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+		}
 	} else {
 		ast_bridge_dtmf_stream(bridge, dtmf, bridge_channel->chan);
 	}
@@ -1108,7 +1125,7 @@ static void *bridge_channel_thread(void *data)
 	state = bridge_channel_join(bridge_channel);
 
 	/* If no other thread is going to take the channel then hang it up, or else we would have to service it until something else came along */
-	if (state == AST_BRIDGE_CHANNEL_STATE_END || state == AST_BRIDGE_CHANNEL_STATE_HANGUP) {
+	if (bridge_channel->allow_impart_hangup && (state == AST_BRIDGE_CHANNEL_STATE_END || state == AST_BRIDGE_CHANNEL_STATE_HANGUP)) {
 		ast_hangup(bridge_channel->chan);
 	}
 
@@ -1124,7 +1141,7 @@ static void *bridge_channel_thread(void *data)
 	return NULL;
 }
 
-int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struct ast_channel *swap, struct ast_bridge_features *features)
+int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struct ast_channel *swap, struct ast_bridge_features *features, int allow_hangup)
 {
 	struct ast_bridge_channel *bridge_channel = bridge_channel_alloc(bridge);
 	/* Try to allocate a structure for the bridge channel */
@@ -1136,6 +1153,8 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 	bridge_channel->chan = chan;
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
+	bridge_channel->allow_impart_hangup = allow_hangup;
+
 
 	/* Actually create the thread that will handle the channel */
 	if (ast_pthread_create(&bridge_channel->thread, NULL, bridge_channel_thread, bridge_channel)) {
@@ -1468,5 +1487,167 @@ void ast_bridge_set_internal_sample_rate(struct ast_bridge *bridge, unsigned int
 
 	ao2_lock(bridge);
 	bridge->internal_sample_rate = sample_rate;
+	ao2_unlock(bridge);
+}
+
+static void cleanup_video_mode(struct ast_bridge *bridge)
+{
+	switch (bridge->video_mode.mode) {
+	case AST_BRIDGE_VIDEO_MODE_NONE:
+		break;
+	case AST_BRIDGE_VIDEO_MODE_SINGLE_SRC:
+		if (bridge->video_mode.mode_data.single_src_data.chan_vsrc) {
+			ast_channel_unref(bridge->video_mode.mode_data.single_src_data.chan_vsrc);
+		}
+		break;
+	case AST_BRIDGE_VIDEO_MODE_TALKER_SRC:
+		if (bridge->video_mode.mode_data.talker_src_data.chan_vsrc) {
+			ast_channel_unref(bridge->video_mode.mode_data.talker_src_data.chan_vsrc);
+		}
+		if (bridge->video_mode.mode_data.talker_src_data.chan_old_vsrc) {
+			ast_channel_unref(bridge->video_mode.mode_data.talker_src_data.chan_old_vsrc);
+		}
+	}
+	memset(&bridge->video_mode, 0, sizeof(bridge->video_mode));
+}
+
+void ast_bridge_set_single_src_video_mode(struct ast_bridge *bridge, struct ast_channel *video_src_chan)
+{
+	ao2_lock(bridge);
+	cleanup_video_mode(bridge);
+	bridge->video_mode.mode = AST_BRIDGE_VIDEO_MODE_SINGLE_SRC;
+	bridge->video_mode.mode_data.single_src_data.chan_vsrc = ast_channel_ref(video_src_chan);
+	ast_test_suite_event_notify("BRIDGE_VIDEO_MODE", "Message: video mode set to single source\r\nVideo Mode: %d\r\nVideo Channel: %s", bridge->video_mode.mode, video_src_chan->name);
+	ast_indicate(video_src_chan, AST_CONTROL_VIDUPDATE);
+	ao2_unlock(bridge);
+}
+
+void ast_bridge_set_talker_src_video_mode(struct ast_bridge *bridge)
+{
+	ao2_lock(bridge);
+	cleanup_video_mode(bridge);
+	bridge->video_mode.mode = AST_BRIDGE_VIDEO_MODE_TALKER_SRC;
+	ast_test_suite_event_notify("BRIDGE_VIDEO_MODE", "Message: video mode set to talker source\r\nVideo Mode: %d", bridge->video_mode.mode);
+	ao2_unlock(bridge);
+}
+
+void ast_bridge_update_talker_src_video_mode(struct ast_bridge *bridge, struct ast_channel *chan, int talker_energy, int is_keyframe)
+{
+	struct ast_bridge_video_talker_src_data *data;
+	/* If the channel doesn't support video, we don't care about it */
+	if (!ast_format_cap_has_type(chan->nativeformats, AST_FORMAT_TYPE_VIDEO)) {
+		return;
+	}
+
+	ao2_lock(bridge);
+	data = &bridge->video_mode.mode_data.talker_src_data;
+
+	if (data->chan_vsrc == chan) {
+		data->average_talking_energy = talker_energy;
+	} else if ((data->average_talking_energy < talker_energy) && is_keyframe) {
+		if (data->chan_old_vsrc) {
+			ast_channel_unref(data->chan_old_vsrc);
+		}
+		if (data->chan_vsrc) {
+			data->chan_old_vsrc = data->chan_vsrc;
+			ast_indicate(data->chan_old_vsrc, AST_CONTROL_VIDUPDATE);
+		}
+		data->chan_vsrc = ast_channel_ref(chan);
+		data->average_talking_energy = talker_energy;
+		ast_test_suite_event_notify("BRIDGE_VIDEO_SRC", "Message: video source updated\r\nVideo Channel: %s", data->chan_vsrc->name);
+		ast_indicate(data->chan_vsrc, AST_CONTROL_VIDUPDATE);
+	} else if ((data->average_talking_energy < talker_energy) && !is_keyframe) {
+		ast_indicate(chan, AST_CONTROL_VIDUPDATE);
+	} else if (!data->chan_vsrc && is_keyframe) {
+		data->chan_vsrc = ast_channel_ref(chan);
+		data->average_talking_energy = talker_energy;
+		ast_test_suite_event_notify("BRIDGE_VIDEO_SRC", "Message: video source updated\r\nVideo Channel: %s", data->chan_vsrc->name);
+		ast_indicate(chan, AST_CONTROL_VIDUPDATE);
+	} else if (!data->chan_old_vsrc && is_keyframe) {
+		data->chan_old_vsrc = ast_channel_ref(chan);
+		ast_indicate(chan, AST_CONTROL_VIDUPDATE);
+	}
+	ao2_unlock(bridge);
+}
+
+int ast_bridge_number_video_src(struct ast_bridge *bridge)
+{
+	int res = 0;
+
+	ao2_lock(bridge);
+	switch (bridge->video_mode.mode) {
+	case AST_BRIDGE_VIDEO_MODE_NONE:
+		break;
+	case AST_BRIDGE_VIDEO_MODE_SINGLE_SRC:
+		if (bridge->video_mode.mode_data.single_src_data.chan_vsrc) {
+			res = 1;
+		}
+		break;
+	case AST_BRIDGE_VIDEO_MODE_TALKER_SRC:
+		if (bridge->video_mode.mode_data.talker_src_data.chan_vsrc) {
+			res++;
+		}
+		if (bridge->video_mode.mode_data.talker_src_data.chan_old_vsrc) {
+			res++;
+		}
+	}
+	ao2_unlock(bridge);
+	return res;
+}
+
+int ast_bridge_is_video_src(struct ast_bridge *bridge, struct ast_channel *chan)
+{
+	int res = 0;
+
+	ao2_lock(bridge);
+	switch (bridge->video_mode.mode) {
+	case AST_BRIDGE_VIDEO_MODE_NONE:
+		break;
+	case AST_BRIDGE_VIDEO_MODE_SINGLE_SRC:
+		if (bridge->video_mode.mode_data.single_src_data.chan_vsrc == chan) {
+			res = 1;
+		}
+		break;
+	case AST_BRIDGE_VIDEO_MODE_TALKER_SRC:
+		if (bridge->video_mode.mode_data.talker_src_data.chan_vsrc == chan) {
+			res = 1;
+		} else if (bridge->video_mode.mode_data.talker_src_data.chan_old_vsrc == chan) {
+			res = 2;
+		}
+
+	}
+	ao2_unlock(bridge);
+	return res;
+}
+
+void ast_bridge_remove_video_src(struct ast_bridge *bridge, struct ast_channel *chan)
+{
+	ao2_lock(bridge);
+	switch (bridge->video_mode.mode) {
+	case AST_BRIDGE_VIDEO_MODE_NONE:
+		break;
+	case AST_BRIDGE_VIDEO_MODE_SINGLE_SRC:
+		if (bridge->video_mode.mode_data.single_src_data.chan_vsrc == chan) {
+			if (bridge->video_mode.mode_data.single_src_data.chan_vsrc) {
+				ast_channel_unref(bridge->video_mode.mode_data.single_src_data.chan_vsrc);
+			}
+			bridge->video_mode.mode_data.single_src_data.chan_vsrc = NULL;
+		}
+		break;
+	case AST_BRIDGE_VIDEO_MODE_TALKER_SRC:
+		if (bridge->video_mode.mode_data.talker_src_data.chan_vsrc == chan) {
+			if (bridge->video_mode.mode_data.talker_src_data.chan_vsrc) {
+				ast_channel_unref(bridge->video_mode.mode_data.talker_src_data.chan_vsrc);
+			}
+			bridge->video_mode.mode_data.talker_src_data.chan_vsrc = NULL;
+			bridge->video_mode.mode_data.talker_src_data.average_talking_energy = 0;
+		}
+		if (bridge->video_mode.mode_data.talker_src_data.chan_old_vsrc == chan) {
+			if (bridge->video_mode.mode_data.talker_src_data.chan_old_vsrc) {
+				ast_channel_unref(bridge->video_mode.mode_data.talker_src_data.chan_old_vsrc);
+			}
+			bridge->video_mode.mode_data.talker_src_data.chan_old_vsrc = NULL;
+		}
+	}
 	ao2_unlock(bridge);
 }

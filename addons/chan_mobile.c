@@ -28,6 +28,7 @@
 /*** MODULEINFO
 	<depend>bluetooth</depend>
 	<defaultenabled>no</defaultenabled>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"
@@ -1317,21 +1318,10 @@ static int mbl_queue_hangup(struct mbl_pvt *pvt)
 
 static int mbl_ast_hangup(struct mbl_pvt *pvt)
 {
-	int res = 0;
-	for (;;) {
-		if (pvt->owner) {
-			if (ast_channel_trylock(pvt->owner)) {
-				DEADLOCK_AVOIDANCE(&pvt->lock);
-			} else {
-				res = ast_hangup(pvt->owner);
-				/* no need to unlock, ast_hangup() frees the
-				 * channel */
-				break;
-			}
-		} else
-			break;
+	if (pvt->owner) {
+		ast_hangup(pvt->owner);
 	}
-	return res;
+	return 0;
 }
 
 /*!
@@ -1729,7 +1719,7 @@ static int rfcomm_read_result(int rsock, char **buf, size_t count, size_t *in_co
 	return 1;
 
 e_return:
-	ast_log(LOG_ERROR, "error parsing AT result on rfcomm socket");
+	ast_log(LOG_ERROR, "error parsing AT result on rfcomm socket\n");
 	return res;
 }
 
@@ -2130,7 +2120,7 @@ static int hfp_parse_ciev(struct hfp_pvt *hfp, char *buf, int *value)
 		return HFP_CIND_NONE;
 	}
 
-	if (i >= sizeof(hfp->cind_state)) {
+	if (i >= ARRAY_LEN(hfp->cind_state)) {
 		ast_debug(2, "[%s] CIEV event index too high (%s)\n", hfp->owner->id, buf);
 		return HFP_CIND_NONE;
 	}
@@ -2283,14 +2273,13 @@ static int hfp_parse_cmgr(struct hfp_pvt *hfp, char *buf, char **from_number, ch
  */
 static char *hfp_parse_cusd(struct hfp_pvt *hfp, char *buf)
 {
-	int i, state, message_start, message_end;
+	int i, message_start, message_end;
 	char *cusd;
 	size_t s;
 
 	/* parse cusd message in the following format:
 	 * +CUSD: 0,"100,00 EURO, valid till 01.01.2010, you are using tariff "Mega Tariff". More informations *111#."
 	 */
-	state = 0;
 	message_start = 0;
 	message_end = 0;
 	s = strlen(buf);
@@ -2613,7 +2602,7 @@ static int hfp_parse_cind_indicator(struct hfp_pvt *hfp, int group, char *indica
 	int value;
 
 	/* store the current indicator */
-	if (group >= sizeof(hfp->cind_state)) {
+	if (group >= ARRAY_LEN(hfp->cind_state)) {
 		ast_debug(1, "ignoring CIND state '%s' for group %d, we only support up to %d indicators\n", indicator, group, (int) sizeof(hfp->cind_state));
 		return -1;
 	}
@@ -2688,7 +2677,7 @@ static int hfp_parse_cind_test(struct hfp_pvt *hfp, char *buf)
 {
 	int i, state, group;
 	size_t s;
-	char *indicator = NULL, *values;
+	char *indicator = NULL;
 
 	hfp->nocallsetup = 1;
 
@@ -2727,7 +2716,6 @@ static int hfp_parse_cind_test(struct hfp_pvt *hfp, char *buf)
 			}
 			break;
 		case 5: /* mark the start of the value range */
-			values = &buf[i];
 			state++;
 			break;
 		case 6: /* find the end of the value range */
@@ -2999,7 +2987,6 @@ static sdp_session_t *sdp_register(void)
 	sdp_list_t  *l2cap_list = 0, *rfcomm_list = 0, *root_list = 0, *proto_list = 0, *access_proto_list = 0, *svc_uuid_list = 0;
 	sdp_data_t *channel = 0;
 
-	int err = 0;
 	sdp_session_t *session = 0;
 
 	sdp_record_t *record = sdp_record_alloc();
@@ -3036,7 +3023,7 @@ static sdp_session_t *sdp_register(void)
 	if (!(session = sdp_connect(BDADDR_ANY, BDADDR_LOCAL, SDP_RETRY_IF_BUSY)))
 		ast_log(LOG_WARNING, "Failed to connect sdp and create session.\n");
 	else
-		err = sdp_record_register(session, record, 0);
+		sdp_record_register(session, record, 0);
 
 	sdp_data_free(channel);
 	sdp_list_free(rfcomm_list, 0);

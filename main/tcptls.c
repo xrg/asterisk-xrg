@@ -76,9 +76,23 @@ static HOOK_T ssl_write(void *cookie, const char *buf, LEN_T len)
 
 static int ssl_close(void *cookie)
 {
-	close(SSL_get_fd(cookie));
-	SSL_shutdown(cookie);
-	SSL_free(cookie);
+	int cookie_fd = SSL_get_fd(cookie);
+	int ret;
+	if (cookie_fd > -1) {
+		/*
+		 * According to the TLS standard, it is acceptable for an application to only send its shutdown
+		 * alert and then close the underlying connection without waiting for the peer's response (this
+		 * way resources can be saved, as the process can already terminate or serve another connection).
+		 */
+		if ((ret = SSL_shutdown(cookie)) < 0) {
+			ast_log(LOG_ERROR, "SSL_shutdown() failed: %d\n", SSL_get_error(cookie, ret));
+		}
+		SSL_free(cookie);
+		/* adding shutdown(2) here has no added benefit */
+		if (close(cookie_fd)) {
+			ast_log(LOG_ERROR, "close() failed: %s\n", strerror(errno));
+		}
+	}
 	return 0;
 }
 #endif	/* DO_SSL */
@@ -116,6 +130,9 @@ HOOK_T ast_tcptls_server_write(struct ast_tcptls_session_instance *tcptls_sessio
 static void session_instance_destructor(void *obj)
 {
 	struct ast_tcptls_session_instance *i = obj;
+	if (i->parent && i->parent->tls_cfg) {
+		ast_ssl_teardown(i->parent->tls_cfg);
+	}
 	ast_mutex_destroy(&i->lock);
 }
 
@@ -141,8 +158,7 @@ static void *handle_tcptls_connection(void *data)
 	if (!tcptls_session->parent->tls_cfg) {
 		if ((tcptls_session->f = fdopen(tcptls_session->fd, "w+"))) {
 			if(setvbuf(tcptls_session->f, NULL, _IONBF, 0)) {
-				fclose(tcptls_session->f);
-				tcptls_session->f = NULL;
+				ast_tcptls_close_session_file(tcptls_session);
 			}
 		}
 	}
@@ -162,7 +178,7 @@ static void *handle_tcptls_connection(void *data)
 			tcptls_session->f = fopencookie(tcptls_session->ssl, "w+", cookie_funcs);
 #else
 			/* could add other methods here */
-			ast_debug(2, "no tcptls_session->f methods attempted!");
+			ast_debug(2, "no tcptls_session->f methods attempted!\n");
 #endif
 			if ((tcptls_session->client && !ast_test_flag(&tcptls_session->parent->tls_cfg->flags, AST_SSL_DONT_VERIFY_SERVER))
 				|| (!tcptls_session->client && ast_test_flag(&tcptls_session->parent->tls_cfg->flags, AST_SSL_VERIFY_CLIENT))) {
@@ -200,10 +216,10 @@ static void *handle_tcptls_connection(void *data)
 					}
 					if (!found) {
 						ast_log(LOG_ERROR, "Certificate common name did not match (%s)\n", tcptls_session->parent->hostname);
-						if (peer)
+						if (peer) {
 							X509_free(peer);
-						close(tcptls_session->fd);
-						fclose(tcptls_session->f);
+						}
+						ast_tcptls_close_session_file(tcptls_session);
 						ao2_ref(tcptls_session, -1);
 						return NULL;
 					}
@@ -218,7 +234,7 @@ static void *handle_tcptls_connection(void *data)
 #endif /* DO_SSL */
 
 	if (!tcptls_session->f) {
-		close(tcptls_session->fd);
+		ast_tcptls_close_session_file(tcptls_session);
 		ast_log(LOG_WARNING, "FILE * open failed!\n");
 #ifndef DO_SSL
 		if (tcptls_session->parent->tls_cfg) {
@@ -260,7 +276,9 @@ void *ast_tcptls_server_root(void *data)
 		tcptls_session = ao2_alloc(sizeof(*tcptls_session), session_instance_destructor);
 		if (!tcptls_session) {
 			ast_log(LOG_WARNING, "No memory for new session: %s\n", strerror(errno));
-			close(fd);
+			if (close(fd)) {
+				ast_log(LOG_ERROR, "close() failed: %s\n", strerror(errno));
+			}
 			continue;
 		}
 
@@ -277,7 +295,7 @@ void *ast_tcptls_server_root(void *data)
 		/* This thread is now the only place that controls the single ref to tcptls_session */
 		if (ast_pthread_create_detached_background(&launched, NULL, handle_tcptls_connection, tcptls_session)) {
 			ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
-			close(tcptls_session->fd);
+			ast_tcptls_close_session_file(tcptls_session);
 			ao2_ref(tcptls_session, -1);
 		}
 	}
@@ -295,6 +313,14 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 
 	SSL_load_error_strings();
 	SSLeay_add_ssl_algorithms();
+
+	/* Get rid of an old SSL_CTX since we're about to
+	 * allocate a new one
+	 */
+	if (cfg->ssl_ctx) {
+		SSL_CTX_free(cfg->ssl_ctx);
+		cfg->ssl_ctx = NULL;
+	}
 
 	if (client) {
 #ifndef OPENSSL_NO_SSL2
@@ -331,6 +357,8 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 				ast_verb(0, "SSL error loading cert file. <%s>", cfg->certfile);
 				sleep(2);
 				cfg->enabled = 0;
+				SSL_CTX_free(cfg->ssl_ctx);
+				cfg->ssl_ctx = NULL;
 				return 0;
 			}
 		}
@@ -340,6 +368,8 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 				ast_verb(0, "SSL error loading private key file. <%s>", tmpprivate);
 				sleep(2);
 				cfg->enabled = 0;
+				SSL_CTX_free(cfg->ssl_ctx);
+				cfg->ssl_ctx = NULL;
 				return 0;
 			}
 		}
@@ -350,6 +380,8 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 				ast_verb(0, "SSL cipher error <%s>", cfg->cipher);
 				sleep(2);
 				cfg->enabled = 0;
+				SSL_CTX_free(cfg->ssl_ctx);
+				cfg->ssl_ctx = NULL;
 				return 0;
 			}
 		}
@@ -367,6 +399,16 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 int ast_ssl_setup(struct ast_tls_config *cfg)
 {
 	return __ssl_setup(cfg, 0);
+}
+
+void ast_ssl_teardown(struct ast_tls_config *cfg)
+{
+#ifdef DO_SSL
+	if (cfg->ssl_ctx) {
+		SSL_CTX_free(cfg->ssl_ctx);
+		cfg->ssl_ctx = NULL;
+	}
+#endif
 }
 
 struct ast_tcptls_session_instance *ast_tcptls_client_start(struct ast_tcptls_session_instance *tcptls_session)
@@ -397,8 +439,10 @@ struct ast_tcptls_session_instance *ast_tcptls_client_start(struct ast_tcptls_se
 	return handle_tcptls_connection(tcptls_session);
 
 client_start_error:
-	close(desc->accept_fd);
-	desc->accept_fd = -1;
+	if (desc) {
+		close(desc->accept_fd);
+		desc->accept_fd = -1;
+	}
 	if (tcptls_session) {
 		ao2_ref(tcptls_session, -1);
 	}
@@ -534,6 +578,24 @@ void ast_tcptls_server_start(struct ast_tcptls_session_args *desc)
 error:
 	close(desc->accept_fd);
 	desc->accept_fd = -1;
+}
+
+void ast_tcptls_close_session_file(struct ast_tcptls_session_instance *tcptls_session)
+{
+	if (tcptls_session->f) {
+		if (fclose(tcptls_session->f)) {
+			ast_log(LOG_ERROR, "fclose() failed: %s\n", strerror(errno));
+		}
+		tcptls_session->f = NULL;
+		tcptls_session->fd = -1;
+	} else if (tcptls_session->fd != -1) {
+		if (close(tcptls_session->fd)) {
+			ast_log(LOG_ERROR, "close() failed: %s\n", strerror(errno));
+		}
+		tcptls_session->fd = -1;
+	} else {
+		ast_log(LOG_ERROR, "ast_tcptls_close_session_file invoked on session instance without file or file descriptor\n");
+	}
 }
 
 void ast_tcptls_server_stop(struct ast_tcptls_session_args *desc)

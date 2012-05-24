@@ -27,6 +27,7 @@
 
 /*** MODULEINFO
 	<depend>TEST_FRAMEWORK</depend>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
@@ -50,12 +51,24 @@ AST_TEST_DEFINE(test_gosub)
 		const char *args;
 		const char *expected_value;
 	} testplan[] = {
+		{ NULL, "${STACK_PEEK(1,e,1)}", "" },         /* Stack is empty */
 		{ "Gosub", "tests_test_gosub_virtual_context,s,1" },
+		{ NULL, "${PRIORITY}", "1" },
 		{ NULL, "${EXTEN}", "s" },
+		{ NULL, "${STACK_PEEK(1,e,1)}", "" },         /* No extension originally */
 		{ "Gosub", "test,dne,1", (const char *) -1 }, /* This is the only invocation that should fail. */
+		{ NULL, "${PRIORITY}", "1" },
 		{ NULL, "${EXTEN}", "s" },
 		{ "Gosub", "tests_test_gosub_virtual_context,s,1(5,5,5,5,5)" },
+		{ NULL, "${PRIORITY}", "1" },
 		{ NULL, "$[0${ARG1} + 0${ARG5}]", "10" },
+		{ NULL, "${STACK_PEEK(1,e)}", "s" },
+		{ NULL, "${STACK_PEEK(1,c)}", "tests_test_gosub_virtual_context" },
+		{ NULL, "${STACK_PEEK(1,p)}", "1" },
+		{ NULL, "${STACK_PEEK(1,l)}", "tests_test_gosub_virtual_context,s,1" },
+		{ "StackPop", "" },
+		{ NULL, "${STACK_PEEK(1,e,1)}", "" },         /* Only 1 frame deep, my caller is top-level */
+		{ "Gosub", "tests_test_gosub_virtual_context,s,1(5,5,5,5,5)" },
 		{ "Gosub", "tests_test_gosub_virtual_context,s,1(4,4,4,4)" },
 		{ NULL, "$[0${ARG1} + 0${ARG5}]", "4" },
 		{ NULL, "$[0${ARG1} + 0${ARG4}]", "8" },
@@ -101,7 +114,7 @@ AST_TEST_DEFINE(test_gosub)
 
 	if (!(str = ast_str_create(16))) {
 		ast_test_status_update(test, "Unable to allocate dynamic string buffer\n");
-		ast_channel_release(chan);
+		ast_channel_unref(chan);
 		return AST_TEST_FAIL;
 	}
 
@@ -109,7 +122,7 @@ AST_TEST_DEFINE(test_gosub)
 	if (!(con = ast_context_find_or_create(NULL, NULL, "tests_test_gosub_virtual_context", "test_gosub"))) {
 		ast_test_status_update(test, "Unable to create test dialplan context");
 		ast_free(str);
-		ast_channel_release(chan);
+		ast_channel_unref(chan);
 		return AST_TEST_FAIL;
 	}
 
@@ -143,7 +156,7 @@ AST_TEST_DEFINE(test_gosub)
 	}
 
 	ast_free(str);
-	ast_channel_release(chan);
+	ast_channel_unref(chan);
 	ast_context_remove_extension2(con, "s", 1, NULL, 0);
 	ast_context_destroy(con, "test_gosub");
 

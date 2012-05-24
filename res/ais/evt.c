@@ -135,6 +135,13 @@ void evt_event_deliver_cb(SaEvtSubscriptionIdT sub_id,
 		return;
 	}
 
+	if (event_datalen < ast_event_minimum_length()) {
+		ast_debug(1, "Ignoring event that's too small. %u < %u\n",
+			(unsigned int) event_datalen,
+			(unsigned int) ast_event_minimum_length());
+		return;
+	}
+
 	ais_res = saEvtEventDataGet(event_handle, event, &len);
 	if (ais_res != SA_AIS_OK) {
 		ast_log(LOG_ERROR, "Error retrieving event payload: %s\n",
@@ -225,8 +232,15 @@ static void ast_event_cb(const struct ast_event *ast_event, void *data)
 		goto return_event_free;
 	}
 
-	ais_res = saEvtEventPublish(event_handle,
-		ast_event, ast_event_get_size(ast_event), &event_id);
+	for (;;) {
+		ais_res = saEvtEventPublish(event_handle,
+			ast_event, ast_event_get_size(ast_event), &event_id);
+		if (ais_res != SA_AIS_ERR_TRY_AGAIN) {
+			break;
+		}
+		sched_yield();
+	}
+
 	if (ais_res != SA_AIS_OK) {
 		ast_log(LOG_ERROR, "Error publishing event: %s\n", ais_err2str(ais_res));
 		goto return_event_free;
@@ -297,6 +311,22 @@ static char *ais_evt_show_event_channels(struct ast_cli_entry *e, int cmd, struc
 static struct ast_cli_entry ais_cli[] = {
 	AST_CLI_DEFINE(ais_evt_show_event_channels, "Show configured event channels"),
 };
+
+void ast_ais_evt_membership_changed(void)
+{
+	struct event_channel *ec;
+
+	AST_RWLIST_RDLOCK(&event_channels);
+	AST_RWLIST_TRAVERSE(&event_channels, ec, entry) {
+		struct publish_event *pe;
+
+		AST_LIST_TRAVERSE(&ec->publish_events, pe, entry) {
+			ast_debug(1, "Dumping cache for event channel '%s'\n", ec->name);
+			ast_event_dump_cache(pe->sub);
+		}
+	}
+	AST_RWLIST_UNLOCK(&event_channels);
+}
 
 static void add_publish_event(struct event_channel *event_channel, const char *event_type)
 {

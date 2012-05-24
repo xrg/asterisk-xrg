@@ -498,14 +498,20 @@ char * attribute_pure ast_str_buffer(const struct ast_str *buf),
 
 /*!\brief Truncates the enclosed string to the given length.
  * \param buf A pointer to the ast_str structure.
- * \param len Maximum length of the string.
+ * \param len Maximum length of the string. If len is larger than the
+ *        current maximum length, things will explode. If it is negative
+ *        at most -len characters will be trimmed off the end.
  * \retval A pointer to the resulting string.
  */
 AST_INLINE_API(
 char *ast_str_truncate(struct ast_str *buf, ssize_t len),
 {
 	if (len < 0) {
-		buf->__AST_STR_USED += ((ssize_t) abs(len)) > (ssize_t) buf->__AST_STR_USED ? -buf->__AST_STR_USED : len;
+		if ((typeof(buf->__AST_STR_USED)) -len >= buf->__AST_STR_USED) {
+			buf->__AST_STR_USED = 0;
+		} else {
+			buf->__AST_STR_USED += len;
+		}
 	} else {
 		buf->__AST_STR_USED = len;
 	}
@@ -868,6 +874,45 @@ int __attribute__((format(printf, 3, 4))) ast_str_append(
 	va_end(ap);
 
 	return res;
+}
+)
+
+/*!
+ * \brief Check if a string is only digits
+ *
+ * \retval 1 The string contains only digits
+ * \retval 0 The string contains non-digit characters
+ */
+AST_INLINE_API(
+int ast_check_digits(const char *arg),
+{
+	while (*arg) {
+		if (*arg < '0' || *arg > '9') {
+			return 0;
+		}
+		arg++;
+	}
+	return 1;
+}
+)
+
+/*!
+ * \brief Convert the tech portion of a device string to upper case
+ *
+ * \retval dev_str Returns the char* passed in for convenience
+ */
+AST_INLINE_API(
+char *ast_tech_to_upper(char *dev_str),
+{
+	char *pos;
+	if (!dev_str || !strchr(dev_str, '/')) {
+		return dev_str;
+	}
+
+	for (pos = dev_str; *pos && *pos != '/'; pos++) {
+		*pos = toupper(*pos);
+	}
+	return dev_str;
 }
 )
 
