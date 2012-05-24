@@ -111,14 +111,16 @@ AST_MUTEX_DEFINE_STATIC(cdr_batch_lock);
 AST_MUTEX_DEFINE_STATIC(cdr_pending_lock);
 static ast_cond_t cdr_pending_cond;
 
-int check_cdr_enabled()
+int check_cdr_enabled(void)
 {
 	return enabled;
 }
 
-/*! Register a CDR driver. Each registered CDR driver generates a CDR
-	\return 0 on success, -1 on failure
-*/
+/*!
+ * \brief Register a CDR driver. Each registered CDR driver generates a CDR
+ * \retval 0 on success.
+ * \retval -1 on error
+ */
 int ast_cdr_register(const char *name, const char *desc, ast_cdrbe be)
 {
 	struct ast_cdr_beitem *i = NULL;
@@ -552,7 +554,7 @@ void ast_cdr_merge(struct ast_cdr *to, struct ast_cdr *from)
 		}
 
 		if (ast_test_flag(to, AST_CDR_FLAG_LOCKED)) {
-			ast_log(LOG_WARNING, "Merging into locked CDR... no choice.");
+			ast_log(LOG_WARNING, "Merging into locked CDR... no choice.\n");
 			to = zcdr; /* safety-- if all there are is locked CDR's, then.... ?? */
 			lto = NULL;
 		}
@@ -571,7 +573,9 @@ void ast_cdr_merge(struct ast_cdr *to, struct ast_cdr *from)
 				lfrom = lfrom->next;
 			}
 			/* rip off the last entry and put a copy of the to at the end */
-			llfrom->next = to;
+			if (llfrom) {
+				llfrom->next = to;
+			}
 			from = lfrom;
 		} else {
 			/* save copy of the current *to cdr */
@@ -587,10 +591,11 @@ void ast_cdr_merge(struct ast_cdr *to, struct ast_cdr *from)
 			}
 			from->next = NULL;
 			/* rip off the last entry and put a copy of the to at the end */
-			if (llfrom == from)
+			if (llfrom == from) {
 				to = to->next = ast_cdr_dup(&tcdr);
-			else
+			} else if (llfrom) {
 				to = llfrom->next = ast_cdr_dup(&tcdr);
+			}
 			from = lfrom;
 		}
 	}

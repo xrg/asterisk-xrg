@@ -51,6 +51,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/localtime.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
+#include "asterisk/test.h"
 
 /* Forward declaration */
 static int wait_file(struct ast_channel *chan, const char *ints, const char *file, const char *lang);
@@ -433,6 +434,7 @@ static int wait_file(struct ast_channel *chan, const char *ints, const char *fil
      \note Called from AGI */
 static int say_number_full(struct ast_channel *chan, int num, const char *ints, const char *language, const char *options, int audiofd, int ctrlfd)
 {
+	ast_test_suite_event_notify("SAYNUM", "Message: saying number %d\r\nNumber: %d\r\nChannel: %s", num, num, chan->name);
 	if (!strncasecmp(language, "en_GB", 5)) {     /* British syntax */
 	   return ast_say_number_full_en_GB(chan, num, ints, language, audiofd, ctrlfd);
 	} else if (!strncasecmp(language, "en", 2)) { /* English syntax */
@@ -837,6 +839,9 @@ static int ast_say_number_full_de(struct ast_channel *chan, int num, const char 
 		* - 1000 is 'tausend', however all other instances are 'ein tausend'
 		* - 1000000 is always 'eine million'
 		* - "million" is different in singular and plural form
+		* - 'and' should not go between a hundreds place value and any
+		*   tens/ones place values that follows it. i.e 136 is ein hundert
+		*   sechs und dreizig, not ein hundert und sechs und dreizig.
 		*/
 		if (num < 0) {
 			ast_copy_string(fn, "digits/minus", sizeof(fn));
@@ -844,10 +849,7 @@ static int ast_say_number_full_de(struct ast_channel *chan, int num, const char 
 				num = -num;
 			} else {
 				num = 0;
-			}	
-		} else if (num < 100 && t) {
-			ast_copy_string(fn, "digits/and", sizeof(fn));
-			t = 0;
+			}
 		} else if (num == 1 && mf == -1) {
 			snprintf(fn, sizeof(fn), "digits/%dF", num);
 			num = 0;
@@ -875,7 +877,6 @@ static int ast_say_number_full_de(struct ast_channel *chan, int num, const char 
 				snprintf(fn, sizeof(fn), "digits/%d", hundreds);
 			}
 			ast_copy_string(fna, "digits/hundred", sizeof(fna));
-			t = 1;
 		} else if (num == 1000 && t == 0) {
 			ast_copy_string(fn, "digits/thousand", sizeof(fn));
 			num = 0;
@@ -4725,6 +4726,8 @@ int ast_say_date_with_format_es(struct ast_channel *chan, time_t t, const char *
 				/* 12-Hour */
 				if (tm.tm_hour == 0)
 					ast_copy_string(nextmsg, "digits/12", sizeof(nextmsg));
+				else if (tm.tm_hour == 1 || tm.tm_hour == 13)
+					snprintf(nextmsg,sizeof(nextmsg), "digits/1F");
 				else if (tm.tm_hour > 12)
 					snprintf(nextmsg, sizeof(nextmsg), "digits/%d", tm.tm_hour - 12);
 				else
@@ -6122,6 +6125,9 @@ int ast_say_date_with_format_zh(struct ast_channel *chan, time_t t, const char *
 				if (tm.tm_hour < 10) {
 					res = wait_file(chan, ints, "digits/0", lang);
 				}
+				/* XXX Static analysis warns of no break here. No idea if this is
+				 * correct or not
+				 */
 			case 'k':
 				/* 24-Hour */
 				if (!(tm.tm_hour % 10) || tm.tm_hour < 10) {

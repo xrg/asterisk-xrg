@@ -69,8 +69,7 @@
   and assignments are always by value (i.e. strings are copied):
   * ast_string_field_set() stores a simple value;
   * ast_string_field_build() builds the string using a printf-style format;
-  * ast_string_field_build_va() is the varargs version of the above (for
-    portability reasons it uses two vararg arguments);
+  * ast_string_field_build_va() is the varargs version of the above;
   * variants of these function allow passing a pointer to the field
     as an argument.
 
@@ -82,8 +81,8 @@
   ast_string_field_build(x, blah, "%d %s", zipcode, city);
   ast_string_field_ptr_build(x, &x->blah, "%d %s", zipcode, city);
 
-  ast_string_field_build_va(x, bar, fmt, args1, args2)
-  ast_string_field_ptr_build_va(x, &x->bar, fmt, args1, args2)
+  ast_string_field_build_va(x, bar, fmt, args)
+  ast_string_field_ptr_build_va(x, &x->bar, fmt, args)
   \endcode
 
   When the structure instance is no longer needed, the fields
@@ -114,6 +113,10 @@
 */
 typedef const char * ast_string_field;
 
+/* the type of storage used to track how many bytes were allocated for a field */
+
+typedef uint16_t ast_string_field_allocation;
+
 /*!
   \internal
   \brief A constant empty string used for fields that have no other value
@@ -123,13 +126,15 @@ extern const char *__ast_string_field_empty;
 /*!
   \internal
   \brief Structure used to hold a pool of space for string fields
+  \note base is aligned so base+used can stay aligned by incrementing used with
+        aligned numbers only
 */
 struct ast_string_field_pool {
 	struct ast_string_field_pool *prev;	/*!< pointer to the previous pool, if any */
 	size_t size;				/*!< the total size of the pool */
 	size_t used;				/*!< the space used in the pool */
 	size_t active;				/*!< the amount of space actively in use by fields */
-	char base[0];				/*!< storage space for the fields */
+	char base[0] __attribute__((aligned(__alignof__(ast_string_field_allocation)))); /*!< storage space for the fields */
 };
 
 /*!
@@ -200,7 +205,6 @@ void __ast_string_field_ptr_build(struct ast_string_field_mgr *mgr,
   \param ptr Pointer to a field within the structure
   \param format printf-style format string
   \param args va_list of the args for the format_string
-  \param args_again a copy of the first va_list for the sake of bsd not having a copy routine
   \return nothing
 */
 void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
@@ -293,15 +297,14 @@ void * attribute_malloc __ast_calloc_with_stringfields(unsigned int num_structs,
 void __ast_string_field_release_active(struct ast_string_field_pool *pool_head,
 				       const ast_string_field ptr);
 
-/* the type of storage used to track how many bytes were allocated for a field */
-
-typedef uint16_t ast_string_field_allocation;
-
 /*!
   \brief Macro to provide access to the allocation field that lives immediately in front of a string field
   \param x Pointer to the string field
+
+  Note that x must be a pointer to a byte-sized type -- normally (char *) -- or this calculation
+  would break horribly
 */
-#define AST_STRING_FIELD_ALLOCATION(x) *((ast_string_field_allocation *) (x - sizeof(ast_string_field_allocation)))
+#define AST_STRING_FIELD_ALLOCATION(x) *((ast_string_field_allocation *) (x - __alignof__(ast_string_field_allocation)))
 
 /*!
   \brief Set a field to a simple string value
@@ -365,8 +368,7 @@ typedef uint16_t ast_string_field_allocation;
   \param x Pointer to a structure containing fields
   \param ptr Pointer to a field within the structure
   \param fmt printf-style format string
-  \param args1 Arguments for format string in va_list format
-  \param args2 a second copy of the va_list for the sake of bsd, with no va_list copy operation
+  \param args Arguments for format string in va_list format
   \return nothing
 */
 #define ast_string_field_ptr_build_va(x, ptr, fmt, args) \
@@ -377,8 +379,7 @@ typedef uint16_t ast_string_field_allocation;
   \param x Pointer to a structure containing fields
   \param field Name of the field to set
   \param fmt printf-style format string
-  \param args1 argument one
-  \param args2 argument two
+  \param args Arguments for format string in va_list format
   \return nothing
 */
 #define ast_string_field_build_va(x, field, fmt, args) \

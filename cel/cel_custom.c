@@ -29,6 +29,10 @@
  * \ingroup cel_drivers
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -124,7 +128,6 @@ static void custom_log(const struct ast_event *event, void *userdata)
 	}
 
 	dummy = ast_cel_fabricate_channel_from_event(event);
-
 	if (!dummy) {
 		ast_log(LOG_ERROR, "Unable to fabricate channel from CEL event.\n");
 		return;
@@ -159,7 +162,7 @@ static void custom_log(const struct ast_event *event, void *userdata)
 
 	AST_RWLIST_UNLOCK(&sinks);
 
-	ast_channel_release(dummy);
+	ast_channel_unref(dummy);
 }
 
 static int unload_module(void)

@@ -630,7 +630,7 @@ static void ccss_notify_device_state_change(const char *device, enum cc_state st
 	devstate = cc_state_to_devstate(state);
 
 	ast_log_dynamic_level(cc_logger_level,
-		"Notification of CCSS state change to '%s', device state '%s' for device '%s'",
+		"Notification of CCSS state change to '%s', device state '%s' for device '%s'\n",
 		cc_state_to_string(state), ast_devstate2str(devstate), device);
 
 	ast_devstate_changed(devstate, "ccss:%s", device);
@@ -1209,7 +1209,10 @@ static int generic_monitor_cmp_fn(void *obj, void *arg, int flags)
 
 static struct generic_monitor_instance_list *find_generic_monitor_instance_list(const char * const device_name)
 {
-	struct generic_monitor_instance_list finder = {.device_name = device_name};
+	struct generic_monitor_instance_list finder = {0};
+	char *uppertech = ast_strdupa(device_name);
+	ast_tech_to_upper(uppertech);
+	finder.device_name = uppertech;
 
 	return ao2_t_find(generic_monitors, &finder, OBJ_POINTER, "Finding generic monitor instance list");
 }
@@ -1231,19 +1234,24 @@ static struct generic_monitor_instance_list *create_new_generic_list(struct ast_
 {
 	struct generic_monitor_instance_list *generic_list = ao2_t_alloc(sizeof(*generic_list),
 			generic_monitor_instance_list_destructor, "allocate generic monitor instance list");
+	char * device_name;
 
 	if (!generic_list) {
 		return NULL;
 	}
 
-	if (!(generic_list->device_name = ast_strdup(monitor->interface->device_name))) {
+	if (!(device_name = ast_strdup(monitor->interface->device_name))) {
 		cc_unref(generic_list, "Failed to strdup the monitor's device name");
 		return NULL;
 	}
+	ast_tech_to_upper(device_name);
+	generic_list->device_name = device_name;
 
-	if (!(generic_list->sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE, generic_monitor_devstate_cb,
-				"Requesting CC", NULL, AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR,
-				monitor->interface->device_name, AST_EVENT_IE_END))) {
+	if (!(generic_list->sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE,
+		generic_monitor_devstate_cb, "Requesting CC", NULL,
+		AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, monitor->interface->device_name,
+		AST_EVENT_IE_STATE, AST_EVENT_IE_PLTYPE_EXISTS,
+		AST_EVENT_IE_END))) {
 		cc_unref(generic_list, "Failed to subscribe to device state");
 		return NULL;
 	}
@@ -2629,10 +2637,11 @@ static int cc_generic_agent_start_monitoring(struct ast_cc_agent *agent)
 	ast_str_set(&str, 0, "Agent monitoring %s device state since it is busy\n",
 		agent->device_name);
 
-	if (!(generic_pvt->sub = ast_event_subscribe(
-			AST_EVENT_DEVICE_STATE, generic_agent_devstate_cb, ast_str_buffer(str), agent,
-			AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, agent->device_name,
-			AST_EVENT_IE_END))) {
+	if (!(generic_pvt->sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE,
+		generic_agent_devstate_cb, ast_str_buffer(str), agent,
+		AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, agent->device_name,
+		AST_EVENT_IE_STATE, AST_EVENT_IE_PLTYPE_EXISTS,
+		AST_EVENT_IE_END))) {
 		return -1;
 	}
 	return 0;

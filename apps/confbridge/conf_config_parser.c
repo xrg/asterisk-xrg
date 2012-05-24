@@ -219,6 +219,8 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 
 	if (!strcasecmp(sound_name, "sound_only_person")) {
 		ast_string_field_set(sounds, onlyperson, sound_file);
+	} else if (!strcasecmp(sound_name, "sound_only_one")) {
+		ast_string_field_set(sounds, onlyone, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_has_joined")) {
 		ast_string_field_set(sounds, hasjoin, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_has_left")) {
@@ -237,6 +239,8 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 		ast_string_field_set(sounds, placeintoconf, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_wait_for_leader")) {
 		ast_string_field_set(sounds, waitforleader, sound_file);
+	} else if (!strcasecmp(sound_name, "sound_leader_has_left")) {
+		ast_string_field_set(sounds, leaderhasleft, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_get_pin")) {
 		ast_string_field_set(sounds, getpin, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_invalid_pin")) {
@@ -284,6 +288,14 @@ static int set_bridge_option(const char *name, const char *value, struct bridge_
 		}
 	} else if (!strcasecmp(name, "record_conference")) {
 		ast_set2_flag(b_profile, ast_true(value), BRIDGE_OPT_RECORD_CONFERENCE);
+	} else if (!strcasecmp(name, "video_mode")) {
+		if (!strcasecmp(value, "first_marked")) {
+			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED);
+		} else if (!strcasecmp(value, "last_marked")) {
+			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_LAST_MARKED);
+		} else if (!strcasecmp(value, "follow_talker")) {
+			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER);
+		}
 	} else if (!strcasecmp(name, "max_members")) {
 		if (sscanf(value, "%30u", &b_profile->max_members) != 1) {
 			return -1;
@@ -318,6 +330,7 @@ static int set_bridge_option(const char *name, const char *value, struct bridge_
 		ast_string_field_set(sounds, otherinparty, tmp->sounds->otherinparty);
 		ast_string_field_set(sounds, placeintoconf, tmp->sounds->placeintoconf);
 		ast_string_field_set(sounds, waitforleader, tmp->sounds->waitforleader);
+		ast_string_field_set(sounds, leaderhasleft, tmp->sounds->leaderhasleft);
 		ast_string_field_set(sounds, getpin, tmp->sounds->getpin);
 		ast_string_field_set(sounds, invalidpin, tmp->sounds->invalidpin);
 		ast_string_field_set(sounds, locked, tmp->sounds->locked);
@@ -534,6 +547,8 @@ static int add_action_to_menu_entry(struct conf_menu_entry *menu_entry, enum con
 	case MENU_ACTION_ADMIN_TOGGLE_LOCK:
 	case MENU_ACTION_ADMIN_KICK_LAST:
 	case MENU_ACTION_LEAVE:
+	case MENU_ACTION_SET_SINGLE_VIDEO_SRC:
+	case MENU_ACTION_RELEASE_SINGLE_VIDEO_SRC:
 		break;
 	case MENU_ACTION_PLAYBACK:
 	case MENU_ACTION_PLAYBACK_AND_CONTINUE:
@@ -582,7 +597,7 @@ static int add_action_to_menu_entry(struct conf_menu_entry *menu_entry, enum con
 
 static int add_menu_entry(struct conf_menu *menu, const char *dtmf, const char *action_names)
 {
-	struct conf_menu_entry *menu_entry = NULL;
+	struct conf_menu_entry *menu_entry = NULL, *cur = NULL;
 	int res = 0;
 	char *tmp_action_names = ast_strdupa(action_names);
 	char *action = NULL;
@@ -649,6 +664,10 @@ static int add_menu_entry(struct conf_menu *menu, const char *dtmf, const char *
 			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_ADMIN_KICK_LAST, NULL);
 		} else if (!strcasecmp(action, "leave_conference")) {
 			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_LEAVE, NULL);
+		} else if (!strcasecmp(action, "set_as_single_video_src")) {
+			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_SET_SINGLE_VIDEO_SRC, NULL);
+		} else if (!strcasecmp(action, "release_as_single_video_src")) {
+			res |= add_action_to_menu_entry(menu_entry, MENU_ACTION_RELEASE_SINGLE_VIDEO_SRC, NULL);
 		} else if (!strncasecmp(action, "dialplan_exec(", 14)) {
 			ast_copy_string(buf, action, sizeof(buf));
 			action_args = buf;
@@ -690,6 +709,16 @@ static int add_menu_entry(struct conf_menu *menu, const char *dtmf, const char *
 		ast_free(menu_entry);
 		return -1;
 	}
+
+	/* remove any list entry with an identical DTMF sequence for overrides */
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&menu->entries, cur, entry) {
+		if (!strcasecmp(cur->dtmf, menu_entry->dtmf)) {
+			AST_LIST_REMOVE_CURRENT(entry);
+			ast_free(cur);
+			break;
+		}
+	}
+	AST_LIST_TRAVERSE_SAFE_END;
 
 	AST_LIST_INSERT_TAIL(&menu->entries, menu_entry, entry);
 
@@ -973,6 +1002,16 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 		ast_cli(a->fd,"Max Members:          No Limit\n");
 	}
 
+	if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_LAST_MARKED) {
+		ast_cli(a->fd, "Video Mode:           last_marked\n");
+	} else if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED) {
+		ast_cli(a->fd, "Video Mode:           first_marked\n");
+	} else if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER) {
+		ast_cli(a->fd, "Video Mode:           follow_talker\n");
+	} else {
+		ast_cli(a->fd, "Video Mode:           no video\n");
+	}
+
 	ast_cli(a->fd,"sound_join:           %s\n", conf_get_sound(CONF_SOUND_JOIN, b_profile.sounds));
 	ast_cli(a->fd,"sound_leave:          %s\n", conf_get_sound(CONF_SOUND_LEAVE, b_profile.sounds));
 	ast_cli(a->fd,"sound_only_person:    %s\n", conf_get_sound(CONF_SOUND_ONLY_PERSON, b_profile.sounds));
@@ -985,6 +1024,7 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 	ast_cli(a->fd,"sound_other_in_party: %s\n", conf_get_sound(CONF_SOUND_OTHER_IN_PARTY, b_profile.sounds));
 	ast_cli(a->fd,"sound_place_into_conference: %s\n", conf_get_sound(CONF_SOUND_PLACE_IN_CONF, b_profile.sounds));
 	ast_cli(a->fd,"sound_wait_for_leader:       %s\n", conf_get_sound(CONF_SOUND_WAIT_FOR_LEADER, b_profile.sounds));
+	ast_cli(a->fd,"sound_leader_has_left:       %s\n", conf_get_sound(CONF_SOUND_LEADER_HAS_LEFT, b_profile.sounds));
 	ast_cli(a->fd,"sound_get_pin:        %s\n", conf_get_sound(CONF_SOUND_GET_PIN, b_profile.sounds));
 	ast_cli(a->fd,"sound_invalid_pin:    %s\n", conf_get_sound(CONF_SOUND_INVALID_PIN, b_profile.sounds));
 	ast_cli(a->fd,"sound_locked:         %s\n", conf_get_sound(CONF_SOUND_LOCKED, b_profile.sounds));
@@ -1132,6 +1172,12 @@ static char *handle_cli_confbridge_show_menu(struct ast_cli_entry *e, int cmd, s
 			case MENU_ACTION_LEAVE:
 				ast_cli(a->fd, "leave_conference");
 				break;
+			case MENU_ACTION_SET_SINGLE_VIDEO_SRC:
+				ast_cli(a->fd, "set_as_single_video_src");
+				break;
+			case MENU_ACTION_RELEASE_SINGLE_VIDEO_SRC:
+				ast_cli(a->fd, "release_as_single_video_src");
+				break;
 			}
 			action_num++;
 		}
@@ -1270,8 +1316,9 @@ const struct user_profile *conf_find_user_profile(struct ast_channel *chan, cons
 				conf_user_profile_copy(result, &b_data->u_profile);
 				return result;
 			}
+		} else {
+			ast_channel_unlock(chan);
 		}
-		ast_channel_unlock(chan);
 	}
 
 	if (ast_strlen_zero(user_profile_name)) {
@@ -1320,8 +1367,9 @@ const struct bridge_profile *conf_find_bridge_profile(struct ast_channel *chan, 
 				conf_bridge_profile_copy(result, &b_data->b_profile);
 				return result;
 			}
+		} else {
+			ast_channel_unlock(chan);
 		}
-		ast_channel_unlock(chan);
 	}
 	if (ast_strlen_zero(bridge_profile_name)) {
 		bridge_profile_name = DEFAULT_BRIDGE_PROFILE;

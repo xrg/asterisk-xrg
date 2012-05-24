@@ -168,6 +168,30 @@ type=bridge
                         ; larger amounts of delay into the bridge.  Valid values here are 10, 20, 40,
                         ; or 80.  By default 20ms is used.
 
+;video_mode = follow_talker; Sets how confbridge handles video distribution to the conference participants.
+                           ; Note that participants wanting to view and be the source of a video feed
+                           ; _MUST_ be sharing the same video codec.  Also, using video in conjunction with
+                           ; with the jitterbuffer currently results in the audio being slightly out of sync
+                           ; with the video.  This is a result of the jitterbuffer only working on the audio
+                           ; stream.  It is recommended to disable the jitterbuffer when video is used.
+                           ;
+                           ; --- MODES ---
+                           ; none: No video sources are set by default in the conference. It is still
+                           ;       possible for a user to be set as a video source via AMI or DTMF action
+                           ;       at any time.
+                           ;
+                           ; follow_talker: The video feed will follow whoever is talking and providing video.
+                           ;
+                           ; last_marked: The last marked user to join the conference with video capabilities
+                           ;              will be the single source of video distributed to all participants.
+                           ;              If multiple marked users are capable of video, the last one to join
+                           ;              is always the source, when that user leaves it goes to the one who
+                           ;              joined before them.
+                           ;
+                           ; first_marked: The first marked user to join the conference with video capabilities
+                           ;               is the single source of video distribution among all participants. If
+                           ;               that user leaves, the marked user to join after them becomes the source.
+
 ; All sounds in the conference are customizable using the bridge profile options below.
 ; Simply state the option followed by the filename or full path of the filename after
 ; the option.  Example: sound_had_joined=conf-hasjoin  This will play the conf-hasjoin
@@ -265,6 +289,23 @@ type=bridge
                                ; unlocking the conference.  Non admins can not use
                                ; this action even if it is in their menu.
 
+; set_as_single_video_src   ; This action allows any user to set themselves as the
+                            ; single video source distributed to all participants.
+                            ; This will make the video feed stick to them regardless
+                            ; of what the video_mode is set to.
+
+; release_as_single_video_src ; This action allows a user to release themselves as
+                              ; the video source.  If video_mode is not set to "none"
+                              ; this action will result in the conference returning to
+                              ; whatever video mode the bridge profile is using.
+                              ;
+                              ; Note that this action will have no effect if the user
+                              ; is not currently the video source.  Also, the user is
+                              ; not guaranteed by using this action that they will not
+                              ; become the video source again.  The bridge will return
+                              ; to whatever operation the video_mode option is set to
+                              ; upon release of the video src.
+
 [sample_user_menu]
 type=menu
 *=playback_and_continue(conf-usermenu)
@@ -276,8 +317,8 @@ type=menu
 6=increase_listening_volume
 *7=decrease_talking_volume
 7=decrease_talking_volume
-*8=no_op
-8=no_op
+*8=leave_conference
+8=leave_conference
 *9=increase_talking_volume
 9=increase_talking_volume
 

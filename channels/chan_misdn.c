@@ -53,6 +53,7 @@
 	<depend>isdnnet</depend>
 	<depend>misdn</depend>
 	<depend>suppserv</depend>
+	<support_level>extended</support_level>
  ***/
 #include "asterisk.h"
 
@@ -6984,6 +6985,19 @@ static int misdn_indication(struct ast_channel *ast, int cond, const void *data,
 		chan_misdn_log(1, p->bc->port, " --> * IND :\tproceeding pid:%d\n", p->bc->pid);
 		misdn_lib_send_event(p->bc, EVENT_PROCEEDING);
 		break;
+	case AST_CONTROL_INCOMPLETE:
+		chan_misdn_log(1, p->bc->port, " --> *\tincomplete pid:%d\n", p->bc->pid);
+		if (!p->overlap_dial) {
+			/* Overlapped dialing not enabled - send hangup */
+			p->bc->out_cause = AST_CAUSE_INVALID_NUMBER_FORMAT;
+			start_bc_tones(p);
+			misdn_lib_send_event(p->bc, EVENT_DISCONNECT);
+
+			if (p->bc->nt) {
+				hanguptone_indicate(p);
+			}
+		}
+		break;
 	case AST_CONTROL_CONGESTION:
 		chan_misdn_log(1, p->bc->port, " --> * IND :\tcongestion pid:%d\n", p->bc->pid);
 
@@ -7392,7 +7406,6 @@ static struct ast_frame *misdn_read(struct ast_channel *ast)
 static int misdn_write(struct ast_channel *ast, struct ast_frame *frame)
 {
 	struct chan_list *ch;
-	int i  = 0;
 
 	if (!ast || !(ch = MISDN_ASTERISK_TECH_PVT(ast))) {
 		return -1;
@@ -7491,7 +7504,7 @@ static int misdn_write(struct ast_channel *ast, struct ast_frame *frame)
 
 	} else {
 		/* transmit without jitterbuffer */
-		i = misdn_lib_tx2misdn_frm(ch->bc, frame->data.ptr, frame->samples);
+		misdn_lib_tx2misdn_frm(ch->bc, frame->data.ptr, frame->samples);
 	}
 
 	return 0;
@@ -7872,64 +7885,71 @@ static struct ast_channel *misdn_request(const char *type, struct ast_format_cap
 		}
 
 		if (rr) {
-			int robin_channel = rr->channel;
 			int port_start;
-			int next_chan = 1;
+			int bchan_start;
+			int port_up;
+			int check;
+			int maxbchans;
+			int wraped = 0;
 
+			if (!rr->port) {
+				rr->port = misdn_cfg_get_next_port_spin(0);
+			}
+
+			if (!rr->channel) {
+				rr->channel = 1;
+			}
+
+			bchan_start = rr->channel;
+			port_start = rr->port;
 			do {
-				port_start = 0;
-				for (port = misdn_cfg_get_next_port_spin(rr->port); port > 0 && port != port_start;
-					 port = misdn_cfg_get_next_port_spin(port)) {
-
-					if (!port_start) {
-						port_start = port;
-					}
-
-					if (port >= port_start) {
-						next_chan = 1;
-					}
-
-					if (port <= port_start && next_chan) {
-						int maxbchans = misdn_lib_get_maxchans(port);
-
-						if (++robin_channel >= maxbchans) {
-							robin_channel = 1;
-						}
-						next_chan = 0;
-					}
-
-					misdn_cfg_get(port, MISDN_CFG_GROUPNAME, cfg_group, sizeof(cfg_group));
-
-					if (!strcasecmp(cfg_group, group)) {
-						int port_up;
-						int check;
-
-						misdn_cfg_get(port, MISDN_CFG_PMP_L1_CHECK, &check, sizeof(check));
-						port_up = misdn_lib_port_up(port, check);
-
-						if (check && !port_up) {
-							chan_misdn_log(1, port, "L1 is not Up on this Port\n");
-						}
-
-						if (check && port_up < 0) {
-							ast_log(LOG_WARNING, "This port (%d) is blocked\n", port);
-						}
-
-						if (port_up > 0)	{
-							newbc = misdn_lib_get_free_bc(port, robin_channel, 0, 0);
-							if (newbc) {
-								chan_misdn_log(4, port, " Success! Found port:%d channel:%d\n", newbc->port, newbc->channel);
-								if (port_up) {
-									chan_misdn_log(4, port, "portup:%d\n",  port_up);
-								}
-								rr->port = newbc->port;
-								rr->channel = newbc->channel;
-								break;
-							}
-						}
-					}
+				misdn_cfg_get(rr->port, MISDN_CFG_GROUPNAME, cfg_group, sizeof(cfg_group));
+				if (strcasecmp(cfg_group, group)) {
+					wraped = 1;
+					rr->port = misdn_cfg_get_next_port_spin(rr->port);
+					rr->channel = 1;
+					continue;
 				}
-			} while (!newbc && robin_channel != rr->channel);
+
+				misdn_cfg_get(rr->port, MISDN_CFG_PMP_L1_CHECK, &check, sizeof(check));
+				port_up = misdn_lib_port_up(rr->port, check);
+
+				if (!port_up) {
+					chan_misdn_log(1, rr->port, "L1 is not Up on this Port\n");
+					rr->port = misdn_cfg_get_next_port_spin(rr->port);
+					rr->channel = 1;
+				} else if (port_up < 0) {
+					ast_log(LOG_WARNING, "This port (%d) is blocked\n", rr->port);
+					rr->port = misdn_cfg_get_next_port_spin(rr->port);
+					rr->channel = 1;
+				} else {
+					chan_misdn_log(4, rr->port, "portup\n");
+					maxbchans = misdn_lib_get_maxchans(rr->port);
+
+					for (;rr->channel <= maxbchans;rr->channel++) {
+						/* ive come full circle and can stop now */
+						if (wraped && (rr->port == port_start) && (rr->channel == bchan_start)) {
+							break;
+						}
+
+						chan_misdn_log(4, rr->port, "Checking channel %d\n",  rr->channel);
+
+						if ((newbc = misdn_lib_get_free_bc(rr->port, rr->channel, 0, 0))) {
+							chan_misdn_log(4, rr->port, " Success! Found port:%d channel:%d\n", newbc->port, newbc->channel);
+							rr->channel++;
+							break;
+						}
+					}
+					if (wraped && (rr->port == port_start) && (rr->channel <= bchan_start)) {
+						break;
+					} else if (!newbc || (rr->channel == maxbchans)) {
+						rr->port = misdn_cfg_get_next_port_spin(rr->port);
+						rr->channel = 1;
+					}
+
+				}
+				wraped = 1;
+			} while (!newbc && (rr->port > 0));
 		} else {
 			for (port = misdn_cfg_get_next_port(0); port > 0;
 				port = misdn_cfg_get_next_port(port)) {

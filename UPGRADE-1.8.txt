@@ -18,7 +18,18 @@
 ===
 ===========================================================
 
+From 1.8.10 to 1.8.11:
+
+* If no transport is specified in sip.conf, transport will default to UDP.
+  Also, if multiple transport= lines are used, only the last will be used.
+
 From 1.6.2 to 1.8:
+
+* chan_sip no longer sets HASH(SIP_CAUSE,<chan name>) on channels by default.
+  This must now be enabled by setting 'sipstorecause' to 'yes' in sip.conf.
+  This carries a performance penalty.
+
+* Asterisk now requires libpri 1.4.11+ for PRI support.
 
 * A couple of CLI commands in res_ais were changed back to their original form:
     "ais show clm members" --> "ais clm show members"
@@ -90,8 +101,8 @@ From 1.6.2 to 1.8:
 * ExternalIVR will now send Z events for invalid or missing files, T events
   now include the interrupted file and bugs in argument parsing have been
   fixed so there may be arguments specified in incorrect ways that were
-  working that will no longer work.
-  Please see doc/externalivr.txt for details.
+  working that will no longer work. Please see 
+  https://wiki.asterisk.org/wiki/display/AST/External+IVR+Interface for details.
 
 * OSP lookup application changes following variable names:
   OSPPEERIP to OSPINPEERIP
@@ -140,6 +151,25 @@ From 1.6.2 to 1.8:
   the connected line ID on outgoing call legs.  The timing of some AMI
   events/responses output the connected line ID as caller ID.  These party ID's
   are now separate.
+
+* The Dial application d and H options do not automatically answer the call
+  anymore.  It broke DTMF attended transfers.  Since many SIP and ISDN phones
+  cannot send DTMF before a call is connected, you need to answer the call
+  leg to those phones before using Dial with these options for them to have
+  any effect before the dialed party answers.
+
+* The outgoing directory (where .call files are read) now uses inotify to
+  detect file changes instead of polling the directory on a regular basis.
+  If your outgoing folder is on a NFS mount or another network file system,
+  changes to the files will not be detected.  You can revert to polling the
+  directory by specifying --without-inotify to configure before compiling.
+
+* The 'sipusers' realtime table has been removed completely. Use the 'sippeers'
+  table with type 'user' for user type objects.
+
+* The sip.conf allowoverlap option now accepts 'dtmf' as a value.  If you
+  are using the early media DTMF overlap dialing method you now need to set
+  allowoverlap=dtmf.
 
 From 1.6.1 to 1.6.2:
 
@@ -235,6 +265,11 @@ From 1.6.1 to 1.6.2:
 
 * The cdr.conf file must exist and be configured correctly in order for CDR
   records to be written.
+
+* cdr_pgsql now assumes the encoding of strings it is handed are in LATIN9,
+  which should cover most uses of the extended ASCII set.  If your strings
+  use a different encoding in Asterisk, the "encoding" parameter may be set
+  to specify the correct character set.
 
 From 1.6.0.1 to 1.6.1:
 

@@ -26,7 +26,7 @@
  */
 
 /*** MODULEINFO
-	<defaultenabled>yes</defaultenabled>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"

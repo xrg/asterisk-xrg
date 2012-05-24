@@ -210,25 +210,25 @@ int __ao2_ref_debug(void *user_data, const int delta, char *tag, char *file, int
 		return -1;
 
 	if (delta != 0) {
-		FILE *refo = fopen(REF_FILE,"a");
-		fprintf(refo, "%p %s%d   %s:%d:%s (%s) [@%d]\n", user_data, (delta<0? "":"+"), delta, file, line, funcname, tag, obj ? obj->priv_data.ref_counter : -1);
-		fclose(refo);
+		FILE *refo = fopen(REF_FILE, "a");
+		if (refo) {
+			fprintf(refo, "%p %s%d   %s:%d:%s (%s) [@%d]\n", user_data, (delta < 0 ? "" : "+"),
+				delta, file, line, funcname, tag, obj ? obj->priv_data.ref_counter : -1);
+			fclose(refo);
+		}
 	}
 	if (obj->priv_data.ref_counter + delta == 0 && obj->priv_data.destructor_fn != NULL) { /* this isn't protected with lock; just for o/p */
-			FILE *refo = fopen(REF_FILE,"a"); 	 
-			fprintf(refo, "%p **call destructor** %s:%d:%s (%s)\n", user_data, file, line, funcname, tag); 	 
+		FILE *refo = fopen(REF_FILE, "a");
+		if (refo) {
+			fprintf(refo, "%p **call destructor** %s:%d:%s (%s)\n", user_data, file, line, funcname, tag);
 			fclose(refo);
+		}
 	}
 	return internal_ao2_ref(user_data, delta);
 }
 
 int __ao2_ref(void *user_data, const int delta)
 {
-	struct astobj2 *obj = INTERNAL_OBJ(user_data);
-
-	if (obj == NULL)
-		return -1;
-
 	return internal_ao2_ref(user_data, delta);
 }
 
@@ -319,14 +319,13 @@ void *__ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, char 
 {
 	/* allocation */
 	void *obj;
-	FILE *refo = ref_debug ? fopen(REF_FILE,"a") : NULL;
+	FILE *refo;
 
 	if ((obj = internal_ao2_alloc(data_size, destructor_fn, file, line, funcname)) == NULL) {
-		fclose(refo);
 		return NULL;
 	}
 
-	if (refo) {
+	if (ref_debug && (refo = fopen(REF_FILE, "a"))) {
 		fprintf(refo, "%p =1   %s:%d:%s (%s)\n", obj, file, line, funcname, tag);
 		fclose(refo);
 	}
@@ -733,10 +732,6 @@ static void *internal_ao2_callback(struct ao2_container *c,
 						__ao2_ref(EXTERNAL_OBJ(cur->astobj), -1);
 				}
 				ast_free(cur);	/* free the link record */
-			}
-			if ((match) && (!(flags & OBJ_UNLINK))) {
-				AST_LIST_REMOVE_CURRENT(entry);
-				AST_LIST_INSERT_HEAD(&c->buckets[i], cur, entry);
 			}
 
 			if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {

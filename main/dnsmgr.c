@@ -54,8 +54,14 @@ struct ast_dnsmgr_entry {
 	struct ast_sockaddr *result;
 	/*! SRV record to lookup, if provided. Composed of service, protocol, and domain name: _Service._Proto.Name */
 	char *service;
+	/*! Address family to filter DNS responses. */
+	unsigned int family;
 	/*! Set to 1 if the entry changes */
 	unsigned int changed:1;
+	/*! Data to pass back to update_func */
+	void *data;
+	/*! The callback function to execute on address update */
+	dns_update_func update_func;
 	ast_mutex_t lock;
 	AST_RWLIST_ENTRY(ast_dnsmgr_entry) list;
 	/*! just 1 here, but we use calloc to allocate the correct size */
@@ -83,7 +89,7 @@ static struct refresh_info master_refresh_info = {
 	.verbose = 0,
 };
 
-struct ast_dnsmgr_entry *ast_dnsmgr_get(const char *name, struct ast_sockaddr *result, const char *service)
+struct ast_dnsmgr_entry *ast_dnsmgr_get_family(const char *name, struct ast_sockaddr *result, const char *service, unsigned int family)
 {
 	struct ast_dnsmgr_entry *entry;
 	int total_size = sizeof(*entry) + strlen(name) + (service ? strlen(service) + 1 : 0);
@@ -99,12 +105,18 @@ struct ast_dnsmgr_entry *ast_dnsmgr_get(const char *name, struct ast_sockaddr *r
 		entry->service = ((char *) entry) + sizeof(*entry) + strlen(name);
 		strcpy(entry->service, service);
 	}
+	entry->family = family;
 
 	AST_RWLIST_WRLOCK(&entry_list);
 	AST_RWLIST_INSERT_HEAD(&entry_list, entry, list);
 	AST_RWLIST_UNLOCK(&entry_list);
 
 	return entry;
+}
+
+struct ast_dnsmgr_entry *ast_dnsmgr_get(const char *name, struct ast_sockaddr *result, const char *service)
+{
+	return ast_dnsmgr_get_family(name, result, service, 0);
 }
 
 void ast_dnsmgr_release(struct ast_dnsmgr_entry *entry)
@@ -115,14 +127,16 @@ void ast_dnsmgr_release(struct ast_dnsmgr_entry *entry)
 	AST_RWLIST_WRLOCK(&entry_list);
 	AST_RWLIST_REMOVE(&entry_list, entry, list);
 	AST_RWLIST_UNLOCK(&entry_list);
-	ast_verb(4, "removing dns manager for '%s'\n", entry->name);
+	ast_verb(6, "removing dns manager for '%s'\n", entry->name);
 
 	ast_mutex_destroy(&entry->lock);
 	ast_free(entry);
 }
 
-int ast_dnsmgr_lookup(const char *name, struct ast_sockaddr *result, struct ast_dnsmgr_entry **dnsmgr, const char *service)
+static int internal_dnsmgr_lookup(const char *name, struct ast_sockaddr *result, struct ast_dnsmgr_entry **dnsmgr, const char *service, dns_update_func func, void *data)
 {
+	unsigned int family;
+
 	if (ast_strlen_zero(name) || !result || !dnsmgr) {
 		return -1;
 	}
@@ -131,19 +145,42 @@ int ast_dnsmgr_lookup(const char *name, struct ast_sockaddr *result, struct ast_
 		return 0;
 	}
 
-	ast_verb(4, "doing dnsmgr_lookup for '%s'\n", name);
+	/* Lookup address family filter. */
+	family = result->ss.ss_family;
+
+	/*
+	 * If it's actually an IP address and not a name, there's no
+	 * need for a managed lookup.
+	 */
+	if (ast_sockaddr_parse(result, name, PARSE_PORT_FORBID)) {
+		return 0;
+	}
+
+	ast_verb(6, "doing dnsmgr_lookup for '%s'\n", name);
 
 	/* do a lookup now but add a manager so it will automagically get updated in the background */
 	ast_get_ip_or_srv(result, name, service);
-	
+
 	/* if dnsmgr is not enable don't bother adding an entry */
 	if (!enabled) {
 		return 0;
 	}
-	
-	ast_verb(3, "adding dns manager for '%s'\n", name);
-	*dnsmgr = ast_dnsmgr_get(name, result, service);
+
+	ast_verb(6, "adding dns manager for '%s'\n", name);
+	*dnsmgr = ast_dnsmgr_get_family(name, result, service, family);
+	(*dnsmgr)->update_func = func;
+	(*dnsmgr)->data = data;
 	return !*dnsmgr;
+}
+
+int ast_dnsmgr_lookup(const char *name, struct ast_sockaddr *result, struct ast_dnsmgr_entry **dnsmgr, const char *service)
+{
+	return internal_dnsmgr_lookup(name, result, dnsmgr, service, NULL, NULL);
+}
+
+int ast_dnsmgr_lookup_cb(const char *name, struct ast_sockaddr *result, struct ast_dnsmgr_entry **dnsmgr, const char *service, dns_update_func func, void *data)
+{
+	return internal_dnsmgr_lookup(name, result, dnsmgr, service, func, data);
 }
 
 /*
@@ -157,23 +194,27 @@ static int dnsmgr_refresh(struct ast_dnsmgr_entry *entry, int verbose)
 	ast_mutex_lock(&entry->lock);
 
 	if (verbose) {
-		ast_verb(3, "refreshing '%s'\n", entry->name);
+		ast_verb(6, "refreshing '%s'\n", entry->name);
 	}
 
+	tmp.ss.ss_family = entry->family;
 	if (!ast_get_ip_or_srv(&tmp, entry->name, entry->service)) {
 		if (!ast_sockaddr_port(&tmp)) {
 			ast_sockaddr_set_port(&tmp, ast_sockaddr_port(entry->result));
 		}
-
 		if (ast_sockaddr_cmp(&tmp, entry->result)) {
 			const char *old_addr = ast_strdupa(ast_sockaddr_stringify(entry->result));
 			const char *new_addr = ast_strdupa(ast_sockaddr_stringify(&tmp));
 
-			ast_log(LOG_NOTICE, "dnssrv: host '%s' changed from %s to %s\n",
-					entry->name, old_addr, new_addr);
+			if (entry->update_func) {
+				entry->update_func(entry->result, &tmp, entry->data);
+			} else {
+				ast_log(LOG_NOTICE, "dnssrv: host '%s' changed from %s to %s\n",
+						entry->name, old_addr, new_addr);
 
-			ast_sockaddr_copy(entry->result, &tmp);
-			changed = entry->changed = 1;
+				ast_sockaddr_copy(entry->result, &tmp);
+				changed = entry->changed = 1;
+			}
 		}
 	}
 
@@ -227,7 +268,7 @@ static int refresh_list(const void *data)
 		return -1;
 	}
 
-	ast_verb(3, "Refreshing DNS lookups.\n");
+	ast_verb(6, "Refreshing DNS lookups.\n");
 	AST_RWLIST_RDLOCK(info->entries);
 	AST_RWLIST_TRAVERSE(info->entries, entry, list) {
 		if (info->regex_present && regexec(&info->filter, entry->name, 0, NULL, 0))

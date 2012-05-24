@@ -19,7 +19,22 @@
 ===
 ===========================================================
 
-From 1.8 to 1.10:
+From 10.3 to 10.4:
+
+* In AEL dialplans, the "h" extension will now be inherited from prior
+  calling contexts, just as it had in 1.4.  If you have created an AEL
+  dialplan from scratch in earlier versions of 10, you may want to check
+  that the execution of "h" extensions in earlier contexts is what you
+  want.  If you want to interrupt this functionality, simply placing an
+  "h" extension in the macro where you want no inheritance to take place
+  should be sufficient.
+
+From 10.2 to 10.3:
+
+* If no transport is specified in sip.conf, transport will default to UDP.
+  Also, if multiple transport= lines are used, only the last will be used.
+
+From 1.8 to 10:
 
 cel_pgsql:
  - This module now expects an 'extra' column in the database for data added
@@ -28,6 +43,12 @@ cel_pgsql:
 ConfBridge
  - ConfBridge's dialplan arguments have changed and are not
    backwards compatible.
+
+File Interpreters
+ - The format interpreter formats/format_sln16.c for the file extension
+   '.sln16' has been removed. The '.sln16' file interpreter now exists
+   in the formats/format_sln.c module along with new support for sln12,
+   sln24, sln32, sln44, sln48, sln96, and sln192 file extensions.
 
 HTTP:
  - A bindaddr must be specified in order for the HTTP server
@@ -49,6 +70,45 @@ pbx_lua:
    function stops executing.
  - the autoservice now defaults to being on by default
  - autoservice_start() and autoservice_start() no longer return a value.
+
+Queue:
+ - Mark QUEUE_MEMBER_PENALTY Deprecated it never worked for realtime members
+ - QUEUE_MEMBER is now R/W supporting setting paused, ignorebusy and penalty.
+
+Asterisk Database:
+ - The internal Asterisk database has been switched from Berkeley DB 1.86 to
+   SQLite 3. An existing Berkeley astdb file can be converted with the astdb2sqlite3
+   utility in the UTILS section of menuselect. If an existing astdb is found and no
+   astdb.sqlite3 exists, astdb2sqlite3 will be compiled automatically. Asterisk will
+   convert an existing astdb to the SQLite3 version automatically at runtime. If
+   moving back from Asterisk 10 to Asterisk 1.8, the astdb2bdb utility can be used
+   to create a Berkeley DB copy of the SQLite3 astdb that Asterisk 10 uses.
+
+Manager:
+ - The AMI protocol version was incremented to 1.2 as a result of changing two
+   instances of the Unlink event to Bridge events. This change was documented
+   as part of the AMI 1.1 update, but two Unlink events were inadvertently left
+   unchanged.
+
+Module Support Level
+ - All modules in the addons, apps, bridge, cdr, cel, channels, codecs, 
+   formats, funcs, pbx, and res have been updated to include MODULEINFO data
+   that includes <support_level> tags with a value of core, extended, or deprecated.
+   More information is available on the Asterisk wiki at 
+   https://wiki.asterisk.org/wiki/display/AST/Asterisk+Module+Support+States
+
+   Deprecated modules are now marked to not build by default and must be explicitly
+   enabled in menuselect.
+
+chan_sip:
+ - Setting of HASH(SIP_CAUSE,<slave-channel-name>) on channels is now disabled
+   by default. It can be enabled using the 'storesipcause' option. This feature
+   has a significant performance penalty.
+
+UDPTL:
+ - The default UDPTL port range in udptl.conf.sample differed from the defaults
+   in the source. If you didn't have a config file, you got 4500 to 4599. Now the
+   default is 4000 to 4999.
 
 ===========================================================
 ===========================================================

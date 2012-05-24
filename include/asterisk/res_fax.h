@@ -42,6 +42,10 @@ enum ast_fax_capabilities {
 	AST_FAX_TECH_T38       = (1 << 3),
 	/*! sending mulitple documents supported */
 	AST_FAX_TECH_MULTI_DOC = (1 << 4),
+	/*! T.38 - T.30 Gateway */
+	AST_FAX_TECH_GATEWAY = (1 << 5),
+	/*! V21 detection is supported */
+	AST_FAX_TECH_V21_DETECT = (1 << 6),
 };
 
 /*! \brief fax modem capabilities */
@@ -158,6 +162,8 @@ struct ast_fax_session_details {
 			uint32_t send_cng:1;
 			/*! send a T.38 reinvite */
 			uint32_t request_t38:1;
+			/*! a V.21 preamble was detected */
+			uint32_t v21_detected:1;
 		};
 	} option;
 	/*! override the minimum transmission rate with a channel variable */
@@ -168,6 +174,10 @@ struct ast_fax_session_details {
 	struct ast_fax_t38_parameters our_t38_parameters;
 	/*! the other endpoint's T.38 session parameters, if any */
 	struct ast_fax_t38_parameters their_t38_parameters;
+	/*! the id of the t.38 gateway framehook for this channel */
+	int gateway_id;
+	/*! the timeout for this gateway in seconds */
+	int gateway_timeout;
 };
 
 struct ast_fax_tech;
@@ -203,6 +213,9 @@ struct ast_fax_session {
 	/*! used to take variable-sized frames in and output frames of an expected size to the fax stack */
 	struct ast_smoother *smoother;
 };
+
+/* if this overlaps with any AST_FRFLAG_* values, problems will occur */
+#define AST_FAX_FRFLAG_GATEWAY (1 << 13)
 
 /*! \brief used to register a FAX technology module with res_fax */
 struct ast_fax_tech {

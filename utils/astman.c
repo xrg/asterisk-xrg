@@ -22,6 +22,10 @@
  *
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk.h"
@@ -383,7 +387,7 @@ static int input_check(struct ast_mansession *s, struct message **mout)
 				}
 				if (process_message(s, &m))
 					break;
-				memset(&m, 0, sizeof(&m));
+				memset(&m, 0, sizeof(m));
 			} else if (m.hdrcount < MAX_HEADERS - 1)
 				m.hdrcount++;
 		} else if (res < 0) {

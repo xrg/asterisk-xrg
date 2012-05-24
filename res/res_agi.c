@@ -25,6 +25,10 @@
  * \todo Convert the rest of the AGI commands over to XML documentation
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -57,7 +61,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/ast_version.h"
 #include "asterisk/speech.h"
 #include "asterisk/manager.h"
-#include "asterisk/features.h"
 #include "asterisk/term.h"
 #include "asterisk/xmldoc.h"
 #include "asterisk/srv.h"
@@ -297,7 +300,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</agi>
 	<agi name="hangup" language="en_US">
 		<synopsis>
-			Hangup the current channel.
+			Hangup a channel.
 		</synopsis>
 		<syntax>
 			<parameter name="channelname" />
@@ -1294,9 +1297,9 @@ static enum agi_result launch_asyncagi(struct ast_channel *chan, char *argv[], i
 	setup_env(chan, "async", fds[1], 0, 0, NULL);
 	/* read the environment */
 	res = read(fds[0], agi_buffer, AGI_BUF_SIZE);
-	if (!res) {
-		ast_log(LOG_ERROR, "Failed to read from Async AGI pipe on channel %s\n",
-			chan->name);
+	if (res <= 0) {
+		ast_log(LOG_ERROR, "Failed to read from Async AGI pipe on channel %s: %s\n",
+			chan->name, res < 0 ? strerror(errno) : "EOF");
 		returnstatus = AGI_RESULT_FAILURE;
 		goto async_agi_abort;
 	}
@@ -1324,9 +1327,9 @@ static enum agi_result launch_asyncagi(struct ast_channel *chan, char *argv[], i
 			 * fd (the pipe), let's read the response.
 			 */
 			res = read(fds[0], agi_buffer, AGI_BUF_SIZE);
-			if (!res) {
-				ast_log(LOG_ERROR, "Failed to read from Async AGI pipe on channel %s\n",
-					chan->name);
+			if (res <= 0) {
+				ast_log(LOG_ERROR, "Failed to read from Async AGI pipe on channel %s: %s\n",
+					chan->name, res < 0 ? strerror(errno) : "EOF");
 				free_agi_cmd(cmd);
 				returnstatus = AGI_RESULT_FAILURE;
 				goto async_agi_done;
@@ -2470,9 +2473,6 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, const char 
 	ast_verb(3, "AGI Script Executing Application: (%s) Options: (%s)\n", argv[1], argc >= 3 ? argv[2] : "");
 
 	if ((app_to_exec = pbx_findapp(argv[1]))) {
-		if(!strcasecmp(argv[1], PARK_APP_NAME)) {
-			ast_masq_park_call(chan, NULL, 0, NULL);
-		}
 		if (!(workaround = ast_test_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS))) {
 			ast_set_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS);
 		}
@@ -3137,10 +3137,10 @@ int AST_OPTIONAL_API_NAME(ast_agi_register)(struct ast_module *mod, agi_command 
 		*((enum ast_doc_src *) &cmd->docsrc) = AST_STATIC_DOC;
 		if (ast_strlen_zero(cmd->summary) && ast_strlen_zero(cmd->usage)) {
 #ifdef AST_XML_DOCS
-			*((char **) &cmd->summary) = ast_xmldoc_build_synopsis("agi", fullcmd);
-			*((char **) &cmd->usage) = ast_xmldoc_build_description("agi", fullcmd);
-			*((char **) &cmd->syntax) = ast_xmldoc_build_syntax("agi", fullcmd);
-			*((char **) &cmd->seealso) = ast_xmldoc_build_seealso("agi", fullcmd);
+			*((char **) &cmd->summary) = ast_xmldoc_build_synopsis("agi", fullcmd, NULL);
+			*((char **) &cmd->usage) = ast_xmldoc_build_description("agi", fullcmd, NULL);
+			*((char **) &cmd->syntax) = ast_xmldoc_build_syntax("agi", fullcmd, NULL);
+			*((char **) &cmd->seealso) = ast_xmldoc_build_seealso("agi", fullcmd, NULL);
 			*((enum ast_doc_src *) &cmd->docsrc) = AST_XML_DOC;
 #endif
 #ifndef HAVE_NULLSAFE_PRINTF
@@ -3495,7 +3495,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 				if (pid > -1) {
 					kill(pid, SIGHUP);
 				} else if (agi->fast) {
-					send(agi->ctrl, "HANGUP\n", 7, 0);
+					ast_agi_send(agi->fd, chan, "HANGUP\n");
 				}
 			}
 		}
@@ -3610,7 +3610,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 			}
 			waitpid(pid, status, WNOHANG);
 		} else if (agi->fast) {
-			send(agi->ctrl, "HANGUP\n", 7, 0);
+			ast_agi_send(agi->fd, chan, "HANGUP\n");
 		}
 	}
 	fclose(readf);

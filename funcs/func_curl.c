@@ -32,6 +32,7 @@
  
 /*** MODULEINFO
 	<depend>curl</depend>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
@@ -301,6 +302,7 @@ static int acf_curlopt_write(struct ast_channel *chan, const char *cmd, char *na
 			if (!(list = ast_calloc(1, sizeof(*list)))) {
 				ast_log(LOG_ERROR, "Unable to allocate list head.  Cannot set any CURL options\n");
 				ast_datastore_free(store);
+				return -1;
 			}
 
 			store->data = list;
@@ -563,9 +565,11 @@ static void curl_instance_cleanup(void *data)
 }
 
 AST_THREADSTORAGE_CUSTOM(curl_instance, curl_instance_init, curl_instance_cleanup);
+AST_THREADSTORAGE(thread_escapebuf);
 
 static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info, char *buf, struct ast_str **input_str, ssize_t len)
 {
+	struct ast_str *escapebuf = ast_str_thread_get(&thread_escapebuf, 16);
 	struct ast_str *str = ast_str_create(16);
 	int ret = -1;
 	AST_DECLARE_APP_ARGS(args,
@@ -586,6 +590,11 @@ static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info
 		return -1;
 	}
 
+	if (!escapebuf) {
+		ast_free(str);
+		return -1;
+	}
+
 	if (ast_strlen_zero(info)) {
 		ast_log(LOG_WARNING, "CURL requires an argument (URL)\n");
 		ast_free(str);
@@ -600,6 +609,7 @@ static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info
 
 	if (!(curl = ast_threadstorage_get(&curl_instance, sizeof(*curl)))) {
 		ast_log(LOG_ERROR, "Cannot allocate curl structure\n");
+		ast_free(str);
 		return -1;
 	}
 
@@ -669,8 +679,8 @@ static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info
 					}
 					ast_uri_decode(name, ast_uri_http);
 				}
-				ast_str_append(&fields, 0, "%s%s", rowcount ? "," : "", name);
-				ast_str_append(&values, 0, "%s%s", rowcount ? "," : "", S_OR(piece, ""));
+				ast_str_append(&fields, 0, "%s%s", rowcount ? "," : "", ast_str_set_escapecommas(&escapebuf, 0, name, INT_MAX));
+				ast_str_append(&values, 0, "%s%s", rowcount ? "," : "", ast_str_set_escapecommas(&escapebuf, 0, S_OR(piece, ""), INT_MAX));
 				rowcount++;
 			}
 			pbx_builtin_setvar_helper(chan, "~ODBCFIELDS~", ast_str_buffer(fields));

@@ -40,7 +40,7 @@ int ooOnReceivedCallProceeding(OOH323CallData *call, Q931Message *q931Msg);
 int ooOnReceivedAlerting(OOH323CallData *call, Q931Message *q931Msg);
 int ooOnReceivedProgress(OOH323CallData *call, Q931Message *q931Msg);
 int ooHandleDisplayIE(OOH323CallData *call, Q931Message *q931Msg);
-int ooHandleH2250ID (OOH323CallData *call, H225ProtocolIdentifier protocolIdentifier);
+int ooHandleH2250ID (OOH323CallData *call, H225ProtocolIdentifier* protocolIdentifier);
 
 int ooHandleDisplayIE(OOH323CallData *call, Q931Message *q931Msg) {
    Q931InformationElement* pDisplayIE;
@@ -58,10 +58,10 @@ int ooHandleDisplayIE(OOH323CallData *call, Q931Message *q931Msg) {
    return OO_OK;
 }
 
-int ooHandleH2250ID (OOH323CallData *call, H225ProtocolIdentifier protocolIdentifier) {
-   if (!call->h225version && (protocolIdentifier.numids >= 6) &&
-	(protocolIdentifier.subid[3] == 2250)) {
-	call->h225version = protocolIdentifier.subid[5];
+int ooHandleH2250ID (OOH323CallData *call, H225ProtocolIdentifier* protocolIdentifier) {
+   if (!call->h225version && (protocolIdentifier->numids >= 6) &&
+	(protocolIdentifier->subid[3] == 2250)) {
+	call->h225version = protocolIdentifier->subid[5];
 	OOTRACEDBGC4("Extract H.225 remote version, it's %d, (%s, %s)\n", call->h225version, 
 						call->callType, call->callToken);
 
@@ -371,7 +371,7 @@ int ooOnReceivedSetup(OOH323CallData *call, Q931Message *q931Msg)
    H225TransportAddress_ip6Address_ip *ip6 = NULL;
    Q931InformationElement* pDisplayIE=NULL;
    OOAliases *pAlias=NULL;
-   char remoteIP[2+8*4+7];
+   char remoteIP[2+8*4+7] = "";
 
    call->callReference = q931Msg->callReference;
  
@@ -388,7 +388,7 @@ int ooOnReceivedSetup(OOH323CallData *call, Q931Message *q931Msg)
                   "%s\n", call->callType, call->callToken);
       return OO_FAILED;
    }
-   ooHandleH2250ID(call, setup->protocolIdentifier);
+   ooHandleH2250ID(call, &setup->protocolIdentifier);
    memcpy(call->callIdentifier.guid.data, setup->callIdentifier.guid.data, 
           setup->callIdentifier.guid.numocts);
    call->callIdentifier.guid.numocts = setup->callIdentifier.guid.numocts;
@@ -529,6 +529,7 @@ int ooOnReceivedSetup(OOH323CallData *call, Q931Message *q931Msg)
      OOTRACEERR5("ERROR: Security denial remote sig IP isn't a socket ip, %s not %s "
 		     "(%s, %s)\n", remoteIP, call->remoteIP, call->callType, 
 		     call->callToken);
+     return OO_FAILED;
    }
    
    /* check for fast start */
@@ -643,7 +644,7 @@ int ooOnReceivedCallProceeding(OOH323CallData *call, Q931Message *q931Msg)
       return OO_FAILED;
    }
 
-   ooHandleH2250ID(call, callProceeding->protocolIdentifier);
+   ooHandleH2250ID(call, &callProceeding->protocolIdentifier);
    /* Handle fast-start */
    if(OO_TESTFLAG (call->flags, OO_M_FASTSTART))
    {
@@ -872,7 +873,7 @@ int ooOnReceivedAlerting(OOH323CallData *call, Q931Message *q931Msg)
       }
       return OO_FAILED;
    }
-   ooHandleH2250ID(call, alerting->protocolIdentifier);
+   ooHandleH2250ID(call, &alerting->protocolIdentifier);
    /*Handle fast-start */
    if(OO_TESTFLAG (call->flags, OO_M_FASTSTART) &&
       !OO_TESTFLAG(call->flags, OO_M_FASTSTARTANSWERED))
@@ -1109,7 +1110,7 @@ int ooOnReceivedProgress(OOH323CallData *call, Q931Message *q931Msg)
       }
       return OO_FAILED;
    }
-   ooHandleH2250ID(call, progress->protocolIdentifier);
+   ooHandleH2250ID(call, &progress->protocolIdentifier);
    /*Handle fast-start */
    if(OO_TESTFLAG (call->flags, OO_M_FASTSTART) &&
       !OO_TESTFLAG(call->flags, OO_M_FASTSTARTANSWERED))
@@ -1353,7 +1354,7 @@ int ooOnReceivedSignalConnect(OOH323CallData* call, Q931Message *q931Msg)
       }
       return OO_FAILED;
    }
-   ooHandleH2250ID(call, connect->protocolIdentifier);
+   ooHandleH2250ID(call, &connect->protocolIdentifier);
    /*Handle fast-start */
    if(OO_TESTFLAG (call->flags, OO_M_FASTSTART) && 
       !OO_TESTFLAG (call->flags, OO_M_FASTSTARTANSWERED))
@@ -1638,12 +1639,15 @@ int ooHandleH2250Message(OOH323CallData *call, Q931Message *q931Msg)
       case Q931SetupMsg: /* SETUP message is received */
          OOTRACEINFO3("Received SETUP message (%s, %s)\n", call->callType,
                        call->callToken);
-         ooOnReceivedSetup(call, q931Msg);
-
+         ret = ooOnReceivedSetup(call, q931Msg);
+         if (ret != OO_OK) {
+           call->callState = OO_CALL_CLEAR;
+         } else {
+           
          /* H225 message callback */
-         if(gH323ep.h225Callbacks.onReceivedSetup)
-            ret = gH323ep.h225Callbacks.onReceivedSetup(call, q931Msg);
-
+            if(gH323ep.h225Callbacks.onReceivedSetup)
+               ret = gH323ep.h225Callbacks.onReceivedSetup(call, q931Msg);
+         }
          /* Free up the mem used by the received message, as it's processing 
             is done. 
          */
@@ -1661,23 +1665,24 @@ int ooHandleH2250Message(OOH323CallData *call, Q931Message *q931Msg)
             if(gH323ep.gkClient->state == GkClientRegistered)
             {
                call->callState = OO_CALL_WAITING_ADMISSION;
-	       ast_mutex_lock(&call->Lock);
                ret = ooGkClientSendAdmissionRequest(gH323ep.gkClient, call, 
                                                     FALSE);
-				tv = ast_tvnow();
+		tv = ast_tvnow();
                 ts.tv_sec = tv.tv_sec + 24;
-				ts.tv_nsec = tv.tv_usec * 1000;
-                ast_cond_timedwait(&call->gkWait, &call->Lock, &ts);
+		ts.tv_nsec = tv.tv_usec * 1000;
+	        ast_mutex_lock(&call->GkLock);
+		if (call->callState == OO_CALL_WAITING_ADMISSION)
+                   ast_cond_timedwait(&call->gkWait, &call->GkLock, &ts);
                 if (call->callState == OO_CALL_WAITING_ADMISSION)
 			call->callState = OO_CALL_CLEAR;
-                ast_mutex_unlock(&call->Lock);
+                ast_mutex_unlock(&call->GkLock);
 
             }
             else {
-               /* TODO: Should send Release complete with reject reason */
                OOTRACEERR1("Error:Ignoring incoming call as not yet"
                            "registered with Gk\n");
 	       call->callState = OO_CALL_CLEAR;
+               call->callEndReason = OO_REASON_GK_UNREACHABLE;
             }
          }
 	 if (call->callState < OO_CALL_CLEAR) {
@@ -1798,6 +1803,7 @@ int ooHandleH2250Message(OOH323CallData *call, Q931Message *q931Msg)
       case Q931StatusEnquiryMsg:
          OOTRACEINFO3("H.225 Status Inquiry message Received (%s, %s)\n",
                        call->callType, call->callToken);
+	 ooSendStatus(call);
          ooFreeQ931Message(call->msgctxt, q931Msg);
          break;
       case Q931SetupAckMsg:
@@ -1847,7 +1853,7 @@ int ooOnReceivedFacility(OOH323CallData *call, Q931Message * pQ931Msg)
    facility = pH323UUPdu->h323_message_body.u.facility;
    if(facility)
    {
-      ooHandleH2250ID(call, facility->protocolIdentifier);
+      ooHandleH2250ID(call, &facility->protocolIdentifier);
       /* Depending on the reason of facility message handle the message */
       if(facility->reason.t == T_H225FacilityReason_transportedInformation)
       {

@@ -200,6 +200,15 @@ static int analog_wait_event(struct analog_pvt *p)
 	return -1;
 }
 
+static int analog_have_progressdetect(struct analog_pvt *p)
+{
+	if (p->calls->have_progressdetect) {
+		return p->calls->have_progressdetect(p->chan_pvt);
+	}
+	/* Don't have progress detection. */
+	return 0;
+}
+
 enum analog_cid_start analog_str_to_cidstart(const char *value)
 {
 	if (!strcasecmp(value, "ring")) {
@@ -503,6 +512,14 @@ static int analog_on_hook(struct analog_pvt *p)
 	return -1;
 }
 
+static void analog_set_outgoing(struct analog_pvt *p, int is_outgoing)
+{
+	p->outgoing = is_outgoing;
+	if (p->calls->set_outgoing) {
+		p->calls->set_outgoing(p->chan_pvt, is_outgoing);
+	}
+}
+
 static int analog_check_for_conference(struct analog_pvt *p)
 {
 	if (p->calls->check_for_conference) {
@@ -787,11 +804,11 @@ struct ast_channel * analog_request(struct analog_pvt *p, int *callwait, const s
 		}
 	}
 
-	p->outgoing = 1;
+	analog_set_outgoing(p, 1);
 	ast = analog_new_ast_channel(p, AST_STATE_RESERVED, 0,
 		p->owner ? ANALOG_SUB_CALLWAIT : ANALOG_SUB_REAL, requestor);
 	if (!ast) {
-		p->outgoing = 0;
+		analog_set_outgoing(p, 0);
 	}
 	return ast;
 }
@@ -1017,7 +1034,7 @@ int analog_call(struct analog_pvt *p, struct ast_channel *ast, char *rdest, int 
 	}
 
 	p->dialednone = 0;
-	p->outgoing = 1;
+	analog_set_outgoing(p, 1);
 
 	mysig = p->sig;
 	if (p->outsigmod > -1) {
@@ -1420,7 +1437,7 @@ int analog_hangup(struct analog_pvt *p, struct ast_channel *ast)
 		analog_set_ringtimeout(p, 0);
 		analog_set_confirmanswer(p, 0);
 		analog_set_pulsedial(p, 0);
-		p->outgoing = 0;
+		analog_set_outgoing(p, 0);
 		p->onhooktime = time(NULL);
 		p->cidrings = 1;
 
@@ -1701,6 +1718,33 @@ static int analog_get_sub_fd(struct analog_pvt *p, enum analog_sub sub)
 }
 
 #define ANALOG_NEED_MFDETECT(p) (((p)->sig == ANALOG_SIG_FEATDMF) || ((p)->sig == ANALOG_SIG_FEATDMF_TA) || ((p)->sig == ANALOG_SIG_E911) || ((p)->sig == ANALOG_SIG_FGC_CAMA) || ((p)->sig == ANALOG_SIG_FGC_CAMAMF) || ((p)->sig == ANALOG_SIG_FEATB))
+
+static int analog_canmatch_featurecode(const char *exten)
+{
+	int extlen = strlen(exten);
+	const char *pickup_ext;
+	if (!extlen) {
+		return 1;
+	}
+	pickup_ext = ast_pickup_ext();
+	if (extlen < strlen(pickup_ext) && !strncmp(pickup_ext, exten, extlen)) {
+		return 1;
+	}
+	/* hardcoded features are *60, *67, *69, *70, *72, *73, *78, *79, *82, *0 */
+	if (exten[0] == '*' && extlen < 3) {
+		if (extlen == 1) {
+			return 1;
+		}
+		/* "*0" should be processed before it gets here */
+		switch (exten[1]) {
+		case '6':
+		case '7':
+		case '8':
+			return 1;
+		}
+	}
+	return 0;
+}
 
 static void *__analog_ss_thread(void *data)
 {
@@ -2234,7 +2278,9 @@ static void *__analog_ss_thread(void *data)
 						ast_bridged_channel(p->subs[ANALOG_SUB_THREEWAY].owner)) {
 				/* This is a three way call, the main call being a real channel,
 					and we're parking the first call. */
-				ast_masq_park_call(ast_bridged_channel(p->subs[ANALOG_SUB_THREEWAY].owner), chan, 0, NULL);
+				ast_masq_park_call_exten(
+					ast_bridged_channel(p->subs[ANALOG_SUB_THREEWAY].owner), chan, exten,
+					chan->context, 0, NULL);
 				ast_verb(3, "Parking call to '%s'\n", chan->name);
 				break;
 			} else if (!ast_strlen_zero(p->lastcid_num) && !strcmp(exten, "*60")) {
@@ -2296,7 +2342,7 @@ static void *__analog_ss_thread(void *data)
 				}
 			} else if (!ast_canmatch_extension(chan, chan->context, exten, 1,
 				chan->caller.id.number.valid ? chan->caller.id.number.str : NULL)
-				&& ((exten[0] != '*') || (strlen(exten) > 2))) {
+				&& !analog_canmatch_featurecode(exten)) {
 				ast_debug(1, "Can't match %s from '%s' in context %s\n", exten,
 					chan->caller.id.number.valid && chan->caller.id.number.str
 						? chan->caller.id.number.str : "<Unknown Caller>",
@@ -2698,7 +2744,10 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				analog_train_echocanceller(p);
 				ast_copy_string(p->dop.dialstr, p->echorest, sizeof(p->dop.dialstr));
 				p->dop.op = ANALOG_DIAL_OP_REPLACE;
-				analog_dial_digits(p, ANALOG_SUB_REAL, &p->dop);
+				if (analog_dial_digits(p, ANALOG_SUB_REAL, &p->dop)) {
+					int dial_err = errno;
+					ast_log(LOG_WARNING, "Dialing failed on channel %d: %s\n", p->channel, strerror(dial_err));
+				}
 				p->echobreak = 0;
 			} else {
 				analog_set_dialing(p, 0);
@@ -2715,7 +2764,9 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 					}
 				}
 				if (ast->_state == AST_STATE_DIALING) {
-					if (analog_check_confirmanswer(p) || (!p->dialednone
+					if (analog_have_progressdetect(p)) {
+						ast_debug(1, "Done dialing, but waiting for progress detection before doing more...\n");
+					} else if (analog_check_confirmanswer(p) || (!p->dialednone
 						&& ((mysig == ANALOG_SIG_EM) || (mysig == ANALOG_SIG_EM_E1)
 							|| (mysig == ANALOG_SIG_EMWINK) || (mysig == ANALOG_SIG_FEATD)
 							|| (mysig == ANALOG_SIG_FEATDMF_TA) || (mysig == ANALOG_SIG_FEATDMF)

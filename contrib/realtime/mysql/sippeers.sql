@@ -1,8 +1,8 @@
 #
-# Table structure for table `sipfriends`
+# Table structure for table `sippeers`
 #
 
-CREATE TABLE IF NOT EXISTS `sipfriends` (
+CREATE TABLE IF NOT EXISTS `sippeers` (
       `id` int(11) NOT NULL AUTO_INCREMENT,
       `name` varchar(10) NOT NULL,
       `ipaddr` varchar(15) DEFAULT NULL,
@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS `sipfriends` (
       `sendrpid` enum('yes','no') DEFAULT NULL,
       `outboundproxy` varchar(40) DEFAULT NULL,
       `callbackextension` varchar(40) DEFAULT NULL,
-      `registertrying` enum('yes','no') DEFAULT NULL,
       `timert1` int(11) DEFAULT NULL,
       `timerb` int(11) DEFAULT NULL,
       `qualifyfreq` int(11) DEFAULT NULL,

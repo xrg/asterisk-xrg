@@ -36,6 +36,8 @@
 /*** MODULEINFO
 	<depend>mysqlclient</depend>
 	<defaultenabled>no</defaultenabled>
+	<support_level>deprecated</support_level>
+	<replacement>cdr_adaptive_odbc</replacement>
  ***/
 
 #include "asterisk.h"
@@ -460,6 +462,7 @@ static int my_load_module(int reload)
 		if (reload) {
 			AST_RWLIST_UNLOCK(&columns);
 		}
+		ast_config_destroy(cfg);
 		return AST_MODULE_LOAD_SUCCESS;
 	}
 
@@ -500,6 +503,7 @@ static int my_load_module(int reload)
 		if (reload) {
 			AST_RWLIST_UNLOCK(&columns);
 		}
+		ast_config_destroy(cfg);
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
