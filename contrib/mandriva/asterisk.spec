@@ -141,7 +141,7 @@ BuildRequires:	postgresql-devel
 BuildRequires:	radiusclient-ng-devel
 BuildRequires:	resample-devel
 BuildRequires:	SDL_image-devel
-BuildRequires:	libspandsp-devel
+BuildRequires:	libspandsp-devel >= 0.0.6
 BuildRequires:	speex-devel
 BuildRequires:	sqlite3-devel
 BuildRequires:	tcp_wrappers-devel
@@ -812,7 +812,7 @@ fi
 
 %files
 %defattr(-,root,root)
-%doc BUGS CHANGES CREDITS LICENSE README* apps/rpt_flow.pdf
+%doc BUGS CHANGES CREDITS LICENSE README*
 %doc doc/*.txt contrib/init.d/rc.mandriva* contrib/asterisk-ices.xml
 %doc contrib/scripts contrib/i18n.testsuite.conf contrib/README.festival
 %attr(0755,root,root)					%{_initrddir}/asterisk
@@ -955,11 +955,9 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_jpeg.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_ogg_vorbis.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_pcm.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_sln16.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_sln.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren14.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren7.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_attr_silk.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/func_aes.so
 #%attr(0755,root,root) %{_libdir}/asterisk/modules/func_connectedline.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav_gsm.so
