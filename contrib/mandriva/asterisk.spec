@@ -890,7 +890,6 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_readfile.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_read.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_record.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_rpt.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_timerfd.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_saycounted.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sayunixtime.so
