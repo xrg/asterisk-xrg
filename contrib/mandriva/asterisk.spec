@@ -99,12 +99,12 @@ BuildRequires:	libgcrypt-devel
 BuildRequires:	libgnutls-devel
 BuildRequires:	libgpg-error-devel
 BuildRequires:	libgsm-devel
-BuildRequires:	%mklibname hoard
 BuildRequires:	libidn-devel
 BuildRequires:	libiksemel-devel
 BuildRequires:	libilbc-devel
 BuildRequires:	libjack-devel
 %if %{_host_vendor} == mandriva
+BuildRequires:	%mklibname hoard
 BuildRequires:	libnbs-devel
 %endif
 BuildRequires:	libncurses-devel
@@ -125,7 +125,7 @@ BuildRequires:	libtool
 BuildRequires:	libtool-devel
 BuildRequires:	libusb-devel
 BuildRequires:	libvorbis-devel
-BuildRequires:	libzap-devel >= 1.0.1
+# BuildRequires:	libzap-devel >= 1.0.1
 BuildRequires:	lm_sensors-devel
 BuildRequires:	lpc10-devel
 BuildRequires:	lua-devel
@@ -578,7 +578,6 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-gsm=%{_prefix} \
     --without-gtk \
     --with-gtk2=%{_prefix} \
-    --with-hoard=%{_prefix} \
     --with-iconv=%{_prefix} \
     --with-iksemel=%{_prefix} \
 %if %{build_imap}
@@ -599,6 +598,7 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --without-suppserv \
 %endif
 %if %{_host_vendor} == mandriva
+    --with-hoard=%{_prefix} \
     --with-nbs=%{_prefix} \
 %endif
     --with-ncurses=%{_prefix} \
