@@ -848,6 +848,7 @@ fi
 %attr(0755,root,root)					%{_sbindir}/streamplayer
 %attr(0755,root,root)					%{_sbindir}/astcanary
 %attr(0755,root,root)					%{_sbindir}/conf2ael
+%attr(0755,root,root)					%{_sbindir}/astdb2sqlite3
 %exclude						%{_sbindir}/refcounter
 
 %attr(0755,root,root)		%dir			%{_libdir}/asterisk
@@ -1025,6 +1026,8 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_originate.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_playtones.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_bridge.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_format_attr_celt.so
+%attr(0755,root,root) %{_libdir}/asterisk/modules/res_format_attr_silk.so
 
 # Do these really belong here? :
 %attr(0755,root,root) %{modulesdir}/app_celgenuserevent.so
