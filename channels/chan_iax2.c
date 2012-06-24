@@ -1922,24 +1922,25 @@ static void send_signaling(struct chan_iax2_pvt *pvt)
  *  we have received a destination call number. */
 static int queue_signalling(struct chan_iax2_pvt *pvt, struct ast_frame *f)
 {
-	struct signaling_queue_entry *new;
+	struct signaling_queue_entry *qe;
 
 	if (f->frametype == AST_FRAME_IAX || !pvt->hold_signaling) {
 		return 1; /* do not queue this frame */
-	} else if (!(new = ast_calloc(1, sizeof(struct signaling_queue_entry)))) {
+	} else if (!(qe = ast_calloc(1, sizeof(struct signaling_queue_entry)))) {
 		return -1;  /* out of memory */
 	}
 
-	memcpy(&new->f, f, sizeof(new->f)); /* copy ast_frame into our queue entry */
-
-	if (new->f.datalen) { /* if there is data in this frame copy it over as well */
-		if (!(new->f.data.ptr = ast_calloc(1, new->f.datalen))) {
-			free_signaling_queue_entry(new);
+	/* copy ast_frame into our queue entry */
+	qe->f = *f;
+	if (qe->f.datalen) {
+		/* if there is data in this frame copy it over as well */
+		if (!(qe->f.data.ptr = ast_malloc(qe->f.datalen))) {
+			free_signaling_queue_entry(qe);
 			return -1;
 		}
-		memcpy(new->f.data.ptr, f->data.ptr, sizeof(*new->f.data.ptr));
+		memcpy(qe->f.data.ptr, f->data.ptr, qe->f.datalen);
 	}
-	AST_LIST_INSERT_TAIL(&pvt->signaling_queue, new, next);
+	AST_LIST_INSERT_TAIL(&pvt->signaling_queue, qe, next);
 
 	return 0;
 }
@@ -2483,19 +2484,20 @@ static void peercnt_remove(struct peercnt *peercnt)
 		.sin_addr.s_addr = peercnt->addr,
 	};
 
-	if (peercnt) {
-		/* Container locked here since peercnt may be unlinked from list.  If left unlocked,
-		 * peercnt_add could try and grab this entry from the table and modify it at the
-		 * "same time" this thread attemps to unlink it.*/
-		ao2_lock(peercnts);
-		peercnt->cur--;
-		ast_debug(1, "ip callno count decremented to %d for %s\n", peercnt->cur, ast_inet_ntoa(sin.sin_addr));
-		/* if this was the last connection from the peer remove it from table */
-		if (peercnt->cur == 0) {
-			ao2_unlink(peercnts, peercnt);/* decrements ref from table, last ref is left to scheduler */
-		}
-		ao2_unlock(peercnts);
+	/*
+	 * Container locked here since peercnt may be unlinked from
+	 * list.  If left unlocked, peercnt_add could try and grab this
+	 * entry from the table and modify it at the "same time" this
+	 * thread attemps to unlink it.
+	 */
+	ao2_lock(peercnts);
+	peercnt->cur--;
+	ast_debug(1, "ip callno count decremented to %d for %s\n", peercnt->cur, ast_inet_ntoa(sin.sin_addr));
+	/* if this was the last connection from the peer remove it from table */
+	if (peercnt->cur == 0) {
+		ao2_unlink(peercnts, peercnt);/* decrements ref from table, last ref is left to scheduler */
 	}
+	ao2_unlock(peercnts);
 }
 
 /*! 
@@ -4243,6 +4245,15 @@ static int schedule_delivery(struct iax_frame *fr, int updatehistory, int fromtr
 	int needfree = 0;
 	struct ast_channel *owner = NULL;
 	struct ast_channel *bridge = NULL;
+
+	/*
+	 * Clear fr->af.data if there is no data in the buffer.  Things
+	 * like AST_CONTROL_HOLD without a suggested music class must
+	 * have a NULL pointer.
+	 */
+	if (!fr->af.datalen) {
+		memset(&fr->af.data, 0, sizeof(fr->af.data));
+	}
 
 	/* Attempt to recover wrapped timestamps */
 	unwrap_timestamp(fr);
@@ -6006,16 +6017,15 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 	   The "genuine" distinction is needed because genuine frames must get a clock-based timestamp,
 	   the others need a timestamp slaved to the voice frames so that they go in sequence
 	*/
-	if (f) {
-		if (f->frametype == AST_FRAME_VOICE) {
-			voice = 1;
-			delivery = &f->delivery;
-		} else if (f->frametype == AST_FRAME_IAX) {
-			genuine = 1;
-		} else if (f->frametype == AST_FRAME_CNG) {
-			p->notsilenttx = 0;
-		}
+	if (f->frametype == AST_FRAME_VOICE) {
+		voice = 1;
+		delivery = &f->delivery;
+	} else if (f->frametype == AST_FRAME_IAX) {
+		genuine = 1;
+	} else if (f->frametype == AST_FRAME_CNG) {
+		p->notsilenttx = 0;
 	}
+
 	if (ast_tvzero(p->offset)) {
 		p->offset = ast_tvnow();
 		/* Round to nearest 20ms for nice looking traces */
@@ -9990,11 +10000,20 @@ static void set_hangup_source_and_cause(int callno, unsigned char causecode)
 {
 	iax2_lock_owner(callno);
 	if (iaxs[callno] && iaxs[callno]->owner) {
+		struct ast_channel *owner;
+		const char *name;
+
+		owner = iaxs[callno]->owner;
 		if (causecode) {
-			iaxs[callno]->owner->hangupcause = causecode;
+			owner->hangupcause = causecode;
 		}
-		ast_set_hangupsource(iaxs[callno]->owner, iaxs[callno]->owner->name, 0);
-		ast_channel_unlock(iaxs[callno]->owner);
+		name = ast_strdupa(owner->name);
+		ast_channel_ref(owner);
+		ast_channel_unlock(owner);
+		ast_mutex_unlock(&iaxsl[callno]);
+		ast_set_hangupsource(owner, name, 0);
+		ast_channel_unref(owner);
+		ast_mutex_lock(&iaxsl[callno]);
 	}
 }
 

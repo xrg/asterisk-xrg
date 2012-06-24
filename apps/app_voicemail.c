@@ -1582,7 +1582,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 			for (category = ast_category_browse(cfg, NULL); category; category = ast_category_browse(cfg, category)) {
 				ast_debug(4, "users.conf: %s\n", category);
 				if (!strcasecmp(category, vmu->mailbox)) {
-					if (!(tmp = ast_variable_retrieve(cfg, category, "vmsecret"))) {
+					if (!ast_variable_retrieve(cfg, category, "vmsecret")) {
 						ast_debug(3, "looks like we need to make vmsecret!\n");
 						var = ast_variable_new("vmsecret", newpassword, "");
 					} else {
@@ -4555,7 +4555,7 @@ static void make_email_file(FILE *p, char *srcemail, struct ast_vm_user *vmu, in
 	}
 
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
-	ast_strftime_locale(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm), S_OR(vmu->locale, NULL));
+	ast_strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm));
 	fprintf(p, "Date: %s" ENDL, date);
 
 	/* Set date format for voicemail mail */
@@ -4913,7 +4913,7 @@ static int sendpage(char *srcemail, char *pager, int msgnum, char *context, char
 		snprintf(who, sizeof(who), "%s@%s", srcemail, host);
 	}
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
-	ast_strftime_locale(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm), S_OR(vmu->locale, NULL));
+	ast_strftime(date, sizeof(date), "%a, %d %b %Y %H:%M:%S %z", vmu_tm(vmu, &tm));
 	fprintf(p, "Date: %s\n", date);
 
 	/* Reformat for custom pager format */

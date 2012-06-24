@@ -19,6 +19,10 @@
  * \brief sip request parsing functions and unit tests
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -1079,7 +1083,7 @@ AST_TEST_DEFINE(get_in_brackets_test)
 	}
 
 	/* Test 6, NULL input  */
-	if ((uri = get_in_brackets(NULL))) {
+	if (get_in_brackets(NULL)) {
 		ast_test_status_update(test, "Test 6, NULL input failed.\n");
 		res = AST_TEST_FAIL;
 	}

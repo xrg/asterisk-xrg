@@ -1370,8 +1370,13 @@ static int unload_module(void)
 static char *pbx_strsep(char **destructible, const char *delim)
 {
 	int square = 0;
-	char *res = *destructible;
-	for (; destructible && *destructible && **destructible; (*destructible)++) {
+	char *res;
+
+	if (!destructible || !*destructible) {
+		return NULL;
+	}
+	res = *destructible;
+	for (; **destructible; (*destructible)++) {
 		if (**destructible == '[' && !strchr(delim, '[')) {
 			square++;
 		} else if (**destructible == ']' && !strchr(delim, ']')) {
@@ -1386,7 +1391,7 @@ static char *pbx_strsep(char **destructible, const char *delim)
 			break;
 		}
 	}
-	if (destructible && *destructible && **destructible == '\0') {
+	if (**destructible == '\0') {
 		*destructible = NULL;
 	}
 	return res;
@@ -1476,7 +1481,7 @@ static int pbx_load_config(const char *config_file)
 				}
 			} else if (!strcasecmp(v->name, "exten")) {
 				int ipri;
-				char *plus, *firstp;
+				char *plus;
 				char *pri, *appl, *data, *cidmatch;
 
 				if (!(stringp = tc = ast_strdup(v->value))) {
@@ -1546,7 +1551,7 @@ process_extension:
 				}
 				appl = S_OR(stringp, "");
 				/* Find the first occurrence of '(' */
-				if (!(firstp = strchr(appl, '('))) {
+				if (!strchr(appl, '(')) {
 					/* No arguments */
 					data = "";
 				} else {
@@ -1596,7 +1601,7 @@ process_extension:
 							v->lineno, vfile);
 					}
 				}
-				free(tc);
+				ast_free(tc);
 			} else if (!strcasecmp(v->name, "include")) {
 				pbx_substitute_variables_helper(NULL, v->value, realvalue, sizeof(realvalue) - 1);
 				if (ast_context_add_include2(con, realvalue, registrar)) {

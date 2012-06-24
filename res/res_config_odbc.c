@@ -317,7 +317,7 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 	char sql[1024];
 	char coltitle[256];
 	char rowdata[2048];
-	const char *initfield=NULL;
+	const char *initfield;
 	char *op;
 	const char *newparam;
 	char *stringp;
@@ -375,9 +375,7 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 	}
 	va_end(aq);
 
-	if (initfield) {
-		snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " ORDER BY %s", initfield);
-	}
+	snprintf(sql + strlen(sql), sizeof(sql) - strlen(sql), " ORDER BY %s", initfield);
 
 	va_copy(cps.ap, ap);
 	stmt = ast_odbc_prepare_and_execute(obj, custom_prepare, &cps);
@@ -447,7 +445,7 @@ static struct ast_config *realtime_multi_odbc(const char *database, const char *
 					if (strchr(chunk, '^')) {
 						decode_chunk(chunk);
 					}
-					if (initfield && !strcmp(initfield, coltitle)) {
+					if (!strcmp(initfield, coltitle)) {
 						ast_category_rename(cat, chunk);
 					}
 					var = ast_variable_new(coltitle, chunk, "");
@@ -520,7 +518,7 @@ static int update_odbc(const char *database, const char *table, const char *keyf
 	}
 	va_arg(aq, const char *);
 
-	if (tableptr && !(column = ast_odbc_find_column(tableptr, newparam))) {
+	if (tableptr && !ast_odbc_find_column(tableptr, newparam)) {
 		ast_log(LOG_WARNING, "Key field '%s' does not exist in table '%s@%s'.  Update will fail\n", newparam, table, database);
 	}
 
@@ -589,7 +587,6 @@ static SQLHSTMT update2_prepare(struct odbc_obj *obj, void *data)
 	SQLHSTMT stmt;
 	va_list ap;
 	struct odbc_cache_tables *tableptr = ast_odbc_find_table(ups->database, ups->table);
-	struct odbc_cache_columns *column;
 
 	if (!sql) {
 		if (tableptr) {
@@ -621,7 +618,7 @@ static SQLHSTMT update2_prepare(struct odbc_obj *obj, void *data)
 
 	while ((newparam = va_arg(ap, const char *))) {
 		newval = va_arg(ap, const char *);
-		if ((column = ast_odbc_find_column(tableptr, newparam))) {
+		if (ast_odbc_find_column(tableptr, newparam)) {
 			ast_str_append(&sql, 0, "%s%s=? ", first ? "" : ", ", newparam);
 			SQLBindParameter(stmt, x++, SQL_PARAM_INPUT, SQL_C_CHAR, SQL_CHAR, strlen(newval), 0, (void *)newval, 0, NULL);
 			first = 0;
@@ -639,7 +636,7 @@ static SQLHSTMT update2_prepare(struct odbc_obj *obj, void *data)
 
 	while ((newparam = va_arg(ap, const char *))) {
 		newval = va_arg(ap, const char *);
-		if (!(column = ast_odbc_find_column(tableptr, newparam))) {
+		if (!ast_odbc_find_column(tableptr, newparam)) {
 			va_end(ap);
 			ast_log(LOG_ERROR, "One or more of the criteria columns '%s' on '%s@%s' for this update does not exist!\n", newparam, ups->table, ups->database);
 			ast_odbc_release_table(tableptr);

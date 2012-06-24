@@ -31,6 +31,10 @@
  *  						IP Crossing Co., Ltd.
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -1913,7 +1917,7 @@ static void powiedz(struct ast_channel *chan, const char *language, int audiofd,
 			char *b = buf;
 			b = pl_append(b, odm->dziesiatki[m100 / 10]);  
 			b = pl_append(b, odm->separator_dziesiatek);  
-			b = pl_append(b, odm->cyfry2[m100 % 10]); 
+			pl_append(b, odm->cyfry2[m100 % 10]); 
 			pl_odtworz_plik(chan, language, audiofd, ctrlfd, ints, buf);
 		}
 	} 
