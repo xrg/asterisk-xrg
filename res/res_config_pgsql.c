@@ -1243,6 +1243,10 @@ static int require_pgsql(const char *database, const char *tablename, va_list ap
 				    if (type != RQ_CHAR)
 					    ast_log(LOG_WARNING, "Column '%s' is of the incorrect type: (need %d but saw %s)\n",
 						    column->name, type, column->type);
+				} else if (strncmp(column->type, "bool", 4) == 0) {
+					if (type != RQ_INTEGER1)
+						ast_log(LOG_WARNING, "Column '%s' is of the incorrect type: (need %d but saw %s)\n",
+						    column->name, type, column->type);
 				} else if (strncmp(column->type, "int", 3) == 0) {
 					int typesize = atoi(column->type + 3);
 					/* Integers can hold only other integers */
