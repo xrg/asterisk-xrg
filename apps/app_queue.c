@@ -2145,9 +2145,7 @@ static void rt_handle_member_record(struct call_queue *q, char *interface, struc
 	}
 
 	if (paused_str) {
-		paused = atoi(paused_str);
-		if (paused < 0)
-			paused = 0;
+		paused = abs(ast_true(paused_str));
 	}
 
 	if ((config_val = ast_variable_retrieve(member_config, interface, "ignorebusy"))) {
