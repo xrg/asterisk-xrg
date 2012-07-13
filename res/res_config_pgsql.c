@@ -956,9 +956,9 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
 {
 	PGresult *result = NULL;
 	Oid insertid;
-	struct ast_str *sql = ast_str_thread_get(&sql_buf, 100);
+	struct ast_str *sql = ast_str_thread_get(&sql_buf, 256);
+	struct ast_str *vals = ast_str_thread_get(&escapebuf_buf, 100);
 	char params[256];
-	char vals[256];
 	const char *sparams[50];
 	int  nparams = 0;
 	const char *newparam, *newval;
@@ -968,6 +968,7 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
 	 * configured by res_pgsql.conf.
 	 */
 	database = dbname;
+	params[0] = '\0';
 
 	if (!table) {
 		ast_log(LOG_WARNING, "PostgreSQL RealTime: No table specified.\n");
@@ -986,22 +987,19 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
 			va_end(ap);
 			return -1;
 		}
-		if (((strlen(params) + 3 + strlen(newparam)) > sizeof(params)) ||
-			((strlen(vals) + 4) > sizeof(vals))){
+		if ((strlen(params) + 3 + strlen(newparam)) > sizeof(params)){
 			ast_log(LOG_ERROR, "PostgreSQL RealTime: Params buffer too short for query.\n");
 			va_end(ap);
 			return -1;
 		}
 		
 		newval = va_arg(ap, const char *);
-		if (nparams>0) {
+		if (nparams>0)
 			strcat(params,", ");
-			strcat(vals,", ");
-		}
 		
 		strcat(params,newparam);
-		strcat(vals,"?");
 		sparams[nparams++]=newval;
+		ast_str_append(&vals, 0, "%s$%d", (nparams > 1) ? ", " : "", nparams);
 	}
  	va_end(ap);
 	
@@ -1016,7 +1014,8 @@ static int store_pgsql(const char *database, const char *table, va_list ap)
 	}
 	
 	
-	ast_str_set(&sql, 0, "INSERT INTO (%s) VALUES (%s)", params, vals);
+	ast_str_set(&sql, 0, "INSERT INTO %s(%s) VALUES (%s)",table, params, ast_str_buffer(vals));
+	ast_str_reset(vals);
 
 	ast_debug(1, "PostgreSQL RealTime: Insert SQL: %s\n", ast_str_buffer(sql));
 
