@@ -73,10 +73,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="condition" required="true" />
 			<parameter name="destination" required="true" argsep=":">
 				<argument name="labeliftrue" hasparams="optional">
+					<para>Continue at <replaceable>labeliftrue</replaceable> if the condition is true.
+					Takes the form similar to Goto() of [[context,]extension,]priority.</para>
 					<argument name="arg1" required="true" multiple="true" />
 					<argument name="argN" />
 				</argument>
 				<argument name="labeliffalse" hasparams="optional">
+					<para>Continue at <replaceable>labeliffalse</replaceable> if the condition is false.
+					Takes the form similar to Goto() of [[context,]extension,]priority.</para>
 					<argument name="arg1" required="true" multiple="true" />
 					<argument name="argN" />
 				</argument>
@@ -93,6 +97,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="application">MacroIf</ref>
 			<ref type="function">IF</ref>
 			<ref type="application">GotoIf</ref>
+			<ref type="application">Goto</ref>
 		</see-also>
 	</application>
 	<application name="Return" language="en_US">
@@ -207,7 +212,7 @@ static const char * const app_pop = "StackPop";
 
 static void gosub_free(void *data);
 
-static struct ast_datastore_info stack_info = {
+static const struct ast_datastore_info stack_info = {
 	.type = "GOSUB",
 	.destroy = gosub_free,
 };
