@@ -810,6 +810,9 @@ int ooGkClientHandleGatekeeperConfirm
    if(pGatekeeperConfirm->m.gatekeeperIdentifierPresent) 
    {
       pGkClient->gkId.nchars = pGatekeeperConfirm->gatekeeperIdentifier.nchars;
+      if (pGkClient->gkId.data) {
+         memFreePtr(&pGkClient->ctxt, pGkClient->gkId.data);
+      }
       pGkClient->gkId.data = (ASN116BITCHAR*)memAlloc(&pGkClient->ctxt,
                               sizeof(ASN116BITCHAR)*pGkClient->gkId.nchars);
       if(!pGkClient->gkId.data)
@@ -1280,6 +1283,8 @@ int ooGkClientHandleRegistrationReject
    unsigned int x=0;
    DListNode *pNode = NULL;
    OOTimer *pTimer = NULL;
+   ooGkClientTimerCb *cbData=NULL;
+
    /* First delete the corresponding RRQ timer */
    for(x=0; x<pGkClient->timerList.count; x++)
    {
@@ -1369,8 +1374,40 @@ int ooGkClientHandleRegistrationReject
    default:
       OOTRACEINFO1("RRQ Rejected - Invalid Reason\n");
    }
-   pGkClient->state = GkClientGkErr;
+
+   /* send again GRQ/RRQ's */
+   ast_mutex_lock(&pGkClient->Lock);
+   pGkClient->state = GkClientUnregistered;
+   pGkClient->rrqRetries = 0;
+   pGkClient->grqRetries = 0;
+   pGkClient->discoveryComplete = FALSE;
+
+   cbData = (ooGkClientTimerCb*) memAlloc
+                               (&pGkClient->ctxt, sizeof(ooGkClientTimerCb));
+   if(!cbData)
+   {
+      OOTRACEERR1("Error:Failed to allocate memory to GRQ timer callback\n");
+      pGkClient->state = GkClientFailed;
+      ast_mutex_unlock(&pGkClient->Lock);
+      return OO_FAILED;
+   }
+   cbData->timerType = OO_GRQ_TIMER;
+   cbData->pGkClient = pGkClient;
+   if(!ooTimerCreate(&pGkClient->ctxt, &pGkClient->timerList,
+                     &ooGkClientGRQTimerExpired, pGkClient->grqTimeout,
+                     cbData, FALSE))
+   {
+      OOTRACEERR1("Error:Unable to create GRQ timer.\n ");
+      memFreePtr(&pGkClient->ctxt, cbData);
+      pGkClient->state = GkClientFailed;
+      ast_mutex_unlock(&pGkClient->Lock);
+      return OO_FAILED;
+   }
+
+   ast_mutex_unlock(&pGkClient->Lock);
+
    return OO_OK;
+
 }
 
 

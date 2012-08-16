@@ -335,7 +335,7 @@ static struct tables *find_table(const char *database, const char *orig_tablenam
 		if (strchr(schemaname, '\\') || strchr(schemaname, '\'')) {
 			char *tmp = schemaname, *ptr;
 
-			ptr = schemaname = alloca(strlen(tmp) * 2 + 1);
+			ptr = schemaname = ast_alloca(strlen(tmp) * 2 + 1);
 			for (; *tmp; tmp++) {
 				if (strchr("\\'", *tmp)) {
 					*ptr++ = *tmp;
@@ -348,7 +348,7 @@ static struct tables *find_table(const char *database, const char *orig_tablenam
 		if (strchr(tablename, '\\') || strchr(tablename, '\'')) {
 			char *tmp = tablename, *ptr;
 
-			ptr = tablename = alloca(strlen(tmp) * 2 + 1);
+			ptr = tablename = ast_alloca(strlen(tmp) * 2 + 1);
 			for (; *tmp; tmp++) {
 				if (strchr("\\'", *tmp)) {
 					*ptr++ = *tmp;
@@ -367,7 +367,7 @@ static struct tables *find_table(const char *database, const char *orig_tablenam
 			const char *tmp = orig_tablename;
 			char *ptr;
 
-			orig_tablename = ptr = alloca(strlen(tmp) * 2 + 1);
+			orig_tablename = ptr = ast_alloca(strlen(tmp) * 2 + 1);
 			for (; *tmp; tmp++) {
 				if (strchr("\\'", *tmp)) {
 					*ptr++ = *tmp;

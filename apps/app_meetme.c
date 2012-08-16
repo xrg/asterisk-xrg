@@ -32,7 +32,7 @@
 /*** MODULEINFO
 	<depend>dahdi</depend>
 	<defaultenabled>no</defaultenabled>
-	<support_level>deprecated</support_level>
+	<support_level>extended</support_level>
 	<replacement>app_confbridge</replacement>
  ***/
 
@@ -186,7 +186,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<argument name="secs" required="true" />
 					</option>
 					<option name="x">
-						<para>Close the conference when last marked user exits</para>
+						<para>Leave the conference when the last marked user leaves.</para>
 					</option>
 					<option name="X">
 						<para>Allow user to exit the conference by entering a valid single digit
@@ -595,7 +595,7 @@ enum {
 	CONFFLAG_AGI = (1 << 7),
 	/*! Set to have music on hold when user is alone in conference */
 	CONFFLAG_MOH = (1 << 8),
-	/*! If set the MeetMe will return if all marked with this flag left */
+	/*! If set, the channel will leave the conference if all marked users leave */
 	CONFFLAG_MARKEDEXIT = (1 << 9),
 	/*! If set, the MeetMe will wait until a marked user enters */
 	CONFFLAG_WAITMARKED = (1 << 10),
@@ -2830,6 +2830,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 			ast_channel_setoption(chan, AST_OPTION_TONE_VERIFY, &x, sizeof(char), 0);
 		}
 	} else {
+		int lastusers = conf->users;
 		if (user->dahdichannel && ast_test_flag64(confflags, CONFFLAG_STARMENU)) {
 			/*  Set CONFMUTE mode on DAHDI channel to mute DTMF tones when the menu is enabled */
 			x = 1;
@@ -3109,7 +3110,15 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 				}
 				break;
 			}
-	
+
+			/* Throw a TestEvent if a user exit did not cause this user to leave the conference */
+			if (conf->users != lastusers) {
+				if (conf->users < lastusers) {
+					ast_test_suite_event_notify("NOEXIT", "Message: CONFFLAG_MARKEDEXIT\r\nLastUsers: %d\r\nUsers: %d", lastusers, conf->users);
+				}
+				lastusers = conf->users;
+			}
+
 			/* Check if my modes have changed */
 
 			/* If I should be muted but am still talker, mute me */
@@ -4197,8 +4206,7 @@ static int count_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	
-	if (!(localdata = ast_strdupa(data)))
-		return -1;
+	localdata = ast_strdupa(data);
 
 	AST_STANDARD_APP_ARGS(args, localdata);
 	
