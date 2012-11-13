@@ -19,6 +19,8 @@ MENUSELECT_DESCRIPTION=Codec Translators
 
 LIBILBC=-lilbc
 LIBLPC10=-llpc10
+SUB_DIRS := \
+	$(SUB_GSM)
 
 all: _all
 
@@ -31,21 +33,24 @@ endif
 
 
 clean::
-	$(MAKE) -C gsm clean
+	for dir in $(SUB_DIRS); do \
+		$(MAKE) -C $$dir clean; \
+	done
 	rm -f g722/*.[oa]
 	rm -f speex/*.[oa]
 
-gsm/lib/libgsm.a:
-	@mkdir -p gsm/lib
-	@$(MAKE) -C gsm lib/libgsm.a
+.PHONY: $(SUB_DIRS)
 
 $(if $(filter codec_lpc10,$(EMBEDDED_MODS)),modules.link,codec_lpc10.so): $(LIBLPC10)
 
 
 $(if $(filter codec_ilbc,$(EMBEDDED_MODS)),modules.link,codec_ilbc.so): $(LIBILBC)
 
+
 $(if $(filter codec_g722,$(EMBEDDED_MODS)),modules.link,codec_g722.so): g722/g722_encode.o g722/g722_decode.o
+
 g722/g722_encode.o g722/g722_decode.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,codec_g722)
+
 
 ifeq ($(BUILD_CPU),x86_64)
 SPEEX_RESAMPLE_CFLAGS:=-fPIC
@@ -54,4 +59,5 @@ SPEEX_RESAMPLE_CFLAGS:=
 endif
 
 $(if $(filter codec_resample,$(EMBEDDED_MODS)),modules.link,codec_resample.so): speex/resample.o
+
 speex/resample.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,codec_resample) $(SPEEX_RESAMPLE_CFLAGS)

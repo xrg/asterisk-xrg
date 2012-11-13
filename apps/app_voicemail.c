@@ -648,7 +648,6 @@ struct ast_vm_user {
 	char *emailbody;                 /*!< E-mail body */
 	char pager[80];                  /*!< E-mail address to pager (no attachment) */
 	char serveremail[80];            /*!< From: Mail address */
-	char mailcmd[160];               /*!< Configurable mail command */
 	char language[MAX_LANGUAGE];     /*!< Config: Language setting */
 	char zonetag[80];                /*!< Time zone */
 	char locale[20];                 /*!< The locale (for presentation of date/time) */
@@ -1408,17 +1407,21 @@ static struct ast_vm_user *find_user_realtime(struct ast_vm_user *ivm, const cha
 	struct ast_vm_user *retval;
 
 	if ((retval = (ivm ? ivm : ast_calloc(1, sizeof(*retval))))) {
-		if (!ivm)
-			ast_set_flag(retval, VM_ALLOCED);	
-		else
+		if (ivm) {
 			memset(retval, 0, sizeof(*retval));
-		if (mailbox) 
-			ast_copy_string(retval->mailbox, mailbox, sizeof(retval->mailbox));
+		}
 		populate_defaults(retval);
-		if (!context && ast_test_flag((&globalflags), VM_SEARCH))
+		if (!ivm) {
+			ast_set_flag(retval, VM_ALLOCED);
+		}
+		if (mailbox) {
+			ast_copy_string(retval->mailbox, mailbox, sizeof(retval->mailbox));
+		}
+		if (!context && ast_test_flag((&globalflags), VM_SEARCH)) {
 			var = ast_load_realtime("voicemail", "mailbox", mailbox, SENTINEL);
-		else
+		} else {
 			var = ast_load_realtime("voicemail", "mailbox", mailbox, "context", context, SENTINEL);
+		}
 		if (var) {
 			apply_options_full(retval, var);
 			ast_variables_destroy(var);
@@ -1803,6 +1806,11 @@ static void vm_imap_delete(char *file, int msgnum, struct ast_vm_user *vmu)
 
 	if (!(vms = get_vm_state_by_mailbox(vmu->mailbox, vmu->context, 1)) && !(vms = get_vm_state_by_mailbox(vmu->mailbox, vmu->context, 0))) {
 		ast_log(LOG_WARNING, "Couldn't find a vm_state for mailbox %s. Unable to set \\DELETED flag for message %d\n", vmu->mailbox, msgnum);
+		return;
+	}
+
+	if (msgnum < 0) {
+		imap_delete_old_greeting(file, vms);
 		return;
 	}
 
@@ -2418,8 +2426,10 @@ static int inboxcount2(const char *mailbox_context, int *urgentmsgs, int *newmsg
 			return -1;
 		}
 		if ((*newmsgs = __messagecount(context, mailboxnc, vmu->imapfolder)) < 0) {
+			free_user(vmu);
 			return -1;
 		}
+		free_user(vmu);
 	}
 	if (oldmsgs) {
 		if ((*oldmsgs = __messagecount(context, mailboxnc, "Old")) < 0) {
@@ -2733,8 +2743,9 @@ static struct ast_vm_user *find_user_realtime_imapuser(const char *imapuser)
 	vmu = ast_calloc(1, sizeof *vmu);
 	if (!vmu)
 		return NULL;
-	ast_set_flag(vmu, VM_ALLOCED);
+
 	populate_defaults(vmu);
+	ast_set_flag(vmu, VM_ALLOCED);
 
 	var = ast_load_realtime("voicemail", "imapuser", imapuser, NULL);
 	if (var) {
@@ -10849,8 +10860,8 @@ AST_TEST_DEFINE(test_voicemail_vmuser)
 	if (!(vmu = ast_calloc(1, sizeof(*vmu)))) {
 		return AST_TEST_NOT_RUN;
 	}
-	ast_set_flag(vmu, VM_ALLOCED);
 	populate_defaults(vmu);
+	ast_set_flag(vmu, VM_ALLOCED);
 
 	apply_options(vmu, options_string);
 
@@ -10978,7 +10989,7 @@ AST_TEST_DEFINE(test_voicemail_vmuser)
 		res = 1;
 	}
 	if (strcasecmp(vmu->imapfolder, "INBOX")) {
-		ast_test_status_update(test, "Parse failure for imappasswd option\n");
+		ast_test_status_update(test, "Parse failure for imapfolder option\n");
 		res = 1;
 	}
 	if (strcasecmp(vmu->imapvmshareid, "6000")) {
@@ -11311,7 +11322,6 @@ static struct ast_cli_entry cli_voicemail[] = {
 		USER(ast_vm_user, emailbody, AST_DATA_STRING)			\
 		USER(ast_vm_user, pager, AST_DATA_STRING)			\
 		USER(ast_vm_user, serveremail, AST_DATA_STRING)			\
-		USER(ast_vm_user, mailcmd, AST_DATA_STRING)			\
 		USER(ast_vm_user, language, AST_DATA_STRING)			\
 		USER(ast_vm_user, zonetag, AST_DATA_STRING)			\
 		USER(ast_vm_user, callback, AST_DATA_STRING)			\
@@ -11339,7 +11349,6 @@ static struct ast_cli_entry cli_voicemail[] = {
 		USER(ast_vm_user, emailbody, AST_DATA_STRING)			\
 		USER(ast_vm_user, pager, AST_DATA_STRING)			\
 		USER(ast_vm_user, serveremail, AST_DATA_STRING)			\
-		USER(ast_vm_user, mailcmd, AST_DATA_STRING)			\
 		USER(ast_vm_user, language, AST_DATA_STRING)			\
 		USER(ast_vm_user, zonetag, AST_DATA_STRING)			\
 		USER(ast_vm_user, callback, AST_DATA_STRING)			\
@@ -11715,8 +11724,8 @@ static int manager_list_voicemail_users(struct mansession *s, const struct messa
 			vmu->fullname,
 			vmu->email,
 			vmu->pager,
-			vmu->serveremail,
-			vmu->mailcmd,
+			ast_strlen_zero(vmu->serveremail) ? serveremail : vmu->serveremail,
+			mailcmd,
 			vmu->language,
 			vmu->zonetag,
 			vmu->callback,

@@ -208,7 +208,7 @@ ifeq ($(OSARCH),SunOS)
   _ASTCFLAGS+=-Wcast-align -DSOLARIS -I../include/solaris-compat -I/opt/ssl/include -I/usr/local/ssl/include -D_XPG4_2 -D__EXTENSIONS__
 endif
 
-ASTERISKVERSION:=$(shell GREP=$(GREP) AWK=$(AWK) build_tools/make_version .)
+ASTERISKVERSION:=$(shell GREP=$(GREP) AWK=$(AWK) GIT=$(GIT) build_tools/make_version .)
 
 ifneq ($(wildcard .version),)
   ASTERISKVERSIONNUM:=$(shell $(AWK) -F. '{printf "%01d%02d%02d", $$1, $$2, $$3}' .version)
@@ -626,6 +626,7 @@ samples:
 			-e 's|^astspooldir.*$$|astspooldir => $(ASTSPOOLDIR)|' \
 			-e 's|^astrundir.*$$|astrundir => $(ASTVARRUNDIR)|' \
 			-e 's|^astlogdir.*$$|astlogdir => $(ASTLOGDIR)|' \
+			-e 's|^astsbindir.*$$|astsbindir => $(ASTSBINDIR)|' \
 			"$(DESTDIR)$(ASTCONFPATH)" > "$(DESTDIR)$(ASTCONFPATH).tmp" ; \
 		$(INSTALL) -m 644 "$(DESTDIR)$(ASTCONFPATH).tmp" "$(DESTDIR)$(ASTCONFPATH)" ; \
 		rm -f "$(DESTDIR)$(ASTCONFPATH).tmp" ; \

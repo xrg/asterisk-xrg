@@ -223,7 +223,6 @@ static int autologoff;
 static int wrapuptime;
 static int ackcall;
 static int endcall;
-static int multiplelogin = 1;
 static int autologoffunavail = 0;
 static char acceptdtmf = DEFAULT_ACCEPTDTMF;
 static char enddtmf = DEFAULT_ENDDTMF;
@@ -1047,6 +1046,8 @@ static int agent_ack_sleep(void *data)
 	int res=0;
 	int to = 1000;
 	struct ast_frame *f;
+	struct timeval start = ast_tvnow();
+	int ms;
 
 	/* Wait a second and look for something */
 
@@ -1054,12 +1055,14 @@ static int agent_ack_sleep(void *data)
 	if (!p->chan) 
 		return -1;
 
-	for(;;) {
-		to = ast_waitfor(p->chan, to);
-		if (to < 0) 
+	while ((ms = ast_remaining_ms(start, to))) {
+		ms = ast_waitfor(p->chan, ms);
+		if (ms < 0) {
 			return -1;
-		if (!to) 
+		}
+		if (ms == 0) {
 			return 0;
+		}
 		f = ast_read(p->chan);
 		if (!f) 
 			return -1;
@@ -1079,7 +1082,7 @@ static int agent_ack_sleep(void *data)
 		ast_mutex_unlock(&p->lock);
 		res = 0;
 	}
-	return res;
+	return 0;
 }
 
 static struct ast_channel *agent_bridgedchannel(struct ast_channel *chan, struct ast_channel *bridge)
@@ -1194,9 +1197,6 @@ static int read_agent_config(int reload)
 	strcpy(recordformatext, "wav");
 	urlprefix[0] = '\0';
 	savecallsin[0] = '\0';
-
-	/* Read in [general] section for persistence */
-	multiplelogin = ast_true(ast_variable_retrieve(cfg, "general", "multiplelogin"));
 
 	/* Read in the [agents] section */
 	v = ast_variable_browse(cfg, "agents");
@@ -2560,12 +2560,15 @@ static int load_module(void)
 	ast_format_cap_add_all(agent_tech.capabilities);
 	/* Make sure we can register our agent channel type */
 	if (ast_channel_register(&agent_tech)) {
+		agent_tech.capabilities = ast_format_cap_destroy(agent_tech.capabilities);
 		ast_log(LOG_ERROR, "Unable to register channel class 'Agent'\n");
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	/* Read in the config */
-	if (!read_agent_config(0))
+	if (!read_agent_config(0)) {
+		agent_tech.capabilities = ast_format_cap_destroy(agent_tech.capabilities);
 		return AST_MODULE_LOAD_DECLINE;
+	}
 	/* Dialplan applications */
 	ast_register_application_xml(app, login_exec);
 	ast_register_application_xml(app3, agentmonitoroutgoing_exec);

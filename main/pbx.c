@@ -5159,6 +5159,9 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 		int invalid = 0;
 		int timeout = 0;
 
+		/* No digits pressed yet */
+		dst_exten[pos] = '\0';
+
 		/* loop on priorities in this context/exten */
 		while (!(res = ast_spawn_extension(c, c->context, c->exten, c->priority,
 			S_COR(c->caller.id.number.valid, c->caller.id.number.str, NULL),
@@ -6911,6 +6914,7 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 			continue;	/* not the name we want */
 
 		dpc->context_existence = 1;
+		dpc->total_context++;
 
 		ast_debug(3, "manager_show_dialplan: Found Context: %s \n", ast_get_context_name(c));
 
@@ -6934,8 +6938,6 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 
 			dpc->extension_existence = 1;
 
-			/* may we print context info? */
-			dpc->total_context++;
 			dpc->total_exten++;
 
 			p = NULL;		/* walk next extension peers */
@@ -7037,22 +7039,26 @@ static int manager_show_dialplan(struct mansession *s, const struct message *m)
 
 	manager_show_dialplan_helper(s, m, idtext, context, exten, &counters, NULL);
 
-	if (context && !counters.context_existence) {
+	if (!ast_strlen_zero(context) && !counters.context_existence) {
 		char errorbuf[BUFSIZ];
 
 		snprintf(errorbuf, sizeof(errorbuf), "Did not find context %s", context);
 		astman_send_error(s, m, errorbuf);
 		return 0;
 	}
-	if (exten && !counters.extension_existence) {
+	if (!ast_strlen_zero(exten) && !counters.extension_existence) {
 		char errorbuf[BUFSIZ];
 
-		if (context)
+		if (!ast_strlen_zero(context))
 			snprintf(errorbuf, sizeof(errorbuf), "Did not find extension %s@%s", exten, context);
 		else
 			snprintf(errorbuf, sizeof(errorbuf), "Did not find extension %s in any context", exten);
 		astman_send_error(s, m, errorbuf);
 		return 0;
+	}
+
+	if (!counters.total_items) {
+		manager_dpsendack(s, m);
 	}
 
 	astman_append(s, "Event: ShowDialPlanComplete\r\n"
@@ -8679,7 +8685,7 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 	}
 
 	/* If we are adding a hint evalulate in variables and global variables */
-	if (priority == PRIORITY_HINT && strstr(application, "${") && !strstr(extension, "_")) {
+	if (priority == PRIORITY_HINT && strstr(application, "${") && extension[0] != '_') {
 		struct ast_channel *c = ast_dummy_channel_alloc();
 
 		if (c) {
@@ -8878,13 +8884,15 @@ static void *async_wait(void *data)
 	int res;
 	struct ast_frame *f;
 	struct ast_app *app;
+	struct timeval start = ast_tvnow();
+	int ms;
 
-	while (timeout && (chan->_state != AST_STATE_UP)) {
-		res = ast_waitfor(chan, timeout);
+	while ((ms = ast_remaining_ms(start, timeout)) &&
+			chan->_state != AST_STATE_UP) {
+		res = ast_waitfor(chan, ms);
 		if (res < 1)
 			break;
-		if (timeout > -1)
-			timeout = res;
+
 		f = ast_read(chan);
 		if (!f)
 			break;
@@ -10461,6 +10469,26 @@ static const struct ast_data_entry pbx_data_providers[] = {
 	AST_DATA_ENTRY("asterisk/core/hints", &hints_data_provider),
 };
 
+/*! \internal \brief Clean up resources on Asterisk shutdown.
+ * \note Cleans up resources allocated in load_pbx */
+static void unload_pbx(void)
+{
+	int x;
+
+	if (device_state_sub) {
+		device_state_sub = ast_event_unsubscribe(device_state_sub);
+	}
+
+	/* Unregister builtin applications */
+	for (x = 0; x < ARRAY_LEN(builtins); x++) {
+		ast_unregister_application(builtins[x].name);
+	}
+	ast_manager_unregister("ShowDialPlan");
+	ast_custom_function_unregister(&exception_function);
+	ast_custom_function_unregister(&testtime_function);
+	ast_data_unregister(NULL);
+}
+
 int load_pbx(void)
 {
 	int x;
@@ -10494,6 +10522,7 @@ int load_pbx(void)
 		return -1;
 	}
 
+	ast_register_atexit(unload_pbx);
 	return 0;
 }
 
@@ -10854,11 +10883,26 @@ static int statecbs_cmp(void *obj, void *arg, int flags)
 	return (state_cb->change_cb == change_cb) ? CMP_MATCH | CMP_STOP : 0;
 }
 
+/*! \internal \brief Clean up resources on Asterisk shutdown */
+static void pbx_shutdown(void)
+{
+	if (hints) {
+		ao2_ref(hints, -1);
+	}
+	if (hintdevices) {
+		ao2_ref(hintdevices, -1);
+	}
+	if (statecbs) {
+		ao2_ref(statecbs, -1);
+	}
+}
+
 int ast_pbx_init(void)
 {
 	hints = ao2_container_alloc(HASH_EXTENHINT_SIZE, hint_hash, hint_cmp);
 	hintdevices = ao2_container_alloc(HASH_EXTENHINT_SIZE, hintdevice_hash_cb, hintdevice_cmp_multiple);
 	statecbs = ao2_container_alloc(1, NULL, statecbs_cmp);
 
+	ast_register_atexit(pbx_shutdown);
 	return (hints && hintdevices && statecbs) ? 0 : -1;
 }

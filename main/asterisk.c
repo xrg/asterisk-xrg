@@ -1694,6 +1694,10 @@ static int can_safely_quit(shutdown_nice_t niceness, int restart)
 	 * the atexit handlers, otherwise this would be a bit early. */
 	ast_cdr_engine_term();
 
+	/* Shutdown the message queue for the technology agnostic message channel.
+	 * This has to occur before we pause shutdown pending ast_undestroyed_channels. */
+	ast_msg_shutdown();
+
 	if (niceness == SHUTDOWN_NORMAL) {
 		time_t s, e;
 		/* Begin shutdown routine, hanging up active channels */
@@ -1770,6 +1774,15 @@ static void really_quit(int num, shutdown_nice_t niceness, int restart)
 			}
 		}
 	}
+	/* The manager event for shutdown must happen prior to ast_run_atexits, as
+	 * the manager interface will dispose of its sessions as part of its
+	 * shutdown.
+	 */
+	manager_event(EVENT_FLAG_SYSTEM, "Shutdown", "Shutdown: %s\r\n"
+			"Restart: %s\r\n",
+			ast_active_channels() ? "Uncleanly" : "Cleanly",
+			restart ? "True" : "False");
+
 	if (option_verbose)
 		ast_verbose("Executing last minute cleanups\n");
 	ast_run_atexits();
@@ -1777,7 +1790,6 @@ static void really_quit(int num, shutdown_nice_t niceness, int restart)
 	if (option_verbose && ast_opt_console)
 		ast_verbose("Asterisk %s ending (%d).\n", ast_active_channels() ? "uncleanly" : "cleanly", num);
 	ast_debug(1, "Asterisk ending (%d).\n", num);
-	manager_event(EVENT_FLAG_SYSTEM, "Shutdown", "Shutdown: %s\r\nRestart: %s\r\n", ast_active_channels() ? "Uncleanly" : "Cleanly", restart ? "True" : "False");
 	if (ast_socket > -1) {
 		pthread_cancel(lthread);
 		close(ast_socket);
@@ -3340,6 +3352,10 @@ int main(int argc, char *argv[])
 	int moduleresult;         /*!< Result from the module load subsystem */
 	struct rlimit l;
 
+#if defined(__AST_DEBUG_MALLOC)
+	__ast_mm_init_phase_1();
+#endif	/* defined(__AST_DEBUG_MALLOC) */
+
 	/* Remember original args for restart */
 	if (argc > ARRAY_LEN(_argv) - 1) {
 		fprintf(stderr, "Truncating argument size to %d\n", (int)ARRAY_LEN(_argv) - 1);
@@ -4010,9 +4026,9 @@ int main(int argc, char *argv[])
 
 	pthread_sigmask(SIG_UNBLOCK, &sigs, NULL);
 
-#ifdef __AST_DEBUG_MALLOC
-	__ast_mm_init();
-#endif
+#if defined(__AST_DEBUG_MALLOC)
+	__ast_mm_init_phase_2();
+#endif	/* defined(__AST_DEBUG_MALLOC) */
 
 	ast_lastreloadtime = ast_startuptime = ast_tvnow();
 	ast_cli_register_multiple(cli_asterisk, ARRAY_LEN(cli_asterisk));

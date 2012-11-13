@@ -705,7 +705,18 @@ static void chan_cleanup(struct ast_channel *chan)
 	ast_channel_unlock(chan);
 }
 
-AST_THREADSTORAGE(msg_q_chan);
+static void destroy_msg_q_chan(void *data)
+{
+	struct ast_channel **chan = data;
+
+	if (!*chan) {
+		return;
+	}
+
+	ast_channel_release(*chan);
+}
+
+AST_THREADSTORAGE_CUSTOM(msg_q_chan, NULL, destroy_msg_q_chan);
 
 /*!
  * \internal
@@ -1102,6 +1113,29 @@ int ast_msg_tech_unregister(const struct ast_msg_tech *tech)
 	return 0;
 }
 
+void ast_msg_shutdown(void)
+{
+	if (msg_q_tp) {
+		msg_q_tp = ast_taskprocessor_unreference(msg_q_tp);
+	}
+}
+
+/*! \internal \brief Clean up other resources on Asterisk shutdown
+ * \note This does not include the msg_q_tp object, which must be disposed
+ * of prior to Asterisk checking for channel destruction in its shutdown
+ * sequence.  The atexit handlers are executed after this occurs. */
+static void message_shutdown(void)
+{
+	ast_custom_function_unregister(&msg_function);
+	ast_custom_function_unregister(&msg_data_function);
+	ast_unregister_application(app_msg_send);
+
+	if (msg_techs) {
+		ao2_ref(msg_techs, -1);
+		msg_techs = NULL;
+	}
+}
+
 /*
  * \internal
  * \brief Initialize stuff during Asterisk startup.
@@ -1129,6 +1163,8 @@ int ast_msg_init(void)
 	res = __ast_custom_function_register(&msg_function, NULL);
 	res |= __ast_custom_function_register(&msg_data_function, NULL);
 	res |= ast_register_application2(app_msg_send, msg_send_exec, NULL, NULL, NULL);
+
+	ast_register_atexit(message_shutdown);
 
 	return res;
 }

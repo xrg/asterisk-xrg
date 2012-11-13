@@ -18,6 +18,11 @@
 === UPGRADE-1.8.txt -- Upgrade info for 1.6 to 1.8
 ===
 ===========================================================
+From 10.9 to 10.10:
+
+* Queue strategy rrmemory now has a predictable order similar to strategy
+  rrordered. Members will be called in the order that they are added to the
+  queue.
 
 From 10.4 to 10.5:
 
@@ -116,6 +121,15 @@ chan_sip:
  - Setting of HASH(SIP_CAUSE,<slave-channel-name>) on channels is now disabled
    by default. It can be enabled using the 'storesipcause' option. This feature
    has a significant performance penalty.
+ - In order to improve compliance with RFC 3261, SIP usernames are now properly
+   escaped when encoding reserved characters. Prior to this change, the use of
+   these characters in certain SIP settings affecting usernames could cause
+   injections of these characters in their raw form into SIP headers which could
+   in turn cause all sorts of nasty behaviors. All characters that are not
+   alphanumeric or are not contained in the the following lists specified by
+   RFC 3261 section 25.1 will be escaped as %XX when encoding a SIP username:
+    * mark: "-" / "_" / "." / "!" / "~" / "*" / "'" / "(" / ")"
+    * user-unreserved: "&" / "=" / "+" / "$" / "," / ";" / "?" / "/"
 
 UDPTL:
  - The default UDPTL port range in udptl.conf.sample differed from the defaults

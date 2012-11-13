@@ -776,16 +776,20 @@ static const char *locktype2str(enum ast_lock_type type)
 static void append_backtrace_information(struct ast_str **str, struct ast_bt *bt)
 {
 	char **symbols;
+	int num_frames;
 
 	if (!bt) {
 		ast_str_append(str, 0, "\tNo backtrace to print\n");
 		return;
 	}
 
-	if ((symbols = ast_bt_get_symbols(bt->addresses, bt->num_frames))) {
+	/* store frame count locally to avoid the memory corruption that
+	 * sometimes happens on virtualized CentOS 6.x systems */
+	num_frames = bt->num_frames;
+	if ((symbols = ast_bt_get_symbols(bt->addresses, num_frames))) {
 		int frame_iterator;
 		
-		for (frame_iterator = 0; frame_iterator < bt->num_frames; ++frame_iterator) {
+		for (frame_iterator = 0; frame_iterator < num_frames; ++frame_iterator) {
 			ast_str_append(str, 0, "\t%s\n", symbols[frame_iterator]);
 		}
 
@@ -1056,9 +1060,8 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 		a->start_routine = start_routine;
 		a->data = data;
 		start_routine = dummy_start;
-		if (asprintf(&a->name, "%-20s started at [%5d] %s %s()",
+		if (ast_asprintf(&a->name, "%-20s started at [%5d] %s %s()",
 			     start_fn, line, file, caller) < 0) {
-			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
 			a->name = NULL;
 		}
 		data = a;
@@ -1435,6 +1438,23 @@ struct timeval ast_tvsub(struct timeval a, struct timeval b)
 	}
 	return a;
 }
+
+int ast_remaining_ms(struct timeval start, int max_ms)
+{
+	int ms;
+
+	if (max_ms < 0) {
+		ms = max_ms;
+	} else {
+		ms = max_ms - ast_tvdiff_ms(ast_tvnow(), start);
+		if (ms < 0) {
+			ms = 0;
+		}
+	}
+
+	return ms;
+}
+
 #undef ONE_MILLION
 
 /*! \brief glibc puts a lock inside random(3), so that the results are thread-safe.
@@ -2158,3 +2178,35 @@ char *ast_utils_which(const char *binary, char *fullpath, size_t fullpath_size)
 	return NULL;
 }
 
+void ast_do_crash(void)
+{
+#if defined(DO_CRASH)
+	abort();
+	/*
+	 * Just in case abort() doesn't work or something else super
+	 * silly, and for Qwell's amusement.
+	 */
+	*((int *) 0) = 0;
+#endif	/* defined(DO_CRASH) */
+}
+
+#if defined(AST_DEVMODE)
+void __ast_assert_failed(int condition, const char *condition_str, const char *file, int line, const char *function)
+{
+	/*
+	 * Attempt to put it into the logger, but hope that at least
+	 * someone saw the message on stderr ...
+	 */
+	ast_log(__LOG_ERROR, file, line, function, "FRACK!, Failed assertion %s (%d)\n",
+		condition_str, condition);
+	fprintf(stderr, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
+		condition_str, condition, line, function, file);
+	/*
+	 * Give the logger a chance to get the message out, just in case
+	 * we abort(), or Asterisk crashes due to whatever problem just
+	 * happened after we exit ast_assert().
+	 */
+	usleep(1);
+	ast_do_crash();
+}
+#endif	/* defined(AST_DEVMODE) */

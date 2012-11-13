@@ -293,6 +293,24 @@ static void sig_ss7_handle_link_exception(struct sig_ss7_linkset *linkset, int w
 
 /*!
  * \internal
+ * \brief Determine if a private channel structure is available.
+ *
+ * \param pvt Channel to determine if available.
+ *
+ * \return TRUE if the channel is available.
+ */
+static int sig_ss7_is_chan_available(struct sig_ss7_chan *pvt)
+{
+	if (!pvt->inalarm && !pvt->owner && !pvt->ss7call
+		&& pvt->call_level == SIG_SS7_CALL_LEVEL_IDLE
+		&& !pvt->locallyblocked && !pvt->remotelyblocked) {
+		return 1;
+	}
+	return 0;
+}
+
+/*!
+ * \internal
  * \brief Obtain the sig_ss7 owner channel lock if the owner exists.
  * \since 1.8
  *
@@ -540,6 +558,7 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 		p->call_level = SIG_SS7_CALL_LEVEL_SETUP;
 	}
 
+	/* Companding law is determined by SS7 signaling type. */
 	if (linkset->type == SS7_ITU) {
 		law = SIG_SS7_ALAW;
 	} else {
@@ -558,7 +577,7 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 		ast_log(LOG_WARNING, "Unable to start PBX on CIC %d\n", p->cic);
 		ast_mutex_lock(&linkset->lock);
 		sig_ss7_lock_private(p);
-		isup_rel(linkset->ss7, p->ss7call, -1);
+		isup_rel(linkset->ss7, p->ss7call, AST_CAUSE_SWITCH_CONGESTION);
 		p->call_level = SIG_SS7_CALL_LEVEL_IDLE;
 		p->alreadyhungup = 1;
 		return;
@@ -905,11 +924,11 @@ void *ss7_linkset(void *data)
 						 * We have not sent our IAM yet and we never will at this point.
 						 */
 						p->alreadyhungup = 1;
-						isup_rel(ss7, e->iam.call, -1);
+						isup_rel(ss7, e->iam.call, AST_CAUSE_NORMAL_CIRCUIT_CONGESTION);
 					}
 					p->call_level = SIG_SS7_CALL_LEVEL_GLARE;
 					if (p->owner) {
-						p->owner->hangupcause = AST_CAUSE_NORMAL_CLEARING;
+						p->owner->hangupcause = AST_CAUSE_NORMAL_CIRCUIT_CONGESTION;
 						ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 						ast_channel_unlock(p->owner);
 					}
@@ -921,6 +940,13 @@ void *ss7_linkset(void *data)
 				 * are in the process of creating an owner for it.
 				 */
 				ast_assert(!p->owner);
+
+				if (!sig_ss7_is_chan_available(p)) {
+					/* Circuit is likely blocked or in alarm. */
+					isup_rel(ss7, e->iam.call, AST_CAUSE_NORMAL_CIRCUIT_CONGESTION);
+					sig_ss7_unlock_private(p);
+					break;
+				}
 
 				/* Mark channel as in use so no outgoing call will steal it. */
 				p->call_level = SIG_SS7_CALL_LEVEL_ALLOCATED;
@@ -1359,24 +1385,6 @@ int sig_ss7_add_sigchan(struct sig_ss7_linkset *linkset, int which, int ss7type,
 }
 
 /*!
- * \internal
- * \brief Determine if a private channel structure is available.
- *
- * \param pvt Channel to determine if available.
- *
- * \return TRUE if the channel is available.
- */
-static int sig_ss7_is_chan_available(struct sig_ss7_chan *pvt)
-{
-	if (!pvt->inalarm && !pvt->owner && !pvt->ss7call
-		&& pvt->call_level == SIG_SS7_CALL_LEVEL_IDLE
-		&& !pvt->locallyblocked && !pvt->remotelyblocked) {
-		return 1;
-	}
-	return 0;
-}
-
-/*!
  * \brief Determine if the specified channel is available for an outgoing call.
  * \since 1.8
  *
@@ -1787,6 +1795,13 @@ int sig_ss7_indicate(struct sig_ss7_chan *p, struct ast_channel *chan, int condi
 struct ast_channel *sig_ss7_request(struct sig_ss7_chan *p, enum sig_ss7_law law, const struct ast_channel *requestor, int transfercapability)
 {
 	struct ast_channel *ast;
+
+	/* Companding law is determined by SS7 signaling type. */
+	if (p->ss7->type == SS7_ITU) {
+		law = SIG_SS7_ALAW;
+	} else {
+		law = SIG_SS7_ULAW;
+	}
 
 	sig_ss7_set_outgoing(p, 1);
 	ast = sig_ss7_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability, p->exten, requestor);

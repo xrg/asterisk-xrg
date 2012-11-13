@@ -84,6 +84,8 @@ static const int BUCKET_SIZE = 1;
 
 static struct ao2_container *locals;
 
+static unsigned int name_sequence = 0;
+
 static struct ast_jb_conf g_jb_conf = {
 	.flags = 0,
 	.max_size = -1,
@@ -305,11 +307,13 @@ static int local_devicestate(void *data)
 	res = AST_DEVICE_NOT_INUSE;
 
 	it = ao2_iterator_init(locals, 0);
-	while ((lp = ao2_iterator_next(&it))) {
+	while ((lp = ao2_iterator_next(&it)) && (res == AST_DEVICE_NOT_INUSE)) {
 		if (!strcmp(exten, lp->exten) && !strcmp(context, lp->context) && lp->owner) {
-			res = AST_DEVICE_INUSE;
-			ao2_ref(lp, -1);
-			break;
+			ao2_lock(lp);
+			if (ast_test_flag(lp, LOCAL_LAUNCHED_PBX)) {
+				res = AST_DEVICE_INUSE;
+			}
+			ao2_unlock(lp);
 		}
 		ao2_ref(lp, -1);
 	}
@@ -755,6 +759,15 @@ static int local_indicate(struct ast_channel *ast, int condition, const void *da
 			f.data.ptr = (void *) data;
 			f.datalen = datalen;
 			res = local_queue_frame(p, isoutbound, &f, ast, 1);
+
+			if (!res && (condition == AST_CONTROL_T38_PARAMETERS) &&
+			    (datalen == sizeof(struct ast_control_t38_parameters))) {
+				const struct ast_control_t38_parameters *parameters = data;
+				
+				if (parameters->request_response == AST_T38_REQUEST_PARMS) {
+					res = AST_T38_REQUEST_PARMS;
+				}
+			}
 		} else {
 			ast_debug(4, "Blocked indication %d\n", condition);
 		}
@@ -1156,8 +1169,8 @@ static struct local_pvt *local_alloc(const char *data, struct ast_format_cap *ca
 static struct ast_channel *local_new(struct local_pvt *p, int state, const char *linkedid)
 {
 	struct ast_channel *tmp = NULL, *tmp2 = NULL;
-	int randnum = ast_random() & 0xffff;
 	struct ast_format fmt;
+	int generated_seqno = ast_atomic_fetchadd_int((int *)&name_sequence, +1);
 	const char *t;
 	int ama;
 
@@ -1175,8 +1188,8 @@ static struct ast_channel *local_new(struct local_pvt *p, int state, const char 
 
 	/* Make sure that the ;2 channel gets the same linkedid as ;1. You can't pass linkedid to both
 	 * allocations since if linkedid isn't set, then each channel will generate its own linkedid. */
-	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%04x;1", p->exten, p->context, randnum)) 
-		|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, t, p->exten, p->context, tmp->linkedid, ama, "Local/%s@%s-%04x;2", p->exten, p->context, randnum))) {
+	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%08x;1", p->exten, p->context, generated_seqno))
+		|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, t, p->exten, p->context, tmp->linkedid, ama, "Local/%s@%s-%08x;2", p->exten, p->context, generated_seqno))) {
 		if (tmp) {
 			tmp = ast_channel_release(tmp);
 		}

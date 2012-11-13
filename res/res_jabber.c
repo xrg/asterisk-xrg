@@ -313,7 +313,6 @@ static char *aji_do_set_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 static char *aji_do_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *aji_show_clients(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *aji_show_buddies(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
-static char *aji_test(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static int aji_create_client(char *label, struct ast_variable *var, int debug);
 static int aji_create_buddy(char *label, struct aji_client *client);
 static int aji_reload(int reload);
@@ -385,7 +384,6 @@ static struct ast_cli_entry aji_cli[] = {
 	AST_CLI_DEFINE(aji_do_reload, "Reload Jabber configuration"),
 	AST_CLI_DEFINE(aji_show_clients, "Show state of clients and components"),
 	AST_CLI_DEFINE(aji_show_buddies, "Show buddy lists of our clients"),
-	AST_CLI_DEFINE(aji_test, "Shows roster, but is generally used for mog's debugging."),
 	AST_CLI_DEFINE(aji_cli_create_collection, "Creates a PubSub node collection."),
 	AST_CLI_DEFINE(aji_cli_list_pubsub_nodes, "Lists PubSub nodes"),
 	AST_CLI_DEFINE(aji_cli_create_leafnode, "Creates a PubSub leaf node"),
@@ -1760,11 +1758,9 @@ static int aji_act_hook(void *data, int type, iks *node)
 
 				sprintf(secret, "%s%s", pak->id, client->password);
 				ast_sha1_hash(shasum, secret);
-				handshake = NULL;
-				if (asprintf(&handshake, "<handshake>%s</handshake>", shasum) >= 0) {
+				if (ast_asprintf(&handshake, "<handshake>%s</handshake>", shasum) >= 0) {
 					aji_send_raw(client, handshake);
 					ast_free(handshake);
-					handshake = NULL;
 				}
 				client->state = AJI_CONNECTING;
 				if (aji_recv(client, 1) == 2) /*XXX proper result for iksemel library on iks_recv of <handshake/> XXX*/
@@ -2049,6 +2045,12 @@ static int aji_client_info_handler(void *data, ikspak *pak)
 	struct aji_resource *resource = NULL;
 	struct aji_buddy *buddy = ASTOBJ_CONTAINER_FIND(&client->buddies, pak->from->partial);
 
+	if (!buddy) {
+		ast_log(LOG_NOTICE, "JABBER: Received client info from unknown buddy: %s.\n", pak->from->full);
+		ASTOBJ_UNREF(client, ast_aji_client_destroy);
+		return IKS_FILTER_EAT;
+	}
+
 	resource = aji_find_resource(buddy, pak->from->resource);
 	if (pak->subtype == IKS_TYPE_RESULT) {
 		if (!resource) {
@@ -2115,6 +2117,12 @@ static int aji_dinfo_handler(void *data, ikspak *pak)
 	char *node = NULL;
 	struct aji_resource *resource = NULL;
 	struct aji_buddy *buddy = ASTOBJ_CONTAINER_FIND(&client->buddies, pak->from->partial);
+
+	if (!buddy) {
+		ast_log(LOG_NOTICE, "JABBER: Received client info from unknown buddy: %s.\n", pak->from->full);
+		ASTOBJ_UNREF(client, ast_aji_client_destroy);
+		return IKS_FILTER_EAT;
+	}
 
 	if (pak->subtype == IKS_TYPE_ERROR) {
 		ast_log(LOG_WARNING, "Received error from a client, turn on jabber debug!\n");
@@ -4245,69 +4253,6 @@ static char *aji_show_buddies(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 /*!
  * \internal
- * \brief Send test message for debugging.
- * \return CLI_SUCCESS,CLI_FAILURE.
- */
-static char *aji_test(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	struct aji_client *client;
-	struct aji_resource *resource;
-	const char *name;
-	struct aji_message *tmp;
-
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "jabber test";
-		e->usage =
-			"Usage: jabber test <connection>\n"
-			"       Sends test message for debugging purposes.  A specific client\n"
-			"       as configured in jabber.conf must be specified.\n";
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;
-	}
-
-	if (a->argc != 3) {
-		return CLI_SHOWUSAGE;
-	}
-	name = a->argv[2];
-
-	if (!(client = ASTOBJ_CONTAINER_FIND(&clients, name))) {
-		ast_cli(a->fd, "Unable to find client '%s'!\n", name);
-		return CLI_FAILURE;
-	}
-
-	/* XXX Does Matt really want everyone to use his personal address for tests? */ /* XXX yes he does */
-	ast_aji_send_chat(client, "mogorman@astjab.org", "blahblah");
-	ASTOBJ_CONTAINER_TRAVERSE(&client->buddies, 1, {
-		ASTOBJ_RDLOCK(iterator);
-		ast_verbose("User: %s\n", iterator->name);
-		for (resource = iterator->resources; resource; resource = resource->next) {
-			ast_verbose("Resource: %s\n", resource->resource);
-			if (resource->cap) {
-				ast_verbose("   client: %s\n", resource->cap->parent->node);
-				ast_verbose("   version: %s\n", resource->cap->version);
-				ast_verbose("   Jingle Capable: %d\n", resource->cap->jingle);
-			}
-			ast_verbose("	Priority: %d\n", resource->priority);
-			ast_verbose("	Status: %d\n", resource->status);
-			ast_verbose("	Message: %s\n", S_OR(resource->description, ""));
-		}
-		ASTOBJ_UNLOCK(iterator);
-	});
-	ast_verbose("\nOooh a working message stack!\n");
-	AST_LIST_LOCK(&client->messages);
-	AST_LIST_TRAVERSE(&client->messages, tmp, list) {
-		//ast_verbose("	Message from: %s with id %s @ %s	%s\n",tmp->from, S_OR(tmp->id,""), ctime(&tmp->arrived), S_OR(tmp->message, ""));
-	}
-	AST_LIST_UNLOCK(&client->messages);
-	ASTOBJ_UNREF(client, ast_aji_client_destroy);
-
-	return CLI_SUCCESS;
-}
-
-/*!
- * \internal
  * \brief creates aji_client structure.
  * \param label
  * \param var ast_variable
@@ -4482,8 +4427,7 @@ static int aji_create_client(char *label, struct ast_variable *var, int debug)
 		return 0;
 	}
 	if (!strchr(client->user, '/') && !client->component) { /*client */
-		resource = NULL;
-		if (asprintf(&resource, "%s/asterisk", client->user) >= 0) {
+		if (ast_asprintf(&resource, "%s/asterisk", client->user) >= 0) {
 			client->jid = iks_id_new(client->stack, resource);
 			ast_free(resource);
 		}

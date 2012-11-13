@@ -672,7 +672,7 @@ struct chanlist {
 	struct ast_aoc_decoded *aoc_s_rate_list;
 };
 
-static int detect_disconnect(struct ast_channel *chan, char code, struct ast_str *featurecode);
+static int detect_disconnect(struct ast_channel *chan, char code, struct ast_str **featurecode);
 
 static void chanlist_free(struct chanlist *outgoing)
 {
@@ -1055,6 +1055,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 	int is_cc_recall;
 	int cc_frame_received = 0;
 	int num_ringing = 0;
+	struct timeval start = ast_tvnow();
 
 	ast_party_connected_line_init(&connected_caller);
 	if (single) {
@@ -1095,7 +1096,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 		ast_poll_channel_add(in, epollo->chan);
 #endif
 
-	while (*to && !peer) {
+	while ((*to = ast_remaining_ms(start, orig)) && !peer) {
 		struct chanlist *o;
 		int pos = 0; /* how many channels do we handle */
 		int numlines = prestart;
@@ -1532,7 +1533,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				}
 
 				if (ast_test_flag64(peerflags, OPT_CALLER_HANGUP) &&
-					detect_disconnect(in, f->subclass.integer, featurecode)) {
+					detect_disconnect(in, f->subclass.integer, &featurecode)) {
 					ast_verb(3, "User requested call disconnect.\n");
 					*to = 0;
 					strcpy(pa->status, "CANCEL");
@@ -1626,10 +1627,13 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 skip_frame:;
 			ast_frfree(f);
 		}
-		if (!*to)
-			ast_verb(3, "Nobody picked up in %d ms\n", orig);
-		if (!*to || ast_check_hangup(in))
-			ast_cdr_noanswer(in->cdr);
+	}
+
+	if (!*to) {
+		ast_verb(3, "Nobody picked up in %d ms\n", orig);
+	}
+	if (!*to || ast_check_hangup(in)) {
+		ast_cdr_noanswer(in->cdr);
 	}
 
 #ifdef HAVE_EPOLL
@@ -1645,18 +1649,18 @@ skip_frame:;
 	return peer;
 }
 
-static int detect_disconnect(struct ast_channel *chan, char code, struct ast_str *featurecode)
+static int detect_disconnect(struct ast_channel *chan, char code, struct ast_str **featurecode)
 {
 	struct ast_flags features = { AST_FEATURE_DISCONNECT }; /* only concerned with disconnect feature */
 	struct ast_call_feature feature = { 0, };
 	int res;
 
-	ast_str_append(&featurecode, 1, "%c", code);
+	ast_str_append(featurecode, 1, "%c", code);
 
-	res = ast_feature_detect(chan, &features, ast_str_buffer(featurecode), &feature);
+	res = ast_feature_detect(chan, &features, ast_str_buffer(*featurecode), &feature);
 
 	if (res != AST_FEATURE_RETURN_STOREDIGITS) {
-		ast_str_reset(featurecode);
+		ast_str_reset(*featurecode);
 	}
 	if (feature.feature_mask & AST_FEATURE_DISCONNECT) {
 		return 1;
@@ -2795,8 +2799,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 						 ast_exists_extension(peer, opt_args[OPT_ARG_CALLEE_GOSUB], "~~s~~", 1, S_COR(peer->caller.id.number.valid, peer->caller.id.number.str, NULL))) {
 						what_is_s = "~~s~~";
 					}
-					if (asprintf(&gosub_args, "%s,%s,1(%s)", opt_args[OPT_ARG_CALLEE_GOSUB], what_is_s, gosub_argstart + 1) < 0) {
-						ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+					if (ast_asprintf(&gosub_args, "%s,%s,1(%s)", opt_args[OPT_ARG_CALLEE_GOSUB], what_is_s, gosub_argstart + 1) < 0) {
 						gosub_args = NULL;
 					}
 					*gosub_argstart = ',';
@@ -2806,8 +2809,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 						 ast_exists_extension(peer, opt_args[OPT_ARG_CALLEE_GOSUB], "~~s~~", 1, S_COR(peer->caller.id.number.valid, peer->caller.id.number.str, NULL))) {
 						what_is_s = "~~s~~";
 					}
-					if (asprintf(&gosub_args, "%s,%s,1", opt_args[OPT_ARG_CALLEE_GOSUB], what_is_s) < 0) {
-						ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+					if (ast_asprintf(&gosub_args, "%s,%s,1", opt_args[OPT_ARG_CALLEE_GOSUB], what_is_s) < 0) {
 						gosub_args = NULL;
 					}
 				}
@@ -2996,9 +2998,9 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 					/* The peer is now running its own PBX. */
 					goto out;
 				}
-			} else {
-				chan->hangupcause = peer->hangupcause;
 			}
+		} else if (!ast_check_hangup(chan)) {
+			chan->hangupcause = peer->hangupcause;
 		}
 		ast_hangup(peer);
 	}

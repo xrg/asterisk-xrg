@@ -1537,19 +1537,19 @@ static int send_ping(const void *data)
 	return 0;
 }
 
-static void encmethods_to_str(int e, struct ast_str *buf)
+static void encmethods_to_str(int e, struct ast_str **buf)
 {
-	ast_str_set(&buf, 0, "(");
+	ast_str_set(buf, 0, "(");
 	if (e & IAX_ENCRYPT_AES128) {
-		ast_str_append(&buf, 0, "aes128");
+		ast_str_append(buf, 0, "aes128");
 	}
 	if (e & IAX_ENCRYPT_KEYROTATE) {
-		ast_str_append(&buf, 0, ",keyrotate");
+		ast_str_append(buf, 0, ",keyrotate");
 	}
-	if (ast_str_strlen(buf) > 1) {
-		ast_str_append(&buf, 0, ")");
+	if (ast_str_strlen(*buf) > 1) {
+		ast_str_append(buf, 0, ")");
 	} else {
-		ast_str_set(&buf, 0, "No");
+		ast_str_set(buf, 0, "No");
 	}
 }
 
@@ -3426,12 +3426,10 @@ static int send_packet(struct iax_frame *f)
 		ast_debug(3, "Sending %d on %d/%d to %s:%d\n", f->ts, callno, iaxs[callno]->peercallno, ast_inet_ntoa(iaxs[callno]->addr.sin_addr), ntohs(iaxs[callno]->addr.sin_port));
 
 	if (f->transfer) {
-		if (iaxdebug)
-			iax_showframe(f, NULL, 0, &iaxs[callno]->transfer, f->datalen - sizeof(struct ast_iax2_full_hdr));
+		iax_outputframe(f, NULL, 0, &iaxs[callno]->transfer, f->datalen - sizeof(struct ast_iax2_full_hdr));
 		res = sendto(iaxs[callno]->sockfd, f->data, f->datalen, 0,(struct sockaddr *)&iaxs[callno]->transfer, sizeof(iaxs[callno]->transfer));
 	} else {
-		if (iaxdebug)
-			iax_showframe(f, NULL, 0, &iaxs[callno]->addr, f->datalen - sizeof(struct ast_iax2_full_hdr));
+		iax_outputframe(f, NULL, 0, &iaxs[callno]->addr, f->datalen - sizeof(struct ast_iax2_full_hdr));
 		res = sendto(iaxs[callno]->sockfd, f->data, f->datalen, 0,(struct sockaddr *)&iaxs[callno]->addr, sizeof(iaxs[callno]->addr));
 	}
 	if (res < 0) {
@@ -3857,7 +3855,7 @@ static char *handle_cli_iax2_show_peer(struct ast_cli_entry *e, int cmd, struct 
 
 		ast_sockaddr_to_sin(&peer->addr, &peer_addr);
 
-		encmethods_to_str(peer->encmethods, encmethods);
+		encmethods_to_str(peer->encmethods, &encmethods);
 		ast_cli(a->fd, "\n\n");
 		ast_cli(a->fd, "  * Name       : %s\n", peer->name);
 		ast_cli(a->fd, "  Description  : %s\n", peer->description);
@@ -4832,9 +4830,7 @@ static int send_apathetic_reply(unsigned short callno, unsigned short dcallno,
 	data.f.type = AST_FRAME_IAX;
 	data.f.csub = compress_subclass(command);
 
-	if (iaxdebug) {
-		iax_outputframe(NULL, &data.f, 0, sin, size - sizeof(struct ast_iax2_full_hdr));
-	}
+	iax_outputframe(NULL, &data.f, 0, sin, size - sizeof(struct ast_iax2_full_hdr));
 
 	return sendto(sockfd, &data, size, 0, (struct sockaddr *)sin, sizeof(*sin));
 }
@@ -5658,6 +5654,11 @@ static enum ast_bridge_result iax2_bridge(struct ast_channel *c0, struct ast_cha
 		}
 		to = 1000;
 		who = ast_waitfor_n(cs, 2, &to);
+		/* XXX This will need to be updated to calculate
+		 * timeout correctly once timeoutms is allowed to be
+		 * > 0. Right now, this can go badly if the waitfor
+		 * times out in less than a millisecond
+		 */
 		if (timeoutms > -1) {
 			timeoutms -= (1000 - to);
 			if (timeoutms < 0)
@@ -6826,7 +6827,7 @@ static int __iax2_show_peers(int fd, int *total, struct mansession *s, const int
 		else
 			ast_copy_string(name, peer->name, sizeof(name));
 
-		encmethods_to_str(peer->encmethods, encmethods);
+		encmethods_to_str(peer->encmethods, &encmethods);
 		retstatus = peer_status(peer, status, sizeof(status));
 		if (retstatus > 0)
 			online_peers++;
@@ -7141,7 +7142,7 @@ static int manager_iax2_show_peer_list(struct mansession *s, const struct messag
 
 	i = ao2_iterator_init(peers, 0);
 	for (; (peer = ao2_iterator_next(&i)); peer_unref(peer)) {
-		encmethods_to_str(peer->encmethods, encmethods);
+		encmethods_to_str(peer->encmethods, &encmethods);
 		astman_append(s, "Event: PeerEntry\r\n%sChanneltype: IAX\r\n", idtext);
 		if (!ast_strlen_zero(peer->username)) {
 			astman_append(s, "ObjectName: %s\r\nObjectUsername: %s\r\n", peer->name, peer->username);
@@ -7727,10 +7728,10 @@ static int check_access(int callno, struct sockaddr_in *sin, struct iax_ies *ies
 	i = ao2_iterator_init(users, 0);
 	while ((user = ao2_iterator_next(&i))) {
 		if ((ast_strlen_zero(iaxs[callno]->username) ||				/* No username specified */
-			!strcmp(iaxs[callno]->username, user->name))	/* Or this username specified */
-			&& ast_apply_ha(user->ha, &addr) 	/* Access is permitted from this IP */
+			!strcmp(iaxs[callno]->username, user->name))			/* Or this username specified */
+			&& ast_apply_ha(user->ha, &addr) == AST_SENSE_ALLOW		/* Access is permitted from this IP */
 			&& (ast_strlen_zero(iaxs[callno]->context) ||			/* No context specified */
-			     apply_context(user->contexts, iaxs[callno]->context))) {			/* Context is permitted */
+				apply_context(user->contexts, iaxs[callno]->context))) {			/* Context is permitted */
 			if (!ast_strlen_zero(iaxs[callno]->username)) {
 				/* Exact match, stop right now. */
 				if (best)
@@ -7786,8 +7787,9 @@ static int check_access(int callno, struct sockaddr_in *sin, struct iax_ies *ies
 	user = best;
 	if (!user && !ast_strlen_zero(iaxs[callno]->username)) {
 		user = realtime_user(iaxs[callno]->username, sin);
-		if (user && !ast_strlen_zero(iaxs[callno]->context) &&			/* No context specified */
-		    !apply_context(user->contexts, iaxs[callno]->context)) {		/* Context is permitted */
+		if (user && (ast_apply_ha(user->ha, &addr) == AST_SENSE_DENY		/* Access is denied from this IP */
+			|| (!ast_strlen_zero(iaxs[callno]->context) &&					/* No context specified */
+				!apply_context(user->contexts, iaxs[callno]->context)))) {	/* Context is permitted */
 			user = user_unref(user);
 		}
 	}
@@ -9282,8 +9284,11 @@ static int timing_read(int *id, int fd, short events, void *cbdata)
 	if (iaxtrunkdebug)
 		ast_verbose("Beginning trunk processing. Trunk queue ceiling is %d bytes per host\n", trunkmaxsize);
 
-	if (timer) { 
-		ast_timer_ack(timer, 1);
+	if (timer) {
+		if (ast_timer_ack(timer, 1) < 0) {
+			ast_log(LOG_ERROR, "Timer failed acknowledge\n");
+			return 0;
+		}
 	}
 
 	/* For each peer that supports trunking... */
@@ -12324,7 +12329,9 @@ static void *network_thread(void *ignore)
 		/* Wake up once a second just in case SIGURG was sent while
 		 * we weren't in poll(), to make sure we don't hang when trying
 		 * to unload. */
-		ast_io_wait(io, 1000);
+		if (ast_io_wait(io, 1000) <= 0) {
+			break;
+		}
 	}
 
 	return NULL;
@@ -13835,6 +13842,8 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 
 	/* By here we must have a dp */
 	if (dp->flags & CACHE_FLAG_PENDING) {
+		struct timeval start;
+		int ms;
 		/* Okay, here it starts to get nasty.  We need a pipe now to wait
 		   for a reply to come back so long as it's pending */
 		for (x = 0; x < ARRAY_LEN(dp->waiters); x++) {
@@ -13859,8 +13868,9 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 		if (chan)
 			old = ast_channel_defer_dtmf(chan);
 		doabort = 0;
-		while(timeout) {
-			c = ast_waitfor_nandfds(&chan, chan ? 1 : 0, &com[0], 1, NULL, &outfd, &timeout);
+		start = ast_tvnow();
+		while ((ms = ast_remaining_ms(start, timeout))) {
+			c = ast_waitfor_nandfds(&chan, chan ? 1 : 0, &com[0], 1, NULL, &outfd, &ms);
 			if (outfd > -1)
 				break;
 			if (!c)
@@ -13871,7 +13881,7 @@ static struct iax2_dpcache *find_cache(struct ast_channel *chan, const char *dat
 			}
 			ast_frfree(f);
 		}
-		if (!timeout) {
+		if (!ms) {
 			ast_log(LOG_WARNING, "Timeout waiting for %s exten %s\n", data, exten);
 		}
 		AST_LIST_LOCK(&dpcache);
@@ -14537,6 +14547,7 @@ static int __unload_module(void)
 	ao2_ref(callno_pool_trunk, -1);
 	if (timer) {
 		ast_timer_close(timer);
+		timer = NULL;
 	}
 	transmit_processor = ast_taskprocessor_unreference(transmit_processor);
 	ast_sched_context_destroy(sched);
@@ -14726,7 +14737,7 @@ static int peers_data_provider_get(const struct ast_data_search *search,
 
 		ast_data_add_bool(data_peer, "dynamic", ast_test_flag64(peer, IAX_DYNAMIC));
 
-		encmethods_to_str(peer->encmethods, encmethods);
+		encmethods_to_str(peer->encmethods, &encmethods);
 		ast_data_add_str(data_peer, "encryption", peer->encmethods ? ast_str_buffer(encmethods) : "no");
 
 		peer_unref(peer);
@@ -14913,6 +14924,7 @@ static int load_module(void)
 	if (set_config(config, 0) == -1) {
 		if (timer) {
 			ast_timer_close(timer);
+			timer = NULL;
 		}
 		return AST_MODULE_LOAD_DECLINE;
 	}

@@ -71,6 +71,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/global_datastores.h"
 #include "asterisk/data.h"
+#include "asterisk/features.h"
 
 #ifdef HAVE_EPOLL
 #include <sys/epoll.h>
@@ -683,7 +684,7 @@ static void ast_chan_trace_destroy_cb(void *data)
 }
 
 /*! \brief Datastore to put the linked list of ast_chan_trace and trace status */
-static const const struct ast_datastore_info ast_chan_trace_datastore_info = {
+static const struct ast_datastore_info ast_chan_trace_datastore_info = {
 	.type = "ChanTrace",
 	.destroy = ast_chan_trace_destroy_cb
 };
@@ -1400,6 +1401,7 @@ struct ast_channel *ast_dummy_channel_alloc(void)
 {
 	struct ast_channel *tmp;
 	struct varshead *headp;
+	int x;
 
 #if defined(REF_DEBUG)
 	tmp = __ao2_alloc_debug(sizeof(*tmp), ast_dummy_channel_destructor, "dummy channel",
@@ -1418,6 +1420,22 @@ struct ast_channel *ast_dummy_channel_alloc(void)
 	if ((ast_string_field_init(tmp, 128))) {
 		return ast_channel_unref(tmp);
 	}
+
+	/*
+	 * Init file descriptors to unopened state just in case
+	 * autoservice is called on the channel or something tries to
+	 * read a frame from it.
+	 */
+	tmp->timingfd = -1;
+	for (x = 0; x < ARRAY_LEN(tmp->alertpipe); ++x) {
+		tmp->alertpipe[x] = -1;
+	}
+	for (x = 0; x < ARRAY_LEN(tmp->fds); ++x) {
+		tmp->fds[x] = -1;
+	}
+#ifdef HAVE_EPOLL
+	tmp->epfd = -1;
+#endif
 
 	headp = &tmp->varshead;
 	AST_LIST_HEAD_INIT_NOLOCK(headp);
@@ -1844,11 +1862,13 @@ int ast_is_deferrable_frame(const struct ast_frame *frame)
 }
 
 /*! \brief Wait, look for hangups and condition arg */
-int ast_safe_sleep_conditional(struct ast_channel *chan, int ms, int (*cond)(void*), void *data)
+int ast_safe_sleep_conditional(struct ast_channel *chan, int timeout_ms, int (*cond)(void*), void *data)
 {
 	struct ast_frame *f;
 	struct ast_silence_generator *silgen = NULL;
 	int res = 0;
+	struct timeval start;
+	int ms;
 	AST_LIST_HEAD_NOLOCK(, ast_frame) deferred_frames;
 
 	AST_LIST_HEAD_INIT_NOLOCK(&deferred_frames);
@@ -1858,8 +1878,10 @@ int ast_safe_sleep_conditional(struct ast_channel *chan, int ms, int (*cond)(voi
 		silgen = ast_channel_start_silence_generator(chan);
 	}
 
-	while (ms > 0) {
+	start = ast_tvnow();
+	while ((ms = ast_remaining_ms(start, timeout_ms))) {
 		struct ast_frame *dup_f = NULL;
+
 		if (cond && ((*cond)(data) == 0)) {
 			break;
 		}
@@ -2478,6 +2500,7 @@ static void ast_channel_destructor(void *obj)
 		close(fd);
 	if (chan->timer) {
 		ast_timer_close(chan->timer);
+		chan->timer = NULL;
 	}
 #ifdef HAVE_EPOLL
 	for (i = 0; i < AST_MAX_FDS; i++) {
@@ -2560,7 +2583,7 @@ static void ast_dummy_channel_destructor(void *obj)
 	ast_string_field_free_memory(chan);
 }
 
-struct ast_datastore *ast_channel_datastore_alloc(const const struct ast_datastore_info *info, const char *uid)
+struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
 {
 	return ast_datastore_alloc(info, uid);
 }
@@ -2601,7 +2624,7 @@ int ast_channel_datastore_remove(struct ast_channel *chan, struct ast_datastore 
 	return AST_LIST_REMOVE(&chan->datastores, datastore, entry) ? 0 : -1;
 }
 
-struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const const struct ast_datastore_info *info, const char *uid)
+struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const struct ast_datastore_info *info, const char *uid)
 {
 	struct ast_datastore *datastore = NULL;
 	
@@ -3012,12 +3035,15 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay, int cdr_answer)
 		do {
 			AST_LIST_HEAD_NOLOCK(, ast_frame) frames;
 			struct ast_frame *cur, *new;
-			int ms = MAX(delay, 500);
+			int timeout_ms = MAX(delay, 500);
 			unsigned int done = 0;
+			struct timeval start;
 
 			AST_LIST_HEAD_INIT_NOLOCK(&frames);
 
+			start = ast_tvnow();
 			for (;;) {
+				int ms = ast_remaining_ms(start, timeout_ms);
 				ms = ast_waitfor(chan, ms);
 				if (ms < 0) {
 					ast_log(LOG_WARNING, "Error condition occurred when polling channel %s for a voice frame: %s\n", chan->name, strerror(errno));
@@ -3541,15 +3567,17 @@ struct ast_channel *ast_waitfor_n(struct ast_channel **c, int n, int *ms)
 
 int ast_waitfor(struct ast_channel *c, int ms)
 {
-	int oldms = ms;	/* -1 if no timeout */
-
-	ast_waitfor_nandfds(&c, 1, NULL, 0, NULL, NULL, &ms);
-	if ((ms < 0) && (oldms < 0))
-		ms = 0;
+	if (ms < 0) {
+		do {
+			ms = 100000;
+			ast_waitfor_nandfds(&c, 1, NULL, 0, NULL, NULL, &ms);
+		} while (!ms);
+	} else {
+		ast_waitfor_nandfds(&c, 1, NULL, 0, NULL, NULL, &ms);
+	}
 	return ms;
 }
 
-/* XXX never to be called with ms = -1 */
 int ast_waitfordigit(struct ast_channel *c, int ms)
 {
 	return ast_waitfordigit_full(c, ms, -1, -1);
@@ -3598,8 +3626,11 @@ int ast_settimeout(struct ast_channel *c, unsigned int rate, int (*func)(const v
 	return res;
 }
 
-int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
+int ast_waitfordigit_full(struct ast_channel *c, int timeout_ms, int audiofd, int cmdfd)
 {
+	struct timeval start = ast_tvnow();
+	int ms;
+
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(c, AST_FLAG_ZOMBIE) || ast_check_hangup(c))
 		return -1;
@@ -3607,15 +3638,19 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 	/* Only look for the end of DTMF, don't bother with the beginning and don't emulate things */
 	ast_set_flag(c, AST_FLAG_END_DTMF_ONLY);
 
-	/* Wait for a digit, no more than ms milliseconds total. */
-	
-	while (ms) {
+	/* Wait for a digit, no more than timeout_ms milliseconds total.
+	 * Or, wait indefinitely if timeout_ms is <0.
+	 */
+	while ((ms = ast_remaining_ms(start, timeout_ms))) {
 		struct ast_channel *rchan;
-		int outfd=-1;
+		int outfd = -1;
 
 		errno = 0;
+		/* While ast_waitfor_nandfds tries to help by reducing the timeout by how much was waited,
+		 * it is unhelpful if it waited less than a millisecond.
+		 */
 		rchan = ast_waitfor_nandfds(&c, 1, &cmdfd, (cmdfd > -1) ? 1 : 0, NULL, &outfd, &ms);
-		
+
 		if (!rchan && outfd < 0 && ms) {
 			if (errno == 0 || errno == EINTR)
 				continue;
@@ -3873,7 +3908,10 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 
 		switch (res) {
 		case AST_TIMING_EVENT_EXPIRED:
-			ast_timer_ack(chan->timer, 1);
+			if (ast_timer_ack(chan->timer, 1) < 0) {
+				ast_log(LOG_ERROR, "Failed to acknoweldge timer in ast_read\n");
+				goto done;
+			}
 
 			if (chan->timingfunc) {
 				/* save a copy of func/data before unlocking the channel */
@@ -4615,25 +4653,32 @@ int ast_recvchar(struct ast_channel *chan, int timeout)
 
 char *ast_recvtext(struct ast_channel *chan, int timeout)
 {
-	int res, done = 0;
+	int res;
 	char *buf = NULL;
-	
-	while (!done) {
+	struct timeval start = ast_tvnow();
+	int ms;
+
+	while ((ms = ast_remaining_ms(start, timeout))) {
 		struct ast_frame *f;
-		if (ast_check_hangup(chan))
+
+		if (ast_check_hangup(chan)) {
 			break;
-		res = ast_waitfor(chan, timeout);
-		if (res <= 0) /* timeout or error */
+		}
+		res = ast_waitfor(chan, ms);
+		if (res <= 0)  {/* timeout or error */
 			break;
-		timeout = res;	/* update timeout */
+		}
 		f = ast_read(chan);
-		if (f == NULL)
+		if (f == NULL) {
 			break; /* no frame */
-		if (f->frametype == AST_FRAME_CONTROL && f->subclass.integer == AST_CONTROL_HANGUP)
-			done = 1;	/* force a break */
-		else if (f->frametype == AST_FRAME_TEXT) {		/* what we want */
+		}
+		if (f->frametype == AST_FRAME_CONTROL && f->subclass.integer == AST_CONTROL_HANGUP) {
+			ast_frfree(f);
+			break;
+		} else if (f->frametype == AST_FRAME_TEXT) {		/* what we want */
 			buf = ast_strndup((char *) f->data.ptr, f->datalen);	/* dup and break */
-			done = 1;
+			ast_frfree(f);
+			break;
 		}
 		ast_frfree(f);
 	}
@@ -4704,6 +4749,11 @@ int ast_senddigit_begin(struct ast_channel *chan, char digit)
 	if (!chan->tech->send_digit_begin)
 		return 0;
 
+	ast_channel_lock(chan);
+	chan->sending_dtmf_digit = digit;
+	chan->sending_dtmf_tv = ast_tvnow();
+	ast_channel_unlock(chan);
+
 	if (!chan->tech->send_digit_begin(chan, digit))
 		return 0;
 
@@ -4726,6 +4776,12 @@ int ast_senddigit_begin(struct ast_channel *chan, char digit)
 int ast_senddigit_end(struct ast_channel *chan, char digit, unsigned int duration)
 {
 	int res = -1;
+
+	ast_channel_lock(chan);
+	if (chan->sending_dtmf_digit == digit) {
+		chan->sending_dtmf_digit = 0;
+	}
+	ast_channel_unlock(chan);
 
 	if (chan->tech->send_digit_end)
 		res = chan->tech->send_digit_end(chan, digit, duration);
@@ -5611,18 +5667,19 @@ struct ast_channel *__ast_request_and_dial(const char *type, struct ast_format_c
 	if (ast_call(chan, data, 0)) {	/* ast_call failed... */
 		ast_log(LOG_NOTICE, "Unable to call channel %s/%s\n", type, (char *)data);
 	} else {
+		struct timeval start = ast_tvnow();
 		res = 1;	/* mark success in case chan->_state is already AST_STATE_UP */
 		while (timeout && chan->_state != AST_STATE_UP) {
 			struct ast_frame *f;
-			res = ast_waitfor(chan, timeout);
+			int ms = ast_remaining_ms(start, timeout);
+
+			res = ast_waitfor(chan, ms);
 			if (res == 0) { /* timeout, treat it like ringing */
 				*outstate = AST_CONTROL_RINGING;
 				break;
 			}
 			if (res < 0) /* error or done */
 				break;
-			if (timeout > -1)
-				timeout = res;
 			if (!ast_strlen_zero(chan->call_forward)) {
 				if (!(chan = ast_call_forward(NULL, chan, NULL, cap, oh, outstate))) {
 					return NULL;
@@ -6281,7 +6338,7 @@ static void xfer_ds_destroy(void *data)
 	ast_free(ds);
 }
 
-static const const struct ast_datastore_info xfer_ds_info = {
+static const struct ast_datastore_info xfer_ds_info = {
 	.type = "xfer_colp",
 	.destroy = xfer_ds_destroy,
 };
@@ -6675,6 +6732,8 @@ int ast_do_masquerade(struct ast_channel *original)
 	char orig[AST_CHANNEL_NAME];
 	char masqn[AST_CHANNEL_NAME];
 	char zombn[AST_CHANNEL_NAME];
+	char clone_sending_dtmf_digit;
+	struct timeval clone_sending_dtmf_tv;
 
 	/* XXX This operation is a bit odd.  We're essentially putting the guts of
 	 * the clone channel into the original channel.  Start by killing off the
@@ -6784,6 +6843,10 @@ int ast_do_masquerade(struct ast_channel *original)
 	free_translation(clonechan);
 	free_translation(original);
 
+	/* Save the current DTMF digit being sent if any. */
+	clone_sending_dtmf_digit = clonechan->sending_dtmf_digit;
+	clone_sending_dtmf_tv = clonechan->sending_dtmf_tv;
+
 	/* Save the original name */
 	ast_copy_string(orig, original->name, sizeof(orig));
 	/* Save the new name */
@@ -6881,6 +6944,10 @@ int ast_do_masquerade(struct ast_channel *original)
 
 	/* Keep the same language.  */
 	ast_string_field_set(original, language, clonechan->language);
+
+	/* Keep the same parkinglot. */
+	ast_string_field_set(original, parkinglot, clonechan->parkinglot);
+
 	/* Copy the FD's other than the generator fd */
 	for (x = 0; x < AST_MAX_FDS; x++) {
 		if (x != AST_GENERATOR_FD)
@@ -7023,6 +7090,15 @@ int ast_do_masquerade(struct ast_channel *original)
 	}
 
 	ast_channel_unlock(clonechan);
+
+	if (clone_sending_dtmf_digit) {
+		/*
+		 * The clonechan was sending a DTMF digit that was not completed
+		 * before the masquerade.
+		 */
+		ast_bridge_end_dtmf(original, clone_sending_dtmf_digit, clone_sending_dtmf_tv,
+			"masquerade");
+	}
 
 	/*
 	 * If an indication is currently playing, maintain it on the
@@ -8246,6 +8322,15 @@ static const struct ast_data_entry channel_providers[] = {
 	AST_DATA_ENTRY("/asterisk/core/channeltypes", &channeltypes_provider),
 };
 
+static void channels_shutdown(void)
+{
+	ast_data_unregister(NULL);
+	if (channels) {
+		ao2_ref(channels, -1);
+		channels = NULL;
+	}
+}
+
 void ast_channels_init(void)
 {
 	channels = ao2_container_alloc(NUM_CHANNEL_BUCKETS,
@@ -8256,6 +8341,8 @@ void ast_channels_init(void)
 	ast_data_register_multiple_core(channel_providers, ARRAY_LEN(channel_providers));
 
 	ast_plc_reload();
+
+	ast_register_atexit(channels_shutdown);
 }
 
 /*! \brief Print call group and pickup group ---*/
@@ -9725,7 +9812,7 @@ static void channel_cc_params_destroy(void *data)
 	ast_cc_config_params_destroy(cc_params);
 }
 
-static const const struct ast_datastore_info cc_channel_datastore_info = {
+static const struct ast_datastore_info cc_channel_datastore_info = {
 	.type = "Call Completion",
 	.duplicate = channel_cc_params_copy,
 	.destroy = channel_cc_params_destroy,

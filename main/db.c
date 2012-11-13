@@ -141,6 +141,36 @@ static int init_stmt(sqlite3_stmt **stmt, const char *sql, size_t len)
 	return 0;
 }
 
+/*! \internal
+ * \brief Clean up the prepared SQLite3 statement
+ * \note dblock should already be locked prior to calling this method
+ */
+static int clean_stmt(sqlite3_stmt *stmt, const char *sql)
+{
+	if (sqlite3_finalize(stmt) != SQLITE_OK) {
+		ast_log(LOG_WARNING, "Couldn't finalize statement '%s': %s\n", sql, sqlite3_errmsg(astdb));
+		return -1;
+	}
+	return 0;
+}
+
+/*! \internal
+ * \brief Clean up all prepared SQLite3 statements
+ * \note dblock should already be locked prior to calling this method
+ */
+static void clean_statements(void)
+{
+	clean_stmt(get_stmt, get_stmt_sql);
+	clean_stmt(del_stmt, del_stmt_sql);
+	clean_stmt(deltree_stmt, deltree_stmt_sql);
+	clean_stmt(deltree_all_stmt, deltree_all_stmt_sql);
+	clean_stmt(gettree_stmt, gettree_stmt_sql);
+	clean_stmt(gettree_all_stmt, gettree_all_stmt_sql);
+	clean_stmt(showkey_stmt, showkey_stmt_sql);
+	clean_stmt(put_stmt, put_stmt_sql);
+	clean_stmt(create_astdb_stmt, create_astdb_stmt_sql);
+}
+
 static int init_statements(void)
 {
 	/* Don't initialize create_astdb_statment here as the astdb table needs to exist
@@ -307,7 +337,21 @@ int ast_db_put(const char *family, const char *key, const char *value)
 	return res;
 }
 
-int ast_db_get(const char *family, const char *key, char *value, int valuelen)
+/*!
+ * \internal
+ * \brief Get key value specified by family/key.
+ *
+ * Gets the value associated with the specified \a family and \a key, and
+ * stores it, either into the fixed sized buffer specified by \a buffer
+ * and \a bufferlen, or as a heap allocated string if \a bufferlen is -1.
+ *
+ * \note If \a bufferlen is -1, \a buffer points to heap allocated memory
+ *       and must be freed by calling ast_free().
+ *
+ * \retval -1 An error occurred
+ * \retval 0 Success
+ */
+static int db_get_common(const char *family, const char *key, char **buffer, int bufferlen)
 {
 	const unsigned char *result;
 	char fullkey[MAX_DB_FIELD];
@@ -332,12 +376,35 @@ int ast_db_get(const char *family, const char *key, char *value, int valuelen)
 		ast_log(LOG_WARNING, "Couldn't get value\n");
 		res = -1;
 	} else {
-		strncpy(value, (const char *) result, valuelen);
+		const char *value = (const char *) result;
+
+		if (bufferlen == -1) {
+			*buffer = ast_strdup(value);
+		} else {
+			ast_copy_string(*buffer, value, bufferlen);
+		}
 	}
 	sqlite3_reset(get_stmt);
 	ast_mutex_unlock(&dblock);
 
 	return res;
+}
+
+int ast_db_get(const char *family, const char *key, char *value, int valuelen)
+{
+	ast_assert(value != NULL);
+
+	/* Make sure we initialize */
+	value[0] = 0;
+
+	return db_get_common(family, key, &value, valuelen);
+}
+
+int ast_db_get_allocated(const char *family, const char *key, char **out)
+{
+	*out = NULL;
+
+	return db_get_common(family, key, out, -1);
 }
 
 int ast_db_del(const char *family, const char *key)
@@ -552,7 +619,7 @@ static char *handle_cli_database_del(struct ast_cli_entry *e, int cmd, struct as
 
 static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	int res;
+	int num_deleted;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -571,14 +638,16 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 	if ((a->argc < 3) || (a->argc > 4))
 		return CLI_SHOWUSAGE;
 	if (a->argc == 4) {
-		res = ast_db_deltree(a->argv[2], a->argv[3]);
+		num_deleted = ast_db_deltree(a->argv[2], a->argv[3]);
 	} else {
-		res = ast_db_deltree(a->argv[2], NULL);
+		num_deleted = ast_db_deltree(a->argv[2], NULL);
 	}
-	if (res < 0) {
+	if (num_deleted < 0) {
+		ast_cli(a->fd, "Database unavailable.\n");
+	} else if (num_deleted == 0) {
 		ast_cli(a->fd, "Database entries do not exist.\n");
 	} else {
-		ast_cli(a->fd, "%d database entries removed.\n",res);
+		ast_cli(a->fd, "%d database entries removed.\n",num_deleted);
 	}
 	return CLI_SUCCESS;
 }
@@ -836,22 +905,26 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 {
 	const char *family = astman_get_header(m, "Family");
 	const char *key = astman_get_header(m, "Key");
-	int res;
+	int num_deleted;
 
 	if (ast_strlen_zero(family)) {
 		astman_send_error(s, m, "No family specified.");
 		return 0;
 	}
 
-	if (!ast_strlen_zero(key))
-		res = ast_db_deltree(family, key);
-	else
-		res = ast_db_deltree(family, NULL);
+	if (!ast_strlen_zero(key)) {
+		num_deleted = ast_db_deltree(family, key);
+	} else {
+		num_deleted = ast_db_deltree(family, NULL);
+	}
 
-	if (res < 0)
+	if (num_deleted < 0) {
+		astman_send_error(s, m, "Database unavailable");
+	} else if (num_deleted == 0) {
 		astman_send_error(s, m, "Database entry not found");
-	else
+	} else {
 		astman_send_ack(s, m, "Key tree deleted successfully");
+	}
 
 	return 0;
 }
@@ -909,8 +982,15 @@ static void *db_sync_thread(void *data)
 	return NULL;
 }
 
+/*! \internal \brief Clean up resources on Asterisk shutdown */
 static void astdb_atexit(void)
 {
+	ast_cli_unregister_multiple(cli_database, ARRAY_LEN(cli_database));
+	ast_manager_unregister("DBGet");
+	ast_manager_unregister("DBPut");
+	ast_manager_unregister("DBDel");
+	ast_manager_unregister("DBDelTree");
+
 	/* Set doexit to 1 to kill thread. db_sync must be called with
 	 * mutex held. */
 	doexit = 1;
@@ -920,7 +1000,10 @@ static void astdb_atexit(void)
 
 	pthread_join(syncthread, NULL);
 	ast_mutex_lock(&dblock);
-	sqlite3_close(astdb);
+	clean_statements();
+	if (sqlite3_close(astdb) == SQLITE_OK) {
+		astdb = NULL;
+	}
 	ast_mutex_unlock(&dblock);
 }
 
