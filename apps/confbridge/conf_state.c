@@ -38,6 +38,7 @@
 #include "asterisk.h"
 
 #include "asterisk/logger.h"
+#include "asterisk/test.h"
 #include "include/conf_state.h"
 #include "include/confbridge.h"
 
@@ -46,9 +47,28 @@ void conf_invalid_event_fn(struct conference_bridge_user *cbu)
 	ast_log(LOG_ERROR, "Invalid event for confbridge user '%s'\n", cbu->u_profile.name);
 }
 
+/*!
+ * \internal
+ * \brief Mute the user and play MOH if the user requires it.
+ *
+ * \param user Conference user to mute and optionally start MOH on.
+ *
+ * \return Nothing
+ */
+static void conf_mute_moh_inactive_waitmarked(struct conference_bridge_user *user)
+{
+	/* Be sure we are muted so we can't talk to anybody else waiting */
+	user->features.mute = 1;
+	/* Start music on hold if needed */
+	if (ast_test_flag(&user->u_profile, USER_OPT_MUSICONHOLD)) {
+		conf_moh_start(user);
+	}
+}
+
 void conf_default_join_waitmarked(struct conference_bridge_user *cbu)
 {
 	conf_add_user_waiting(cbu->conference_bridge, cbu);
+	conf_mute_moh_inactive_waitmarked(cbu);
 	conf_add_post_join_action(cbu, conf_handle_inactive_waitmarked);
 }
 
@@ -60,6 +80,10 @@ void conf_default_leave_waitmarked(struct conference_bridge_user *cbu)
 void conf_change_state(struct conference_bridge_user *cbu, struct conference_state *newstate)
 {
 	ast_debug(1, "Changing conference '%s' state from %s to %s\n", cbu->conference_bridge->name, cbu->conference_bridge->state->name, newstate->name);
+	ast_test_suite_event_notify("CONF_CHANGE_STATE", "Conference: %s\r\nOldState: %s\r\nNewState: %s\r\n",
+			cbu->conference_bridge->name,
+			cbu->conference_bridge->state->name,
+			newstate->name);
 	if (cbu->conference_bridge->state->exit) {
 		cbu->conference_bridge->state->exit(cbu);
 	}

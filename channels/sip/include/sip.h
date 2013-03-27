@@ -97,6 +97,7 @@
 
 #define SIP_MAX_HEADERS           64     /*!< Max amount of SIP headers to read */
 #define SIP_MAX_LINES             256    /*!< Max amount of lines in SIP attachment (like SDP) */
+#define SIP_MAX_PACKET_SIZE       20480  /*!< Max SIP packet size */
 #define SIP_MIN_PACKET            4096   /*!< Initialize size of memory to allocate for packets */
 #define MAX_HISTORY_ENTRIES		  50	 /*!< Max entires in the history list for a sip_pvt */
 
@@ -488,7 +489,6 @@ enum check_auth_result {
 	AUTH_SECRET_FAILED = -1,
 	AUTH_USERNAME_MISMATCH = -2,
 	AUTH_NOT_FOUND = -3,	/*!< returned by register_verify */
-	AUTH_FAKE_AUTH = -4,
 	AUTH_UNKNOWN_DOMAIN = -5,
 	AUTH_PEER_NOT_DYNAMIC = -6,
 	AUTH_ACL_FAILED = -7,
@@ -800,6 +800,7 @@ struct sip_request {
 	/* XXX Do we need to unref socket.ser when the request goes away? */
 	struct sip_socket socket;          /*!< The socket used for this request */
 	AST_LIST_ENTRY(sip_request) next;
+	unsigned int reqsipoptions; /*!< Items needed for Required header in responses */
 };
 
 /* \brief given a sip_request and an offset, return the char * that resides there

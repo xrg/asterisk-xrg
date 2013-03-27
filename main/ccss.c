@@ -637,7 +637,7 @@ static void ccss_notify_device_state_change(const char *device, enum cc_state st
 		"Notification of CCSS state change to '%s', device state '%s' for device '%s'\n",
 		cc_state_to_string(state), ast_devstate2str(devstate), device);
 
-	ast_devstate_changed(devstate, "ccss:%s", device);
+	ast_devstate_changed(devstate, AST_DEVSTATE_CACHABLE, "ccss:%s", device);
 }
 
 #define CC_OFFER_TIMER_DEFAULT			20		/* Seconds */
@@ -4491,6 +4491,8 @@ static void cc_shutdown(void)
 	ast_cc_monitor_unregister(&generic_monitor_cbs);
 	ast_unregister_application(cccancel_app);
 	ast_unregister_application(ccreq_app);
+	ast_logger_unregister_level(CC_LOGGER_LEVEL_NAME);
+	ast_cli_unregister_multiple(cc_cli, ARRAY_LEN(cc_cli));
 
 	if (cc_sched_context) {
 		ast_sched_context_destroy(cc_sched_context);

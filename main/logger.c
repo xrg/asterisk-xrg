@@ -1124,8 +1124,17 @@ int init_logger(void)
 	/* auto rotate if sig SIGXFSZ comes a-knockin */
 	sigaction(SIGXFSZ, &handle_SIGXFSZ, NULL);
 
-	/* start logger thread */
+	/* Re-initialize the logmsgs mutex.  The recursive mutex can be accessed prior
+ 	 * to Asterisk being forked into the background, which can cause the thread
+ 	 * ID tracked by the underlying pthread mutex to be different than the ID of
+ 	 * the thread that unlocks the mutex.  Since init_logger is called after the
+ 	 * fork, it is safe to initialize the mutex here for future accesses.
+ 	 */
+	ast_mutex_destroy(&logmsgs.lock);
+	ast_mutex_init(&logmsgs.lock);
 	ast_cond_init(&logcond, NULL);
+
+	/* start logger thread */
 	if (ast_pthread_create(&logthread, NULL, logger_thread, NULL) < 0) {
 		ast_cond_destroy(&logcond);
 		return -1;
@@ -1146,6 +1155,9 @@ int init_logger(void)
 void close_logger(void)
 {
 	struct logchannel *f = NULL;
+	struct verb *cur = NULL;
+
+	ast_cli_unregister_multiple(cli_logger, ARRAY_LEN(cli_logger));
 
 	logger_initialized = 0;
 
@@ -1158,6 +1170,12 @@ void close_logger(void)
 	if (logthread != AST_PTHREADT_NULL)
 		pthread_join(logthread, NULL);
 
+	AST_RWLIST_WRLOCK(&verbosers);
+	while ((cur = AST_LIST_REMOVE_HEAD(&verbosers, list))) {
+		ast_free(cur);
+	}
+	AST_RWLIST_UNLOCK(&verbosers);
+
 	AST_RWLIST_WRLOCK(&logchannels);
 
 	if (qlog) {
@@ -1165,11 +1183,12 @@ void close_logger(void)
 		qlog = NULL;
 	}
 
-	AST_RWLIST_TRAVERSE(&logchannels, f, list) {
+	while ((f = AST_LIST_REMOVE_HEAD(&logchannels, list))) {
 		if (f->fileptr && (f->fileptr != stdout) && (f->fileptr != stderr)) {
 			fclose(f->fileptr);
 			f->fileptr = NULL;
 		}
+		ast_free(f);
 	}
 
 	closelog(); /* syslog */

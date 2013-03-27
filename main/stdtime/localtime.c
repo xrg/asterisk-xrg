@@ -71,6 +71,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "private.h"
 #include "tzfile.h"
 
+#include "asterisk/_private.h"
 #include "asterisk/lock.h"
 #include "asterisk/localtime.h"
 #include "asterisk/strings.h"
@@ -427,7 +428,7 @@ static void *kqueue_daemon(void *data)
 			closedir(sp->dir);
 		}
 #endif
-		free(sp);
+		ast_free(sp);
 
 		/* Just in case the signal was sent late */
 		AST_LIST_LOCK(&zonelist);
@@ -707,7 +708,14 @@ static int tzload(const char *name, struct state * const sp, const int doextend)
 			return -1;
 		if ((fid = open(name, OPEN_MODE)) == -1)
 			return -1;
-		add_notify(sp, name);
+		if (ast_fully_booted) {
+			/* If we don't wait until Asterisk is fully booted, it's possible
+			 * that the watcher thread gets started in the parent process,
+			 * before daemon(3) is called, and the thread won't propagate to
+			 * the child.  Given that bootup only takes a few seconds, it's
+			 * reasonable to only start the watcher later. */
+			add_notify(sp, name);
+		}
 	}
 	nread = read(fid, u.buf, sizeof u.buf);
 	if (close(fid) < 0 || nread <= 0)
@@ -1408,6 +1416,17 @@ static int gmtload(struct state *sp)
 		return tzparse(gmt, sp, TRUE);
 	else
 		return -1;
+}
+
+void clean_time_zones(void)
+{
+	struct state *sp;
+
+	AST_LIST_LOCK(&zonelist);
+	while ((sp = AST_LIST_REMOVE_HEAD(&zonelist, list))) {
+		ast_free(sp);
+	}
+	AST_LIST_UNLOCK(&zonelist);
 }
 
 static const struct state *ast_tzset(const char *zone)
