@@ -1379,8 +1379,6 @@ fi
 %endif
 %attr(0755,root,root)	%{_sbindir}/check_expr
 %attr(0755,root,root)	%{_sbindir}/check_expr2
-%attr(0755,root,root)	%{_sbindir}/hashtest
-%attr(0755,root,root)	%{_sbindir}/hashtest2
 %attr(0755,root,root)	%{_sbindir}/refcounter
 
 %changelog -f %{_sourcedir}/%{name}-changelog.gitrpm.txt
