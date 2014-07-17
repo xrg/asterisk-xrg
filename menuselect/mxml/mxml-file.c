@@ -1,5 +1,5 @@
 /*
- * "$Id: mxml-file.c 22267 2006-04-24 17:11:45Z kpfleming $"
+ * "$Id$"
  *
  * File loading code for Mini-XML, a small XML-like file parsing library.
  *
@@ -1977,6 +1977,7 @@ mxml_parse_element(mxml_node_t *node,	/* I  - Element node */
       {
         mxml_error("Missing value for attribute '%s' in element %s!",
 	           name, node->value.element.name);
+        free(value);
         return (EOF);
       }
 
@@ -2839,5 +2840,5 @@ mxml_write_ws(mxml_node_t *node,	/* I - Current node */
 
 
 /*
- * End of "$Id: mxml-file.c 22267 2006-04-24 17:11:45Z kpfleming $".
+ * End of "$Id$".
  */

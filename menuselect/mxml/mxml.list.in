@@ -1,5 +1,5 @@
 #
-# "$Id: mxml.list.in 22267 2006-04-24 17:11:45Z kpfleming $"
+# "$Id$"
 #
 # EPM software list file for Mini-XML, a small XML library.
 #
@@ -25,6 +25,7 @@ $includedir=@includedir@
 $libdir=@libdir@
 $mandir=@mandir@
 $srcdir=@srcdir@
+$datarootdir=@datarootdir@
 
 $PICFLAG=@PICFLAG@
 
@@ -110,5 +111,5 @@ f 0444 root sys ${mandir}/cat3/mxml.$CAT3EXT $srcdir/mxml.$CAT3EXT
 f 0444 root sys ${mandir}/man3/mxml.$MAN3EXT $srcdir/mxml.man
 
 #
-# End of "$Id: mxml.list.in 22267 2006-04-24 17:11:45Z kpfleming $".
+# End of "$Id$".
 #

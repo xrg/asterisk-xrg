@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2005 - 2006, Russell Bryant
+ * Copyright (C) 2005 - 2010, Digium, Inc.
  *
  * Russell Bryant <russell@digium.com>
  *
@@ -20,7 +20,7 @@
  * \file
  *
  * \author Russell Bryant <russell@digium.com>
- * 
+ *
  * \brief A menu-driven system for Asterisk module selection
  */
 
@@ -29,12 +29,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <getopt.h>
 
+#include "autoconfig.h"
 #include "mxml/mxml.h"
 #include "linkedlists.h"
 #include "menuselect.h"
 
-#undef MENUSELECT_DEBUG
 #ifdef MENUSELECT_DEBUG
 static FILE *debug;
 #endif
@@ -45,7 +46,7 @@ struct categories categories = AST_LIST_HEAD_NOLOCK_INIT_VALUE;
 /*!
    We have to maintain a pointer to the root of the trees generated from reading
    the build options XML files so that we can free it when we're done.  We don't
-   copy any of the information over from these trees. Our list is just a 
+   copy any of the information over from these trees. Our list is just a
    convenient mapping to the information contained in these lists with one
    additional piece of information - whether the build option is enabled or not.
 */
@@ -72,18 +73,29 @@ static int existing_config = 0;
 /*! This is set when the --check-deps argument is provided. */
 static int check_deps = 0;
 
+/*! These are set when the --list-options or --list-groups arguments are provided. */
+static int list_options = 0, list_groups = 0;
+
 /*! This variable is non-zero when any changes are made */
 int changes_made = 0;
 
 /*! Menu name */
 const char *menu_name = "Menuselect";
 
+enum dep_file_state {
+	DEP_FILE_UNKNOWN = -2,
+	DEP_FILE_DISABLED = -1,
+	DEP_FILE_UNMET = 0,
+	DEP_FILE_MET = 1,
+};
+
 /*! Global list of dependencies that are external to the tree */
 struct dep_file {
 	char name[32];
-	int met;
+	enum dep_file_state met;
+	enum dep_file_state previously_met;
 	AST_LIST_ENTRY(dep_file) list;
-} *dep_file;
+};
 AST_LIST_HEAD_NOLOCK_STATIC(deps_file, dep_file);
 
 #if !defined(ast_strdupa) && defined(__GNUC__)
@@ -110,16 +122,38 @@ static inline char *skip_blanks(char *str)
 	return str;
 }
 
-static void print_debug(const char *format, ...)
+static int open_debug(void)
+{
+#ifdef MENUSELECT_DEBUG
+	if (!(debug = fopen("menuselect_debug.txt", "w"))) {
+		fprintf(stderr, "Failed to open menuselect_debug.txt for debug output.\n");
+		return -1;
+	}
+#endif
+	return 0;
+}
+
+#define print_debug(f, ...) __print_debug(__LINE__, f, ## __VA_ARGS__)
+static void __attribute__((format(printf, 2, 3))) __print_debug(int line, const char *format, ...)
 {
 #ifdef MENUSELECT_DEBUG
 	va_list ap;
+
+	fprintf(debug, "%d -", line);
 
 	va_start(ap, format);
 	vfprintf(debug, format, ap);
 	va_end(ap);
 
 	fflush(debug);
+#endif
+}
+
+static void close_debug(void)
+{
+#ifdef MENUSELECT_DEBUG
+	if (debug)
+		fclose(debug);
 #endif
 }
 
@@ -138,6 +172,7 @@ static struct category *add_category(struct category *cat)
 	return cat;
 }
 
+#if 0
 /*! \brief Add a member to the member list of a category, ensuring that there are no duplicates */
 static int add_member(struct member *mem, struct category *cat)
 {
@@ -153,13 +188,45 @@ static int add_member(struct member *mem, struct category *cat)
 
 	return 0;
 }
+#endif
+
+static int add_member_after(struct member *mem, struct category *cat, struct member *place)
+{
+	struct member *tmp;
+
+	AST_LIST_TRAVERSE(&cat->members, tmp, list) {
+		if (!strcmp(tmp->name, mem->name)) {
+			fprintf(stderr, "Member '%s' already exists in category '%s', ignoring.\n", mem->name, cat->name);
+			return -1;
+		}
+	}
+	AST_LIST_INSERT_AFTER(&cat->members, place, mem, list);
+
+	return 0;
+
+}
+
+static int add_member_head(struct member *mem, struct category *cat)
+{
+	struct member *tmp;
+
+	AST_LIST_TRAVERSE(&cat->members, tmp, list) {
+		if (!strcmp(tmp->name, mem->name)) {
+			fprintf(stderr, "Member '%s' already exists in category '%s', ignoring.\n", mem->name, cat->name);
+			return -1;
+		}
+	}
+	AST_LIST_INSERT_HEAD(&cat->members, mem, list);
+
+	return 0;
+}
 
 /*! \brief Free a member structure and all of its members */
 static void free_member(struct member *mem)
 {
-	struct depend *dep;
-	struct conflict *cnf;
-	struct use *use;
+	struct reference *dep;
+	struct reference *cnf;
+	struct reference *use;
 
 	while ((dep = AST_LIST_REMOVE_HEAD(&mem->deps, list)))
 		free(dep);
@@ -170,15 +237,135 @@ static void free_member(struct member *mem)
 	free(mem);
 }
 
+/*! \assigns values to support level strings */
+static enum support_level_values string_to_support_level(const char *support_level)
+{
+	if (!support_level) {
+		return SUPPORT_UNSPECIFIED;
+	}
+
+	if (!strcasecmp(support_level, "core")) {
+		return SUPPORT_CORE;
+	}
+
+	if (!strcasecmp(support_level, "extended")) {
+		return SUPPORT_EXTENDED;
+	}
+
+	if (!strcasecmp(support_level, "deprecated")) {
+		return SUPPORT_DEPRECATED;
+	}
+
+	return SUPPORT_UNSPECIFIED;
+}
+
+/*! \gets const separator strings from support level values */
+static const char *support_level_to_string(enum support_level_values support_level)
+{
+	switch (support_level) {
+	case SUPPORT_CORE:
+		return "core";
+	case SUPPORT_EXTENDED:
+		return "extended";
+	case SUPPORT_DEPRECATED:
+		return "deprecated";
+	default:
+		return "unspecified";
+	}
+}
+
+/*! \sets default values for a given separator */
+static int initialize_separator(struct member *separators[], enum support_level_values level)
+{
+	separators[level] = calloc(1, sizeof(*(separators[level])));
+	separators[level]->name = support_level_to_string(level);
+	separators[level]->displayname = "";
+	separators[level]->is_separator = 1;
+	return 0;
+}
+
+/*! \Iterates through an existing category's members.  If separators are found, they are
+	 added to the provided separator array.  Any separators left unfound will then be
+	 initialized with initialize_separator. */
+static void find_or_initialize_separators(struct member *separators[], struct category *cat, int used[])
+{
+	enum support_level_values level;
+	struct member *tmp;
+	AST_LIST_TRAVERSE(&cat->members, tmp, list) {
+		if (tmp->is_separator) {
+			level = string_to_support_level(tmp->name);
+			separators[level] = tmp;
+			used[level] = 1;
+		}
+	}
+
+	for (level = 0; level < SUPPORT_COUNT; level++) {
+		if (!used[level]) {
+			initialize_separator(separators, level);
+		}
+	}
+}
+
+/*! \adds a member to a category and attaches it to the last element of a particular support level used */
+static int add_member_list_order(struct member *mem, struct category *cat, struct member *tails[], int used[], struct member *separators[])
+{
+	enum support_level_values support_level = string_to_support_level(mem->support_level);
+	int tail_index;
+
+	/* Works backwards from support_level to find properly ordered linked list member to insert from */
+	for (tail_index = support_level; ; tail_index--) {
+		if (tail_index == -1) {
+			break;
+		}
+		if (used[tail_index]) {
+			break;
+		}
+	}
+
+	if (tail_index == -1) { /* None of the nodes that should come before the list were in use, so use head. */
+		if (add_member_head(mem, cat)) { /* Failure to insert the node... */
+			return -1;
+		}
+
+		/* If we successfully added the member, we need to update its support level pointer info */
+		tails[support_level] = mem;
+		used[support_level] = 1;
+		if (add_member_head(separators[support_level], cat)) {
+			printf("Separator insertion failed.  This should be impossible, report an issue if this occurs.\n");
+			return -1;
+		}
+		return 0;
+
+	} else { /* We found an appropriate node to use to insert before we reached the head. */
+		if (add_member_after(mem, cat, tails[tail_index])) {
+			return -1;
+		}
+
+		tails[support_level] = mem;
+		used[support_level] = 1;
+		if (support_level != tail_index) {
+			if (add_member_after(separators[support_level], cat, tails[tail_index])) {
+				printf("Separator insertion failed.  This should be impossible, report an issue if this occurs.\n");
+				return -1;
+			}
+		}
+
+		return 0;
+
+	}
+
+	return -2; /* failed to place... for whatever reason.  This should be impossible to reach. */
+}
+
 /*! \brief Parse an input makeopts file */
 static int parse_tree(const char *tree_file)
 {
 	FILE *f;
 	struct tree *tree;
 	struct member *mem;
-	struct depend *dep;
-	struct conflict *cnf;
-	struct use *use;
+	struct reference *dep;
+	struct reference *cnf;
+	struct reference *use;
 	mxml_node_t *cur;
 	mxml_node_t *cur2;
 	mxml_node_t *cur3;
@@ -206,12 +393,19 @@ static int parse_tree(const char *tree_file)
 	menu = mxmlFindElement(tree->root, tree->root, "menu", NULL, NULL, MXML_DESCEND);
 	if ((tmp = mxmlElementGetAttr(menu, "name")))
 		menu_name = tmp;
-	for (cur = mxmlFindElement(menu, menu, "category", NULL, NULL, MXML_DESCEND);
+	for (cur = mxmlFindElement(menu, menu, "category", NULL, NULL, MXML_DESCEND_FIRST);
 	     cur;
-	     cur = mxmlFindElement(cur, menu, "category", NULL, NULL, MXML_DESCEND))
+	     cur = mxmlFindElement(cur, menu, "category", NULL, NULL, MXML_NO_DESCEND))
 	{
 		struct category *cat;
 		struct category *newcat;
+
+		/* Member seperator definitions */
+		struct member *separators[SUPPORT_COUNT];
+
+		/* link list tails... used to put new elements in in order of support level */
+		struct member *support_tails[SUPPORT_COUNT];
+		int support_tails_placed[SUPPORT_COUNT] = { 0 };
 
 		if (!(cat = calloc(1, sizeof(*cat))))
 			return -1;
@@ -226,6 +420,8 @@ static int parse_tree(const char *tree_file)
 			cat = newcat;
 		}
 
+		find_or_initialize_separators(separators, cat, support_tails_placed);
+
 		if ((tmp = mxmlElementGetAttr(cur, "displayname")))
 			cat->displayname = tmp;
 		if ((tmp = mxmlElementGetAttr(cur, "positive_output")))
@@ -234,73 +430,124 @@ static int parse_tree(const char *tree_file)
 			cat->exclusive = !strcasecmp(tmp, "yes");
 		if ((tmp = mxmlElementGetAttr(cur, "remove_on_change")))
 			cat->remove_on_change = tmp;
+		if ((tmp = mxmlElementGetAttr(cur, "touch_on_change")))
+			cat->touch_on_change = tmp;
 
-		for (cur2 = mxmlFindElement(cur, cur, "member", NULL, NULL, MXML_DESCEND);
+		for (cur2 = mxmlFindElement(cur, cur, "member", NULL, NULL, MXML_DESCEND_FIRST);
 		     cur2;
-		     cur2 = mxmlFindElement(cur2, cur, "member", NULL, NULL, MXML_DESCEND))
+		     cur2 = mxmlFindElement(cur2, cur, "member", NULL, NULL, MXML_NO_DESCEND))
 		{
 			if (!(mem = calloc(1, sizeof(*mem))))
 				return -1;
-			
+
 			mem->name = mxmlElementGetAttr(cur2, "name");
 			mem->displayname = mxmlElementGetAttr(cur2, "displayname");
-		
+			mem->touch_on_change = mxmlElementGetAttr(cur2, "touch_on_change");
 			mem->remove_on_change = mxmlElementGetAttr(cur2, "remove_on_change");
+			mem->support_level = "unspecified";
 
-			if (!cat->positive_output)
-				mem->was_enabled = mem->enabled = 1;
-	
+			if ((tmp = mxmlElementGetAttr(cur2, "explicitly_enabled_only"))) {
+				mem->explicitly_enabled_only = !strcasecmp(tmp, "yes");
+			}
+
 			cur3 = mxmlFindElement(cur2, cur2, "defaultenabled", NULL, NULL, MXML_DESCEND);
-			if (cur3 && cur3->child)
+			if (cur3 && cur3->child) {
 				mem->defaultenabled = cur3->child->value.opaque;
-			
-			for (cur3 = mxmlFindElement(cur2, cur2, "depend", NULL, NULL, MXML_DESCEND);
+			}
+
+			if (!cat->positive_output) {
+				mem->enabled = 1;
+				if (!(mem->defaultenabled && strcasecmp(mem->defaultenabled, "no"))) {
+					mem->was_enabled = 1;
+					print_debug("Enabled %s because the category does not have positive output\n", mem->name);
+				}
+			}
+
+			cur3 = mxmlFindElement(cur2, cur2, "support_level", NULL, NULL, MXML_DESCEND);
+			if (cur3 && cur3->child) {
+				mem->support_level = cur3->child->value.opaque;
+				print_debug("Set support_level for %s to %s\n", mem->name, mem->support_level);
+			}
+
+			cur3 = mxmlFindElement(cur2, cur2, "replacement", NULL, NULL, MXML_DESCEND);
+			if (cur3 && cur3->child) {
+				mem->replacement = cur3->child->value.opaque;
+			}
+
+			for (cur3 = mxmlFindElement(cur2, cur2, "depend", NULL, NULL, MXML_DESCEND_FIRST);
 			     cur3 && cur3->child;
-			     cur3 = mxmlFindElement(cur3, cur2, "depend", NULL, NULL, MXML_DESCEND))
+			     cur3 = mxmlFindElement(cur3, cur2, "depend", NULL, NULL, MXML_NO_DESCEND))
 			{
 				if (!(dep = calloc(1, sizeof(*dep)))) {
 					free_member(mem);
 					return -1;
 				}
+				if ((tmp = mxmlElementGetAttr(cur3, "name"))) {
+					if (!strlen_zero(tmp)) {
+						dep->name = tmp;
+					}
+				}
 				if (!strlen_zero(cur3->child->value.opaque)) {
-					dep->name = cur3->child->value.opaque;
+					dep->displayname = cur3->child->value.opaque;
+					if (!dep->name) {
+						dep->name = dep->displayname;
+					}
 					AST_LIST_INSERT_TAIL(&mem->deps, dep, list);
 				} else
 					free(dep);
 			}
 
-			for (cur3 = mxmlFindElement(cur2, cur2, "conflict", NULL, NULL, MXML_DESCEND);
+			for (cur3 = mxmlFindElement(cur2, cur2, "conflict", NULL, NULL, MXML_DESCEND_FIRST);
 			     cur3 && cur3->child;
-			     cur3 = mxmlFindElement(cur3, cur2, "conflict", NULL, NULL, MXML_DESCEND))
+			     cur3 = mxmlFindElement(cur3, cur2, "conflict", NULL, NULL, MXML_NO_DESCEND))
 			{
 				if (!(cnf = calloc(1, sizeof(*cnf)))) {
 					free_member(mem);
 					return -1;
 				}
+				if ((tmp = mxmlElementGetAttr(cur3, "name"))) {
+					if (!strlen_zero(tmp)) {
+						cnf->name = tmp;
+					}
+				}
 				if (!strlen_zero(cur3->child->value.opaque)) {
-					cnf->name = cur3->child->value.opaque;
+					cnf->displayname = cur3->child->value.opaque;
+					if (!cnf->name) {
+						cnf->name = cnf->displayname;
+					}
 					AST_LIST_INSERT_TAIL(&mem->conflicts, cnf, list);
 				} else
 					free(cnf);
 			}
 
-			for (cur3 = mxmlFindElement(cur2, cur2, "use", NULL, NULL, MXML_DESCEND);
+			for (cur3 = mxmlFindElement(cur2, cur2, "use", NULL, NULL, MXML_DESCEND_FIRST);
 			     cur3 && cur3->child;
-			     cur3 = mxmlFindElement(cur3, cur2, "use", NULL, NULL, MXML_DESCEND))
+			     cur3 = mxmlFindElement(cur3, cur2, "use", NULL, NULL, MXML_NO_DESCEND))
 			{
 				if (!(use = calloc(1, sizeof(*use)))) {
 					free_member(mem);
 					return -1;
 				}
+				if ((tmp = mxmlElementGetAttr(cur3, "name"))) {
+					if (!strlen_zero(tmp)) {
+						use->name = tmp;
+					}
+				}
 				if (!strlen_zero(cur3->child->value.opaque)) {
-					use->name = cur3->child->value.opaque;
+					use->displayname = cur3->child->value.opaque;
+					if (!use->name) {
+						use->name = use->displayname;
+					}
+
 					AST_LIST_INSERT_TAIL(&mem->uses, use, list);
-				} else
+				} else {
 					free(use);
+				}
 			}
 
-			if (add_member(mem, cat))
+			if (add_member_list_order(mem, cat, support_tails, support_tails_placed, separators)) {
 				free_member(mem);
+			}
 		}
 	}
 
@@ -312,16 +559,20 @@ static int parse_tree(const char *tree_file)
 /*!
  * \arg interactive Set to non-zero if being called while user is making changes
  */
-static unsigned int calc_dep_failures(int interactive)
+static unsigned int calc_dep_failures(int interactive, int pre_confload)
 {
 	unsigned int result = 0;
 	struct category *cat;
 	struct member *mem;
-	struct depend *dep;
+	struct reference *dep;
+	struct dep_file *dep_file;
 	unsigned int changed, old_failure;
 
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
 			old_failure = mem->depsfailed;
 			AST_LIST_TRAVERSE(&mem->deps, dep, list) {
 				if (dep->member)
@@ -330,8 +581,9 @@ static unsigned int calc_dep_failures(int interactive)
 				mem->depsfailed = HARD_FAILURE;
 				AST_LIST_TRAVERSE(&deps_file, dep_file, list) {
 					if (!strcasecmp(dep_file->name, dep->name)) {
-						if (dep_file->met)
+						if (dep_file->met == DEP_FILE_MET) {
 							mem->depsfailed = NO_FAILURE;
+						}
 						break;
 					}
 				}
@@ -344,11 +596,19 @@ static unsigned int calc_dep_failures(int interactive)
 		}
 	}
 
+	if (pre_confload) {
+		return 0;
+	}
+
 	do {
 		changed = 0;
 
 		AST_LIST_TRAVERSE(&categories, cat, list) {
 			AST_LIST_TRAVERSE(&cat->members, mem, list) {
+				if (mem->is_separator) {
+					continue;
+				}
+
 				old_failure = mem->depsfailed;
 
 				if (mem->depsfailed == HARD_FAILURE)
@@ -368,12 +628,14 @@ static unsigned int calc_dep_failures(int interactive)
 						mem->depsfailed = SOFT_FAILURE;
 					}
 				}
-				
+
 				if (mem->depsfailed != old_failure) {
 					if ((mem->depsfailed == NO_FAILURE) && mem->was_defaulted) {
 						mem->enabled = !strcasecmp(mem->defaultenabled, "yes");
+						print_debug("Just set %s enabled to %d\n", mem->name, mem->enabled);
 					} else {
 						mem->enabled = interactive ? 0 : mem->was_enabled;
+						print_debug("Just set %s enabled to %d\n", mem->name, mem->enabled);
 					}
 					changed = 1;
 					break; /* This dependency is not met, so we can stop now */
@@ -391,16 +653,21 @@ static unsigned int calc_dep_failures(int interactive)
 	return result;
 }
 
-static unsigned int calc_conflict_failures(int interactive)
+static unsigned int calc_conflict_failures(int interactive, int pre_confload)
 {
 	unsigned int result = 0;
 	struct category *cat;
 	struct member *mem;
-	struct conflict *cnf;
+	struct reference *cnf;
+	struct dep_file *dep_file;
 	unsigned int changed, old_failure;
 
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			old_failure = mem->conflictsfailed;
 			AST_LIST_TRAVERSE(&mem->conflicts, cnf, list) {
 				if (cnf->member)
@@ -409,8 +676,10 @@ static unsigned int calc_conflict_failures(int interactive)
 				mem->conflictsfailed = NO_FAILURE;
 				AST_LIST_TRAVERSE(&deps_file, dep_file, list) {
 					if (!strcasecmp(dep_file->name, cnf->name)) {
-						if (dep_file->met)
+						if (dep_file->met == DEP_FILE_MET) {
 							mem->conflictsfailed = HARD_FAILURE;
+							print_debug("Setting %s conflictsfailed to HARD_FAILURE\n", mem->name);
+						}
 						break;
 					}
 				}
@@ -418,9 +687,15 @@ static unsigned int calc_conflict_failures(int interactive)
 				if (mem->conflictsfailed != NO_FAILURE)
 					break; /* This conflict was found, so we can stop now */
 			}
-			if (old_failure == SOFT_FAILURE && mem->conflictsfailed != HARD_FAILURE)
+			if (old_failure == SOFT_FAILURE && mem->conflictsfailed != HARD_FAILURE) {
+				print_debug("%d - Setting %s conflictsfailed to SOFT_FAILURE\n", __LINE__, mem->name);
 				mem->conflictsfailed = SOFT_FAILURE;
+			}
 		}
+	}
+
+	if (pre_confload) {
+		return 0;
 	}
 
 	do {
@@ -428,6 +703,10 @@ static unsigned int calc_conflict_failures(int interactive)
 
 		AST_LIST_TRAVERSE(&categories, cat, list) {
 			AST_LIST_TRAVERSE(&cat->members, mem, list) {
+				if (mem->is_separator) {
+					continue;
+				}
+
 				old_failure = mem->conflictsfailed;
 
 				if (mem->conflictsfailed == HARD_FAILURE)
@@ -438,15 +717,17 @@ static unsigned int calc_conflict_failures(int interactive)
 				AST_LIST_TRAVERSE(&mem->conflicts, cnf, list) {
 					if (!cnf->member)
 						continue;
-						
+
 					if (cnf->member->enabled) {
 						mem->conflictsfailed = SOFT_FAILURE;
+						print_debug("%d - Setting %s conflictsfailed to SOFT_FAILURE because %s is enabled\n", __LINE__, mem->name, cnf->member->name);
 						break;
 					}
 				}
-				
+
 				if (mem->conflictsfailed != old_failure && mem->conflictsfailed != NO_FAILURE) {
 					mem->enabled = 0;
+					print_debug("Just set %s enabled to %d because of conflicts\n", mem->name, mem->enabled);
 					changed = 1;
 					break; /* This conflict has been found, so we can stop now */
 				}
@@ -468,24 +749,72 @@ static int process_deps(void)
 {
 	FILE *f;
 	char buf[80];
-	char *p;
 	int res = 0;
+	struct dep_file *dep_file;
 
 	if (!(f = fopen(MENUSELECT_DEPS, "r"))) {
 		fprintf(stderr, "Unable to open '%s' for reading!  Did you run ./configure ?\n", MENUSELECT_DEPS);
 		return -1;
 	}
 
-	/* Build a dependency list from the file generated by configure */	
+	/* Build a dependency list from the file generated by configure */
 	while (memset(buf, 0, sizeof(buf)), fgets(buf, sizeof(buf), f)) {
+		char *name, *cur, *prev, *p;
+		int val;
+
+		/* Strip trailing CR/NL */
+		while ((p = strchr(buf, '\r')) || (p = strchr(buf, '\n'))) {
+			*p = '\0';
+		}
+
 		p = buf;
-		strsep(&p, "=");
+		name = strsep(&p, "=");
+
 		if (!p)
 			continue;
+
+		cur = strsep(&p, ":");
+		prev = strsep(&p, ":");
+
 		if (!(dep_file = calloc(1, sizeof(*dep_file))))
 			break;
-		strncpy(dep_file->name, buf, sizeof(dep_file->name) - 1);
-		dep_file->met = atoi(p);
+
+		strncpy(dep_file->name, name, sizeof(dep_file->name) - 1);
+		dep_file->met = DEP_FILE_UNKNOWN;
+		dep_file->previously_met = DEP_FILE_UNKNOWN;
+
+		if (sscanf(cur, "%d", &val) != 1) {
+			fprintf(stderr, "Unknown value '%s' found in %s for %s\n", cur, MENUSELECT_DEPS, name);
+		} else {
+			switch (val) {
+			case DEP_FILE_MET:
+			case DEP_FILE_UNMET:
+			case DEP_FILE_DISABLED:
+				dep_file->met = val;
+				break;
+			default:
+				fprintf(stderr, "Unknown value '%s' found in %s for %s\n", cur, MENUSELECT_DEPS, name);
+				break;
+			}
+		}
+
+		if (prev) {
+			if (sscanf(prev, "%d", &val) != 1) {
+				fprintf(stderr, "Unknown value '%s' found in %s for %s\n", prev, MENUSELECT_DEPS, name);
+			} else {
+				switch (val) {
+				case DEP_FILE_MET:
+				case DEP_FILE_UNMET:
+				case DEP_FILE_DISABLED:
+					dep_file->previously_met = val;
+					break;
+				default:
+					fprintf(stderr, "Unknown value '%s' found in %s for %s\n", prev, MENUSELECT_DEPS, name);
+					break;
+				}
+			}
+		}
+
 		AST_LIST_INSERT_TAIL(&deps_file, dep_file, list);
 	}
 
@@ -496,6 +825,8 @@ static int process_deps(void)
 
 static void free_deps_file(void)
 {
+	struct dep_file *dep_file;
+
 	/* Free the dependency list we built from the file */
 	while ((dep_file = AST_LIST_REMOVE_HEAD(&deps_file, list)))
 		free(dep_file);
@@ -505,14 +836,23 @@ static int match_member_relations(void)
 {
 	struct category *cat, *cat2;
 	struct member *mem, *mem2;
-	struct depend *dep;
-	struct conflict *cnf;
-	struct use *use;
+	struct reference *dep;
+	struct reference *cnf;
+	struct reference *use;
 
+	/* Traverse through each module's dependency list and determine whether each is another module */
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			AST_LIST_TRAVERSE(&mem->deps, dep, list) {
 				AST_LIST_TRAVERSE(&cat->members, mem2, list) {
+					if (mem->is_separator) {
+						continue;
+					}
+
 					if (strcasecmp(mem2->name, dep->name))
 						continue;
 
@@ -520,13 +860,17 @@ static int match_member_relations(void)
 					break;
 				}
 				if (dep->member)
-					break;
+					continue;
 
 				AST_LIST_TRAVERSE(&categories, cat2, list) {
 					AST_LIST_TRAVERSE(&cat2->members, mem2, list) {
+						if (mem->is_separator) {
+							continue;
+						}
+
 						if (strcasecmp(mem2->name, dep->name))
 							continue;
-						
+
 						dep->member = mem2;
 						break;
 					}
@@ -537,24 +881,37 @@ static int match_member_relations(void)
 		}
 	}
 
+	/* Traverse through each module's use list and determine whether each is another module */
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			AST_LIST_TRAVERSE(&mem->uses, use, list) {
 				AST_LIST_TRAVERSE(&cat->members, mem2, list) {
+					if (mem->is_separator) {
+						continue;
+					}
+
 					if (strcasecmp(mem2->name, use->name))
 						continue;
 
 					use->member = mem2;
-						break;
-					}
-				if (use->member)
 					break;
+				}
+				if (use->member)
+					continue;
 
 				AST_LIST_TRAVERSE(&categories, cat2, list) {
 					AST_LIST_TRAVERSE(&cat2->members, mem2, list) {
+						if (mem->is_separator) {
+							continue;
+						}
+
 						if (strcasecmp(mem2->name, use->name))
 							continue;
-						
+
 						use->member = mem2;
 						break;
 					}
@@ -565,12 +922,40 @@ static int match_member_relations(void)
 		}
 	}
 
+	/* If weak linking is not supported, move module uses which are other modules to the dependency list */
+#if !defined(HAVE_ATTRIBUTE_weak_import) && !defined(HAVE_ATTRIBUTE_weakref) && !defined(HAVE_ATTRIBUTE_weak)
+	AST_LIST_TRAVERSE(&categories, cat, list) {
+		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&mem->uses, use, list) {
+				if (use->member) {
+					AST_LIST_REMOVE_CURRENT(&mem->uses, list);
+					AST_LIST_INSERT_TAIL(&mem->deps, use, list);
+				}
+			}
+			AST_LIST_TRAVERSE_SAFE_END;
+		}
+	}
+#endif
+
+	/* Traverse through each category marked as exclusive and mark every member as conflicting with every other member */
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		if (!cat->exclusive)
 			continue;
 
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			AST_LIST_TRAVERSE(&cat->members, mem2, list) {
+				if (mem->is_separator) {
+					continue;
+				}
+
 				if (mem2 == mem)
 					continue;
 
@@ -584,10 +969,19 @@ static int match_member_relations(void)
 		}
 	}
 
+	/* Traverse through each category and determine whether named conflicts for each module are other modules */
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			AST_LIST_TRAVERSE(&mem->conflicts, cnf, list) {
 				AST_LIST_TRAVERSE(&cat->members, mem2, list) {
+					if (mem->is_separator) {
+						continue;
+					}
+
 					if (strcasecmp(mem2->name, cnf->name))
 						continue;
 
@@ -595,13 +989,17 @@ static int match_member_relations(void)
 					break;
 				}
 				if (cnf->member)
-					break;
+					continue;
 
 				AST_LIST_TRAVERSE(&categories, cat2, list) {
 					AST_LIST_TRAVERSE(&cat2->members, mem2, list) {
+						if (mem->is_separator) {
+							continue;
+						}
+
 						if (strcasecmp(mem2->name, cnf->name))
 							continue;
-						
+
 						cnf->member = mem2;
 						break;
 					}
@@ -639,13 +1037,26 @@ static void mark_as_present(const char *member, const char *category)
 {
 	struct category *cat;
 	struct member *mem;
+	char negate = 0;
+
+	if (*member == '-') {
+		member++;
+		negate = 1;
+	}
+
+	print_debug("Marking %s of %s as present\n", member, category);
 
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		if (strcmp(category, cat->name))
 			continue;
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			if (!strcmp(member, mem->name)) {
-				mem->was_enabled = mem->enabled = cat->positive_output;
+				mem->was_enabled = mem->enabled = (negate ? !cat->positive_output : cat->positive_output);
+				print_debug("Just set %s enabled to %d\n", mem->name, mem->enabled);
 				break;
 			}
 		}
@@ -660,7 +1071,7 @@ static void mark_as_present(const char *member, const char *category)
 
 unsigned int enable_member(struct member *mem)
 {
-	struct depend *dep;
+	struct reference *dep;
 	unsigned int can_enable = 1;
 
 	AST_LIST_TRAVERSE(&mem->deps, dep, list) {
@@ -678,20 +1089,27 @@ unsigned int enable_member(struct member *mem)
 				break;
 			}
 
+			if (dep->member->explicitly_enabled_only) {
+				can_enable = 0;
+				break;
+			}
+
 			if (!(can_enable = enable_member(dep->member)))
 				break;
 		}
 	}
 
-	if ((mem->enabled = can_enable))
-		while (calc_dep_failures(1) || calc_conflict_failures(1));
+	if ((mem->enabled = can_enable)) {
+		print_debug("Just set %s enabled to %d\n", mem->name, mem->enabled);
+		while (calc_dep_failures(1, 0) || calc_conflict_failures(1, 0));
+	}
 
 	return can_enable;
 }
 
 void toggle_enabled(struct member *mem)
 {
-	if ((mem->depsfailed == HARD_FAILURE) || (mem->conflictsfailed == HARD_FAILURE))
+	if ((mem->depsfailed == HARD_FAILURE) || (mem->conflictsfailed == HARD_FAILURE) || (mem->is_separator))
 		return;
 
 	if (!mem->enabled)
@@ -703,7 +1121,7 @@ void toggle_enabled(struct member *mem)
 	mem->was_defaulted = 0;
 	changes_made++;
 
-	while (calc_dep_failures(1) || calc_conflict_failures(1));
+	while (calc_dep_failures(1, 0) || calc_conflict_failures(1, 0));
 }
 
 /*! \brief Toggle a member of a category at the specified index to enabled/disabled */
@@ -723,12 +1141,31 @@ void toggle_enabled_index(struct category *cat, int index)
 	toggle_enabled(mem);
 }
 
+static void set_member_enabled(struct member *mem)
+{
+	if ((mem->depsfailed == HARD_FAILURE) || (mem->conflictsfailed == HARD_FAILURE))
+		return;
+
+	if ((mem->enabled) || (mem->is_separator))
+		return;
+
+	enable_member(mem);
+	mem->was_defaulted = 0;
+	changes_made++;
+
+	while (calc_dep_failures(1, 0) || calc_conflict_failures(1, 0));
+}
+
 void set_enabled(struct category *cat, int index)
 {
 	struct member *mem;
 	int i = 0;
 
 	AST_LIST_TRAVERSE(&cat->members, mem, list) {
+		if (mem->is_separator) {
+			continue;
+		}
+
 		if (i++ == index)
 			break;
 	}
@@ -736,17 +1173,19 @@ void set_enabled(struct category *cat, int index)
 	if (!mem)
 		return;
 
-	if ((mem->depsfailed == HARD_FAILURE) || (mem->conflictsfailed == HARD_FAILURE))
+	set_member_enabled(mem);
+}
+
+static void clear_member_enabled(struct member *mem)
+{
+	if (!mem->enabled)
 		return;
 
-	if (mem->enabled)
-		return;
-
-	enable_member(mem);
-		mem->was_defaulted = 0;
+	mem->enabled = 0;
+	mem->was_defaulted = 0;
 	changes_made++;
 
-	while (calc_dep_failures(1) || calc_conflict_failures(1));
+	while (calc_dep_failures(1, 0) || calc_conflict_failures(1, 0));
 }
 
 void clear_enabled(struct category *cat, int index)
@@ -755,6 +1194,10 @@ void clear_enabled(struct category *cat, int index)
 	int i = 0;
 
 	AST_LIST_TRAVERSE(&cat->members, mem, list) {
+		if (mem->is_separator) {
+			continue;
+		}
+
 		if (i++ == index)
 			break;
 	}
@@ -762,14 +1205,7 @@ void clear_enabled(struct category *cat, int index)
 	if (!mem)
 		return;
 
-	if (!mem->enabled)
-		return;
-
-	mem->enabled = 0;
-	mem->was_defaulted = 0;
-	changes_made++;
-
-	while (calc_dep_failures(1) || calc_conflict_failures(1));
+	clear_member_enabled(mem);
 }
 
 /*! \brief Process a previously failed dependency
@@ -794,17 +1230,22 @@ static void process_prev_failed_deps(char *buf)
 		if (strcasecmp(cat->name, cat_name))
 			continue;
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			if (strcasecmp(mem->name, mem_name))
 				continue;
 
 			if (!mem->depsfailed && !mem->conflictsfailed) {
-				mem->enabled = 1;			
+				mem->enabled = 1;
+				print_debug("Just set %s enabled to %d in processing of previously failed deps\n", mem->name, mem->enabled);
 				mem->was_defaulted = 0;
 			}
-	
+
 			break;
 		}
-		break;	
+		break;
 	}
 
 	if (!cat || !mem)
@@ -815,19 +1256,24 @@ static void process_prev_failed_deps(char *buf)
 static int parse_existing_config(const char *infile)
 {
 	FILE *f;
-	char buf[2048];
+#define PARSE_BUF_SIZE 8192
+	char *buf = NULL;
 	char *category, *parse, *member;
 	int lineno = 0;
 
 	if (!(f = fopen(infile, "r"))) {
-#ifdef MENUSELECT_DEBUG
 		/* This isn't really an error, so only print the message in debug mode */
-		fprintf(stderr, "Unable to open '%s' for reading existing config.\n", infile);
-#endif	
+		print_debug("Unable to open '%s' for reading existing config.\n", infile);
 		return -1;
 	}
 
-	while (fgets(buf, sizeof(buf), f)) {
+	buf = malloc(PARSE_BUF_SIZE);
+	if (!buf) {
+		fprintf(stderr, "Unable to allocate buffer for reading existing config.\n");
+		exit(1);
+	}
+
+	while (fgets(buf, PARSE_BUF_SIZE, f)) {
 		lineno++;
 
 		if (strlen_zero(buf))
@@ -848,20 +1294,20 @@ static int parse_existing_config(const char *infile)
 		if (strlen_zero(parse))
 			continue;
 
-		/* Grab the category name */	
+		/* Grab the category name */
 		category = strsep(&parse, "=");
 		if (!parse) {
 			fprintf(stderr, "Invalid string in '%s' at line '%d'!\n", output_makeopts, lineno);
 			continue;
 		}
-		
+
 		parse = skip_blanks(parse);
-	
+
 		if (!strcasecmp(category, "MENUSELECT_DEPSFAILED")) {
 			process_prev_failed_deps(parse);
 			continue;
 		}
-	
+
 		while ((member = strsep(&parse, " \n"))) {
 			member = skip_blanks(member);
 			if (strlen_zero(member))
@@ -870,6 +1316,7 @@ static int parse_existing_config(const char *infile)
 		}
 	}
 
+	free(buf);
 	fclose(f);
 
 	return 0;
@@ -881,23 +1328,61 @@ static int generate_makedeps_file(void)
 	FILE *f;
 	struct category *cat;
 	struct member *mem;
-	struct depend *dep;
-	struct use *use;
+	struct reference *dep;
+	struct reference *use;
+	struct dep_file *dep_file;
 
 	if (!(f = fopen(output_makedeps, "w"))) {
 		fprintf(stderr, "Unable to open dependencies file (%s) for writing!\n", output_makedeps);
 		return -1;
 	}
 
+	/* Traverse all categories and members and mark which used packages were found,
+	 * skipping other members
+	 */
+	AST_LIST_TRAVERSE(&categories, cat, list) {
+		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
+			AST_LIST_TRAVERSE(&mem->uses, use, list) {
+				if (use->member) {
+					use->met = 0;
+					continue;
+				}
+				AST_LIST_TRAVERSE(&deps_file, dep_file, list) {
+					if ((use->met = !strcasecmp(use->name, dep_file->name))) {
+						break;
+					}
+				}
+			}
+		}
+	}
+
 	/* Traverse all categories and members and output dependencies for each member */
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
+			unsigned char header_printed = 0;
+
 			if (AST_LIST_EMPTY(&mem->deps) && AST_LIST_EMPTY(&mem->uses))
 				continue;
 
-			fprintf(f, "MENUSELECT_DEPENDS_%s=", mem->name);
 			AST_LIST_TRAVERSE(&mem->deps, dep, list) {
 				const char *c;
+
+				if (dep->member) {
+					continue;
+				}
+
+				if (!header_printed) {
+					fprintf(f, "MENUSELECT_DEPENDS_%s=", mem->name);
+					header_printed = 1;
+				}
 
 				for (c = dep->name; *c; c++)
 					fputc(toupper(*c), f);
@@ -906,11 +1391,23 @@ static int generate_makedeps_file(void)
 			AST_LIST_TRAVERSE(&mem->uses, use, list) {
 				const char *c;
 
+				if (!use->met) {
+					continue;
+				}
+
+				if (!header_printed) {
+					fprintf(f, "MENUSELECT_DEPENDS_%s=", mem->name);
+					header_printed = 1;
+				}
+
 				for (c = use->name; *c; c++)
 					fputc(toupper(*c), f);
 				fputc(' ', f);
 			}
-			fprintf(f, "\n");
+
+			if (header_printed) {
+				fprintf(f, "\n");
+			}
 		}
 	}
 
@@ -925,8 +1422,8 @@ static int generate_makeopts_file(void)
 	FILE *f;
 	struct category *cat;
 	struct member *mem;
-	struct depend *dep;
-	struct use *use;
+	struct reference *dep;
+	struct reference *use;
 
 	if (!(f = fopen(output_makeopts, "w"))) {
 		fprintf(stderr, "Unable to open build configuration file (%s) for writing!\n", output_makeopts);
@@ -937,6 +1434,10 @@ static int generate_makeopts_file(void)
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		fprintf(f, "%s=", cat->name);
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			if ((!cat->positive_output && (!mem->enabled || mem->depsfailed || mem->conflictsfailed)) ||
 			    (cat->positive_output && mem->enabled && !mem->depsfailed && !mem->conflictsfailed))
 				fprintf(f, "%s ", mem->name);
@@ -950,6 +1451,10 @@ static int generate_makeopts_file(void)
 	fprintf(f, "MENUSELECT_BUILD_DEPS=");
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			if ((!cat->positive_output && (!mem->enabled || mem->depsfailed || mem->conflictsfailed)) ||
 			    (cat->positive_output && mem->enabled && !mem->depsfailed && !mem->conflictsfailed))
 				continue;
@@ -984,11 +1489,15 @@ static int generate_makeopts_file(void)
 	/* Output which members were disabled because of failed dependencies or conflicts */
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			if (mem->depsfailed != HARD_FAILURE && mem->conflictsfailed != HARD_FAILURE)
 				continue;
 
 			if (!mem->defaultenabled || !strcasecmp(mem->defaultenabled, "yes"))
-					fprintf(f, "MENUSELECT_DEPSFAILED=%s=%s\n", cat->name, mem->name);
+				fprintf(f, "MENUSELECT_DEPSFAILED=%s=%s\n", cat->name, mem->name);
 		}
 	}
 
@@ -1005,13 +1514,27 @@ static int generate_makeopts_file(void)
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		unsigned int had_changes = 0;
 		char rmcommand[256] = "rm -rf ";
+		char touchcommand[256] = "touch -c ";
 		char *file, *buf;
 
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			if ((mem->enabled == mem->was_enabled) && !mem->was_defaulted)
 				continue;
 
 			had_changes = 1;
+
+			if (mem->touch_on_change) {
+				for (buf = ast_strdupa(mem->touch_on_change), file = strsep(&buf, " ");
+				     file;
+				     file = strsep(&buf, " ")) {
+					strcpy(&touchcommand[9], file);
+					system(touchcommand);
+				}
+			}
 
 			if (mem->remove_on_change) {
 				for (buf = ast_strdupa(mem->remove_on_change), file = strsep(&buf, " ");
@@ -1020,6 +1543,15 @@ static int generate_makeopts_file(void)
 					strcpy(&rmcommand[7], file);
 					system(rmcommand);
 				}
+			}
+		}
+
+		if (cat->touch_on_change && had_changes) {
+			for (buf = ast_strdupa(cat->touch_on_change), file = strsep(&buf, " ");
+			     file;
+			     file = strsep(&buf, " ")) {
+				strcpy(&touchcommand[9], file);
+				system(touchcommand);
 			}
 		}
 
@@ -1036,18 +1568,22 @@ static int generate_makeopts_file(void)
 	return 0;
 }
 
-#ifdef MENUSELECT_DEBUG
 /*! \brief Print out all of the information contained in our tree */
 static void dump_member_list(void)
 {
+#ifdef MENUSELECT_DEBUG
 	struct category *cat;
 	struct member *mem;
-	struct depend *dep;
-	struct conflict *cnf;
+	struct reference *dep;
+	struct reference *cnf;
 
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		fprintf(stderr, "Category: '%s'\n", cat->name);
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			fprintf(stderr, "   ==>> Member: '%s'  (%s)", mem->name, mem->enabled ? "Enabled" : "Disabled");
 			fprintf(stderr, "        Was %s\n", mem->was_enabled ? "Enabled" : "Disabled");
 			if (mem->defaultenabled)
@@ -1055,23 +1591,24 @@ static void dump_member_list(void)
 			AST_LIST_TRAVERSE(&mem->deps, dep, list)
 				fprintf(stderr, "      --> Depends on: '%s'\n", dep->name);
 			if (!AST_LIST_EMPTY(&mem->deps))
-				fprintf(stderr, "      --> Dependencies Met: %s\n", mem->depsfailed ? "No" : "Yes");	
+				fprintf(stderr, "      --> Dependencies Met: %s\n", mem->depsfailed ? "No" : "Yes");
 			AST_LIST_TRAVERSE(&mem->conflicts, cnf, list)
 				fprintf(stderr, "      --> Conflicts with: '%s'\n", cnf->name);
 			if (!AST_LIST_EMPTY(&mem->conflicts))
 				fprintf(stderr, "      --> Conflicts Found: %s\n", mem->conflictsfailed ? "Yes" : "No");
 		}
 	}
-}
 #endif
+}
 
 /*! \brief Free all categories and their members */
 static void free_member_list(void)
 {
 	struct category *cat;
 	struct member *mem;
-	struct depend *dep;
-	struct conflict *cnf;
+	struct reference *dep;
+	struct reference *cnf;
+	struct reference *use;
 
 	while ((cat = AST_LIST_REMOVE_HEAD(&categories, list))) {
 		while ((mem = AST_LIST_REMOVE_HEAD(&cat->members, list))) {
@@ -1079,6 +1616,8 @@ static void free_member_list(void)
 				free(dep);
 			while ((cnf = AST_LIST_REMOVE_HEAD(&mem->conflicts, list)))
 				free(cnf);
+			while ((use = AST_LIST_REMOVE_HEAD(&mem->uses, list)))
+				free(use);
 			free(mem);
 		}
 		free(cat);
@@ -1105,6 +1644,9 @@ void set_all(struct category *cat, int val)
 		if (mem->enabled == val)
 			continue;
 
+		if (mem->is_separator)
+			continue;
+
 		if ((mem->depsfailed == HARD_FAILURE) || (mem->conflictsfailed == HARD_FAILURE))
 			continue;
 
@@ -1117,6 +1659,8 @@ void set_all(struct category *cat, int val)
 		mem->was_defaulted = 0;
 		changes_made++;
 	}
+
+	while (calc_dep_failures(1, 0) || calc_conflict_failures(1, 0));
 }
 
 int count_categories(void)
@@ -1127,7 +1671,7 @@ int count_categories(void)
 	AST_LIST_TRAVERSE(&categories, cat, list)
 		count++;
 
-	return count;		
+	return count;
 }
 
 int count_members(struct category *cat)
@@ -1138,32 +1682,130 @@ int count_members(struct category *cat)
 	AST_LIST_TRAVERSE(&cat->members, mem, list)
 		count++;
 
-	return count;		
+	return count;
+}
+
+static void print_sanity_dep_header(struct dep_file *dep_file, unsigned int *flag)
+{
+	fprintf(stderr, "\n"
+		"***********************************************************\n"
+		"  The '%s' dependency was previously satisfied but         \n"
+		"  is now unsatisfied.                                      \n",
+		dep_file->name);
+	*flag = 1;
 }
 
 /*! \brief Make sure an existing menuselect.makeopts disabled everything it should have */
 static int sanity_check(void)
 {
+	unsigned int insane = 0;
 	struct category *cat;
 	struct member *mem;
+	struct reference *dep;
+	struct reference *use;
+	struct dep_file *dep_file;
+	unsigned int dep_header_printed;
+	unsigned int group_header_printed;
+
+	AST_LIST_TRAVERSE(&deps_file, dep_file, list) {
+		if (!((dep_file->previously_met == DEP_FILE_MET) &&
+		      (dep_file->met == DEP_FILE_UNMET))) {
+			continue;
+		}
+
+		/* this dependency was previously met, but now is not, so
+		   warn the user about members that could be affected by it
+		*/
+
+		dep_header_printed = 0;
+
+		group_header_printed = 0;
+		AST_LIST_TRAVERSE(&categories, cat, list) {
+			AST_LIST_TRAVERSE(&cat->members, mem, list) {
+				if (mem->is_separator) {
+					continue;
+				}
+
+				if (!mem->enabled) {
+					continue;
+				}
+				AST_LIST_TRAVERSE(&mem->deps, dep, list) {
+					if (strcasecmp(dep->name, dep_file->name)) {
+						continue;
+					}
+					if (!group_header_printed) {
+						if (!dep_header_printed) {
+							print_sanity_dep_header(dep_file, &dep_header_printed);
+						}
+						fprintf(stderr, "\n"
+							"  The following modules will no longer be available:\n");
+						group_header_printed = 1;
+					}
+					fprintf(stderr, "          %s\n", mem->name);
+					insane = 1;
+				}
+			}
+		}
+
+		group_header_printed = 0;
+		AST_LIST_TRAVERSE(&categories, cat, list) {
+			AST_LIST_TRAVERSE(&cat->members, mem, list) {
+				if (mem->is_separator) {
+					continue;
+				}
+
+				if (!mem->enabled) {
+					continue;
+				}
+				AST_LIST_TRAVERSE(&mem->uses, use, list) {
+					if (strcasecmp(use->name, dep_file->name)) {
+						continue;
+					}
+					if (!group_header_printed) {
+						if (!dep_header_printed) {
+							print_sanity_dep_header(dep_file, &dep_header_printed);
+						}
+						fprintf(stderr, "\n"
+							"  The functionality of the following modules will\n"
+							"  be affected:\n");
+						group_header_printed = 1;
+					}
+					fprintf(stderr, "          %s\n", mem->name);
+					insane = 1;
+				}
+			}
+		}
+
+		if (dep_header_printed) {
+			fprintf(stderr,
+				"***********************************************************\n");
+		}
+	}
 
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			if ((mem->depsfailed || mem->conflictsfailed) && mem->enabled) {
-				fprintf(stderr, "\n***********************************************************\n"
-				                "  The existing menuselect.makeopts file did not specify    \n"
-				                "  that '%s' should not be included.  However, either some  \n"
-				                "  dependencies for this module were not found or a         \n"
-				                "  conflict exists.                                         \n"
-				                "                                                           \n"
-				                "  Either run 'make menuselect' or remove the existing      \n"
-				                "  menuselect.makeopts file to resolve this issue.          \n"
-						"***********************************************************\n\n", mem->name);
-				return -1;
+				fprintf(stderr, "\n"
+					"***********************************************************\n"
+					"  The existing menuselect.makeopts file did not specify    \n"
+					"  that '%s' should not be included.  However, either some  \n"
+					"  dependencies for this module were not found or a         \n"
+					"  conflict exists.                                         \n"
+					"                                                           \n"
+					"  Either run 'make menuselect' or remove the existing      \n"
+					"  menuselect.makeopts file to resolve this issue.          \n"
+					"***********************************************************\n"
+					"\n", mem->name);
+				insane = 1;
 			}
 		}
 	}
-	return 0;	/* all good... */
+
+	return insane ? -1 : 0;
 }
 
 /* \brief Set the forced default values if they exist */
@@ -1172,17 +1814,23 @@ static void process_defaults(void)
 	struct category *cat;
 	struct member *mem;
 
+	print_debug("Processing default values since config was not present\n");
+
 	AST_LIST_TRAVERSE(&categories, cat, list) {
 		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
 			if (!mem->defaultenabled)
 				continue;
-			
+
 			if (mem->depsfailed == HARD_FAILURE)
 				continue;
 
 			if (mem->conflictsfailed == HARD_FAILURE)
 				continue;
-			
+
 			if (!strcasecmp(mem->defaultenabled, "yes")) {
 				mem->enabled = 1;
 				mem->was_defaulted = 1;
@@ -1190,46 +1838,130 @@ static void process_defaults(void)
 				mem->enabled = 0;
 				mem->was_defaulted = 1;
 			} else
-				fprintf(stderr, "Invalid defaultenabled value for '%s' in category '%s'\n", mem->name, cat->name);	
+				fprintf(stderr, "Invalid defaultenabled value for '%s' in category '%s'\n", mem->name, cat->name);
 		}
 	}
 
 }
 
+struct member *find_member(const char *name)
+{
+	struct category *cat;
+	struct member *mem;
+
+	AST_LIST_TRAVERSE(&categories, cat, list) {
+		AST_LIST_TRAVERSE(&cat->members, mem, list) {
+			if (mem->is_separator) {
+				continue;
+			}
+
+			if (!strcasecmp(name, mem->name)) {
+				return mem;
+			}
+		}
+	}
+
+	return NULL;
+}
+
+struct category *find_category(const char *name)
+{
+	struct category *cat;
+
+	AST_LIST_TRAVERSE(&categories, cat, list) {
+		if (!strcasecmp(name, cat->name)) {
+			return cat;
+		}
+	}
+
+	return NULL;
+}
+
+static int usage(const char *argv0)
+{
+	fprintf(stderr, "Usage: %s [--enable <option>] [--disable <option>]\n", argv0);
+	fprintf(stderr, "   [--enable-category <category>] [--enable-all]\n");
+	fprintf(stderr, "   [--disable-category <category>] [--disable-all] [...]\n");
+	fprintf(stderr, "   [<config-file> [...]]\n");
+	fprintf(stderr, "Usage: %s { --check-deps | --list-options\n", argv0);
+	fprintf(stderr, "   | --list-category <category> | --category-list | --help }\n");
+	fprintf(stderr, "   [<config-file> [...]]\n");
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	int res = 0;
+	const char *list_group = NULL;
 	unsigned int x;
+	static struct option long_options[] = {
+		/*
+		 * The --check-deps option is used to ask this application to check to
+		 * see if that an existing menuselect.makeopts file contains all of the
+		 * modules that have dependencies that have not been met.  If this
+		 * is not the case, an informative message will be printed to the
+		 * user and the build will fail.
+		 */
+		{ "check-deps",       no_argument,       &check_deps,   1  },
+		{ "enable",           required_argument, 0,            'e' },
+		{ "enable-category",  required_argument, 0,            'E' },
+		{ "enable-all",       no_argument,       0,            'a' },
+		{ "disable",          required_argument, 0,            'd' },
+		{ "disable-category", required_argument, 0,            'D' },
+		{ "disable-all",      no_argument,       0,            'A' },
+		{ "list-options",     no_argument,       &list_options, 1  },
+		{ "list-category",    required_argument, 0,            'L' },
+		{ "category-list",    no_argument,       &list_groups,  1  },
+		{ "help",             no_argument,       0,            'h' },
 
-	/* Make the compiler happy */
-	print_debug("");
+		{ 0, 0, 0, 0 },
+	};
+	int do_menu = 1, do_settings = 1;
+	int c, option_index = 0;
 
-#ifdef MENUSELECT_DEBUG
-	if (!(debug = fopen("menuselect_debug.txt", "w"))) {
-		fprintf(stderr, "Failed to open menuselect_debug.txt for debug output.\n");
+	if (open_debug()) {
 		exit(1);
 	}
-#endif
 
 	/* Parse the input XML files to build the list of available options */
 	if ((res = build_member_list()))
 		exit(res);
-	
-	/* Process module dependencies */
+
+	/* Load module dependencies */
 	if ((res = process_deps()))
 		exit(res);
-	
-	while (calc_dep_failures(0) || calc_conflict_failures(0));
-	
-	/* The --check-deps option is used to ask this application to check to
-	 * see if that an existing menuselect.makeopts file contains all of the
-	 * modules that have dependencies that have not been met.  If this
-	 * is not the case, an informative message will be printed to the
-	 * user and the build will fail. */
-	for (x = 1; x < argc; x++) {
-		if (!strcmp(argv[x], "--check-deps"))
-			check_deps = 1;
-		else {
+
+	while (calc_dep_failures(0, 1) || calc_conflict_failures(0, 1));
+
+	while ((c = getopt_long(argc, argv, "", long_options, &option_index)) != -1) {
+		switch (c) {
+		case 'L':
+			list_group = optarg;
+			do_settings = 0;
+			/* Fall-through */
+		case 'a':
+		case 'A':
+		case 'e':
+		case 'E':
+		case 'd':
+		case 'D':
+			do_menu = 0;
+			break;
+		case 'h':
+			return usage(argv[0]);
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (check_deps || list_options || list_groups) {
+		do_menu = 0;
+		do_settings = 0;
+	}
+
+	if (optind < argc) {
+		for (x = optind; x < argc; x++) {
 			res = parse_existing_config(argv[x]);
 			if (!res && !strcasecmp(argv[x], OUTPUT_MAKEOPTS_DEFAULT))
 				existing_config = 1;
@@ -1237,40 +1969,136 @@ int main(int argc, char *argv[])
 		}
 	}
 
-#ifdef MENUSELECT_DEBUG
 	/* Dump the list produced by parsing the various input files */
 	dump_member_list();
-#endif
 
-	while (calc_dep_failures(0) || calc_conflict_failures(0));
+	while (calc_dep_failures(0, 0) || calc_conflict_failures(0, 0));
 
 	if (!existing_config)
 		process_defaults();
 	else if (check_deps)
 		res = sanity_check();
 
-	while (calc_dep_failures(0) || calc_conflict_failures(0));
-	
-	/* Run the menu to let the user enable/disable options */
-	if (!check_deps && !res)
-		res = run_menu();
+	while (calc_dep_failures(0, 0) || calc_conflict_failures(0, 0));
 
-	if (!res)
+	print_debug("do_menu=%d, do_settings=%d\n", do_menu, do_settings);
+
+	if (do_menu && !res) {
+		res = run_menu();
+	} else if (!do_settings) {
+		if (list_groups) {
+			struct category *cat;
+			AST_LIST_TRAVERSE(&categories, cat, list) {
+				fprintf(stdout, "%s\n", cat->name);
+			}
+		} else if (list_options) {
+			struct category *cat;
+			struct member *mem;
+			AST_LIST_TRAVERSE(&categories, cat, list) {
+				AST_LIST_TRAVERSE(&cat->members, mem, list) {
+					if (mem->is_separator) {
+						continue;
+					}
+
+					fprintf(stdout, "%c %-30.30s %s\n", mem->enabled ? '+' : '-', mem->name, cat->name);
+				}
+			}
+		} else if (!strlen_zero(list_group)) {
+			struct category *cat;
+			struct member *mem;
+			if ((cat = find_category(list_group))) {
+				AST_LIST_TRAVERSE(&cat->members, mem, list) {
+					if (mem->is_separator) {
+						continue;
+					}
+
+					fprintf(stdout, "%c %s\n", mem->enabled ? '+' : '-', mem->name);
+				}
+			}
+		}
+	} else if (!do_menu && do_settings) {
+		struct member *mem;
+		struct category *cat;
+
+		print_debug("Doing settings with argc=%d\n", argc);
+
+		/* Reset options processing */
+		option_index = 0;
+		optind = 1;
+
+		while ((c = getopt_long(argc, argv, "", long_options, &option_index)) != -1) {
+			print_debug("Got option %c\n", c);
+			switch (c) {
+			case 'e':
+				if (!strlen_zero(optarg)) {
+					if ((mem = find_member(optarg))) {
+						set_member_enabled(mem);
+					} else {
+						fprintf(stderr, "'%s' not found\n", optarg);
+					}
+				}
+				break;
+			case 'E':
+				if (!strlen_zero(optarg)) {
+					if ((cat = find_category(optarg))) {
+						set_all(cat, 1);
+					} else {
+						fprintf(stderr, "'%s' not found\n", optarg);
+					}
+				}
+				break;
+			case 'a': /* enable-all */
+				AST_LIST_TRAVERSE(&categories, cat, list) {
+					set_all(cat, 1);
+				}
+				break;
+			case 'd':
+				if (!strlen_zero(optarg)) {
+					if ((mem = find_member(optarg))) {
+						clear_member_enabled(mem);
+					} else {
+						fprintf(stderr, "'%s' not found\n", optarg);
+					}
+				}
+				break;
+			case 'D':
+				if (!strlen_zero(optarg)) {
+					if ((cat = find_category(optarg))) {
+						set_all(cat, 0);
+					} else {
+						fprintf(stderr, "'%s' not found\n", optarg);
+					}
+				}
+				break;
+			case 'A': /* disable-all */
+				AST_LIST_TRAVERSE(&categories, cat, list) {
+					set_all(cat, 0);
+				}
+				break;
+			case '?':
+				break;
+			default:
+				break;
+			}
+		}
+		res = 0;
+	}
+
+	if (!res) {
 		res = generate_makeopts_file();
+	}
 
 	/* Always generate the dependencies file */
-	if (!res)
+	if (!res) {
 		generate_makedeps_file();
-	
+	}
+
 	/* free everything we allocated */
 	free_deps_file();
 	free_trees();
 	free_member_list();
 
-#ifdef MENUSELECT_DEBUG
-	if (debug)
-		fclose(debug);
-#endif
+	close_debug();
 
 	exit(res);
 }

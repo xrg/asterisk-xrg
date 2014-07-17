@@ -1,5 +1,5 @@
 /*
- * "$Id: mxml-set.c 22267 2006-04-24 17:11:45Z kpfleming $"
+ * "$Id$"
  *
  * Node set functions for Mini-XML, a small XML-like file parsing library.
  *
@@ -253,5 +253,5 @@ mxmlSetTextf(mxml_node_t *node,		/* I - Node to set */
 
 
 /*
- * End of "$Id: mxml-set.c 22267 2006-04-24 17:11:45Z kpfleming $".
+ * End of "$Id$".
  */

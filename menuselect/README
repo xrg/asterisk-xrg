@@ -75,6 +75,24 @@ The format of the input files must be of the same format menuselect uses to
 create the OUPUT_MAKEOPTS_DEFAULT.
 
 
+ENABLING AND DISABLING OPTIONS FROM THE COMMAND LINE
+
+If you would like menuselect to update choices via the command line, it can be
+done with the following syntax:
+
+Enable an option:
+   $ menuselect/menuselect --enable TEST_FRAMEWORK menuselect.makeopts
+
+Enable all options in a category:
+   $ menuselect/menuselect --enable-category MENUSELECT_TEST menuselect.makeopts
+
+Disable an option:
+   $ menuselect/menuselect --disable TEST_FRAMEWORK menuselect.makeopts
+
+Disable all options in a category:
+   $ menuselect/menuselect --disable-category MENUSELECT_TEST menuselect.makeopts
+
+
 SETTING UP AVAILABLE OPTIONS
 
 The XML specification for the menu lives in the file "menuselect-tree" and should
@@ -156,6 +174,6 @@ Conflicts:
 REPORTING BUGS
 
 Any bug reports or feature enhancement submissions to menuselect should be
-submitted at http://bugs.digium.com/
+submitted at https://issues.asterisk.org/
 
 Thank you!

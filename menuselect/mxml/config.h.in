@@ -1,5 +1,5 @@
 /*
- * "$Id: config.h.in 22267 2006-04-24 17:11:45Z kpfleming $"
+ * "$Id$"
  *
  * Configuration file for Mini-XML, a small XML-like file parsing library.
  *
@@ -65,5 +65,5 @@ extern int	mxml_vsnprintf(char *, size_t, const char *, va_list);
 #  endif /* !HAVE_VSNPRINTF */
 
 /*
- * End of "$Id: config.h.in 22267 2006-04-24 17:11:45Z kpfleming $".
+ * End of "$Id$".
  */

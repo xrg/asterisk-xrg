@@ -5,6 +5,7 @@
 CC=@CC@
 
 OSARCH=@HOST_OS@
+MENUSELECT_DEBUG=@MENUSELECT_DEBUG@
 
 # The frontend can use curses, ncurses, newt or gtk2
 

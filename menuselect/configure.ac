@@ -15,13 +15,43 @@ AC_CONFIG_SRCDIR([menuselect.c])
 AC_CONFIG_HEADER(autoconfig.h)
 
 AC_COPYRIGHT("Menuselect")
-AC_REVISION($Revision: 40837 $)
+AC_REVISION($Revision$)
 
 AC_CANONICAL_BUILD
 AC_CANONICAL_HOST
 
 HOST_OS=${host_os}
 AC_SUBST(HOST_OS)
+
+PBX_WINARCH=0
+case "${host_os}" in
+     freebsd*)
+     OSARCH=FreeBSD
+     ;;
+     netbsd*)
+     OSARCH=NetBSD
+     ;;
+     openbsd*)
+     OSARCH=OpenBSD
+     ;;
+     solaris*)
+     OSARCH=SunOS
+     ;;
+     mingw32)
+     OSARCH=mingw32
+     PBX_WINARCH=1
+     ;;
+     cygwin)
+     OSARCH=cygwin
+     PBX_WINARCH=1
+     ;;
+     linux-gnueabi)
+     OSARCH=linux-gnu
+     ;;
+     *)
+     OSARCH=${host_os}
+     ;;
+esac
 
 AH_TOP(
 #ifndef MENUSELECT_AUTOCONFIG_H
@@ -40,9 +70,50 @@ AH_BOTTOM(
 AC_PROG_CC
 AST_CHECK_GNU_MAKE
 
-AC_LANG(C)
 
-AC_CHECK_FUNCS([asprintf getloadavg setenv strcasestr strndup strnlen strsep strtoq unsetenv vasprintf])
+AC_LANG(C)
+AC_ARG_ENABLE([debug],
+	[AS_HELP_STRING([--enable-debug], [Turn on debug mode])],
+	[case "${enableval}" in
+		y|ye|yes) MENUSELECT_DEBUG=yes ;;
+		n|no)  MENUSELECT_DEBUG=no ;;
+		*) AC_MSG_ERROR(bad value ${enableval} for --enable-debug)  ;;
+    esac])
+AC_SUBST(MENUSELECT_DEBUG)
+
+# Support weak symbols on a platform specific basis.  The Mac OS X
+# (Darwin) support must be isolated from the other platforms because
+# it has caused other platforms to fail.
+#
+case "${OSARCH}" in
+	darwin*)
+	# Allow weak symbol support on Darwin platforms only because there
+	# is active community support for it.
+	# However, Darwin seems to break weak symbols for each new version.
+	#
+	AST_GCC_ATTRIBUTE(weak_import, [], [], PBX_WEAKREF)
+
+	# Several other platforms including Linux have GCC versions that
+	# define the weak attribute.  However, this attribute is only
+	# setup for use in the code by Darwin.
+	AST_GCC_ATTRIBUTE(weak, [], [], PBX_WEAKREF)
+	;;
+	linux-gnu)
+	# Primarily support weak symbols on Linux platforms.
+	#
+	AST_GCC_ATTRIBUTE(weakref, [weakref("foo")], static, PBX_WEAKREF)
+	;;
+	*)
+	# Allow weak symbols on other platforms.  However, any problems
+	# with this feature on other platforms must be fixed by the
+	# community.
+	#
+	AST_GCC_ATTRIBUTE(weakref, [weakref("foo")], static, PBX_WEAKREF)
+	;;
+esac
+
+AC_FUNC_ALLOCA
+AC_CHECK_FUNCS([asprintf getloadavg setenv strcasestr strndup strnlen strsep unsetenv vasprintf])
 
 # The frontend can use curses, ncurses, newt or GTK2 so check for all of them
 

@@ -1,14 +1,36 @@
-# AST_GCC_ATTRIBUTE([attribute name])
+# Helper function to check for gcc attributes.
+# AST_GCC_ATTRIBUTE([attribute name], [attribute syntax], [attribute scope], [makeopts flag])
 
 AC_DEFUN([AST_GCC_ATTRIBUTE],
 [
 AC_MSG_CHECKING(checking for compiler 'attribute $1' support)
+saved_CFLAGS="$CFLAGS"
+CFLAGS="$CFLAGS -Wall -Wno-unused -Werror"
+m4_ifval([$4],$4=0)
+
+if test "x$2" = "x"
+then
 AC_COMPILE_IFELSE(
-	AC_LANG_PROGRAM([static int __attribute__(($1)) test(void) {}],
+	AC_LANG_PROGRAM([$3 void __attribute__(($1)) *test(void *muffin, ...) {return (void *) 0;}],
 			[]),
 	AC_MSG_RESULT(yes)
+	m4_ifval([$4],$4=1)
 	AC_DEFINE_UNQUOTED([HAVE_ATTRIBUTE_$1], 1, [Define to 1 if your GCC C compiler supports the '$1' attribute.]),
-	AC_MSG_RESULT(no))
+	AC_MSG_RESULT(no)
+)
+else
+AC_COMPILE_IFELSE(
+	AC_LANG_PROGRAM([$3 void __attribute__(($2)) *test(void *muffin, ...) {return (void *) 0;}],
+			[]),
+	AC_MSG_RESULT(yes)
+	m4_ifval([$4],$4=1)
+	AC_DEFINE_UNQUOTED([HAVE_ATTRIBUTE_$1], 1, [Define to 1 if your GCC C compiler supports the '$1' attribute.]),
+	AC_MSG_RESULT(no)
+)
+fi
+
+m4_ifval([$4],[AC_SUBST($4)])
+CFLAGS="$saved_CFLAGS"
 ])
 
 # AST_EXT_LIB_SETUP([package symbol name], [package friendly name], [package option name], [additional help text])
@@ -95,25 +117,25 @@ fi
 
 
 AC_DEFUN(
-[AST_CHECK_GNU_MAKE], [AC_CACHE_CHECK(for GNU make, GNU_MAKE,
-   GNU_MAKE='Not Found' ;
-   GNU_MAKE_VERSION_MAJOR=0 ;
-   GNU_MAKE_VERSION_MINOR=0 ;
+[AST_CHECK_GNU_MAKE], [AC_CACHE_CHECK([for GNU make], [ac_cv_GNU_MAKE],
+   ac_cv_GNU_MAKE='Not Found' ;
+   ac_cv_GNU_MAKE_VERSION_MAJOR=0 ;
+   ac_cv_GNU_MAKE_VERSION_MINOR=0 ;
    for a in make gmake gnumake ; do
       if test -z "$a" ; then continue ; fi ;
       if ( sh -c "$a --version" 2> /dev/null | grep GNU  2>&1 > /dev/null ) ;  then
-         GNU_MAKE=$a ;
-         GNU_MAKE_VERSION_MAJOR=`$GNU_MAKE --version | grep "GNU Make" | cut -f3 -d' ' | cut -f1 -d'.'`
-         GNU_MAKE_VERSION_MINOR=`$GNU_MAKE --version | grep "GNU Make" | cut -f2 -d'.' | cut -c1-2`
+         ac_cv_GNU_MAKE=$a ;
+         ac_cv_GNU_MAKE_VERSION_MAJOR=`$ac_cv_GNU_MAKE --version | grep "GNU Make" | cut -f3 -d' ' | cut -f1 -d'.'`
+         ac_cv_GNU_MAKE_VERSION_MINOR=`$ac_cv_GNU_MAKE --version | grep "GNU Make" | cut -f2 -d'.' | cut -c1-2`
          break;
       fi
    done ;
 ) ;
-if test  "x$GNU_MAKE" = "xNot Found"  ; then
+if test  "x$ac_cv_GNU_MAKE" = "xNot Found"  ; then
    AC_MSG_ERROR( *** Please install GNU make.  It is required to build Asterisk!)
    exit 1
 fi
-AC_SUBST([GNU_MAKE])
+AC_SUBST([GNU_MAKE], [$ac_cv_GNU_MAKE])
 ])
 
 # AST_FUNC_FORK

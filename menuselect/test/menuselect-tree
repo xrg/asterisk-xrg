@@ -21,16 +21,26 @@
 </member>
 <member name="app_controlplayback" displayname="Control Playback Application" remove_on_change="apps/app_controlplayback.o apps/app_controlplayback.so">
 </member>
+<member name="app_dahdibarge" displayname="Barge in on DAHDI channel application" remove_on_change="apps/app_dahdibarge.o apps/app_dahdibarge.so">
+	<depend name="dahdi">DAHDI</depend>
+</member>
+<member name="app_dahdiras" displayname="DAHDI ISDN Remote Access Server" remove_on_change="apps/app_dahdiras.o apps/app_dahdiras.so">
+	<depend name="dahdi">DAHDI</depend>
+</member>
+<member name="app_dahdiscan" displayname="Scan DAHDI channels application" remove_on_change="apps/app_dahdiscan.o apps/app_dahdiscan.so">
+	<depend name="dahdi">DAHDI</depend>
+</member>
 <member name="app_db" displayname="Database Access Functions" remove_on_change="apps/app_db.o apps/app_db.so">
 </member>
 <member name="app_dial" displayname="Dialing Application" remove_on_change="apps/app_dial.o apps/app_dial.so">
-        <depend>chan_local</depend>
+	<depend>chan_local</depend>
 </member>
 <member name="app_dictate" displayname="Virtual Dictation Machine" remove_on_change="apps/app_dictate.o apps/app_dictate.so">
 </member>
 <member name="app_directed_pickup" displayname="Directed Call Pickup Application" remove_on_change="apps/app_directed_pickup.o apps/app_directed_pickup.so">
 </member>
 <member name="app_directory" displayname="Extension Directory" remove_on_change="apps/app_directory.o apps/app_directory.so">
+	<depend>app_voicemail</depend>
 </member>
 <member name="app_disa" displayname="DISA (Direct Inward System Access) Application" remove_on_change="apps/app_disa.o apps/app_disa.so">
 </member>
@@ -42,13 +52,16 @@
 </member>
 <member name="app_externalivr" displayname="External IVR Interface Application" remove_on_change="apps/app_externalivr.o apps/app_externalivr.so">
 </member>
+<member name="app_fax" displayname="Simple FAX Application" remove_on_change="apps/app_fax.o apps/app_fax.so">
+	 <depend>spandsp</depend>
+</member>
 <member name="app_festival" displayname="Simple Festival Interface" remove_on_change="apps/app_festival.o apps/app_festival.so">
 </member>
 <member name="app_flash" displayname="Flash channel application" remove_on_change="apps/app_flash.o apps/app_flash.so">
-	<depend>zaptel</depend>
+	<depend name="dahdi">DAHDI</depend>
 </member>
 <member name="app_followme" displayname="Find-Me/Follow-Me Application" remove_on_change="apps/app_followme.o apps/app_followme.so">
-        <depend>chan_local</depend>
+	<depend>chan_local</depend>
 </member>
 <member name="app_forkcdr" displayname="Fork The CDR into 2 separate entities" remove_on_change="apps/app_forkcdr.o apps/app_forkcdr.so">
 </member>
@@ -63,13 +76,15 @@
 </member>
 <member name="app_jack" displayname="JACK Interface" remove_on_change="apps/app_jack.o apps/app_jack.so">
 	<depend>jack</depend>
+	<depend name="resample">libresample</depend>
 </member>
 <member name="app_macro" displayname="Extension Macros" remove_on_change="apps/app_macro.o apps/app_macro.so">
 </member>
 <member name="app_meetme" displayname="MeetMe conference bridge" remove_on_change="apps/app_meetme.o apps/app_meetme.so">
-	<depend>zaptel</depend>
+	<depend>dahdi</depend>
 </member>
 <member name="app_milliwatt" displayname="Digital Milliwatt (mu-law) Test Application" remove_on_change="apps/app_milliwatt.o apps/app_milliwatt.so">
+	<depend>res_indications</depend>
 </member>
 <member name="app_minivm" displayname="Mini VoiceMail (A minimal Voicemail e-mail System)" remove_on_change="apps/app_minivm.o apps/app_minivm.so">
 </member>
@@ -86,19 +101,17 @@
 	<depend>ssl</depend>
 </member>
 <member name="app_page" displayname="Page Multiple Phones" remove_on_change="apps/app_page.o apps/app_page.so">
-	<depend>zaptel</depend>
+	<depend name="dahdi">DAHDI</depend>
 	<depend>app_meetme</depend>
 </member>
 <member name="app_parkandannounce" displayname="Call Parking and Announce Application" remove_on_change="apps/app_parkandannounce.o apps/app_parkandannounce.so">
-</member>
-<member name="app_pickupchan" displayname="Channel Pickup Application" remove_on_change="apps/app_pickupchan.o apps/app_pickupchan.so">
 </member>
 <member name="app_playback" displayname="Sound File Playback Application" remove_on_change="apps/app_playback.o apps/app_playback.so">
 </member>
 <member name="app_privacy" displayname="Require phone number to be entered, if no CallerID sent" remove_on_change="apps/app_privacy.o apps/app_privacy.so">
 </member>
 <member name="app_queue" displayname="True Call Queueing" remove_on_change="apps/app_queue.o apps/app_queue.so">
-        <depend>res_monitor</depend>
+	<depend>res_monitor</depend>
 </member>
 <member name="app_read" displayname="Read Variable Application" remove_on_change="apps/app_read.o apps/app_read.so">
 </member>
@@ -108,8 +121,8 @@
 </member>
 <member name="app_record" displayname="Trivial Record Application" remove_on_change="apps/app_record.o apps/app_record.so">
 </member>
-<member name="app_rpt" displayname="Radio Repeater / Remote Base" remove_on_change="apps/app_rpt.o apps/app_rpt.so">
-	<depend>zaptel</depend>
+<member name="app_rpt" displayname="Radio Repeater/Remote Base Application" remove_on_change="apps/app_rpt.o apps/app_rpt.so">
+	<depend name="dahdi">DAHDI</depend>
 	<depend>tonezone</depend>
 	<defaultenabled>no</defaultenabled>
 </member>
@@ -159,19 +172,10 @@
 </member>
 <member name="app_zapateller" displayname="Block Telemarketers with Special Information Tone" remove_on_change="apps/app_zapateller.o apps/app_zapateller.so">
 </member>
-<member name="app_zapbarge" displayname="Barge in on Zap channel application" remove_on_change="apps/app_zapbarge.o apps/app_zapbarge.so">
-	<depend>zaptel</depend>
-</member>
-<member name="app_zapras" displayname="Zaptel ISDN Remote Access Server" remove_on_change="apps/app_zapras.o apps/app_zapras.so">
-	<depend>zaptel</depend>
-</member>
-<member name="app_zapscan" displayname="Scan Zap channels application" remove_on_change="apps/app_zapscan.o apps/app_zapscan.so">
-	<depend>zaptel</depend>
-</member>
 </category>
 <category name="MENUSELECT_CDR" displayname="Call Detail Recording" remove_on_change="cdr/modules.link">
 <member name="cdr_adaptive_odbc" displayname="Adaptive ODBC CDR backend" remove_on_change="cdr/cdr_adaptive_odbc.o cdr/cdr_adaptive_odbc.so">
-	<depend>unixodbc</depend>
+	<depend name="unixODBC">unixodbc</depend>
 </member>
 <member name="cdr_csv" displayname="Comma Separated Values CDR Backend" remove_on_change="cdr/cdr_csv.o cdr/cdr_csv.so">
 </member>
@@ -180,11 +184,11 @@
 <member name="cdr_manager" displayname="Asterisk Manager Interface CDR Backend" remove_on_change="cdr/cdr_manager.o cdr/cdr_manager.so">
 </member>
 <member name="cdr_odbc" displayname="ODBC CDR Backend" remove_on_change="cdr/cdr_odbc.o cdr/cdr_odbc.so">
-	<depend>unixodbc</depend>
-	<depend>ltdl</depend>
+	<depend name="unixodbc">unixODBC</depend>
+	<depend name="ltdl">libtool-ltdl</depend>
 </member>
 <member name="cdr_pgsql" displayname="PostgreSQL CDR Backend" remove_on_change="cdr/cdr_pgsql.o cdr/cdr_pgsql.so">
-	<depend>pgsql</depend>
+	<depend name="pgsql">PostgreSQL</depend>
 </member>
 <member name="cdr_radius" displayname="RADIUS CDR Backend" remove_on_change="cdr/cdr_radius.o cdr/cdr_radius.so">
 	<depend>radius</depend>
@@ -195,8 +199,8 @@
 <member name="cdr_sqlite" displayname="SQLite CDR Backend" remove_on_change="cdr/cdr_sqlite.o cdr/cdr_sqlite.so">
 	<depend>sqlite</depend>
 </member>
-<member name="cdr_tds" displayname="MSSQL CDR Backend" remove_on_change="cdr/cdr_tds.o cdr/cdr_tds.so">
-	<depend>freetds</depend>
+<member name="cdr_tds" displayname="FreeTDS CDR Backend" remove_on_change="cdr/cdr_tds.o cdr/cdr_tds.so">
+	<depend name="freetds">FreeTDS</depend>
 </member>
 </category>
 <category name="MENUSELECT_CHANNELS" displayname="Channel Drivers" remove_on_change="channels/modules.link">
@@ -208,6 +212,13 @@
 </member>
 <member name="chan_console" displayname="Console Channel Driver" remove_on_change="channels/chan_console.o channels/chan_console.so">
 	<depend>portaudio</depend>
+</member>
+<member name="chan_dahdi" displayname="DAHDI Telephony" remove_on_change="channels/chan_dahdi.o channels/chan_dahdi.so">
+	<depend>res_smdi</depend>
+	<depend name="dahdi">DAHDI</depend>
+	<depend>tonezone</depend>
+	<use>pri</use>
+	<use>ss7</use>
 </member>
 <member name="chan_features" displayname="Feature Proxy Channel" remove_on_change="channels/chan_features.o channels/chan_features.so">
         <defaultenabled>no</defaultenabled>
@@ -222,7 +233,6 @@
 	<defaultenabled>yes</defaultenabled>
 </member>
 <member name="chan_iax2" displayname="Inter Asterisk eXchange (Ver 2)" remove_on_change="channels/chan_iax2.o channels/chan_iax2.so">
-	<use>zaptel</use>
 	<use>crypto</use>
 </member>
 <member name="chan_jingle" displayname="Jingle Channel Driver" remove_on_change="channels/chan_jingle.o channels/chan_jingle.so">
@@ -256,17 +266,9 @@
 <member name="chan_unistim" displayname="UNISTIM Protocol (USTM)" remove_on_change="channels/chan_unistim.o channels/chan_unistim.so">
 </member>
 <member name="chan_usbradio" displayname="usb Console Channel Driver" remove_on_change="channels/chan_usbradio.o channels/chan_usbradio.so">
-	<depend>asound</depend>
+	<depend>ossaudio</depend>
 	<depend>usb</depend>
 	<defaultenabled>no</defaultenabled>
-</member>
-<member name="chan_zap" displayname="Zapata Telephony" remove_on_change="channels/chan_zap.o channels/chan_zap.so">
-	<depend>res_smdi</depend>
-	<depend>zaptel_vldtmf</depend>
-	<depend>zaptel</depend>
-	<depend>tonezone</depend>
-	<use>pri</use>
-	<use>ss7</use>
 </member>
 <member name="chan_vpb" displayname="Voicetronix API driver" remove_on_change="channels/chan_vpb.oo channels/chan_vpb.so">
 	<depend>vpbapi</depend>
@@ -279,6 +281,9 @@
 </member>
 <member name="codec_a_mu" displayname="A-law and Mulaw direct Coder/Decoder" remove_on_change="codecs/codec_a_mu.o codecs/codec_a_mu.so">
 </member>
+<member name="codec_dahdi" displayname="Generic DAHDI Transcoder Codec Translator" remove_on_change="codecs/codec_dahdi.o codecs/codec_dahdi.so">
+	<depend name="dahdi">DAHDI</depend>
+</member>
 <member name="codec_g722" displayname="ITU G.722-64kbps G722 Transcoder" remove_on_change="codecs/codec_g722.o codecs/codec_g722.so">
 </member>
 <member name="codec_g726" displayname="ITU G.726-32kbps G726 Transcoder" remove_on_change="codecs/codec_g726.o codecs/codec_g726.so">
@@ -287,20 +292,19 @@
 	<depend>gsm</depend>
 </member>
 <member name="codec_ilbc" displayname="iLBC Coder/Decoder" remove_on_change="codecs/codec_ilbc.o codecs/codec_ilbc.so">
+	<defaultenabled>no</defaultenabled>
 </member>
 <member name="codec_lpc10" displayname="LPC10 2.4kbps Coder/Decoder" remove_on_change="codecs/codec_lpc10.o codecs/codec_lpc10.so">
 </member>
 <member name="codec_resample" displayname="SLIN Resampling Codec" remove_on_change="codecs/codec_resample.o codecs/codec_resample.so">
+	<depend>resample</depend>
 </member>
 <member name="codec_speex" displayname="Speex Coder/Decoder" remove_on_change="codecs/codec_speex.o codecs/codec_speex.so">
 	<depend>speex</depend>
+	<depend>speex_preprocess</depend>
 	<use>speexdsp</use>
 </member>
 <member name="codec_ulaw" displayname="mu-Law Coder/Decoder" remove_on_change="codecs/codec_ulaw.o codecs/codec_ulaw.so">
-</member>
-<member name="codec_zap" displayname="Generic Zaptel Transcoder Codec Translator" remove_on_change="codecs/codec_zap.o codecs/codec_zap.so">
-	<depend>zaptel_transcode</depend>
-	<depend>zaptel</depend>
 </member>
 </category>
 <category name="MENUSELECT_FORMATS" displayname="Format Interpreters" remove_on_change="formats/modules.link">
@@ -346,7 +350,9 @@
 </member>
 <member name="func_cdr" displayname="Call Detail Record (CDR) dialplan function" remove_on_change="funcs/func_cdr.o funcs/func_cdr.so">
 </member>
-<member name="func_channel" displayname="Channel information dialplan function" remove_on_change="funcs/func_channel.o funcs/func_channel.so">
+<member name="func_channel" displayname="Channel information dialplan functions" remove_on_change="funcs/func_channel.o funcs/func_channel.so">
+</member>
+<member name="func_config" displayname="Asterisk configuration file variable access" remove_on_change="funcs/func_config.o funcs/func_config.so">
 </member>
 <member name="func_curl" displayname="Load external URL" remove_on_change="funcs/func_curl.o funcs/func_curl.so">
 	<depend>curl</depend>
@@ -397,6 +403,11 @@
 </member>
 <member name="func_shell" displayname="Returns the output of a shell command" remove_on_change="funcs/func_shell.o funcs/func_shell.so">
 </member>
+<member name="func_speex" displayname="Noise reduction and Automatic Gain Control (AGC)" remove_on_change="funcs/func_speex.o funcs/func_speex.so">
+	<depend>speex</depend>
+	<depend>speex_preprocess</depend>
+	<use>speexdsp</use>
+</member>
 <member name="func_strings" displayname="String handling dialplan functions" remove_on_change="funcs/func_strings.o funcs/func_strings.so">
 </member>
 <member name="func_sysinfo" displayname="System information related functions" remove_on_change="funcs/func_sysinfo.o funcs/func_sysinfo.so">
@@ -443,6 +454,9 @@
 </member>
 <member name="res_agi" displayname="Asterisk Gateway Interface (AGI)" remove_on_change="res/res_agi.o res/res_agi.so">
 </member>
+<member name="res_ais" displayname="SAForum AIS" remove_on_change="res/res_ais.o res/res_ais.so">
+	<depend>ais</depend>
+</member>
 <member name="res_clioriginate" displayname="Call origination from the CLI" remove_on_change="res/res_clioriginate.o res/res_clioriginate.so">
 </member>
 <member name="res_config_curl" displayname="Realtime Curl configuration" remove_on_change="res/res_config_curl.o res/res_config_curl.so">
@@ -467,6 +481,12 @@
 <member name="res_crypto" displayname="Cryptographic Digital Signatures" remove_on_change="res/res_crypto.o res/res_crypto.so">
 	<depend>ssl</depend>
 </member>
+<member name="res_curl" displayname="cURL Resource Module" remove_on_change="res/res_curl.o res/res_curl.so">
+	<depend>curl</depend>
+</member>
+<member name="res_http_post" displayname="HTTP POST support" remove_on_change="res/res_http_post.o res/res_http_post.so">
+	<depend>gmime</depend>
+</member>
 <member name="res_indications" displayname="Region-specific tones" remove_on_change="res/res_indications.o res/res_indications.so">
 </member>
 <member name="res_jabber" displayname="AJI - Asterisk Jabber Interface" remove_on_change="res/res_jabber.o res/res_jabber.so">
@@ -479,7 +499,7 @@
 </member>
 <member name="res_musiconhold" displayname="Music On Hold Resource" remove_on_change="res/res_musiconhold.o res/res_musiconhold.so">
 	<conflict>win32</conflict>
-	<use>zaptel</use>
+	<use>dahdi</use>
 </member>
 <member name="res_odbc" displayname="ODBC resource" remove_on_change="res/res_odbc.o res/res_odbc.so">
 	<depend>unixodbc</depend>
@@ -496,25 +516,19 @@
 </member>
 <member name="res_speech" displayname="Generic Speech Recognition API" remove_on_change="res/res_speech.o res/res_speech.so">
 </member>
+<member name="res_timing_dahdi" displayname="DAHDI Timing Interface" remove_on_change="res/res_timing_dahdi.o res/res_timing_dahdi.so">
+	<depend name="dahdi">DAHDI</depend>
+</member>
+<member name="res_timing_pthread" displayname="pthread Timing Interface" remove_on_change="res/res_timing_pthread.o res/res_timing_pthread.so">
+</member>
 </category>
 <category name="MENUSELECT_TEST" displayname="Test Modules" remove_on_change="tests/modules.link">
+<member name="test_dlinklists" displayname="Test Doubly-Linked Lists" remove_on_change="tests/test_dlinklists.o tests/test_dlinklists.so">
+	<defaultenabled>no</defaultenabled>
+</member>
 <member name="test_skel" displayname="Skeleton (sample) Test" remove_on_change="tests/test_skel.o tests/test_skel.so">
 	<defaultenabled>no</defaultenabled>
 </member>
-</category>
-<category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" remove_on_change="apps/app_voicemail.o apps/app_directory.o">
-	<member name="ODBC_STORAGE" displayname="Storage of Voicemail using ODBC">
-		<depend>unixodbc</depend>
-		<depend>ltdl</depend>
-		<conflict>IMAP_STORAGE</conflict>
-		<defaultenabled>no</defaultenabled>
-	</member>
-	<member name="IMAP_STORAGE" displayname="Storage of Voicemail using IMAP4">
-		<depend>imap_tk</depend>
-		<conflict>ODBC_STORAGE</conflict>
-		<use>ssl</use>
-		<defaultenabled>no</defaultenabled>
-	</member>
 </category>
 	<category name="MENUSELECT_CFLAGS" displayname="Compiler Flags" positive_output="yes" remove_on_change=".lastclean">
 		<member name="DONT_OPTIMIZE" displayname="Disable Optimizations by the Compiler">
@@ -528,9 +542,11 @@
 		</member>
 		<member name="LOW_MEMORY" displayname="Optimize for Low Memory Usage">
 		</member>
-		<member name="LOTS_OF_SPANS" displayname="More than 32 Zaptel spans">
+		<member name="USE_HOARD_ALLOCATOR" displayname="Use the Hoard Memory Allocator instead of the default system one">
+			<defaultenabled>no</defaultenabled>
+			<depend>hoard</depend>
 		</member>
-		<member name="MTX_PROFILE" displayname="Enable Code Profiling Using TSC Counters">
+		<member name="LOTS_OF_SPANS" displayname="More than 32 DAHDI spans">
 		</member>
 		<member name="RADIO_RELAX" displayname="Relax DTMF for Radio Applications">
 		</member>
@@ -549,22 +565,7 @@
 		</member>
 		<member name="DEBUG_CHANNEL_LOCKS" displayname="Debug Channel Locking">
 		</member>
-		<member name="DEBUG_SCHEDULER" displayname="Enable Scheduler Debugging Output">
-		</member>
-		<member name="DEBUG_THREADLOCALS" displayname="Enable Thread-Local-Storage Debugging">
-		</member>
-		<member name="DETECT_DEADLOCKS" displayname="Detect Deadlocks">
-			<depend>DEBUG_THREADS</depend>
-		</member>
-		<member name="DUMP_SCHEDULER" displayname="Dump Scheduler Contents for Debugging">
-		</member>
 		<member name="MALLOC_DEBUG" displayname="Keep Track of Memory Allocations">
-		</member>
-		<member name="TRACE_FRAMES" displayname="Trace Frame Allocations">
-		</member>
-		<member name="DO_CRASH" displayname="Crash on fatal errors">
-		</member>
-		<member name="THREAD_CRASH" displayname="Crash on mutex errors">
 		</member>
 		<member name="BUSYDETECT_TONEONLY" displayname="Enable additional comparision of only the tone duration not the silence part">
 			<conflict>BUSYDETECT_COMPARE_TONE_AND_SILENCE</conflict>
@@ -576,6 +577,53 @@
 		</member>
 		<member name="BUSYDETECT_DEBUG" displayname="Enable additional busy detection debugging">
 			<defaultenabled>no</defaultenabled>
+		</member>
+		<member name="IAX_OLD_FIND" displayname="Use the old, slow method of searching for IAX callnos">
+		</member>
+		<member name="INTEGER_CALLERID" displayname="Use the (less accurate) integer-based method for decoding FSK tones (for embedded systems)">
+		</member>
+	</category>
+<category name="MENUSELECT_OPTS_app_voicemail" displayname="Voicemail Build Options" positive_output="yes" remove_on_change="apps/app_voicemail.o apps/app_directory.o">
+	<member name="ODBC_STORAGE" displayname="Storage of Voicemail using ODBC">
+		<depend>unixodbc</depend>
+		<depend>ltdl</depend>
+		<conflict>IMAP_STORAGE</conflict>
+		<defaultenabled>no</defaultenabled>
+	</member>
+	<member name="IMAP_STORAGE" displayname="Storage of Voicemail using IMAP4">
+		<depend>imap_tk</depend>
+		<conflict>ODBC_STORAGE</conflict>
+		<use>ssl</use>
+		<defaultenabled>no</defaultenabled>
+	</member>
+</category>
+<category name="MENUSELECT_CFLAGS" displayname="Compiler Flags" positive_output="yes" remove_on_change=".lastclean">
+	<member name="RADIO_RTX" displayname="Build RTX/DTX Radio Programming">
+		<defaultenabled>no</defaultenabled>
+		<depend>chan_usbradio</depend>
+	</member>
+	<member name="RADIO_XPMRX" displayname="Build Experimental Radio Protocols">
+		<defaultenabled>no</defaultenabled>
+		<depend>chan_usbradio</depend>
+	</member>
+</category>
+	<category name="MENUSELECT_CFLAGS" displayname="Compiler Flags - Development">
+		<member name="MTX_PROFILE" displayname="Enable Code Profiling Using TSC Counters">
+		</member>
+		<member name="DEBUG_SCHEDULER" displayname="Enable Scheduler Debugging Output">
+		</member>
+		<member name="DEBUG_THREADLOCALS" displayname="Enable Thread-Local-Storage Debugging">
+		</member>
+		<member name="DETECT_DEADLOCKS" displayname="Detect Deadlocks">
+			<depend>DEBUG_THREADS</depend>
+		</member>
+		<member name="DUMP_SCHEDULER" displayname="Dump Scheduler Contents for Debugging">
+		</member>
+		<member name="TRACE_FRAMES" displayname="Trace Frame Allocations">
+		</member>
+		<member name="DO_CRASH" displayname="Crash on fatal errors">
+		</member>
+		<member name="THREAD_CRASH" displayname="Crash on mutex errors">
 		</member>
 		<member name="CHANNEL_TRACE" displayname="Enable CHANNEL(trace) function">
 		</member>
@@ -620,6 +668,8 @@
 		</member>
 		<member name="CORE-SOUNDS-EN-G722" displayname="English, G.722 format">
 		</member>
+		<member name="CORE-SOUNDS-EN-SLN16" displayname="English, Signed-linear 16kHz format">
+		</member>
 		<member name="CORE-SOUNDS-ES-WAV" displayname="Spanish, WAV format">
 		</member>
 		<member name="CORE-SOUNDS-ES-ULAW" displayname="Spanish, mu-Law format">
@@ -631,6 +681,8 @@
 		<member name="CORE-SOUNDS-ES-G729" displayname="Spanish, G.729 format">
 		</member>
 		<member name="CORE-SOUNDS-ES-G722" displayname="Spanish, G.722 format">
+		</member>
+		<member name="CORE-SOUNDS-ES-SLN16" displayname="Spanish, Signed-linear 16kHz format">
 		</member>
 		<member name="CORE-SOUNDS-FR-WAV" displayname="French, WAV format">
 		</member>
@@ -644,20 +696,7 @@
 		</member>
 		<member name="CORE-SOUNDS-FR-G722" displayname="French, G.722 format">
 		</member>
-	</category>
-	<category name="MENUSELECT_MOH" displayname="Music On Hold File Packages" positive_output="yes">
-		<member name="MOH-FREEPLAY-WAV" displayname="FreePlay Music On Hold Files, WAV format" >
-			<defaultenabled>yes</defaultenabled>
-		</member>
-		<member name="MOH-FREEPLAY-ULAW" displayname="FreePlay Music On Hold Files, mu-Law format" >
-		</member>
-		<member name="MOH-FREEPLAY-ALAW" displayname="FreePlay Music On Hold Files, a-Law format" >
-		</member>
-		<member name="MOH-FREEPLAY-GSM" displayname="FreePlay Music On Hold Files, GSM format" >
-		</member>
-		<member name="MOH-FREEPLAY-G729" displayname="FreePlay Music On Hold Files, G.729 format" >
-		</member>
-		<member name="MOH-FREEPLAY-G722" displayname="FreePlay Music On Hold Files, G.722 format" >
+		<member name="CORE-SOUNDS-FR-SLN16" displayname="French, Signed-linear 16kHz format">
 		</member>
 	</category>
 	<category name="MENUSELECT_EXTRA_SOUNDS" displayname="Extras Sound Packages" positive_output="yes">

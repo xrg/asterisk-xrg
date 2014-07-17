@@ -1,5 +1,5 @@
 #
-# "$Id: Makefile.in 23382 2006-04-29 15:44:02Z russell $"
+# "$Id$"
 #
 # Makefile for Mini-XML, a small XML-like file parsing library.
 #
@@ -32,7 +32,6 @@ INSTALL		=	@INSTALL@
 LIBMXML		=	@LIBMXML@
 LN		=	@LN@ -s
 MKDIR		=	@MKDIR@
-NROFF		=	@NROFF@
 OPTIM		=	@OPTIM@
 RANLIB		=	@RANLIB@
 RM		=	@RM@ -f
@@ -50,17 +49,8 @@ includedir	=	@includedir@
 libdir		=	@libdir@
 mandir		=	@mandir@
 docdir		=	@docdir@
+datarootdir =	@datarootdir@
 BUILDROOT	=	$(DSTROOT)
-
-
-#
-# Manpage extensions...
-#
-
-CAT1EXT		=	@CAT1EXT@
-CAT3EXT		=	@CAT3EXT@
-MAN1EXT		=	@MAN1EXT@
-MAN3EXT		=	@MAN3EXT@
 
 
 #
@@ -97,8 +87,7 @@ PUBLIBOBJS	=	mxml-attr.o mxml-entity.o mxml-file.o mxml-index.o \
 			mxml-node.o mxml-search.o mxml-set.o
 LIBOBJS		=	$(PUBLIBOBJS) mxml-private.o mxml-string.o
 OBJS		=	mxmldoc.o testmxml.o $(LIBOBJS)
-TARGETS		=	$(LIBMXML) mxmldoc doc/mxml.$(CAT3EXT) \
-			doc/mxmldoc.$(CAT1EXT) testmxml mxml.xml
+TARGETS		=	$(LIBMXML) mxmldoc testmxml mxml.xml
 
 
 #
@@ -349,5 +338,5 @@ $(OBJS):	Makefile config.h
 
 
 #
-# End of "$Id: Makefile.in 23382 2006-04-29 15:44:02Z russell $".
+# End of "$Id$".
 #
