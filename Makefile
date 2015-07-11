@@ -673,7 +673,7 @@ adsi:
 		$(INSTALL) -m 644 "$$x" "$(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x`" ; \
 	done
 
-samples: adsi
+samples:
 	@echo Installing other config files...
 	@for x in configs/samples/*.sample; do \
 		dst="$(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x .sample`" ;	\
