@@ -20814,11 +20814,6 @@ static char *sip_registry_add(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 */
 static char *sip_registry_prune(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	int portnum = 0;
-	enum sip_transport transport = SIP_TRANSPORT_UDP;
-	char buf[256] = "";
-	char *username = NULL, *hostname=NULL;
-	int count_found=0;
 	
 	switch (cmd) {
 	case CLI_INIT:
@@ -20834,37 +20829,19 @@ static char *sip_registry_prune(struct ast_cli_entry *e, int cmd, struct ast_cli
 	if (a->argc != 4)
 		return CLI_SHOWUSAGE;
 		
-	ast_copy_string(buf, a->argv[3], sizeof(buf));
-	sip_parse_host(buf, 0, &username, &portnum, &transport);
-		
-		/* First split around the last '@' then parse the two components. */
-	hostname = strrchr(username, '@'); /* allow @ in the first part */
-	if (hostname)
-		*hostname++ = '\0';
-	if (ast_strlen_zero(username) || ast_strlen_zero(hostname)) {
-		ast_cli(a->fd, "Format for registration is [transport://]user@host[:port]\n");
-		return NULL;
-	}
 
-	ASTOBJ_CONTAINER_TRAVERSE(&regl, 1, do {
-		ASTOBJ_WRLOCK(iterator); /* now regl is locked, and the object is also locked */
-		if ( !strcmp(iterator->hostname,hostname) && !strcmp(iterator->username,username) &&
-				(iterator->transport==transport) && 
-				(iterator->portno <=0 || iterator->portno == portnum )) {
-			ast_debug(3, "Destroying SIP registry %s@%s\n", iterator->username, iterator->hostname);
-				// explictly mark the object, without the macro, because
-				// we want to keep inside the lock.
-			iterator->objflags |= ASTOBJ_FLAG_MARKED;
-			count_found++;
-		}
-		ASTOBJ_UNLOCK(iterator);	
-	} while(0));
+        struct sip_registry *reg;
 
-	if (count_found)
-		ASTOBJ_CONTAINER_PRUNE_MARKED(&regl,sip_registry_destroy);
-	
-	ast_cli(a->fd, "SIP registrations pruned : %d.\n",count_found);
-	return CLI_SUCCESS;
+        reg = ao2_t_find(registry_list, a->argv[3], OBJ_SEARCH_KEY, "check for existing registry");
+        if (reg) {
+                ao2_t_ref(reg, -1, "throw away found registry");
+                ast_cli(a->fd, "SIP registration pruned : %s.\n", reg->peername);
+                return CLI_SUCCESS;
+        }
+        else {
+                ast_cli(a->fd, "No such registration.\n");
+                return CLI_FAILURE;
+        }
 }
 
 
