@@ -3539,6 +3539,7 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	int inserted = 0;
 	char timebuf[20] = "0";
 	char priobuf[5] = "0";
+        struct ast_party_caller *cid=NULL;
 
 	if (!(q = find_load_queue_rt_friendly(queuename))) {
 		return res;
@@ -3615,14 +3616,15 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 		if (ast_check_realtime("queue_callers")) {
 			snprintf(timebuf, sizeof(timebuf), "%ld", (long)(qe->start));
 			snprintf(priobuf, sizeof(priobuf), "%d", qe->prio);
+                        cid = ast_channel_caller(qe->chan);
 			ast_store_realtime("queue_callers",
 				"queue",q->name,
-				"uniqueid",qe->chan->uniqueid,
-				"channel",qe->chan->name,
+				"uniqueid", ast_channel_uniqueid(qe->chan),
+				"channel", ast_channel_name(qe->chan),
 				"priority",priobuf,
-				"callerid_name",qe->chan->cid.cid_name,
-				"callerid_num",qe->chan->cid.cid_num,
-				"accountcode",qe->chan->accountcode,
+				"callerid_name", cid->id.name,
+				"callerid_num", cid->id.number,
+				"accountcode", ast_channel_accountcode(qe->chan),
 				"started",timebuf,
 				NULL);
 		}
@@ -3908,7 +3910,7 @@ static void leave_queue(struct queue_ent *qe)
 			ast_debug(1, "Queue '%s' Leave, Channel '%s'\n", q->name, ast_channel_name(qe->chan));
 			/* Remove from realtime caller list */
 			if (ast_check_realtime("queue_callers")) {
-				ast_destroy_realtime("queue_callers","uniqueid",qe->chan->uniqueid,NULL);
+				ast_destroy_realtime("queue_callers","uniqueid", ast_channel_uniqueid(qe->chan),NULL);
 			}
 			/* Take us out of the queue */
 			if (prev) {
