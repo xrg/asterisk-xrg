@@ -23,9 +23,6 @@ ifneq ($(findstring IMAP_STORAGE,$(MENUSELECT_OPTS_app_voicemail)),)
   MENUSELECT_DEPENDS_app_voicemail+=$(MENUSELECT_DEPENDS_IMAP_STORAGE)
 endif
 
-MENUSELECT_DEPENDS_app_rxfax+=SPANDSP
-MENUSELECT_DEPENDS_app_txfax+=SPANDSP
-
 all: _all
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
