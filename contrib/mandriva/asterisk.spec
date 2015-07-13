@@ -627,6 +627,17 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
 
 
 export ASTCFLAGS="%{optflags}"
+
+%make menuselect.makeopts
+# Then, turn on some non-default options:
+menuselect/menuselect --enable chan_mobile --enable chan_ooh323 --enable res_config_mysql \
+        --enable aelparse --enable astman --enable check_expr --enable check_expr2 --enable conf2ael \
+        --enable muted --enable smsq --enable stereorize --enable streamplayer \
+        --enable MOH-OPSOUND-ULAW --enable MOH-OPSOUND-ALAW --enable MOH-OPSOUND-GSM \
+        --enable MOH-OPSOUND-G729 --enable MOH-OPSOUND-G722 --enable MOH-OPSOUND-SLN16 \
+        --enable CORE-SOUNDS-EN-WAV --enable CORE-SOUNDS-EN-G729 \
+        --enable CORE-SOUNDS-EN_GB-WAV --enable CORE-SOUNDS-EN_GB-ULAW --enable CORE-SOUNDS-EN_GB-GSM --enable CORE-SOUNDS-EN_GB-G729
+
 %make ASTVARRUNDIR=/var/run/asterisk
 
 %if %{build_docs}
