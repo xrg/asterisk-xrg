@@ -1,4 +1,3 @@
-%define git_repodir /home/panosl/panos/build
 %define git_repo asterisk
 
 %define _requires_exceptions perl(Carp::Heavy)
@@ -51,20 +50,15 @@
 %define modulesdir	%{_libdir}/asterisk/modules
 
 Summary:	Asterisk PBX
-Name:		asterisk110
+Name:		asterisk13
 Version:	%git_get_ver
 Release:	%git_get_rel
 License:	GPL
 Group:		System/Servers
 URL:		http://www.asterisk.org/
-#Source0:	http://www.asterisk.org/html/downloads/%{name}-%{version}.tar.bz2
 Source0:	%git_bs_source %{name}-%{version}.tar.gz
-#Source1:	asterisk.init
-#Source2:	asterisk.sysconfig
-#Source3:	http://www.asteriskdocs.org/modules/tinycontent/content/docbook/current/AsteriskDocs-html.tar.bz2
 Source1:	%{name}-gitrpm.version
 Source2:	%{name}-changelog.gitrpm.txt
-Source6:	http://www.ilbcfreeware.org/documentation/extract-cfile.awk
 Provides:	asterisk
 Obsoletes:	asterisk
 Obsoletes:	asterisk16
@@ -538,27 +532,11 @@ for i in `find . -type d -name CVS` `find . -type f -name .cvs\*` `find . -type 
     if [ -e "$i" ]; then rm -rf $i; fi >&/dev/null
 done
 
-#%endif
-
-cat %{SOURCE4} > menuselect.makeopts
-
-# Generate the ilbc code
-#pushd codecs/ilbc
-#    cat %{SOURCE5} > rfc3951.txt
-#    cat %{SOURCE6} > extract-cfile.awk
-#    awk -f extract-cfile.awk rfc3951.txt >extract-cfile.log
-#popd
-
 chmod -x contrib/scripts/dbsep.cgi
 
 # lib64 fix
 find -name "Makefile" | xargs perl -pi -e "s|/usr/lib|%{_libdir}|g"
 perl -pi -e "s|/lib\b|/%{_lib}|g" configure*
-
-# fix one convenient softlink
-#pushd docs-html
-#    ln -s book1.html index.html
-#popd
 
 %build
 rm -f configure
@@ -658,12 +636,6 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-x11=%{_prefix} \
     --with-z=%{_prefix}
 
-#pushd menuselect
-#	# Just configure for the host system
-#	./configure --prefix=%{_prefix}
-#popd
-
-%make -j1 cleantest
 
 export ASTCFLAGS="%{optflags}"
 %make ASTVARRUNDIR=/var/run/asterisk
