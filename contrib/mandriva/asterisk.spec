@@ -798,8 +798,6 @@ fi
 %exclude						%{_sysconfdir}/asterisk/*tds*.conf
 %endif
 %exclude						%{_sysconfdir}/asterisk/cdr_pgsql.conf
-%exclude						%{_sysconfdir}/asterisk/gtalk.conf
-%exclude						%{_sysconfdir}/asterisk/jabber.conf
 %exclude						%{_sysconfdir}/asterisk/osp.conf
 %exclude						%{_sysconfdir}/asterisk/res_snmp.conf
 %exclude						%{_sysconfdir}/asterisk/*sql*.conf
@@ -818,7 +816,6 @@ fi
 %attr(0755,root,root)					%{_sbindir}/astcanary
 %attr(0755,root,root)					%{_sbindir}/conf2ael
 %attr(0755,root,root)					%{_sbindir}/astdb2sqlite3
-%exclude						%{_sbindir}/refcounter
 
 %attr(0755,root,root)		%dir			%{_libdir}/asterisk
 %attr(0755,root,root)		%dir			%{_libdir}/asterisk/modules
@@ -852,21 +849,16 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_morsecode.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_mp3.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_nbscat.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_parkandannounce.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_playback.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_privacy.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_queue.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_readexten.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_readfile.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_read.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_record.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_timerfd.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_saycounted.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sayunixtime.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_senddtmf.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sendtext.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_setcallerid.so
-# attr(0755,root,root) %{_libdir}/asterisk/modules/app_skel.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_sms.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_softhangup.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_speech_utils.so
@@ -887,11 +879,8 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_csv.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_custom.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_manager.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_agent.so
 #%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_features.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_iax2.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_local.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_mgcp.so
 # attr(0755,root,root) %{_libdir}/asterisk/modules/chan_nbs.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_phone.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_sip.so
@@ -994,13 +983,11 @@ fi
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_rtp_asterisk.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_originate.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_playtones.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_bridge.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_format_attr_celt.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/res_format_attr_silk.so
 
 # Do these really belong here? :
 %attr(0755,root,root) %{modulesdir}/app_celgenuserevent.so
-%attr(0755,root,root) %{modulesdir}/app_saycountpl.so
 %attr(0755,root,root) %{modulesdir}/cdr_syslog.so
 %attr(0755,root,root) %{modulesdir}/cel_custom.so
 %attr(0755,root,root) %{modulesdir}/cel_manager.so
@@ -1013,7 +1000,6 @@ fi
 %attr(0755,root,root) %{modulesdir}/res_calendar_exchange.so
 %attr(0755,root,root) %{modulesdir}/res_calendar_icalendar.so
 %attr(0755,root,root) %{modulesdir}/res_mutestream.so
-%attr(0755,root,root) %{modulesdir}/res_pktccops.so
 %attr(0755,root,root) %{modulesdir}/res_rtp_multicast.so
 %attr(0755,root,root) %{modulesdir}/res_security_log.so
 
@@ -1085,9 +1071,7 @@ fi
 							%{_mandir}/man8/safe_asterisk.8*
 %exclude /var/www/
 %exclude %{_libdir}/asterisk/modules/app_flash.so
-%exclude %{_libdir}/asterisk/modules/app_meetme.so
 %exclude %{_libdir}/asterisk/modules/app_page.so
-%exclude %{_libdir}/asterisk/modules/app_dahdibarge.so
 %exclude %{_libdir}/asterisk/modules/app_dahdiras.so
 # exclude %{_libdir}/asterisk/modules/app_dahdiscan.so
 %exclude %{_libdir}/asterisk/modules/chan_dahdi.so
@@ -1109,10 +1093,6 @@ fi
 # *-*
 # %attr(0750,asterisk,asterisk) /var/lib/asterisk/firmware
 
-%files plugins-ais
-%defattr(-,root,root,-)
-%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/ais.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_ais.so
 
 %files plugins-alsa
 %defattr(-,root,root,-)
@@ -1133,9 +1113,7 @@ fi
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/meetme.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/chan_dahdi.conf
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_flash.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_meetme.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_page.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdibarge.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiras.so
 #attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiscan.so
 %attr(0755,root,root) %{_libdir}/asterisk/modules/chan_dahdi.so
