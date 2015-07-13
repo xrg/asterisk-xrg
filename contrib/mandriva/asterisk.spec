@@ -89,6 +89,7 @@ BuildRequires:	krb5-devel
 BuildRequires:	libcap-devel
 BuildRequires:	libcurl-devel
 BuildRequires:	edit-devel
+BuildRequires:  jansson-devel
 BuildRequires:	libgcrypt-devel
 BuildRequires:	libgnutls-devel
 BuildRequires:	libgpg-error-devel
@@ -124,8 +125,6 @@ BuildRequires:	lm_sensors-devel
 BuildRequires:	lpc10-devel
 BuildRequires:	lua-devel
 BuildRequires:	newt-devel
-BuildRequires:	openais-devel
-BuildRequires:	openldap-devel
 BuildRequires:	oggvorbis-devel
 BuildRequires:	openssl-devel
 BuildRequires:	pam-devel
@@ -135,7 +134,7 @@ BuildRequires:	postgresql-devel
 BuildRequires:	radiusclient-ng-devel
 BuildRequires:	resample-devel
 BuildRequires:	SDL_image-devel
-BuildRequires:	libspandsp-devel >= 0.0.6
+BuildRequires:	spandsp-devel >= 0.0.6
 BuildRequires:	speex-devel
 BuildRequires:	sqlite3-devel
 BuildRequires:	tcp_wrappers-devel
@@ -200,14 +199,6 @@ Group:		Books/Howtos
 
 %description	docs
 The Hitchhiker's Guide to Asterisk
-
-%package	plugins-ais
-Summary:	Modules for Asterisk that use OpenAIS
-Group:		System/Servers
-Requires:	asterisk = %{version}-%{release}
-
-%description	plugins-ais
-Modules for Asterisk that use OpenAIS.
 
 %package	plugins-alsa
 Summary:	Modules for Asterisk that use Alsa sound drivers
@@ -550,8 +541,9 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --localstatedir=%{_var} \
     --with-asound=%{_prefix} \
     --with-execinfo=%{_prefix} \
+    --with-sounds-cache=%{_sourcedir} \
     --with-cap=%{_prefix} \
-    --with-curl=%{_prefix} \
+    --with-libcurl=%{_prefix} \
     --with-curses=%{_prefix} \
     --with-crypto=%{_prefix} \
 %if %{build_dahdi}
@@ -592,9 +584,9 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-netsnmp=%{_prefix} \
     --with-newt=%{_prefix} \
 %if %{build_odbc}
-    --with-odbc=%{_prefix} \
+    --with-unixodbc=%{_prefix} \
 %else
-    --without-odbc \
+    --without-unixodbc \
 %endif
     --with-ogg=%{_prefix} \
 %if %{build_osp}
@@ -621,12 +613,10 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-radius=%{_prefix} \
     --with-sdl=%{_prefix} \
     --with-SDL_image=%{_prefix} \
-    --with-openais=%{_prefix} \
     --with-speexdsp=%{_prefix} \
     --with-sqlite=%{_prefix} \
     --with-sqlite3=%{_prefix} \
     --with-ssl=%{_prefix} \
-    --with-tds=%{_prefix} \
     --with-termcap=%{_prefix} \
     --without-tinfo \
     --with-tonezone=%{_prefix} \
