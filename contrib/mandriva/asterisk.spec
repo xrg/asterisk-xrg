@@ -611,7 +611,6 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --without-h323 \
 %endif
     --with-radius=%{_prefix} \
-    --with-sdl=%{_prefix} \
     --with-SDL_image=%{_prefix} \
     --with-speexdsp=%{_prefix} \
     --with-sqlite=%{_prefix} \
