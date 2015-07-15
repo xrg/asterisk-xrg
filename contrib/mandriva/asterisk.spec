@@ -1073,6 +1073,7 @@ fi
 %attr(0644,root,root) %{_tmpfilesdir}/%{name}.conf
 %else
 %attr(0755,root,root)					%{_initrddir}/asterisk
+%attr(0755,root,root)                                   %{_sbindir}/safe_asterisk
 %endif
 
 %attr(0644,root,root) %config(noreplace)		%{_sysconfdir}/logrotate.d/asterisk
@@ -1100,7 +1101,7 @@ fi
 %exclude						%{_sysconfdir}/asterisk/osp.conf
 %exclude                                                %{_sysconfdir}/asterisk/ooh323.conf
 %exclude						%{_sysconfdir}/asterisk/res_snmp.conf
-%exclude                                                %{_sysconfdir}/asterisk/res_xmpp.conf
+%exclude                                                %{_sysconfdir}/asterisk/xmpp.conf
 %exclude						%{_sysconfdir}/asterisk/*sql*.conf
 
 %attr(0755,root,root)					%{_sbindir}/aelparse
@@ -1110,7 +1111,6 @@ fi
 %attr(0755,root,root)					%{_sbindir}/autosupport
 %attr(0755,root,root)					%{_sbindir}/muted
                                                         %{_sbindir}/rasterisk
-%attr(0755,root,root)					%{_sbindir}/safe_asterisk
 %attr(0755,root,root)					%{_sbindir}/smsq
 %attr(0755,root,root)					%{_sbindir}/stereorize
 %attr(0755,root,root)					%{_sbindir}/streamplayer
@@ -1463,7 +1463,7 @@ fi
 %files plugins-jabber
 %defattr(-,root,root,-)
 # %doc doc/jabber.txt doc/jingle.txt
-%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_xmpp.conf
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/xmpp.conf
 %attr(0755,root,root) %{modulesdir}/res_xmpp.so
 
 %files plugins-jack
