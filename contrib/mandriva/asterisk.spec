@@ -59,9 +59,11 @@
 %define systemd_required_version 44
 %endif
 
+%define version %git_get_ver
+
 Summary:	Asterisk PBX
 Name:		asterisk13
-Version:	%git_get_ver
+Version:	%version
 Release:	%git_get_rel
 License:	GPL
 Group:		System/Servers
@@ -528,7 +530,6 @@ local filesystem.
 
 %package sounds-core-en-alaw
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -538,7 +539,6 @@ with Asterisk in the following formats: a-Law
 
 %package sounds-core-en-ulaw
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -548,7 +548,6 @@ with Asterisk in the following formats: mu-Law
 
 %package sounds-core-en-g729
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 # Provides:     asterisk-sounds-core # NOT to be used globaly
 
@@ -559,7 +558,6 @@ If used, it avoids using the g729 codecs for these pre-recorded sounds.
 
 %package sounds-core-en-sln16
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 # Provides:     asterisk-sounds-core # NOT to be used globaly
 
@@ -570,7 +568,6 @@ with Asterisk in the following formats: Signed Linear 16bit
 %if 0
 %package sounds-core-en-g722
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 
 %description sounds-core-en-g722
@@ -580,7 +577,6 @@ with Asterisk in the following formats: G.722
 
 %package sounds-core-en-wav
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -590,7 +586,6 @@ with Asterisk in the following formats: WAV
 
 %package sounds-core-en-gsm
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -601,7 +596,6 @@ with Asterisk in the following formats: GSM
 %if 0
 %package sounds-core-fr-gsm
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -611,7 +605,6 @@ with Asterisk in the following formats: GSM
 
 %package sounds-core-fr-alaw
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -621,7 +614,6 @@ with Asterisk in the following formats: a-Law
 
 %package sounds-core-fr-ulaw
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -631,7 +623,6 @@ with Asterisk in the following formats: mu-Law
 
 %package sounds-core-fr-g729
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 # Provides:     asterisk-sounds-core # NOT to be used globaly
 
@@ -642,7 +633,6 @@ If used, it avoids using the g729 codecs for these pre-recorded sounds.
 
 %package sounds-core-fr-g722
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 
 %description sounds-core-fr-g722
@@ -651,7 +641,6 @@ with Asterisk in the following formats: G.722
 
 %package sounds-core-fr-wav
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -661,7 +650,6 @@ with Asterisk in the following formats: WAV
 
 %package sounds-core-es-gsm
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -671,7 +659,6 @@ with Asterisk in the following formats: GSM
 
 %package sounds-core-es-alaw
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -681,7 +668,6 @@ with Asterisk in the following formats: a-Law
 
 %package sounds-core-es-ulaw
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -691,7 +677,6 @@ with Asterisk in the following formats: mu-Law
 
 %package sounds-core-es-g729
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 # Provides:     asterisk-sounds-core # NOT to be used globaly
 
@@ -702,7 +687,6 @@ If used, it avoids using the g729 codecs for these pre-recorded sounds.
 
 %package sounds-core-es-g722
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 
 %description sounds-core-es-g722
@@ -711,7 +695,6 @@ with Asterisk in the following formats: G.722
 
 %package sounds-core-es-wav
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
-Version:        %{sounds_core_version}
 Group:          System/Servers
 Provides:       asterisk-sounds-core
 
@@ -1679,9 +1662,9 @@ fi
 
 %files sounds-core-en-alaw
 %defattr(-,root, root)
-                %{soundsdir}/en/CHANGES-asterisk-core-en-%{version}
-                %{soundsdir}/en/CREDITS-asterisk-core-en-%{version}
-                %{soundsdir}/en/LICENSE-asterisk-core-en-%{version}
+                %{soundsdir}/en/CHANGES-asterisk-core-en-%{sounds_core_version}
+                %{soundsdir}/en/CREDITS-asterisk-core-en-%{sounds_core_version}
+                %{soundsdir}/en/LICENSE-asterisk-core-en-%{sounds_core_version}
 #doc en/CREDITS-asterisk-core-en-%{version}
 %attr(644,root,root)    %{soundsdir}/en/*.alaw
 %attr(644,root,root)    %{soundsdir}/en/dictate/*.alaw
