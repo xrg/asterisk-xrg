@@ -19,7 +19,7 @@
 %{?_without_radius:	%global build_radius 0}
 %{?_with_radius:	%global build_radius 1}
 
-%define build_tds	1
+%define build_tds	0
 %{?_without_tds:	%global build_tds 0}
 %{?_with_tds:		%global build_tds 1}
 
@@ -257,12 +257,12 @@ Requires:	ices
 %description	plugins-ices
 Stream audio from Asterisk to an IceCast server.
 
-%package	plugins-jabber
-Summary:	Jabber support for Asterisk
-Group:		System/Servers
-Requires:	asterisk = %{version}-%{release}
+%package       plugins-jabber
+Summary:       Jabber support for Asterisk
+Group:         System/Servers
+Requires:      asterisk = %{version}-%{release}
 
-%description	plugins-jabber
+%description   plugins-jabber
 This package contains Jabber support for Asterisk.
 
 %package	plugins-jack
@@ -296,6 +296,15 @@ Requires:	asterisk = %{version}-%{release}
 
 %description	plugins-minivm
 MiniVM application for Asterisk.
+
+%package        ari
+Summary:        RESTful web API for Asterisk
+Group:          System/Servers
+Requires:       asterisk = %{version}-%{release}
+
+%description    ari
+HTTP binding for the Stasis API
+
 
 %if %{build_misdn}
 %package	chan_misdn
@@ -506,9 +515,8 @@ Requires(preun): %{name} = %{version}
 %description    tests
 This package contains a couple of testing utilities:
 
-* refcounter : finds if asterisk objects are properly referenced
-* tests_dllinklists : performs checks on double-linked lists upon
-     asterisk startup
+        check_expr[2]
+
 
 %prep
 %git_get_source
@@ -792,6 +800,7 @@ fi
 %attr(0750,asterisk,asterisk) %dir			%{_sysconfdir}/asterisk
 %attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*.adsi
 %attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*.conf
+%attr(0644,asterisk,asterisk) %config(noreplace)        %{_sysconfdir}/asterisk/ss7.timers
 %attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/extensions.ael
 %attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/extensions.lua
 %attr(0644,root,root) %config(noreplace)		%{_sysconfdir}/sysconfig/asterisk
@@ -811,6 +820,7 @@ fi
 %exclude						%{_sysconfdir}/asterisk/cdr_pgsql.conf
 %exclude						%{_sysconfdir}/asterisk/osp.conf
 %exclude						%{_sysconfdir}/asterisk/res_snmp.conf
+%exclude                                                %{_sysconfdir}/asterisk/res_xmpp.conf
 %exclude						%{_sysconfdir}/asterisk/*sql*.conf
 
 %attr(0755,root,root)					%{_sbindir}/aelparse
@@ -819,183 +829,196 @@ fi
 %attr(0755,root,root)					%{_sbindir}/astman
 %attr(0755,root,root)					%{_sbindir}/autosupport
 %attr(0755,root,root)					%{_sbindir}/muted
-%attr(0755,root,root)					%{_sbindir}/rasterisk
+                                                        %{_sbindir}/rasterisk
 %attr(0755,root,root)					%{_sbindir}/safe_asterisk
 %attr(0755,root,root)					%{_sbindir}/smsq
 %attr(0755,root,root)					%{_sbindir}/stereorize
 %attr(0755,root,root)					%{_sbindir}/streamplayer
 %attr(0755,root,root)					%{_sbindir}/astcanary
 %attr(0755,root,root)					%{_sbindir}/conf2ael
+%attr(0755,root,root)                                   %{_sbindir}/astdb2bdb
 %attr(0755,root,root)					%{_sbindir}/astdb2sqlite3
 
 %attr(0755,root,root)		%dir			%{_libdir}/asterisk
-%attr(0755,root,root)		%dir			%{_libdir}/asterisk/modules
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_adsiprog.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_alarmreceiver.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_amd.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_authenticate.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_cdr.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_chanisavail.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_channelredirect.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_chanspy.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_controlplayback.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_confbridge.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_db.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dial.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dictate.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_directed_pickup.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_disa.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dumpchan.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_echo.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_exec.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_externalivr.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_followme.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_forkcdr.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_getcpeid.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_image.so
-# attr(0755,root,root) %{_libdir}/asterisk/modules/app_ivrdemo.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_macro.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_milliwatt.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_mixmonitor.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_morsecode.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_mp3.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_nbscat.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_playback.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_privacy.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_queue.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_readexten.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_read.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_record.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_timerfd.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_sayunixtime.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_senddtmf.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_sendtext.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_sms.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_softhangup.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_speech_utils.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_stack.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_system.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_talkdetect.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_test.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_transfer.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_url.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_userevent.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_waitforring.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_waitforsilence.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_waituntil.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_verbose.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_while.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_zapateller.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/bridge*.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_csv.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_custom.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_manager.so
-#%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_features.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_iax2.so
-# attr(0755,root,root) %{_libdir}/asterisk/modules/chan_nbs.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_phone.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_sip.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_adpcm.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_alaw.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_a_mu.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_g722.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_g726.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_gsm.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_ilbc.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_lpc10.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_resample.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_ulaw.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_g719.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_g723.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_g726.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_g729.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_gsm.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_h263.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_h264.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_ilbc.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_jpeg.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_ogg_vorbis.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_pcm.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_sln.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren14.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_siren7.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_aes.so
-#%attr(0755,root,root) %{_libdir}/asterisk/modules/func_connectedline.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav_gsm.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_wav.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/format_vox.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_audiohookinherit.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_base64.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_blacklist.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_callerid.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_cdr.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_channel.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_callcompletion.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_config.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_cut.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_db.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_devstate.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_dialgroup.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_dialplan.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_enum.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_env.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_extstate.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_frame_trace.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_global.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_groupcount.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_iconv.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_jitterbuffer.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_lock.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_logic.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_math.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_md5.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_module.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_rand.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_realtime.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_sha1.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_shell.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_strings.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_srv.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_pitchshift.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_sysinfo.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_timeout.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_uri.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_version.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_volume.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_ael.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_config.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_dundi.so
-# attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_gtkconsole.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_loopback.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_realtime.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_spool.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_adsi.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_ael_share.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_agi.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_clioriginate.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_convert.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_crypto.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_http_post.so
-# attr(0755,root,root) %{_libdir}/asterisk/modules/res_indications.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_limit.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_monitor.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_musiconhold.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_phoneprov.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_realtime.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_smdi.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_speech.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_stun_monitor.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_pthread.so
-# %attr(0755,root,root) %{_libdir}/asterisk/modules/test_dlinklists.so
-# %attr(0755,root,root) %{_libdir}/asterisk/modules/test_heap.so
-# %attr(0755,root,root) %{_libdir}/asterisk/modules/func_redirecting.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_sprintf.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_clialiases.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_rtp_asterisk.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_originate.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_playtones.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_format_attr_celt.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_format_attr_silk.so
+%attr(0755,root,root)                                   %{_libdir}/libasteriskssl.so.*
+                                                        %{_libdir}/libasteriskssl.so
+
+%attr(0755,root,root) %dir %{modulesdir}
+%attr(0755,root,root) %{modulesdir}/app_adsiprog.so
+%attr(0755,root,root) %{modulesdir}/app_alarmreceiver.so
+%attr(0755,root,root) %{modulesdir}/app_agent_pool.so
+%attr(0755,root,root) %{modulesdir}/app_amd.so
+%attr(0755,root,root) %{modulesdir}/app_authenticate.so
+%attr(0755,root,root) %{modulesdir}/app_cdr.so
+%attr(0755,root,root) %{modulesdir}/app_chanisavail.so
+%attr(0755,root,root) %{modulesdir}/app_channelredirect.so
+%attr(0755,root,root) %{modulesdir}/app_chanspy.so
+%attr(0755,root,root) %{modulesdir}/app_controlplayback.so
+%attr(0755,root,root) %{modulesdir}/app_confbridge.so
+%attr(0755,root,root) %{modulesdir}/app_db.so
+%attr(0755,root,root) %{modulesdir}/app_dial.so
+%attr(0755,root,root) %{modulesdir}/app_dictate.so
+%attr(0755,root,root) %{modulesdir}/app_directed_pickup.so
+%attr(0755,root,root) %{modulesdir}/app_disa.so
+%attr(0755,root,root) %{modulesdir}/app_dumpchan.so
+%attr(0755,root,root) %{modulesdir}/app_echo.so
+%attr(0755,root,root) %{modulesdir}/app_exec.so
+%attr(0755,root,root) %{modulesdir}/app_externalivr.so
+%attr(0755,root,root) %{modulesdir}/app_followme.so
+%attr(0755,root,root) %{modulesdir}/app_forkcdr.so
+%attr(0755,root,root) %{modulesdir}/app_getcpeid.so
+%attr(0755,root,root) %{modulesdir}/app_image.so
+# attr(0755,root,root) %{modulesdir}/app_ivrdemo.so
+%attr(0755,root,root) %{modulesdir}/app_macro.so
+%attr(0755,root,root) %{modulesdir}/app_milliwatt.so
+%attr(0755,root,root) %{modulesdir}/app_mixmonitor.so
+%attr(0755,root,root) %{modulesdir}/app_morsecode.so
+%attr(0755,root,root) %{modulesdir}/app_mp3.so
+%attr(0755,root,root) %{modulesdir}/app_nbscat.so
+%attr(0755,root,root) %{modulesdir}/app_playback.so
+%attr(0755,root,root) %{modulesdir}/app_privacy.so
+%attr(0755,root,root) %{modulesdir}/app_queue.so
+%attr(0755,root,root) %{modulesdir}/app_readexten.so
+%attr(0755,root,root) %{modulesdir}/app_read.so
+%attr(0755,root,root) %{modulesdir}/app_record.so
+%attr(0755,root,root) %{modulesdir}/app_bridgewait.so
+%attr(0755,root,root) %{modulesdir}/app_stasis.so
+%attr(0755,root,root) %{modulesdir}/res_timing_timerfd.so
+%attr(0755,root,root) %{modulesdir}/app_sayunixtime.so
+%attr(0755,root,root) %{modulesdir}/app_senddtmf.so
+%attr(0755,root,root) %{modulesdir}/app_sendtext.so
+%attr(0755,root,root) %{modulesdir}/app_sms.so
+%attr(0755,root,root) %{modulesdir}/app_softhangup.so
+%attr(0755,root,root) %{modulesdir}/app_speech_utils.so
+%attr(0755,root,root) %{modulesdir}/app_stack.so
+%attr(0755,root,root) %{modulesdir}/app_system.so
+%attr(0755,root,root) %{modulesdir}/app_talkdetect.so
+%attr(0755,root,root) %{modulesdir}/app_test.so
+%attr(0755,root,root) %{modulesdir}/app_transfer.so
+%attr(0755,root,root) %{modulesdir}/app_url.so
+%attr(0755,root,root) %{modulesdir}/app_userevent.so
+%attr(0755,root,root) %{modulesdir}/app_waitforring.so
+%attr(0755,root,root) %{modulesdir}/app_waitforsilence.so
+%attr(0755,root,root) %{modulesdir}/app_waituntil.so
+%attr(0755,root,root) %{modulesdir}/app_verbose.so
+%attr(0755,root,root) %{modulesdir}/app_while.so
+%attr(0755,root,root) %{modulesdir}/app_zapateller.so
+%attr(0755,root,root) %{modulesdir}/bridge*.so
+%attr(0755,root,root) %{modulesdir}/cdr_csv.so
+%attr(0755,root,root) %{modulesdir}/cdr_custom.so
+%attr(0755,root,root) %{modulesdir}/cdr_manager.so
+%attr(0755,root,root) %{modulesdir}/chan_bridge_media.so
+%attr(0755,root,root) %{modulesdir}/chan_iax2.so
+%attr(0755,root,root) %{modulesdir}/chan_motif.so
+%attr(0755,root,root) %{modulesdir}/chan_phone.so
+%attr(0755,root,root) %{modulesdir}/chan_sip.so
+
+%attr(0755,root,root) %{modulesdir}/codec_adpcm.so
+%attr(0755,root,root) %{modulesdir}/codec_alaw.so
+%attr(0755,root,root) %{modulesdir}/codec_a_mu.so
+%attr(0755,root,root) %{modulesdir}/codec_g722.so
+%attr(0755,root,root) %{modulesdir}/codec_g726.so
+%attr(0755,root,root) %{modulesdir}/codec_gsm.so
+%attr(0755,root,root) %{modulesdir}/codec_ilbc.so
+%attr(0755,root,root) %{modulesdir}/codec_lpc10.so
+%attr(0755,root,root) %{modulesdir}/codec_resample.so
+%attr(0755,root,root) %{modulesdir}/codec_ulaw.so
+%attr(0755,root,root) %{modulesdir}/format_g719.so
+%attr(0755,root,root) %{modulesdir}/format_g723.so
+%attr(0755,root,root) %{modulesdir}/format_g726.so
+%attr(0755,root,root) %{modulesdir}/format_g729.so
+%attr(0755,root,root) %{modulesdir}/format_gsm.so
+%attr(0755,root,root) %{modulesdir}/format_h263.so
+%attr(0755,root,root) %{modulesdir}/format_h264.so
+%attr(0755,root,root) %{modulesdir}/format_ilbc.so
+%attr(0755,root,root) %{modulesdir}/format_jpeg.so
+%attr(0755,root,root) %{modulesdir}/format_ogg_vorbis.so
+%attr(0755,root,root) %{modulesdir}/format_pcm.so
+%attr(0755,root,root) %{modulesdir}/format_sln.so
+%attr(0755,root,root) %{modulesdir}/format_siren14.so
+%attr(0755,root,root) %{modulesdir}/format_siren7.so
+%attr(0755,root,root) %{modulesdir}/func_aes.so
+#%attr(0755,root,root) %{modulesdir}/func_connectedline.so
+%attr(0755,root,root) %{modulesdir}/format_wav_gsm.so
+%attr(0755,root,root) %{modulesdir}/format_wav.so
+%attr(0755,root,root) %{modulesdir}/format_vox.so
+%attr(0755,root,root) %{modulesdir}/func_audiohookinherit.so
+%attr(0755,root,root) %{modulesdir}/func_base64.so
+%attr(0755,root,root) %{modulesdir}/func_blacklist.so
+%attr(0755,root,root) %{modulesdir}/func_callerid.so
+%attr(0755,root,root) %{modulesdir}/func_cdr.so
+%attr(0755,root,root) %{modulesdir}/func_channel.so
+%attr(0755,root,root) %{modulesdir}/func_callcompletion.so
+%attr(0755,root,root) %{modulesdir}/func_config.so
+%attr(0755,root,root) %{modulesdir}/func_cut.so
+%attr(0755,root,root) %{modulesdir}/func_db.so
+%attr(0755,root,root) %{modulesdir}/func_devstate.so
+%attr(0755,root,root) %{modulesdir}/func_dialgroup.so
+%attr(0755,root,root) %{modulesdir}/func_dialplan.so
+%attr(0755,root,root) %{modulesdir}/func_enum.so
+%attr(0755,root,root) %{modulesdir}/func_env.so
+%attr(0755,root,root) %{modulesdir}/func_extstate.so
+%attr(0755,root,root) %{modulesdir}/func_frame_trace.so
+%attr(0755,root,root) %{modulesdir}/func_global.so
+%attr(0755,root,root) %{modulesdir}/func_groupcount.so
+%attr(0755,root,root) %{modulesdir}/func_hangupcause.so
+%attr(0755,root,root) %{modulesdir}/func_iconv.so
+%attr(0755,root,root) %{modulesdir}/func_jitterbuffer.so
+%attr(0755,root,root) %{modulesdir}/func_lock.so
+%attr(0755,root,root) %{modulesdir}/func_logic.so
+%attr(0755,root,root) %{modulesdir}/func_math.so
+%attr(0755,root,root) %{modulesdir}/func_md5.so
+%attr(0755,root,root) %{modulesdir}/func_module.so
+%attr(0755,root,root) %{modulesdir}/func_rand.so
+%attr(0755,root,root) %{modulesdir}/func_realtime.so
+%attr(0755,root,root) %{modulesdir}/func_sha1.so
+%attr(0755,root,root) %{modulesdir}/func_shell.so
+%attr(0755,root,root) %{modulesdir}/func_strings.so
+%attr(0755,root,root) %{modulesdir}/func_srv.so
+%attr(0755,root,root) %{modulesdir}/func_periodic_hook.so
+%attr(0755,root,root) %{modulesdir}/func_presencestate.so
+%attr(0755,root,root) %{modulesdir}/func_pitchshift.so
+%attr(0755,root,root) %{modulesdir}/func_sorcery.so
+%attr(0755,root,root) %{modulesdir}/func_sysinfo.so
+%attr(0755,root,root) %{modulesdir}/func_talkdetect.so
+%attr(0755,root,root) %{modulesdir}/func_timeout.so
+%attr(0755,root,root) %{modulesdir}/func_uri.so
+%attr(0755,root,root) %{modulesdir}/func_version.so
+%attr(0755,root,root) %{modulesdir}/func_volume.so
+%attr(0755,root,root) %{modulesdir}/pbx_ael.so
+%attr(0755,root,root) %{modulesdir}/pbx_config.so
+%attr(0755,root,root) %{modulesdir}/pbx_dundi.so
+# attr(0755,root,root) %{modulesdir}/pbx_gtkconsole.so
+%attr(0755,root,root) %{modulesdir}/pbx_loopback.so
+%attr(0755,root,root) %{modulesdir}/pbx_realtime.so
+%attr(0755,root,root) %{modulesdir}/pbx_spool.so
+%attr(0755,root,root) %{modulesdir}/res_adsi.so
+%attr(0755,root,root) %{modulesdir}/res_ael_share.so
+%attr(0755,root,root) %{modulesdir}/res_agi.so
+%attr(0755,root,root) %{modulesdir}/res_clioriginate.so
+%attr(0755,root,root) %{modulesdir}/res_convert.so
+%attr(0755,root,root) %{modulesdir}/res_crypto.so
+%attr(0755,root,root) %{modulesdir}/res_http_post.so
+# attr(0755,root,root) %{modulesdir}/res_indications.so
+%attr(0755,root,root) %{modulesdir}/res_limit.so
+%attr(0755,root,root) %{modulesdir}/res_monitor.so
+%attr(0755,root,root) %{modulesdir}/res_musiconhold.so
+%attr(0755,root,root) %{modulesdir}/res_phoneprov.so
+%attr(0755,root,root) %{modulesdir}/res_realtime.so
+%attr(0755,root,root) %{modulesdir}/res_smdi.so
+%attr(0755,root,root) %{modulesdir}/res_speech.so
+%attr(0755,root,root) %{modulesdir}/res_stun_monitor.so
+%attr(0755,root,root) %{modulesdir}/res_timing_pthread.so
+# %attr(0755,root,root) %{modulesdir}/test_dlinklists.so
+# %attr(0755,root,root) %{modulesdir}/test_heap.so
+# %attr(0755,root,root) %{modulesdir}/func_redirecting.so
+%attr(0755,root,root) %{modulesdir}/func_sprintf.so
+%attr(0755,root,root) %{modulesdir}/res_clialiases.so
+%attr(0755,root,root) %{modulesdir}/res_rtp_asterisk.so
+%attr(0755,root,root) %{modulesdir}/app_originate.so
+%attr(0755,root,root) %{modulesdir}/app_playtones.so
+%attr(0755,root,root) %{modulesdir}/res_format_attr_celt.so
+%attr(0755,root,root) %{modulesdir}/res_format_attr_silk.so
 
 # Do these really belong here? :
 %attr(0755,root,root) %{modulesdir}/app_celgenuserevent.so
@@ -1013,15 +1036,33 @@ fi
 %attr(0755,root,root) %{modulesdir}/res_mutestream.so
 %attr(0755,root,root) %{modulesdir}/res_rtp_multicast.so
 %attr(0755,root,root) %{modulesdir}/res_security_log.so
+%attr(0755,root,root) %{modulesdir}/res_config_sqlite3.so
 
-%if 0
-%attr(0755,root,root) %{_libdir}/asterisk/modules/test_skel.so
-%endif
+%attr(0755,root,root) %{modulesdir}/res_format_attr_h263.so
+%attr(0755,root,root) %{modulesdir}/res_format_attr_h264.so
+%attr(0755,root,root) %{modulesdir}/res_format_attr_opus.so
+%attr(0755,root,root) %{modulesdir}/res_hep.so
+%attr(0755,root,root) %{modulesdir}/res_hep_rtcp.so
+%attr(0755,root,root) %{modulesdir}/res_http_websocket.so
+%attr(0755,root,root) %{modulesdir}/res_manager_devicestate.so
+%attr(0755,root,root) %{modulesdir}/res_manager_presencestate.so
+%attr(0755,root,root) %{modulesdir}/res_parking.so
+%attr(0755,root,root) %{modulesdir}/res_sorcery_astdb.so
+%attr(0755,root,root) %{modulesdir}/res_sorcery_config.so
+%attr(0755,root,root) %{modulesdir}/res_sorcery_memory.so
+%attr(0755,root,root) %{modulesdir}/res_sorcery_realtime.so
+%attr(0755,root,root) %{modulesdir}/res_stasis.so
+%attr(0755,root,root) %{modulesdir}/res_stasis_answer.so
+%attr(0755,root,root) %{modulesdir}/res_stasis_device_state.so
+%attr(0755,root,root) %{modulesdir}/res_stasis_playback.so
+%attr(0755,root,root) %{modulesdir}/res_stasis_recording.so
+%attr(0755,root,root) %{modulesdir}/res_stasis_snoop.so
+%attr(0755,root,root) %{modulesdir}/res_statsd.so
+
 
 #attr(0755,asterisk,asterisk)	%dir			%{astvardir}
 %ghost							%{astvardir}/astdb
 %attr(0755,root,root)		%dir			%{astvardir}/agi-bin 
-%attr(0755,root,root)					%{astvardir}/agi-bin/*
 %attr(0755,root,root)		%dir			%{astvardir}/images
 %attr(0644,root,root)					%{astvardir}/images/*.jpg
 %attr(0755,root,root)		%dir			%{astvardir}/static-http
@@ -1038,11 +1079,6 @@ fi
 %attr(0755,root,root)					%{astvardir}/firmware/iax/*.bin
 %attr(0755,root,root)		%dir			%{astvardir}/keys
 %attr(0644,root,root)					%{astvardir}/keys/*.pub
-%attr(0755,root,root)		%dir			%{astvardir}/moh
-%attr(0644,root,root)					%{astvardir}/moh/*.wav
-# %doc							%{astvardir}/moh/LICENSE-asterisk-moh-freeplay-wav
-%attr(0755,root,root)		%dir			%{astvardir}/mohmp3
-%attr(0644,root,root)					%{astvardir}/mohmp3/*.mp3
 %endif
 
 %attr(0750,asterisk,asterisk)	%dir			/var/log/asterisk
@@ -1067,27 +1103,22 @@ fi
 #attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/system
 #attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/tmp
 #attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/vm
-%attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail
-%attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/default
-%attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/default/1234
-#attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/default/1234/INBOX
-#%attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/busy.gsm
-#%attr(0644,asterisk,asterisk)				/var/spool/asterisk/voicemail/default/1234/unavail.gsm
-#attr(0750,asterisk,asterisk)	%dir			/var/spool/asterisk/voicemail/voicemail
 
 
 							%{_mandir}/man8/asterisk.8*
 							%{_mandir}/man8/astgenkey.8*
 							%{_mandir}/man8/autosupport.8*
 							%{_mandir}/man8/safe_asterisk.8*
+                                                        %{_mandir}/man8/astdb2bdb.8*
+                                                        %{_mandir}/man8/astdb2sqlite3.8*
 %exclude /var/www/
-%exclude %{_libdir}/asterisk/modules/app_flash.so
-%exclude %{_libdir}/asterisk/modules/app_page.so
-%exclude %{_libdir}/asterisk/modules/app_dahdiras.so
-# exclude %{_libdir}/asterisk/modules/app_dahdiscan.so
-%exclude %{_libdir}/asterisk/modules/chan_dahdi.so
-%exclude %{_libdir}/asterisk/modules/codec_dahdi.so
-%exclude %{_libdir}/asterisk/modules/res_timing_dahdi.so
+%exclude %{modulesdir}/app_flash.so
+%exclude %{modulesdir}/app_page.so
+%exclude %{modulesdir}/app_dahdiras.so
+# exclude %{modulesdir}/app_dahdiscan.so
+%exclude %{modulesdir}/chan_dahdi.so
+%exclude %{modulesdir}/codec_dahdi.so
+%exclude %{modulesdir}/res_timing_dahdi.so
 
 
 %files devel -f %{name}-devel.filelist
@@ -1108,90 +1139,84 @@ fi
 %files plugins-alsa
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/alsa.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_alsa.so
+%attr(0755,root,root) %{modulesdir}/chan_alsa.so
 
 %files plugins-curl
 %defattr(-,root,root,-)
-%doc contrib/scripts/dbsep.cgi
+# %doc contrib/scripts/dbsep.cgi
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/dbsep.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_curl.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_curl.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_curl.so
+%attr(0755,root,root) %{modulesdir}/func_curl.so
+%attr(0755,root,root) %{modulesdir}/res_config_curl.so
+%attr(0755,root,root) %{modulesdir}/res_curl.so
 
 %if %{build_dahdi}
 %files plugins-dahdi
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/meetme.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/chan_dahdi.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_flash.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_page.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiras.so
-#attr(0755,root,root) %{_libdir}/asterisk/modules/app_dahdiscan.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_dahdi.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_dahdi.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_timing_dahdi.so
+                        %{_datadir}/dahdi/span_config.d/40-asterisk
+%attr(0755,root,root) %{modulesdir}/app_flash.so
+%attr(0755,root,root) %{modulesdir}/app_page.so
+%attr(0755,root,root) %{modulesdir}/app_dahdiras.so
+#attr(0755,root,root) %{modulesdir}/app_dahdiscan.so
+%attr(0755,root,root) %{modulesdir}/chan_dahdi.so
+%attr(0755,root,root) %{modulesdir}/codec_dahdi.so
+%attr(0755,root,root) %{modulesdir}/res_timing_dahdi.so
 %endif
 
 %files plugins-fax
 %defattr(-,root,root,-)
-# attr(0755,root,root) %{_libdir}/asterisk/modules/app_fax.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_fax.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_fax_spandsp.so
+# attr(0755,root,root) %{modulesdir}/app_fax.so
+%attr(0755,root,root) %{modulesdir}/res_fax.so
+%attr(0755,root,root) %{modulesdir}/res_fax_spandsp.so
 
 %files plugins-festival
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/festival.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_festival.so
+%attr(0755,root,root) %{modulesdir}/app_festival.so
 
 %files plugins-ices
 %defattr(-,root,root,-)
-%doc contrib/asterisk-ices.xml
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_ices.so
+%attr(0755,root,root) %{modulesdir}/app_ices.so
 
 %files plugins-jabber
 %defattr(-,root,root,-)
 # %doc doc/jabber.txt doc/jingle.txt
-%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/gtalk.conf
-%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/jabber.conf
-%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/jingle.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_gtalk.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_jingle.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_jabber.so
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_xmpp.conf
+%attr(0755,root,root) %{modulesdir}/res_xmpp.so
 
 %files plugins-jack
 %defattr(-,root,root,-)
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_jack.so
+%attr(0755,root,root) %{modulesdir}/app_jack.so
 
 %files plugins-lua
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/extensions.lua
-%attr(0755,root,root) %{_libdir}/asterisk/modules/pbx_lua.so
+%attr(0755,root,root) %{modulesdir}/pbx_lua.so
 
 %files plugins-ldap
 %defattr(-,root,root,-)
 # %doc doc/ldap.txt
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_ldap.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_ldap.so
+%attr(0755,root,root) %{modulesdir}/res_config_ldap.so
 
 %files plugins-minivm
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/extensions_minivm.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/minivm.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_minivm.so
+%attr(0755,root,root) %{modulesdir}/app_minivm.so
 
 %if %{build_misdn}
 %files plugins-misdn
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/misdn.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_misdn.so
+%attr(0755,root,root) %{modulesdir}/chan_misdn.so
 %endif
 
 %files plugins-mysql
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_mysql.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_config_mysql.conf
-%attr(0755,root,root) %{modulesdir}/app_mysql.so
-%attr(0755,root,root) %{modulesdir}/cdr_mysql.so
 %attr(0755,root,root) %{modulesdir}/res_config_mysql.so
 
 %if %{build_odbc}
@@ -1201,50 +1226,50 @@ fi
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_odbc.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/func_odbc.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_odbc.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_adaptive_odbc.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_odbc.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_odbc.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_odbc.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_odbc.so
+%attr(0755,root,root) %{modulesdir}/cdr_adaptive_odbc.so
+%attr(0755,root,root) %{modulesdir}/cdr_odbc.so
+%attr(0755,root,root) %{modulesdir}/func_odbc.so
+%attr(0755,root,root) %{modulesdir}/res_config_odbc.so
+%attr(0755,root,root) %{modulesdir}/res_odbc.so
 %attr(0755,root,root) %{modulesdir}/cel_odbc.so
 %endif
 
 %files plugins-oss
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/oss.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_oss.so
+%attr(0755,root,root) %{modulesdir}/chan_oss.so
 
 %if %{build_osp}
 %files plugins-osp
 %defattr(-,root,root)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/osp.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_osplookup.so
+%attr(0755,root,root) %{modulesdir}/app_osplookup.so
 %endif
 
 %files plugins-portaudio
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/console.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_console.so
+%attr(0755,root,root) %{modulesdir}/chan_console.so
 
 %files plugins-pgsql
 %defattr(-,root,root,-)
-%doc contrib/realtime/postgresql/realtime.sql
+# doc contrib/realtime/postgresql/realtime.sql
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_pgsql.conf
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_pgsql.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_pgsql.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_pgsql.so
+%attr(0755,root,root) %{modulesdir}/cdr_pgsql.so
+%attr(0755,root,root) %{modulesdir}/res_config_pgsql.so
 %attr(0755,root,root) %{modulesdir}/cel_pgsql.so
 
 %files plugins-radius
 %defattr(-,root,root,-)
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_radius.so
+%attr(0755,root,root) %{modulesdir}/cdr_radius.so
 %attr(0755,root,root) %{modulesdir}/cel_radius.so
 
 
 %files plugins-skinny
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/skinny.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_skinny.so
+%attr(0755,root,root) %{modulesdir}/chan_skinny.so
 
 %files plugins-snmp
 %defattr(-,root,root,-)
@@ -1252,26 +1277,26 @@ fi
 # %doc doc/digium-mib.txt
 # %doc doc/snmp.txt
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/res_snmp.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_snmp.so
+%attr(0755,root,root) %{modulesdir}/res_snmp.so
 
 %files plugins-sqlite
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_sqlite3_custom.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_sqlite.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_sqlite3_custom.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/res_config_sqlite.so
+# attr(0755,root,root) %{modulesdir}/cdr_sqlite.so
+%attr(0755,root,root) %{modulesdir}/cdr_sqlite3_custom.so
+%attr(0755,root,root) %{modulesdir}/res_config_sqlite.so
 %attr(0755,root,root) %{modulesdir}/cel_sqlite3_custom.so
 
 %files plugins-speex
 %defattr(-,root,root,-)
-%attr(0755,root,root) %{_libdir}/asterisk/modules/codec_speex.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_speex.so
+%attr(0755,root,root) %{modulesdir}/codec_speex.so
+%attr(0755,root,root) %{modulesdir}/func_speex.so
 
 %if %{build_tds}
 %files plugins-tds
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/cdr_tds.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/cdr_tds.so
+%attr(0755,root,root) %{modulesdir}/cdr_tds.so
 %attr(0755,root,root) %{modulesdir}/cel_tds.so
 %endif
 
@@ -1279,26 +1304,33 @@ fi
 %defattr(-,root,root,-)
 # %doc doc/unistim.txt
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/unistim.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_unistim.so
+%attr(0755,root,root) %{modulesdir}/chan_unistim.so
 
 %if 0
 %files plugins-usbradio
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/usbradio.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/chan_usbradio.so
+%attr(0755,root,root) %{modulesdir}/chan_usbradio.so
 %endif
 
 %files plugins-voicemail
 %defattr(-,root,root,-)
 %attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/voicemail.conf
-%attr(0755,root,root) %{_libdir}/asterisk/modules/func_vmcount.so
+%attr(0755,root,root) %{modulesdir}/func_vmcount.so
+%attr(0750,asterisk,asterisk)   %dir                    /var/spool/asterisk/voicemail
+%attr(0750,asterisk,asterisk)   %dir                    /var/spool/asterisk/voicemail/default
+%attr(0750,asterisk,asterisk)   %dir                    /var/spool/asterisk/voicemail/default/1234
+%attr(0750,asterisk,asterisk)   %dir                    /var/spool/asterisk/voicemail/default/1234/INBOX
+%attr(0644,asterisk,asterisk)                           /var/spool/asterisk/voicemail/default/1234/en/*
+#attr(0750,asterisk,asterisk)   %dir                    /var/spool/asterisk/voicemail/voicemail
+
 
 %if %{build_imap}
 #FIXME: find a better way to build dir_imap etc.
 %files plugins-voicemail-imap
 %defattr(-,root,root,-)
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_directory_imap.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_voicemail_imap.so
+%attr(0755,root,root) %{modulesdir}/app_directory_imap.so
+%attr(0755,root,root) %{modulesdir}/app_voicemail_imap.so
 %endif
 
 %if 0
@@ -1307,18 +1339,35 @@ fi
 %files plugins-voicemail-odbc
 %defattr(-,root,root,-)
 %doc doc/voicemail_odbc_postgresql.txt
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_directory_odbc.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_voicemail_odbc.so
+%attr(0755,root,root) %{modulesdir}/app_directory_odbc.so
+%attr(0755,root,root) %{modulesdir}/app_voicemail_odbc.so
 %endif
 %endif
 
 #FIXME!
 %files plugins-voicemail-plain
 %defattr(-,root,root,-)
-# attr(0755,root,root) %{_libdir}/asterisk/modules/app_directory_plain.so
-# attr(0755,root,root) %{_libdir}/asterisk/modules/app_voicemail_plain.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_directory.so
-%attr(0755,root,root) %{_libdir}/asterisk/modules/app_voicemail.so
+# attr(0755,root,root) %{modulesdir}/app_directory_plain.so
+# attr(0755,root,root) %{modulesdir}/app_voicemail_plain.so
+%attr(0755,root,root) %{modulesdir}/app_directory.so
+%attr(0755,root,root) %{modulesdir}/app_voicemail.so
+
+%files ari
+%attr(0755,root,root) %{modulesdir}/res_ari.so
+%attr(0755,root,root) %{modulesdir}/res_ari_applications.so
+%attr(0755,root,root) %{modulesdir}/res_ari_asterisk.so
+%attr(0755,root,root) %{modulesdir}/res_ari_bridges.so
+%attr(0755,root,root) %{modulesdir}/res_ari_channels.so
+%attr(0755,root,root) %{modulesdir}/res_ari_device_states.so
+%attr(0755,root,root) %{modulesdir}/res_ari_endpoints.so
+%attr(0755,root,root) %{modulesdir}/res_ari_events.so
+%attr(0755,root,root) %{modulesdir}/res_ari_mailboxes.so
+%attr(0755,root,root) %{modulesdir}/res_ari_model.so
+%attr(0755,root,root) %{modulesdir}/res_ari_playbacks.so
+%attr(0755,root,root) %{modulesdir}/res_ari_recordings.so
+%attr(0755,root,root) %{modulesdir}/res_ari_sounds.so
+%attr(0755,asterisk,asterisk) %dir %{astvardir}/rest-api/
+%attr(0640,asterisk,asterisk) %config(noreplace) %{astvardir}/rest-api/*.json
 
 
 %files docs
@@ -1328,16 +1377,15 @@ fi
 %files tests
 %if 0
 # They would depend on the TEST_FRAMEWORK option
-%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_dlinklists.so
-%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_sched.so
-%attr(0755,root,root)  	%{_libdir}/asterisk/modules/test_logger.so
-%attr(0755,root,root)  %{_libdir}/asterisk/modules/test_substitution.so
+%attr(0755,root,root)  %{modulesdir}/test_dlinklists.so
+%attr(0755,root,root)  %{modulesdir}/test_sched.so
+%attr(0755,root,root)  	%{modulesdir}/test_logger.so
+%attr(0755,root,root)  %{modulesdir}/test_substitution.so
 %attr(0755,root,root)	%{modulesdir}/test_security_events.so
 %attr(0755,root,root)	%{modulesdir}/test_amihooks.so
 %endif
 %attr(0755,root,root)	%{_sbindir}/check_expr
 %attr(0755,root,root)	%{_sbindir}/check_expr2
-%attr(0755,root,root)	%{_sbindir}/refcounter
 
 %changelog -f %{_sourcedir}/%{name}-changelog.gitrpm.txt
 
