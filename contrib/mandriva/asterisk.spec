@@ -316,6 +316,14 @@ Requires:       asterisk = %{version}-%{release}
 HTTP binding for the Stasis API
 
 
+%package        plugins-ooh323
+Summary:        Objective System's H323 for Asterisk
+Group:          System/Servers
+Requires:       asterisk = %{version}-%{release}
+
+%description    plugins-ooh323
+Objective System's H323 for Asterisk.
+
 %if %{build_misdn}
 %package	chan_misdn
 Summary:	This module adds mISDN support to the Asterisk PBX
@@ -1107,6 +1115,7 @@ fi
 %endif
 %exclude						%{_sysconfdir}/asterisk/cdr_pgsql.conf
 %exclude						%{_sysconfdir}/asterisk/osp.conf
+%exclude                                                %{_sysconfdir}/asterisk/ooh323.conf
 %exclude						%{_sysconfdir}/asterisk/res_snmp.conf
 %exclude                                                %{_sysconfdir}/asterisk/res_xmpp.conf
 %exclude						%{_sysconfdir}/asterisk/*sql*.conf
@@ -1315,11 +1324,11 @@ fi
 %attr(0755,root,root) %{modulesdir}/cel_manager.so
 %attr(0755,root,root) %{modulesdir}/chan_mobile.so
 %attr(0755,root,root) %{modulesdir}/chan_multicast_rtp.so
-# %attr(0755,root,root) %{modulesdir}/chan_ooh323.so
 # %attr(0755,root,root) %{modulesdir}/format_mp3.so
 %attr(0755,root,root) %{modulesdir}/res_calendar.so
 %attr(0755,root,root) %{modulesdir}/res_calendar_caldav.so
 %attr(0755,root,root) %{modulesdir}/res_calendar_exchange.so
+%attr(0755,root,root) %{modulesdir}/res_calendar_ews.so
 %attr(0755,root,root) %{modulesdir}/res_calendar_icalendar.so
 %attr(0755,root,root) %{modulesdir}/res_mutestream.so
 %attr(0755,root,root) %{modulesdir}/res_rtp_multicast.so
@@ -1407,6 +1416,7 @@ fi
 %exclude %{modulesdir}/chan_dahdi.so
 %exclude %{modulesdir}/codec_dahdi.so
 %exclude %{modulesdir}/res_timing_dahdi.so
+%exclude %{modulesdir}/chan_ooh323.so
 
 
 %files devel -f %{name}-devel.filelist
@@ -1611,6 +1621,11 @@ fi
 %attr(0750,asterisk,asterisk)   %dir                    /var/spool/asterisk/voicemail/default/1234/INBOX
 %attr(0644,asterisk,asterisk)                           /var/spool/asterisk/voicemail/default/1234/en/*
 #attr(0750,asterisk,asterisk)   %dir                    /var/spool/asterisk/voicemail/voicemail
+
+
+%files plugins-ooh323
+%attr(0640,asterisk,asterisk) %config(noreplace) %{_sysconfdir}/asterisk/ooh323.conf
+%attr(0755,root,root) %{modulesdir}/chan_ooh323.so
 
 
 %if %{build_imap}
