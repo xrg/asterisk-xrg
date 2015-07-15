@@ -1,6 +1,7 @@
 %define git_repo asterisk
 
 %define _requires_exceptions perl(Carp::Heavy)
+%define sounds_core_version 1.4.26
 
 %define build_h323	0
 %{?_without_h323:	%global build_h323 0}
@@ -48,6 +49,9 @@
 # Note: at Mandriva/Mageia there is no /var/lib64 ..
 %define astvardir	/var/lib/asterisk
 %define modulesdir	%{_libdir}/asterisk/modules
+%define soundsdir %{astvardir}/sounds
+%define mohdir %{astvardir}/moh
+
 
 Summary:	Asterisk PBX
 Name:		asterisk13
@@ -67,8 +71,8 @@ Requires(postun): rpm-helper
 Requires(post): rpm-helper
 Requires(preun): rpm-helper
 Requires:	mpg123
-Requires:	asterisk-core-sounds
-Requires:	asterisk-core-moh
+Requires:	asterisk-sounds-core
+Requires:	asterisk-moh
 BuildRequires:	alsa-lib-devel
 BuildRequires:	autoconf >= 1:2.60
 BuildRequires:	automake1.9 >= 1.9.6
@@ -506,6 +510,266 @@ Provides:	asterisk-plugins-voicemail-implementation = %{version}-%{release}
 Voicemail implementation for Asterisk that stores voicemail on the
 local filesystem.
 
+# if build sounds
+
+%package sounds-core-en-alaw
+Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-en-alaw
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: a-Law
+
+%package sounds-core-en-ulaw
+Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-en-ulaw
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: mu-Law
+
+%package sounds-core-en-g729
+Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+# Provides:     asterisk-sounds-core # NOT to be used globaly
+
+%description sounds-core-en-g729
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: G.729
+If used, it avoids using the g729 codecs for these pre-recorded sounds.
+
+%package sounds-core-en-sln16
+Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+# Provides:     asterisk-sounds-core # NOT to be used globaly
+
+%description sounds-core-en-sln16
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: Signed Linear 16bit
+
+%if 0
+%package sounds-core-en-g722
+Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+
+%description sounds-core-en-g722
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: G.722
+%endif
+
+%package sounds-core-en-wav
+Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-en-wav
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: WAV
+
+%package sounds-core-en-gsm
+Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-en-gsm
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: GSM
+
+%if 0
+%package sounds-core-fr-gsm
+Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-fr-gsm
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: GSM
+
+%package sounds-core-fr-alaw
+Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-fr-alaw
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: a-Law
+
+%package sounds-core-fr-ulaw
+Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-fr-ulaw
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: mu-Law
+
+%package sounds-core-fr-g729
+Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+# Provides:     asterisk-sounds-core # NOT to be used globaly
+
+%description sounds-core-fr-g729
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: G.729
+If used, it avoids using the g729 codecs for these pre-recorded sounds.
+
+%package sounds-core-fr-g722
+Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+
+%description sounds-core-fr-g722
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: G.722
+
+%package sounds-core-fr-wav
+Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-fr-wav
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: WAV
+
+%package sounds-core-es-gsm
+Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-es-gsm
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: GSM
+
+%package sounds-core-es-alaw
+Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-es-alaw
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: a-Law
+
+%package sounds-core-es-ulaw
+Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-es-ulaw
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: mu-Law
+
+%package sounds-core-es-g729
+Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+# Provides:     asterisk-sounds-core # NOT to be used globaly
+
+%description sounds-core-es-g729
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: G.729
+If used, it avoids using the g729 codecs for these pre-recorded sounds.
+
+%package sounds-core-es-g722
+Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+
+%description sounds-core-es-g722
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: G.722
+
+%package sounds-core-es-wav
+Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
+Version:        %{sounds_core_version}
+Group:          System/Servers
+Provides:       asterisk-sounds-core
+
+%description sounds-core-es-wav
+This package contains freely usable recorded sounds that were meant to be used
+with Asterisk in the following formats: WAV
+
+%endif
+
+%package moh-opsound-alaw
+Summary:        Music on hold for the Asterisk PBX
+Group:          System/Servers
+Provides:       asterisk-moh-core
+
+%description moh-opsound-alaw
+This package contains freely usable recorded music to be used with Asterisk, in
+A-law format.
+
+%package moh-opsound-ulaw
+Summary:        Music on hold for the Asterisk PBX
+Group:          System/Servers
+Provides:       asterisk-moh-core
+
+%description moh-opsound-ulaw
+This package contains freely usable recorded music to be used with Asterisk, in
+mu-law format.
+
+%package moh-opsound-g722
+Summary:        Music on hold for the Asterisk PBX
+Group:          System/Servers
+
+%description moh-opsound-g722
+This package contains freely usable recorded music to be used with Asterisk, in
+g722 format.
+
+%package moh-opsound-g729
+Summary:        Music on hold for the Asterisk PBX
+Group:          System/Servers
+
+%description moh-opsound-g729
+This package contains freely usable recorded music to be used with Asterisk, in
+g729 format.
+
+%package moh-opsound-wav
+Summary:        Music on hold for the Asterisk PBX
+Group:          System/Servers
+Provides:       asterisk-moh-core
+
+%description moh-opsound-wav
+This package contains freely usable recorded music to be used with Asterisk, in
+wav format.
+
+%package moh-opsound-gsm
+Summary:        Music on hold for the Asterisk PBX
+Group:          System/Servers
+Provides:       asterisk-moh-core
+
+%description moh-opsound-gsm
+This package contains freely usable recorded music to be used with Asterisk, in
+GSM format.
+
+%package moh-opsound-sln16
+Summary:        Music on hold for the Asterisk PBX
+Group:          System/Servers
+Provides:       asterisk-moh-core
+
+%description moh-opsound-sln16
+This package contains freely usable recorded music to be used with Asterisk, in
+Signed-Linear-16bit format.
+
+# endif sounds
+
 %package        tests
 Summary:        Testing utilities for Asterisk
 Group:          System/Servers
@@ -641,10 +905,11 @@ export ASTCFLAGS="%{optflags}"
 menuselect/menuselect --enable chan_mobile --enable chan_ooh323 --enable res_config_mysql \
         --enable aelparse --enable astman --enable check_expr --enable check_expr2 --enable conf2ael \
         --enable muted --enable smsq --enable stereorize --enable streamplayer \
-        --enable MOH-OPSOUND-ULAW --enable MOH-OPSOUND-ALAW --enable MOH-OPSOUND-GSM \
-        --enable MOH-OPSOUND-G729 --enable MOH-OPSOUND-G722 --enable MOH-OPSOUND-SLN16 \
-        --enable CORE-SOUNDS-EN-WAV --enable CORE-SOUNDS-EN-G729 \
-        --enable CORE-SOUNDS-EN_GB-WAV --enable CORE-SOUNDS-EN_GB-ULAW --enable CORE-SOUNDS-EN_GB-GSM --enable CORE-SOUNDS-EN_GB-G729
+        --enable CORE-SOUNDS-EN-ALAW --enable CORE-SOUNDS-EN-ULAW --enable CORE-SOUNDS-EN-GSM \
+        --enable CORE-SOUNDS-EN-WAV --enable CORE-SOUNDS-EN-G729 --enable CORE-SOUNDS-EN-SLN16 \
+        --enable MOH-OPSOUND-ULAW --enable MOH-OPSOUND-ALAW \
+        --enable MOH-OPSOUND-G729 --enable MOH-OPSOUND-SLN16 \
+        
 
 %make ASTVARRUNDIR=/var/run/asterisk
 
@@ -725,10 +990,11 @@ perl -pi -e "s|^varrundir=.*|varrundir=/var/run/asterisk|g" %{buildroot}%{_libdi
 #mkdir -p %{buildroot}%{_sysconfdir}/ssl/%{name}
 
 # Remove unpackages files
-# rm -rf %{buildroot}%{astvardir}/moh/.asterisk-moh-freeplay-wav
+rm -r %{buildroot}%{astvardir}/moh/.asterisk-moh-*
+rm -r %{buildroot}%{astvardir}/sounds/*/.asterisk-core-sounds-*
+rm -r %{buildroot}%{astvardir}/sounds/en/core-sounds-en.txt
+#                                                          TODO: move to docs
 
-# use the stand alone asterisk-core-sounds package instead
-rm -rf %{buildroot}%{astvardir}/sounds
 
 %pre
 %_pre_useradd asterisk %{astvardir} /bin/sh
@@ -1373,6 +1639,280 @@ fi
 %files docs
 %defattr(-,root,root)
 # %doc	docs-html/*
+
+%files sounds-core-en-alaw
+%defattr(-,root, root)
+                %{soundsdir}/en/CHANGES-asterisk-core-en-%{version}
+                %{soundsdir}/en/CREDITS-asterisk-core-en-%{version}
+                %{soundsdir}/en/LICENSE-asterisk-core-en-%{version}
+#doc en/CREDITS-asterisk-core-en-%{version}
+%attr(644,root,root)    %{soundsdir}/en/*.alaw
+%attr(644,root,root)    %{soundsdir}/en/dictate/*.alaw
+%attr(644,root,root)    %{soundsdir}/en/digits/*.alaw
+%attr(644,root,root)    %{soundsdir}/en/followme/*.alaw
+%attr(644,root,root)    %{soundsdir}/en/letters/*.alaw
+%attr(644,root,root)    %{soundsdir}/en/phonetic/*.alaw
+%attr(644,root,root)    %{soundsdir}/en/silence/*.alaw
+
+%files sounds-core-en-ulaw
+%defattr(-,root, root)
+#doc en/CHANGES-asterisk-core-en-%{version}
+#doc en/CREDITS-asterisk-core-en-%{version}
+%attr(644,root,root)    %{soundsdir}/en/*.ulaw
+%attr(644,root,root)    %{soundsdir}/en/dictate/*.ulaw
+%attr(644,root,root)    %{soundsdir}/en/digits/*.ulaw
+%attr(644,root,root)    %{soundsdir}/en/followme/*.ulaw
+%attr(644,root,root)    %{soundsdir}/en/letters/*.ulaw
+%attr(644,root,root)    %{soundsdir}/en/phonetic/*.ulaw
+%attr(644,root,root)    %{soundsdir}/en/silence/*.ulaw
+
+%if 0
+%files sounds-core-en-g722
+%defattr(-,root, root)
+%attr(644,root,root)    %{soundsdir}/en/*.g722
+%attr(644,root,root)    %{soundsdir}/en/dictate/*.g722
+%attr(644,root,root)    %{soundsdir}/en/digits/*.g722
+%attr(644,root,root)    %{soundsdir}/en/followme/*.g722
+%attr(644,root,root)    %{soundsdir}/en/letters/*.g722
+%attr(644,root,root)    %{soundsdir}/en/phonetic/*.g722
+%attr(644,root,root)    %{soundsdir}/en/silence/*.g722
+%endif
+
+%files sounds-core-en-g729
+%defattr(-,root, root)
+%attr(644,root,root)    %{soundsdir}/en/*.g729
+%attr(644,root,root)    %{soundsdir}/en/dictate/*.g729
+%attr(644,root,root)    %{soundsdir}/en/digits/*.g729
+%attr(644,root,root)    %{soundsdir}/en/followme/*.g729
+%attr(644,root,root)    %{soundsdir}/en/letters/*.g729
+%attr(644,root,root)    %{soundsdir}/en/phonetic/*.g729
+%attr(644,root,root)    %{soundsdir}/en/silence/*.g729
+
+%files sounds-core-en-wav
+%defattr(-,root, root)
+#%doc CREDITS-asterisk-core-*-%{version}
+%attr(644,root,root)    %{soundsdir}/en/*.wav
+%attr(644,root,root)    %{soundsdir}/en/dictate/*.wav
+%attr(644,root,root)    %{soundsdir}/en/digits/*.wav
+%attr(644,root,root)    %{soundsdir}/en/followme/*.wav
+%attr(644,root,root)    %{soundsdir}/en/letters/*.wav
+%attr(644,root,root)    %{soundsdir}/en/phonetic/*.wav
+%attr(644,root,root)    %{soundsdir}/en/silence/*.wav
+
+%files sounds-core-en-sln16
+%defattr(-,root, root)
+#%doc CREDITS-asterisk-core-*-%{version}
+%attr(644,root,root)    %{soundsdir}/en/*.sln16
+%attr(644,root,root)    %{soundsdir}/en/dictate/*.sln16
+%attr(644,root,root)    %{soundsdir}/en/digits/*.sln16
+%attr(644,root,root)    %{soundsdir}/en/followme/*.sln16
+%attr(644,root,root)    %{soundsdir}/en/letters/*.sln16
+%attr(644,root,root)    %{soundsdir}/en/phonetic/*.sln16
+%attr(644,root,root)    %{soundsdir}/en/silence/*.sln16
+
+%files sounds-core-en-gsm
+%defattr(-,root, root)
+#doc en/CHANGES-asterisk-core-en-%{version}
+#doc en/CREDITS-asterisk-core-en-%{version}
+%attr(644,root,root)    %{soundsdir}/en/*.gsm
+%attr(644,root,root)    %{soundsdir}/en/dictate/*.gsm
+%attr(644,root,root)    %{soundsdir}/en/digits/*.gsm
+%attr(644,root,root)    %{soundsdir}/en/followme/*.gsm
+%attr(644,root,root)    %{soundsdir}/en/letters/*.gsm
+%attr(644,root,root)    %{soundsdir}/en/phonetic/*.gsm
+%attr(644,root,root)    %{soundsdir}/en/silence/*.gsm
+
+%if 0
+%files sounds-core-fr-alaw
+%defattr(-,root, root)
+%doc fr/CHANGES-asterisk-core-fr-%{version}
+%doc fr/CREDITS-asterisk-core-fr-%{version}
+%attr(644,root,root)    %{soundsdir}/fr/*.alaw
+%attr(644,root,root)    %{soundsdir}/fr/dictate/*.alaw
+%attr(644,root,root)    %{soundsdir}/fr/digits/*.alaw
+%attr(644,root,root)    %{soundsdir}/fr/followme/*.alaw
+%attr(644,root,root)    %{soundsdir}/fr/letters/*.alaw
+%attr(644,root,root)    %{soundsdir}/fr/phonetic/*.alaw
+%attr(644,root,root)    %{soundsdir}/fr/silence/*.alaw
+
+%files sounds-core-fr-ulaw
+%defattr(-,root, root)
+%doc fr/CHANGES-asterisk-core-fr-%{version}
+%doc fr/CREDITS-asterisk-core-fr-%{version}
+%attr(644,root,root)    %{soundsdir}/fr/*.ulaw
+%attr(644,root,root)    %{soundsdir}/fr/dictate/*.ulaw
+%attr(644,root,root)    %{soundsdir}/fr/digits/*.ulaw
+%attr(644,root,root)    %{soundsdir}/fr/followme/*.ulaw
+%attr(644,root,root)    %{soundsdir}/fr/letters/*.ulaw
+%attr(644,root,root)    %{soundsdir}/fr/phonetic/*.ulaw
+%attr(644,root,root)    %{soundsdir}/fr/silence/*.ulaw
+
+%files sounds-core-fr-gsm
+%defattr(-,root, root)
+%doc fr/CHANGES-asterisk-core-fr-%{version}
+%doc fr/CREDITS-asterisk-core-fr-%{version}
+%attr(644,root,root)    %{soundsdir}/fr/*.gsm
+%attr(644,root,root)    %{soundsdir}/fr/dictate/*.gsm
+%attr(644,root,root)    %{soundsdir}/fr/digits/*.gsm
+%attr(644,root,root)    %{soundsdir}/fr/followme/*.gsm
+%attr(644,root,root)    %{soundsdir}/fr/letters/*.gsm
+%attr(644,root,root)    %{soundsdir}/fr/phonetic/*.gsm
+%attr(644,root,root)    %{soundsdir}/fr/silence/*.gsm
+
+%files sounds-core-fr-g722
+%defattr(-,root, root)
+#%doc CREDITS-asterisk-core-*-%{version}
+%attr(644,root,root)    %{soundsdir}/fr/*.g722
+%attr(644,root,root)    %{soundsdir}/fr/dictate/*.g722
+%attr(644,root,root)    %{soundsdir}/fr/digits/*.g722
+%attr(644,root,root)    %{soundsdir}/fr/followme/*.g722
+%attr(644,root,root)    %{soundsdir}/fr/letters/*.g722
+%attr(644,root,root)    %{soundsdir}/fr/phonetic/*.g722
+%attr(644,root,root)    %{soundsdir}/fr/silence/*.g722
+
+%files sounds-core-fr-g729
+%defattr(-,root, root)
+#%doc CREDITS-asterisk-core-*-%{version}
+%attr(644,root,root)    %{soundsdir}/fr/*.g729
+%attr(644,root,root)    %{soundsdir}/fr/dictate/*.g729
+%attr(644,root,root)    %{soundsdir}/fr/digits/*.g729
+%attr(644,root,root)    %{soundsdir}/fr/followme/*.g729
+%attr(644,root,root)    %{soundsdir}/fr/letters/*.g729
+%attr(644,root,root)    %{soundsdir}/fr/phonetic/*.g729
+%attr(644,root,root)    %{soundsdir}/fr/silence/*.g729
+
+%files sounds-core-fr-wav
+%defattr(-,root, root)
+#%doc CREDITS-asterisk-core-*-%{version}
+%attr(644,root,root)    %{soundsdir}/fr/*.wav
+%attr(644,root,root)    %{soundsdir}/fr/dictate/*.wav
+%attr(644,root,root)    %{soundsdir}/fr/digits/*.wav
+%attr(644,root,root)    %{soundsdir}/fr/followme/*.wav
+%attr(644,root,root)    %{soundsdir}/fr/letters/*.wav
+%attr(644,root,root)    %{soundsdir}/fr/phonetic/*.wav
+%attr(644,root,root)    %{soundsdir}/fr/silence/*.wav
+
+%files sounds-core-es-alaw
+%defattr(-,root, root)
+%doc es/CHANGES-asterisk-core-es-%{version}
+%doc es/CREDITS-asterisk-core-es-%{version}
+%attr(644,root,root)    %{soundsdir}/es/*.alaw
+%attr(644,root,root)    %{soundsdir}/es/dictate/*.alaw
+%attr(644,root,root)    %{soundsdir}/es/digits/*.alaw
+%attr(644,root,root)    %{soundsdir}/es/followme/*.alaw
+%attr(644,root,root)    %{soundsdir}/es/letters/*.alaw
+%attr(644,root,root)    %{soundsdir}/es/phonetic/*.alaw
+%attr(644,root,root)    %{soundsdir}/es/silence/*.alaw
+
+%files sounds-core-es-ulaw
+%defattr(-,root, root)
+%doc es/CHANGES-asterisk-core-es-%{version}
+%doc es/CREDITS-asterisk-core-es-%{version}
+%attr(644,root,root)    %{soundsdir}/es/*.ulaw
+%attr(644,root,root)    %{soundsdir}/es/dictate/*.ulaw
+%attr(644,root,root)    %{soundsdir}/es/digits/*.ulaw
+%attr(644,root,root)    %{soundsdir}/es/followme/*.ulaw
+%attr(644,root,root)    %{soundsdir}/es/letters/*.ulaw
+%attr(644,root,root)    %{soundsdir}/es/phonetic/*.ulaw
+%attr(644,root,root)    %{soundsdir}/es/silence/*.ulaw
+
+%files sounds-core-es-gsm
+%defattr(-,root, root)
+%doc es/CHANGES-asterisk-core-es-%{version}
+%doc es/CREDITS-asterisk-core-es-%{version}
+%attr(644,root,root)    %{soundsdir}/es/*.gsm
+%attr(644,root,root)    %{soundsdir}/es/dictate/*.gsm
+%attr(644,root,root)    %{soundsdir}/es/digits/*.gsm
+%attr(644,root,root)    %{soundsdir}/es/followme/*.gsm
+%attr(644,root,root)    %{soundsdir}/es/letters/*.gsm
+%attr(644,root,root)    %{soundsdir}/es/phonetic/*.gsm
+%attr(644,root,root)    %{soundsdir}/es/silence/*.gsm
+
+%files sounds-core-es-g722
+%defattr(-,root, root)
+#%doc CREDITS-asterisk-core-*-%{version}
+%attr(644,root,root)    %{soundsdir}/es/*.g722
+%attr(644,root,root)    %{soundsdir}/es/dictate/*.g722
+%attr(644,root,root)    %{soundsdir}/es/digits/*.g722
+%attr(644,root,root)    %{soundsdir}/es/followme/*.g722
+%attr(644,root,root)    %{soundsdir}/es/letters/*.g722
+%attr(644,root,root)    %{soundsdir}/es/phonetic/*.g722
+%attr(644,root,root)    %{soundsdir}/es/silence/*.g722
+
+%files sounds-core-es-g729
+%defattr(-,root, root)
+#%doc CREDITS-asterisk-core-*-%{version}
+%attr(644,root,root)    %{soundsdir}/es/*.g729
+%attr(644,root,root)    %{soundsdir}/es/dictate/*.g729
+%attr(644,root,root)    %{soundsdir}/es/digits/*.g729
+%attr(644,root,root)    %{soundsdir}/es/followme/*.g729
+%attr(644,root,root)    %{soundsdir}/es/letters/*.g729
+%attr(644,root,root)    %{soundsdir}/es/phonetic/*.g729
+%attr(644,root,root)    %{soundsdir}/es/silence/*.g729
+
+%files sounds-core-es-wav
+%defattr(-,root, root)
+#%doc CREDITS-asterisk-core-*-%{version}
+%attr(644,root,root)    %{soundsdir}/es/*.wav
+%attr(644,root,root)    %{soundsdir}/es/dictate/*.wav
+%attr(644,root,root)    %{soundsdir}/es/digits/*.wav
+%attr(644,root,root)    %{soundsdir}/es/followme/*.wav
+%attr(644,root,root)    %{soundsdir}/es/letters/*.wav
+%attr(644,root,root)    %{soundsdir}/es/phonetic/*.wav
+%attr(644,root,root)    %{soundsdir}/es/silence/*.wav
+
+%endif
+
+%files moh-opsound-alaw
+%defattr(-,root, root)
+                        %{mohdir}/LICENSE-asterisk-moh-opsound-alaw
+                        %{mohdir}/CHANGES-asterisk-moh-opsound-alaw
+                        %{mohdir}/CREDITS-asterisk-moh-opsound-alaw
+%attr(644,root,root)    %{mohdir}/*.alaw
+
+%files moh-opsound-ulaw
+%defattr(-,root, root)
+                        %{mohdir}/LICENSE-asterisk-moh-opsound-ulaw
+                        %{mohdir}/CHANGES-asterisk-moh-opsound-ulaw
+                        %{mohdir}/CREDITS-asterisk-moh-opsound-ulaw
+%attr(644,root,root)    %{mohdir}/*.ulaw
+
+%files moh-opsound-g729
+%defattr(-,root, root)
+                        %{mohdir}/LICENSE-asterisk-moh-opsound-g729
+                        %{mohdir}/CHANGES-asterisk-moh-opsound-g729
+                        %{mohdir}/CREDITS-asterisk-moh-opsound-g729
+#doc moh/LICENSE-asterisk-moh-opsound-g729
+%attr(644,root,root)    %{mohdir}/*.g729
+
+%files moh-opsound-sln16
+%defattr(-,root, root)
+                        %{mohdir}/LICENSE-asterisk-moh-opsound-sln16
+                        %{mohdir}/CHANGES-asterisk-moh-opsound-sln16
+                        %{mohdir}/CREDITS-asterisk-moh-opsound-sln16
+%attr(644,root,root)    %{mohdir}/*.sln16
+
+%files moh-opsound-wav
+%defattr(-,root, root)
+                        %{mohdir}/LICENSE-asterisk-moh-opsound-wav
+                        %{mohdir}/CHANGES-asterisk-moh-opsound-wav
+                        %{mohdir}/CREDITS-asterisk-moh-opsound-wav
+%attr(644,root,root)    %{mohdir}/*.wav
+
+
+%if 0
+%files moh-opsound-g722
+%defattr(-,root, root)
+#doc moh/LICENSE-asterisk-moh-opsound-g722
+%attr(644,root,root)    %{mohdir}/*.g722
+
+%files moh-opsound-gsm
+%defattr(-,root, root)
+#doc moh/LICENSE-asterisk-moh-opsound-gsm
+%attr(644,root,root)    %{mohdir}/*.gsm
+
+%endif
+
 
 %files tests
 %if 0
