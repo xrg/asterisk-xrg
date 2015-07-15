@@ -52,6 +52,12 @@
 %define soundsdir %{astvardir}/sounds
 %define mohdir %{astvardir}/moh
 
+%if %{mgaversion} < 3
+%define _tmpfilesdir /usr/lib/tmpfiles.d
+%define _tmpfilescreate() /bin/systemd-tmpfiles --create \
+%{nil}
+%define systemd_required_version 44
+%endif
 
 Summary:	Asterisk PBX
 Name:		asterisk13
@@ -934,10 +940,15 @@ install -d %{buildroot}/var/spool/asterisk/outgoing
 # don't fiddle with the initscript!
 export DONT_GPRINTIFY=1
 
-
+%if %{mgaversion} >=3
+install -D -p -m 0644 contrib/mandriva/asterisk.service %{buildroot}%{_unitdir}/asterisk.service
+rm -f %{buildroot}%{_sbindir}/safe_asterisk
+install -D -p -m 0644 contrib/mandriva/asterisk-tmpfiles %{buildroot}%{_tmpfilesdir}/%{name}.conf
+%else
 # install init scrips
 install -d %{buildroot}%{_initrddir}
 install -m0755 contrib/mandriva/asterisk.init %{buildroot}%{_initrddir}/asterisk
+%endif
 
 # install sysconfig file
 install -d %{buildroot}%{_sysconfdir}/sysconfig
@@ -1009,7 +1020,12 @@ rm -r %{buildroot}%{astvardir}/sounds/en/core-sounds-en.txt
 %create_ghostfile /var/log/asterisk/h323_log asterisk asterisk 640
 echo "Adding setuid root to /usr/bin/mpg123, needed for MOH"
 chmod u+s %{_bindir}/mpg123
-%_post_service asterisk
+
+%if %{mgaversion} >=3 
+%_tmpfilescreate %{name}
+%endif
+%_post_service %{name}
+
 
 %preun
 if [ "$1" = 0 ]; then
@@ -1061,7 +1077,13 @@ fi
 %doc BUGS CHANGES CREDITS LICENSE README*
 %doc doc/*.txt contrib/init.d/rc.mandriva* contrib/asterisk-ices.xml
 %doc contrib/scripts contrib/i18n.testsuite.conf contrib/README.festival
+%if %{mgaversion} >= 3
+%{_unitdir}/asterisk.service
+%attr(0644,root,root) %{_tmpfilesdir}/%{name}.conf
+%else
 %attr(0755,root,root)					%{_initrddir}/asterisk
+%endif
+
 %attr(0644,root,root) %config(noreplace)		%{_sysconfdir}/logrotate.d/asterisk
 %attr(0750,asterisk,asterisk) %dir			%{_sysconfdir}/asterisk
 %attr(0644,asterisk,asterisk) %config(noreplace)	%{_sysconfdir}/asterisk/*.adsi
