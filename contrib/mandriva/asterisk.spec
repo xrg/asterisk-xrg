@@ -984,6 +984,9 @@ touch	%{buildroot}/var/log/asterisk/h323_log
 
 # Fix incorrect path in /etc/asterisk/asterisk.conf
 perl -pi -e "s|astrundir => /var/run|astrundir => /var/run/asterisk|g" %{buildroot}/%{_sysconfdir}/asterisk/asterisk.conf
+%if %{_arch} == "x86_64"
+sed -i 's|/var/lib64/|/var/lib/|' %{buildroot}/%{_sysconfdir}/asterisk/asterisk.conf
+%endif
 perl -pi -e "s|^libdir=.*|libdir=%{_libdir}|g" %{buildroot}%{_libdir}/pkgconfig/asterisk.pc
 perl -pi -e "s|^varrundir=.*|varrundir=/var/run/asterisk|g" %{buildroot}%{_libdir}/pkgconfig/asterisk.pc
 
