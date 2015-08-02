@@ -31181,7 +31181,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 	oldacl = ast_free_acl_list(oldacl);
 	olddirectmediaacl = ast_free_acl_list(olddirectmediaacl);
-	if (!ast_strlen_zero(peer->callback)) { /* build string from peer info */
+	if (!ast_strlen_zero(peer->callback) && !ast_strlen_zero(peer->tohost)) { /* build string from peer info */
 		char *reg_string;
 		if (ast_asprintf(&reg_string, "%s?%s:%s@%s/%s", peer->name, peer->username, !ast_strlen_zero(peer->remotesecret) ? peer->remotesecret : peer->secret, peer->tohost, peer->callback) >= 0) {
 			sip_register(reg_string, 0); /* XXX TODO: count in registry_count */
