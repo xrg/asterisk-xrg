@@ -270,6 +270,7 @@ static struct tables *find_table(const char *database, const char *orig_tablenam
 	}
 
 	if (database == NULL) {
+                AST_LIST_UNLOCK(&psql_tables);
 		return NULL;
 	}
 
@@ -896,6 +897,7 @@ static int update2_pgsql(const char *database, const char *tablename, const stru
 	ast_debug(1, "PostgreSQL RealTime: Update SQL: %s\n", ast_str_buffer(sql));
 
 	/* We now have our complete statement; connect to the server and execute it. */
+        ast_mutex_lock(&pgsql_lock);
         if (pgsql_exec(database, tablename, ast_str_buffer(sql), &result) != 0) {
 		ast_mutex_unlock(&pgsql_lock);
 	        return -1;
@@ -1272,7 +1274,9 @@ static int require_pgsql(const char *database, const char *tablename, va_list ap
 				ast_debug(1, "About to run ALTER query on table '%s' to add column '%s'\n", tablename, elm);
 
 			        if (pgsql_exec(database, tablename, ast_str_buffer(sql), &result) != 0) {
-						ast_mutex_unlock(&pgsql_lock);
+                                        ast_log(LOG_ERROR, "Unable to add column: %s\n", ast_str_buffer(sql));
+					ast_mutex_unlock(&pgsql_lock);
+                                        release_table(table);
 				        return -1;
 			        }
 
