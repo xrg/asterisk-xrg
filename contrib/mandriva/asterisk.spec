@@ -932,7 +932,7 @@ install -d %{buildroot}/var/spool/asterisk/outgoing
 export DONT_GPRINTIFY=1
 
 %if %{mgaversion} >=3
-install -D -p -m 0644 contrib/mandriva/asterisk.service %{buildroot}%{_unitdir}/asterisk.service
+install -D -p -m 0644 contrib/mandriva/asterisk.service %{buildroot}%{_unitdir}/%{name}.service
 rm -f %{buildroot}%{_sbindir}/safe_asterisk
 install -D -p -m 0644 contrib/mandriva/asterisk-tmpfiles %{buildroot}%{_tmpfilesdir}/%{name}.conf
 %else
@@ -1072,7 +1072,7 @@ fi
 %doc doc/*.txt contrib/init.d/rc.mandriva* contrib/asterisk-ices.xml
 %doc contrib/scripts contrib/i18n.testsuite.conf contrib/README.festival
 %if %{mgaversion} >= 3
-%{_unitdir}/asterisk.service
+%{_unitdir}/%{name}.service
 %attr(0644,root,root) %{_tmpfilesdir}/%{name}.conf
 %else
 %attr(0755,root,root)					%{_initrddir}/asterisk
