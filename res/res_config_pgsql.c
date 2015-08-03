@@ -448,10 +448,6 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 	if (!field) {
 		ast_log(LOG_WARNING,
 				"PostgreSQL RealTime: Realtime retrieval requires at least 1 parameter and 1 value to search on.\n");
-		if (pgsqlConn) {
-			PQfinish(pgsqlConn);
-			pgsqlConn = NULL;
-		}
 		return NULL;
 	}
 
@@ -566,10 +562,6 @@ static struct ast_config *realtime_multi_pgsql(const char *database, const char 
 	if (!field) {
 		ast_log(LOG_WARNING,
 				"PostgreSQL RealTime: Realtime retrieval requires at least 1 parameter and 1 value to search on.\n");
-		if (pgsqlConn) {
-			PQfinish(pgsqlConn);
-			pgsqlConn = NULL;
-		}
 		ast_config_destroy(cfg);
 		return NULL;
 	}
@@ -717,10 +709,6 @@ static int update_pgsql(const char *database, const char *tablename, const char 
 	if (!field) {
 		ast_log(LOG_WARNING,
 				"PostgreSQL RealTime: Realtime retrieval requires at least 1 parameter and 1 value to search on.\n");
-		if (pgsqlConn) {
-			PQfinish(pgsqlConn);
-			pgsqlConn = NULL;
-		}
 		release_table(table);
 		return -1;
 	}
@@ -868,10 +856,6 @@ static int update2_pgsql(const char *database, const char *tablename, const stru
 	if (first) {
 		ast_log(LOG_WARNING,
 				"PostgreSQL RealTime: Realtime update requires at least 1 parameter and 1 value to search on.\n");
-		if (pgsqlConn) {
-			PQfinish(pgsqlConn);
-			pgsqlConn = NULL;
-		}
 		release_table(table);
 		return -1;
 	}
@@ -951,10 +935,6 @@ static int store_pgsql(const char *database, const char *table, const struct ast
 	if (!field) {
 		ast_log(LOG_WARNING,
 				"PostgreSQL RealTime: Realtime storage requires at least 1 parameter and 1 value to store.\n");
-		if (pgsqlConn) {
-			PQfinish(pgsqlConn);
-			pgsqlConn = NULL;
-		}
 		return -1;
 	}
 
@@ -1031,10 +1011,6 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 	if (ast_strlen_zero(keyfield) || ast_strlen_zero(lookup))  {
 		ast_log(LOG_WARNING,
 				"PostgreSQL RealTime: Realtime destroy requires at least 1 parameter and 1 value to search on.\n");
-		if (pgsqlConn) {
-			PQfinish(pgsqlConn);
-			pgsqlConn = NULL;
-		};
 		return -1;
 	}
 
