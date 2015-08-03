@@ -336,16 +336,19 @@ static struct tables *find_table(const char *database, const char *orig_tablenam
 
 		ast_str_set(&sql, 0, "SELECT a.attname, t.typname, a.attlen, a.attnotnull, d.adsrc, a.atttypmod FROM pg_class c, pg_type t, pg_attribute a LEFT OUTER JOIN pg_attrdef d ON a.atthasdef AND d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE c.oid = a.attrelid AND a.atttypid = t.oid AND (a.attnum > 0) AND c.relname = '%s' ORDER BY c.relname, attnum", orig_tablename);
 	}
-
+	
+        ast_mutex_lock(&pgsql_lock);
 	exec_result = pgsql_exec(database, orig_tablename, ast_str_buffer(sql), &result);
 	ast_debug(1, "Query of table structure complete.  Now retrieving results.\n");
 	if (exec_result != 0) {
+                ast_mutex_unlock(&pgsql_lock);
 		ast_log(LOG_ERROR, "Failed to query database columns for table %s\n", orig_tablename);
 		AST_LIST_UNLOCK(&psql_tables);
 		return NULL;
 	}
 
 	if (!(table = ast_calloc(1, sizeof(*table) + strlen(orig_tablename) + 1))) {
+                ast_mutex_unlock(&pgsql_lock);
 		ast_log(LOG_ERROR, "Unable to allocate memory for new table structure\n");
 		AST_LIST_UNLOCK(&psql_tables);
 		return NULL;
@@ -364,6 +367,7 @@ static struct tables *find_table(const char *database, const char *orig_tablenam
 		ast_verb(4, "Found column '%s' of type '%s'\n", fname, ftype);
 
 		if (!(column = ast_calloc(1, sizeof(*column) + strlen(fname) + strlen(ftype) + 2))) {
+                        ast_mutex_unlock(&pgsql_lock);
 			ast_log(LOG_ERROR, "Unable to allocate column element for %s, %s\n", orig_tablename, fname);
 			destroy_table(table);
 			AST_LIST_UNLOCK(&psql_tables);
@@ -395,6 +399,7 @@ static struct tables *find_table(const char *database, const char *orig_tablenam
 		AST_LIST_INSERT_TAIL(&table->columns, column, list);
 	}
 
+	ast_mutex_unlock(&pgsql_lock);
 	AST_LIST_INSERT_TAIL(&psql_tables, table, list);
 	ast_rwlock_rdlock(&table->lock);
 	AST_LIST_UNLOCK(&psql_tables);
