@@ -921,8 +921,12 @@ export CFLAGS="%{optflags} `gmime-config --cflags`"
     --with-vorbis=%{_prefix} \
     --without-vpb \
     --with-x11=%{_prefix} \
-    --with-z=%{_prefix}
-
+    --with-z=%{_prefix} \
+%if %{build_tds}
+    --with-tds_mssql=%{_prefix} \
+%else
+    --without-tds_mssql
+%endif
 
 export ASTCFLAGS="%{optflags}"
 
@@ -1129,6 +1133,9 @@ fi
 %endif
 %if %{build_tds}
 %exclude						%{_sysconfdir}/asterisk/*tds*.conf
+%else
+%exclude                                                %{modulesdir}/cel_tds.so
+%exclude                                                %{modulesdir}/cdr_tds.so
 %endif
 %exclude						%{_sysconfdir}/asterisk/cdr_pgsql.conf
 %exclude						%{_sysconfdir}/asterisk/osp.conf
