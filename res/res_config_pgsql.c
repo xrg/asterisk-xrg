@@ -468,13 +468,18 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
 		else
 			op = "";
 
-		ESCAPE_STRING(escapebuf, field->value);
-		if (pgresult) {
-			ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
-			return NULL;
-		}
+                if (field->value) {
+                        ESCAPE_STRING(escapebuf, field->value);
+                        if (pgresult) {
+                                ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
+                                return NULL;
+                        }
 
-		ast_str_append(&sql, 0, " AND %s%s '%s'", field->name, op, ast_str_buffer(escapebuf));
+                        ast_str_append(&sql, 0, " AND %s%s '%s'", field->name, op, ast_str_buffer(escapebuf));
+                }
+                else {
+                        ast_str_append(&sql, 0, " AND %s IS NULL", field->name, op);
+                }
 	}
 
 	/* We now have our complete statement; Lets connect to the server and execute it. */
@@ -593,14 +598,19 @@ static struct ast_config *realtime_multi_pgsql(const char *database, const char 
 		else
 			op = "";
 
-		ESCAPE_STRING(escapebuf, field->value);
-		if (pgresult) {
-			ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
-			ast_config_destroy(cfg);
-			return NULL;
-		}
+                if (field->value) {
+                        ESCAPE_STRING(escapebuf, field->value);
+                        if (pgresult) {
+                                ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
+                                ast_config_destroy(cfg);
+                                return NULL;
+                        }
 
-		ast_str_append(&sql, 0, " AND %s%s '%s'", field->name, op, ast_str_buffer(escapebuf));
+                        ast_str_append(&sql, 0, " AND %s%s '%s'", field->name, op, ast_str_buffer(escapebuf));
+                }
+                else{
+                        ast_str_append(&sql, 0, " AND %s IS NULL", field->name, op);
+                }
 	}
 
 	if (initfield) {
@@ -729,13 +739,17 @@ static int update_pgsql(const char *database, const char *tablename, const char 
 	/* Create the first part of the query using the first parameter/value pairs we just extracted
 	   If there is only 1 set, then we have our query. Otherwise, loop thru the list and concat */
 
-	ESCAPE_STRING(escapebuf, field->value);
-	if (pgresult) {
-		ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
-		release_table(table);
-		return -1;
-	}
-	ast_str_set(&sql, 0, "UPDATE %s SET %s = '%s'", tablename, field->name, ast_str_buffer(escapebuf));
+        if (field->value) {
+                ESCAPE_STRING(escapebuf, field->value);
+                if (pgresult) {
+                        ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
+                        release_table(table);
+                        return -1;
+                }
+                ast_str_set(&sql, 0, "UPDATE %s SET %s = '%s'", tablename, field->name, ast_str_buffer(escapebuf));
+        }else {
+                ast_str_set(&sql, 0, "UPDATE %s SET %s = NULL", tablename, field->name);
+        }
 
 	while ((field = field->next)) {
 		if (!find_column(table, field->name)) {
@@ -743,14 +757,18 @@ static int update_pgsql(const char *database, const char *tablename, const char 
 			continue;
 		}
 
-		ESCAPE_STRING(escapebuf, field->value);
-		if (pgresult) {
-			ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
-			release_table(table);
-			return -1;
-		}
+		if (field->value) {
+                        ESCAPE_STRING(escapebuf, field->value);
+                        if (pgresult) {
+                                ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
+                                release_table(table);
+                                return -1;
+                        }
+                        ast_str_append(&sql, 0, ", %s = '%s'", field->name, ast_str_buffer(escapebuf));
+                }else {
+                        ast_str_append(&sql, 0, ", %s = NULL", field->name);
+                }
 
-		ast_str_append(&sql, 0, ", %s = '%s'", field->name, ast_str_buffer(escapebuf));
 	}
 	release_table(table);
 
@@ -843,13 +861,17 @@ static int update2_pgsql(const char *database, const char *tablename, const stru
 			return -1;
 		}
 
-		ESCAPE_STRING(escapebuf, field->value);
-		if (pgresult) {
-			ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
-			release_table(table);
-			return -1;
-		}
-		ast_str_append(&where, 0, "%s %s='%s'", first ? "" : " AND", field->name, ast_str_buffer(escapebuf));
+                if (field->value) {
+                        ESCAPE_STRING(escapebuf, field->value);
+                        if (pgresult) {
+                                ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
+                                release_table(table);
+                                return -1;
+                        }
+                        ast_str_append(&where, 0, "%s %s='%s'", first ? "" : " AND", field->name, ast_str_buffer(escapebuf));
+                } else{
+                        ast_str_append(&where, 0, "%s %s=NULL", first ? "" : " AND", field->name);
+                }
 		first = 0;
 	}
 
@@ -869,14 +891,18 @@ static int update2_pgsql(const char *database, const char *tablename, const stru
 			continue;
 		}
 
-		ESCAPE_STRING(escapebuf, field->value);
-		if (pgresult) {
-			ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
-			release_table(table);
-			return -1;
-		}
+		if (field->value){
+                        ESCAPE_STRING(escapebuf, field->value);
+                        if (pgresult) {
+                                ast_log(LOG_ERROR, "PostgreSQL RealTime: detected invalid input: '%s'\n", field->value);
+                                release_table(table);
+                                return -1;
+                        }
+                        ast_str_append(&sql, 0, "%s %s='%s'", first ? "" : ",", field->name, ast_str_buffer(escapebuf));
+                }else {
+                        ast_str_append(&sql, 0, "%s %s=NULL", first ? "" : ",", field->name);
+                }
 
-		ast_str_append(&sql, 0, "%s %s='%s'", first ? "" : ",", field->name, ast_str_buffer(escapebuf));
 		first = 0;
 	}
 	release_table(table);
@@ -949,13 +975,21 @@ static int store_pgsql(const char *database, const char *table, const struct ast
 	   If there is only 1 set, then we have our query. Otherwise, loop thru the list and concat */
 	ESCAPE_STRING(buf, field->name);
 	ast_str_set(&sql1, 0, "INSERT INTO %s (%s", table, ast_str_buffer(buf));
-	ESCAPE_STRING(buf, field->value);
-	ast_str_set(&sql2, 0, ") VALUES ('%s'", ast_str_buffer(buf));
+        if (field->value){
+                ESCAPE_STRING(buf, field->value);
+                ast_str_set(&sql2, 0, ") VALUES ('%s'", ast_str_buffer(buf));
+        }else {
+                ast_str_set(&sql2, 0, ") VALUES (NULL");
+        }
 	while ((field = field->next)) {
 		ESCAPE_STRING(buf, field->name);
 		ast_str_append(&sql1, 0, ", %s", ast_str_buffer(buf));
-		ESCAPE_STRING(buf, field->value);
-		ast_str_append(&sql2, 0, ", '%s'", ast_str_buffer(buf));
+                if (field->value) {
+                        ESCAPE_STRING(buf, field->value);
+                        ast_str_append(&sql2, 0, ", '%s'", ast_str_buffer(buf));
+                } else {
+                        ast_str_append(&sql2, 0, ", NULL");
+                }
 	}
 	ast_str_append(&sql1, 0, "%s)", ast_str_buffer(sql2));
 
@@ -1030,8 +1064,14 @@ static int destroy_pgsql(const char *database, const char *table, const char *ke
 	ast_str_set(&sql, 0, "DELETE FROM %s WHERE %s = '%s'", table, ast_str_buffer(buf1), ast_str_buffer(buf2));
 	for (field = fields; field; field = field->next) {
 		ESCAPE_STRING(buf1, field->name);
-		ESCAPE_STRING(buf2, field->value);
-		ast_str_append(&sql, 0, " AND %s = '%s'", ast_str_buffer(buf1), ast_str_buffer(buf2));
+                if (field->value) {
+                        ESCAPE_STRING(buf2, field->value);
+                        ast_str_append(&sql, 0, " AND %s = '%s'", ast_str_buffer(buf1), ast_str_buffer(buf2));
+                }
+                else {
+                        ast_str_append(&sql, 0, " AND %s IS NULL", ast_str_buffer(buf1));
+                
+                }
 	}
 
 	ast_debug(1, "PostgreSQL RealTime: Delete SQL: %s\n", ast_str_buffer(sql));
