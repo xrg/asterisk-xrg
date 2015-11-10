@@ -478,7 +478,7 @@ static struct ast_variable *realtime_pgsql(const char *database, const char *tab
                         ast_str_append(&sql, 0, " AND %s%s '%s'", field->name, op, ast_str_buffer(escapebuf));
                 }
                 else {
-                        ast_str_append(&sql, 0, " AND %s IS NULL", field->name, op);
+                        ast_str_append(&sql, 0, " AND %s IS NULL", field->name);
                 }
 	}
 
@@ -609,7 +609,7 @@ static struct ast_config *realtime_multi_pgsql(const char *database, const char 
                         ast_str_append(&sql, 0, " AND %s%s '%s'", field->name, op, ast_str_buffer(escapebuf));
                 }
                 else{
-                        ast_str_append(&sql, 0, " AND %s IS NULL", field->name, op);
+                        ast_str_append(&sql, 0, " AND %s IS NULL", field->name);
                 }
 	}
 
