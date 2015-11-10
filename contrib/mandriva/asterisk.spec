@@ -208,6 +208,7 @@ to compile 3rd party modules.
 %package	docs
 Summary:	The Hitchhiker's Guide to Asterisk
 Group:		Books/Howtos
+BuildArch:      noarch
 
 %description	docs
 The Hitchhiker's Guide to Asterisk
@@ -313,6 +314,7 @@ MiniVM application for Asterisk.
 Summary:        RESTful web API for Asterisk
 Group:          System/Servers
 Requires:       asterisk = %{version}-%{release}
+BuildArch:      noarch
 
 %description    ari
 HTTP binding for the Stasis API
@@ -531,6 +533,7 @@ local filesystem.
 %package sounds-core-en-alaw
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-en-alaw
@@ -540,6 +543,7 @@ with Asterisk in the following formats: a-Law
 %package sounds-core-en-ulaw
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-en-ulaw
@@ -549,6 +553,7 @@ with Asterisk in the following formats: mu-Law
 %package sounds-core-en-g729
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 # Provides:     asterisk-sounds-core # NOT to be used globaly
 
 %description sounds-core-en-g729
@@ -559,6 +564,7 @@ If used, it avoids using the g729 codecs for these pre-recorded sounds.
 %package sounds-core-en-sln16
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 # Provides:     asterisk-sounds-core # NOT to be used globaly
 
 %description sounds-core-en-sln16
@@ -569,6 +575,7 @@ with Asterisk in the following formats: Signed Linear 16bit
 %package sounds-core-en-g722
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 
 %description sounds-core-en-g722
 This package contains freely usable recorded sounds that were meant to be used
@@ -578,6 +585,7 @@ with Asterisk in the following formats: G.722
 %package sounds-core-en-wav
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-en-wav
@@ -587,6 +595,7 @@ with Asterisk in the following formats: WAV
 %package sounds-core-en-gsm
 Summary:        English sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-en-gsm
@@ -597,6 +606,7 @@ with Asterisk in the following formats: GSM
 %package sounds-core-fr-gsm
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-fr-gsm
@@ -606,6 +616,7 @@ with Asterisk in the following formats: GSM
 %package sounds-core-fr-alaw
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-fr-alaw
@@ -615,6 +626,7 @@ with Asterisk in the following formats: a-Law
 %package sounds-core-fr-ulaw
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-fr-ulaw
@@ -624,6 +636,7 @@ with Asterisk in the following formats: mu-Law
 %package sounds-core-fr-g729
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 # Provides:     asterisk-sounds-core # NOT to be used globaly
 
 %description sounds-core-fr-g729
@@ -634,6 +647,8 @@ If used, it avoids using the g729 codecs for these pre-recorded sounds.
 %package sounds-core-fr-g722
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
+
 
 %description sounds-core-fr-g722
 This package contains freely usable recorded sounds that were meant to be used
@@ -642,6 +657,7 @@ with Asterisk in the following formats: G.722
 %package sounds-core-fr-wav
 Summary:        French sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-fr-wav
@@ -651,6 +667,7 @@ with Asterisk in the following formats: WAV
 %package sounds-core-es-gsm
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-es-gsm
@@ -660,6 +677,7 @@ with Asterisk in the following formats: GSM
 %package sounds-core-es-alaw
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-es-alaw
@@ -669,6 +687,7 @@ with Asterisk in the following formats: a-Law
 %package sounds-core-es-ulaw
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-es-ulaw
@@ -678,6 +697,7 @@ with Asterisk in the following formats: mu-Law
 %package sounds-core-es-g729
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 # Provides:     asterisk-sounds-core # NOT to be used globaly
 
 %description sounds-core-es-g729
@@ -688,6 +708,7 @@ If used, it avoids using the g729 codecs for these pre-recorded sounds.
 %package sounds-core-es-g722
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 
 %description sounds-core-es-g722
 This package contains freely usable recorded sounds that were meant to be used
@@ -696,6 +717,7 @@ with Asterisk in the following formats: G.722
 %package sounds-core-es-wav
 Summary:        Spanish sound files for the Asterisk PBX and telephony application and toolkit
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-sounds-core
 
 %description sounds-core-es-wav
@@ -707,6 +729,7 @@ with Asterisk in the following formats: WAV
 %package moh-opsound-alaw
 Summary:        Music on hold for the Asterisk PBX
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-moh-core
 
 %description moh-opsound-alaw
@@ -716,6 +739,7 @@ A-law format.
 %package moh-opsound-ulaw
 Summary:        Music on hold for the Asterisk PBX
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-moh-core
 
 %description moh-opsound-ulaw
@@ -725,6 +749,7 @@ mu-law format.
 %package moh-opsound-g722
 Summary:        Music on hold for the Asterisk PBX
 Group:          System/Servers
+BuildArch:      noarch
 
 %description moh-opsound-g722
 This package contains freely usable recorded music to be used with Asterisk, in
@@ -733,6 +758,7 @@ g722 format.
 %package moh-opsound-g729
 Summary:        Music on hold for the Asterisk PBX
 Group:          System/Servers
+BuildArch:      noarch
 
 %description moh-opsound-g729
 This package contains freely usable recorded music to be used with Asterisk, in
@@ -741,6 +767,7 @@ g729 format.
 %package moh-opsound-wav
 Summary:        Music on hold for the Asterisk PBX
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-moh-core
 
 %description moh-opsound-wav
@@ -750,6 +777,7 @@ wav format.
 %package moh-opsound-gsm
 Summary:        Music on hold for the Asterisk PBX
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-moh-core
 
 %description moh-opsound-gsm
@@ -759,6 +787,7 @@ GSM format.
 %package moh-opsound-sln16
 Summary:        Music on hold for the Asterisk PBX
 Group:          System/Servers
+BuildArch:      noarch
 Provides:       asterisk-moh-core
 
 %description moh-opsound-sln16
@@ -989,6 +1018,7 @@ sed -i 's|/var/lib64/|/var/lib/|' %{buildroot}/%{_sysconfdir}/asterisk/asterisk.
 %endif
 perl -pi -e "s|^libdir=.*|libdir=%{_libdir}|g" %{buildroot}%{_libdir}/pkgconfig/asterisk.pc
 perl -pi -e "s|^varrundir=.*|varrundir=/var/run/asterisk|g" %{buildroot}%{_libdir}/pkgconfig/asterisk.pc
+
 
 # TODO
 # Add directory for ssl certs
