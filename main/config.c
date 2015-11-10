@@ -287,8 +287,11 @@ struct ast_variable *ast_variable_new(const char *name, const char *value, const
 {
 	struct ast_variable *variable;
 	int name_len = strlen(name) + 1;
-	int val_len = strlen(value) + 1;
+	int val_len = 1;
 	int fn_len = strlen(filename) + 1;
+        
+        if (value)
+                val_len =  strlen(value) + 1;
 
 	/* Ensure a minimum length in case the filename is changed later. */
 	if (fn_len < MIN_VARIABLE_FNAME_SPACE) {
@@ -309,7 +312,11 @@ struct ast_variable *ast_variable_new(const char *name, const char *value, const
 		dst += fn_len;
 		variable->name = strcpy(dst, name);
 		dst += name_len;
-		variable->value = strcpy(dst, value);
+                if (value){
+		    variable->value = strcpy(dst, value);
+                }else{
+                     variable->value = NULL;
+                }
 	}
 	return variable;
 }
