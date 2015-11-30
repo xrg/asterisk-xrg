@@ -1,7 +1,7 @@
 %define git_repo asterisk
 
 %define _requires_exceptions perl(Carp::Heavy)
-%define sounds_core_version 1.4.26
+%define sounds_core_version 1.4.27
 
 %define build_h323	0
 %{?_without_h323:	%global build_h323 0}
