@@ -53,7 +53,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/chanvars.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/indications.h"
-#include "asterisk/monitor.h"
 #include "asterisk/causes.h"
 #include "asterisk/callerid.h"
 #include "asterisk/utils.h"
@@ -75,6 +74,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/bridge.h"
 #include "asterisk/test.h"
 #include "asterisk/stasis_channels.h"
+#include "asterisk/max_forwards.h"
 
 /*** DOCUMENTATION
  ***/
@@ -339,7 +339,7 @@ static char *complete_channeltypes(struct ast_cli_args *a)
 static char *handle_cli_core_show_channeltype(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct chanlist *cl = NULL;
-	struct ast_str *codec_buf = ast_str_alloca(256);
+	struct ast_str *codec_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -3905,11 +3905,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 		switch (f->frametype) {
 		case AST_FRAME_CONTROL:
 			if (f->subclass.integer == AST_CONTROL_ANSWER) {
-				if (!ast_test_flag(ast_channel_flags(chan), AST_FLAG_OUTGOING)) {
-					ast_debug(1, "Ignoring answer on an inbound call!\n");
-					ast_frfree(f);
-					f = &ast_null_frame;
-				} else if (prestate == AST_STATE_UP && ast_channel_is_bridged(chan)) {
+				if (prestate == AST_STATE_UP && ast_channel_is_bridged(chan)) {
 					ast_debug(1, "Dropping duplicate answer!\n");
 					ast_frfree(f);
 					f = &ast_null_frame;
@@ -4491,7 +4487,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 
 	/* Don't bother if the channel is about to go away, anyway. */
 	if ((ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE)
-			|| ast_check_hangup(chan))
+			|| (ast_check_hangup(chan) && !ast_channel_is_leaving_bridge(chan)))
 		&& condition != AST_CONTROL_MASQUERADE_NOTIFY) {
 		res = -1;
 		goto indicate_cleanup;
@@ -4660,6 +4656,11 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 		/* We have a tone to play, yay. */
 		ast_debug(1, "Driver for channel '%s' does not support indication %u, emulating it\n", ast_channel_name(chan), condition);
 		res = ast_playtones_start(chan, 0, ts->data, 1);
+		if (!res) {
+			ast_test_suite_event_notify("RINGING_INBAND",
+					"Channel: %s\r\n",
+					ast_channel_name(chan));
+		}
 		ts = ast_tone_zone_sound_unref(ts);
 	}
 
@@ -5093,7 +5094,7 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 			f = fr;
 		} else {
 			if (ast_format_cmp(ast_channel_writeformat(chan), fr->subclass.format) != AST_FORMAT_CMP_EQUAL) {
-				struct ast_str *codec_buf = ast_str_alloca(256);
+				struct ast_str *codec_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 				/*
 				 * We are not setup to write this frame.  Things may have changed
@@ -5434,8 +5435,8 @@ static int set_format(struct ast_channel *chan, struct ast_format_cap *cap_set, 
 		res = ast_translator_best_choice(cap_native, cap_set, &best_native_fmt, &best_set_fmt);
 	}
 	if (res < 0) {
-		struct ast_str *codec_native = ast_str_alloca(256);
-		struct ast_str *codec_set = ast_str_alloca(256);
+		struct ast_str *codec_native = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+		struct ast_str *codec_set = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 		ast_format_cap_get_names(cap_native, &codec_native);
 		ast_channel_unlock(chan);
@@ -5621,6 +5622,7 @@ static void call_forward_inherit(struct ast_channel *new_chan, struct ast_channe
 	ast_channel_lock_both(parent, new_chan);
 	ast_channel_inherit_variables(parent, new_chan);
 	ast_channel_datastore_inherit(parent, new_chan);
+	ast_max_forwards_decrement(new_chan);
 	ast_channel_unlock(new_chan);
 	ast_channel_unlock(parent);
 }
@@ -5740,6 +5742,7 @@ struct ast_channel *__ast_request_and_dial(const char *type, struct ast_format_c
 			ast_channel_lock_both(oh->parent_channel, chan);
 			ast_channel_inherit_variables(oh->parent_channel, chan);
 			ast_channel_datastore_inherit(oh->parent_channel, chan);
+			ast_max_forwards_decrement(chan);
 			ast_channel_unlock(oh->parent_channel);
 			ast_channel_unlock(chan);
 		}
@@ -5975,8 +5978,8 @@ struct ast_channel *ast_request(const char *type, struct ast_format_cap *request
 			res = ast_translator_best_choice(tmp_cap, chan->tech->capabilities, &tmp_fmt, &best_audio_fmt);
 			ao2_ref(tmp_cap, -1);
 			if (res < 0) {
-				struct ast_str *tech_codecs = ast_str_alloca(64);
-				struct ast_str *request_codecs = ast_str_alloca(64);
+				struct ast_str *tech_codecs = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+				struct ast_str *request_codecs = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 				ast_log(LOG_WARNING, "No translator path exists for channel type %s (native %s) to %s\n", type,
 					ast_format_cap_get_names(chan->tech->capabilities, &tech_codecs),
@@ -7406,7 +7409,7 @@ int ast_moh_start(struct ast_channel *chan, const char *mclass, const char *inte
 
 	ast_verb(3, "Music class %s requested but no musiconhold loaded.\n", mclass ? mclass : (interpclass ? interpclass : "default"));
 
-	return 0;
+	return -1;
 }
 
 void ast_moh_stop(struct ast_channel *chan)

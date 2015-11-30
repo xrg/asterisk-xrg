@@ -33,6 +33,8 @@
 #define DEFAULT_OUTBOUND_ENDPOINT "default_outbound_endpoint"
 #define DEFAULT_DEBUG "no"
 #define DEFAULT_ENDPOINT_IDENTIFIER_ORDER "ip,username,anonymous"
+#define DEFAULT_MAX_INITIAL_QUALIFY_TIME 0
+#define DEFAULT_FROM_USER "asterisk"
 
 static char default_useragent[256];
 
@@ -45,11 +47,15 @@ struct global_config {
 		AST_STRING_FIELD(debug);
 		/*! Order by which endpoint identifiers are checked (comma separated list) */
 		AST_STRING_FIELD(endpoint_identifier_order);
+		/*! User name to place in From header if there is no better option */
+		AST_STRING_FIELD(default_from_user);
 	);
 	/* Value to put in Max-Forwards header */
 	unsigned int max_forwards;
 	/* The interval at which to send keep alive messages to active connection-oriented transports */
 	unsigned int keep_alive_interval;
+	/* The maximum time for all contacts to be qualified at startup */
+	unsigned int max_initial_qualify_time;
 };
 
 static void global_destructor(void *obj)
@@ -159,6 +165,34 @@ unsigned int ast_sip_get_keep_alive_interval(void)
 	interval = cfg->keep_alive_interval;
 	ao2_ref(cfg, -1);
 	return interval;
+}
+
+unsigned int ast_sip_get_max_initial_qualify_time(void)
+{
+	unsigned int time;
+	struct global_config *cfg;
+
+	cfg = get_global_cfg();
+	if (!cfg) {
+		return DEFAULT_MAX_INITIAL_QUALIFY_TIME;
+	}
+
+	time = cfg->max_initial_qualify_time;
+	ao2_ref(cfg, -1);
+	return time;
+}
+
+void ast_sip_get_default_from_user(char *from_user, size_t size)
+{
+	struct global_config *cfg;
+
+	cfg = get_global_cfg();
+	if (!cfg) {
+		ast_copy_string(from_user, DEFAULT_FROM_USER, size);
+	} else {
+		ast_copy_string(from_user, cfg->default_from_user, size);
+		ao2_ref(cfg, -1);
+	}
 }
 
 /*!
@@ -271,6 +305,11 @@ int ast_sip_initialize_sorcery_global(void)
 	ast_sorcery_object_field_register(sorcery, "global", "keep_alive_interval",
 		__stringify(DEFAULT_KEEPALIVE_INTERVAL),
 		OPT_UINT_T, 0, FLDSET(struct global_config, keep_alive_interval));
+	ast_sorcery_object_field_register(sorcery, "global", "max_initial_qualify_time",
+		__stringify(DEFAULT_MAX_INITIAL_QUALIFY_TIME),
+		OPT_UINT_T, 0, FLDSET(struct global_config, max_initial_qualify_time));
+	ast_sorcery_object_field_register(sorcery, "global", "default_from_user", DEFAULT_FROM_USER,
+		OPT_STRINGFIELD_T, 0, STRFLDSET(struct global_config, default_from_user));
 
 	if (ast_sorcery_instance_observer_add(sorcery, &observer_callbacks_global)) {
 		return -1;

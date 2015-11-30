@@ -1551,7 +1551,7 @@ int ast_bridge_join(struct ast_bridge *bridge,
 	}
 
 	if (!res) {
-		res = bridge_channel_internal_join(bridge_channel);
+		res = bridge_channel_internal_join(bridge_channel, NULL);
 	}
 
 	/* Cleanup all the data in the bridge channel after it leaves the bridge. */
@@ -1581,13 +1581,14 @@ join_exit:;
 /*! \brief Thread responsible for imparted bridged channels to be departed */
 static void *bridge_channel_depart_thread(void *data)
 {
-	struct ast_bridge_channel *bridge_channel = data;
+	struct bridge_channel_internal_cond *cond = data;
+	struct ast_bridge_channel *bridge_channel = cond->bridge_channel;
 
 	if (bridge_channel->callid) {
 		ast_callid_threadassoc_add(bridge_channel->callid);
 	}
 
-	bridge_channel_internal_join(bridge_channel);
+	bridge_channel_internal_join(bridge_channel, cond);
 
 	/*
 	 * cleanup
@@ -1608,14 +1609,15 @@ static void *bridge_channel_depart_thread(void *data)
 /*! \brief Thread responsible for independent imparted bridged channels */
 static void *bridge_channel_ind_thread(void *data)
 {
-	struct ast_bridge_channel *bridge_channel = data;
+	struct bridge_channel_internal_cond *cond = data;
+	struct ast_bridge_channel *bridge_channel = cond->bridge_channel;
 	struct ast_channel *chan;
 
 	if (bridge_channel->callid) {
 		ast_callid_threadassoc_add(bridge_channel->callid);
 	}
 
-	bridge_channel_internal_join(bridge_channel);
+	bridge_channel_internal_join(bridge_channel, cond);
 	chan = bridge_channel->chan;
 
 	/* cleanup */
@@ -1699,13 +1701,27 @@ int ast_bridge_impart(struct ast_bridge *bridge,
 
 	/* Actually create the thread that will handle the channel */
 	if (!res) {
+		struct bridge_channel_internal_cond cond = {
+			.done = 0,
+			.bridge_channel = bridge_channel
+		};
+		ast_mutex_init(&cond.lock);
+		ast_cond_init(&cond.cond, NULL);
+
 		if ((flags & AST_BRIDGE_IMPART_CHAN_MASK) == AST_BRIDGE_IMPART_CHAN_INDEPENDENT) {
 			res = ast_pthread_create_detached(&bridge_channel->thread, NULL,
-				bridge_channel_ind_thread, bridge_channel);
+				bridge_channel_ind_thread, &cond);
 		} else {
 			res = ast_pthread_create(&bridge_channel->thread, NULL,
-				bridge_channel_depart_thread, bridge_channel);
+				bridge_channel_depart_thread, &cond);
 		}
+
+		if (!res) {
+			bridge_channel_internal_wait(&cond);
+		}
+
+		ast_cond_destroy(&cond.cond);
+		ast_mutex_destroy(&cond.lock);
 	}
 
 	if (res) {
@@ -3955,6 +3971,15 @@ static enum ast_transfer_result attended_transfer_bridge(struct ast_channel *cha
 		struct ast_channel *chan2, struct ast_bridge *bridge1, struct ast_bridge *bridge2,
 		struct ast_attended_transfer_message *transfer_msg)
 {
+#define BRIDGE_LOCK_ONE_OR_BOTH(b1, b2) \
+	do { \
+		if (b2) { \
+			ast_bridge_lock_both(b1, b2); \
+		} else { \
+			ast_bridge_lock(b1); \
+		} \
+	} while (0)
+
 	static const char *dest = "_attended@transfer/m";
 	struct ast_channel *local_chan;
 	int cause;
@@ -3985,8 +4010,18 @@ static enum ast_transfer_result attended_transfer_bridge(struct ast_channel *cha
 		return AST_BRIDGE_TRANSFER_FAIL;
 	}
 
+	/*
+	 * Since bridges need to be unlocked before entering ast_bridge_impart and
+	 * core_local may call into it then the bridges need to be unlocked here.
+	 */
+	ast_bridge_unlock(bridge1);
+	if (bridge2) {
+		ast_bridge_unlock(bridge2);
+	}
+
 	if (ast_call(local_chan, dest, 0)) {
 		ast_hangup(local_chan);
+		BRIDGE_LOCK_ONE_OR_BOTH(bridge1, bridge2);
 		return AST_BRIDGE_TRANSFER_FAIL;
 	}
 
@@ -3996,8 +4031,10 @@ static enum ast_transfer_result attended_transfer_bridge(struct ast_channel *cha
 		AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
 		ast_hangup(local_chan);
 		ao2_cleanup(local_chan);
+		BRIDGE_LOCK_ONE_OR_BOTH(bridge1, bridge2);
 		return AST_BRIDGE_TRANSFER_FAIL;
 	}
+	BRIDGE_LOCK_ONE_OR_BOTH(bridge1, bridge2);
 
 	if (bridge2) {
 		RAII_VAR(struct ast_channel *, local_chan2, NULL, ao2_cleanup);
@@ -4389,6 +4426,7 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
 	int do_bridge_transfer;
 	enum ast_transfer_result res;
 	const char *app = NULL;
+	int hangup_target = 0;
 
 	to_transferee_bridge = acquire_bridge(to_transferee);
 	to_target_bridge = acquire_bridge(to_transfer_target);
@@ -4468,13 +4506,19 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
 		ast_bridge_unlock(to_transferee_bridge);
 		ast_bridge_unlock(to_target_bridge);
 
-		ast_softhangup(to_transfer_target, AST_SOFTHANGUP_DEV);
+		hangup_target = 1;
 		goto end;
 	}
 
 	the_bridge = to_transferee_bridge ?: to_target_bridge;
 	chan_bridged = to_transferee_bridge ? to_transferee : to_transfer_target;
 	chan_unbridged = to_transferee_bridge ? to_transfer_target : to_transferee;
+
+	/*
+	 * Race condition makes it possible for app to be NULL, so get the app prior to
+	 * transferring with a fallback of "unknown".
+	 */
+	app = ast_strdupa(ast_channel_appl(chan_unbridged) ?: "unknown");
 
 	{
 		int chan_count;
@@ -4505,6 +4549,11 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
 	set_transfer_variables_all(to_transferee, channels, 1);
 
 	if (do_bridge_transfer) {
+		/*
+		 * Hang up the target if it was bridged. Note, if it is not bridged
+		 * it is hung up during the masquerade.
+		 */
+		hangup_target = chan_bridged == to_transfer_target;
 		ast_bridge_lock(the_bridge);
 		res = attended_transfer_bridge(chan_bridged, chan_unbridged, the_bridge, NULL, transfer_msg);
 		ast_bridge_unlock(the_bridge);
@@ -4517,7 +4566,6 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
 		goto end;
 	}
 
-	app = ast_strdupa(ast_channel_appl(chan_unbridged));
 	if (bridge_channel_internal_queue_attended_transfer(transferee, chan_unbridged)) {
 		res = AST_BRIDGE_TRANSFER_FAIL;
 		goto end;
@@ -4529,6 +4577,10 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
 	res = AST_BRIDGE_TRANSFER_SUCCESS;
 
 end:
+	if (res == AST_BRIDGE_TRANSFER_SUCCESS && hangup_target) {
+		ast_softhangup(to_transfer_target, AST_SOFTHANGUP_DEV);
+	}
+
 	transfer_msg->result = res;
 	ast_bridge_publish_attended_transfer(transfer_msg);
 	return res;

@@ -107,6 +107,70 @@ static void format_cap_only_type(struct ast_format_cap *caps, enum ast_media_typ
 	}
 }
 
+static int send_keepalive(const void *data)
+{
+	struct ast_sip_session_media *session_media = (struct ast_sip_session_media *) data;
+	struct ast_rtp_instance *rtp = session_media->rtp;
+	int keepalive;
+	time_t interval;
+	int send_keepalive;
+
+	if (!rtp) {
+		return 0;
+	}
+
+	keepalive = ast_rtp_instance_get_keepalive(rtp);
+
+	if (!ast_sockaddr_isnull(&session_media->direct_media_addr)) {
+		ast_debug(3, "Not sending RTP keepalive on RTP instance %p since direct media is in use\n", rtp);
+		return keepalive * 1000;
+	}
+
+	interval = time(NULL) - ast_rtp_instance_get_last_tx(rtp);
+	send_keepalive = interval >= keepalive;
+
+	ast_debug(3, "It has been %d seconds since RTP was last sent on instance %p. %sending keepalive\n",
+			(int) interval, rtp, send_keepalive ? "S" : "Not s");
+
+	if (send_keepalive) {
+		ast_rtp_instance_sendcng(rtp, 0);
+		return keepalive * 1000;
+	}
+
+	return (keepalive - interval) * 1000;
+}
+
+/*! \brief Check whether RTP is being received or not */
+static int rtp_check_timeout(const void *data)
+{
+	struct ast_sip_session_media *session_media = (struct ast_sip_session_media *)data;
+	struct ast_rtp_instance *rtp = session_media->rtp;
+	int elapsed;
+	struct ast_channel *chan;
+
+	if (!rtp) {
+		return 0;
+	}
+
+	elapsed = time(NULL) - ast_rtp_instance_get_last_rx(rtp);
+	if (elapsed < ast_rtp_instance_get_timeout(rtp)) {
+		return (ast_rtp_instance_get_timeout(rtp) - elapsed) * 1000;
+	}
+
+	chan = ast_channel_get_by_name(ast_rtp_instance_get_channel_id(rtp));
+	if (!chan) {
+		return 0;
+	}
+
+	ast_log(LOG_NOTICE, "Disconnecting channel '%s' for lack of RTP activity in %d seconds\n",
+		ast_channel_name(chan), elapsed);
+
+	ast_softhangup(chan, AST_SOFTHANGUP_DEV);
+	ast_channel_unref(chan);
+
+	return 0;
+}
+
 /*! \brief Internal function which creates an RTP instance */
 static int create_rtp(struct ast_sip_session *session, struct ast_sip_session_media *session_media, unsigned int ipv6)
 {
@@ -141,6 +205,8 @@ static int create_rtp(struct ast_sip_session *session, struct ast_sip_session_me
 				session->endpoint->media.cos_video, "SIP RTP Video");
 	}
 
+	ast_rtp_instance_set_last_rx(session_media->rtp, time(NULL));
+
 	return 0;
 }
 
@@ -155,6 +221,8 @@ static void get_codecs(struct ast_sip_session *session, const struct pjmedia_sdp
 	char name[256];
 	char media[20];
 	char fmt_param[256];
+	enum ast_rtp_options options = session->endpoint->media.g726_non_standard ?
+		AST_RTP_OPT_G726_NONSTANDARD : 0;
 
 	ast_rtp_codecs_payloads_initialize(codecs);
 
@@ -173,12 +241,13 @@ static void get_codecs(struct ast_sip_session *session, const struct pjmedia_sdp
 		}
 
 		ast_copy_pj_str(name, &rtpmap->enc_name, sizeof(name));
-                if (strcmp(name,"telephone-event") == 0) {
-                        tel_event++;
-                }
+		if (strcmp(name, "telephone-event") == 0) {
+			tel_event++;
+		}
+
 		ast_copy_pj_str(media, (pj_str_t*)&stream->desc.media, sizeof(media));
-		ast_rtp_codecs_payloads_set_rtpmap_type_rate(codecs, NULL, pj_strtoul(&stream->desc.fmt[i]),
-							     media, name, 0, rtpmap->clock_rate);
+		ast_rtp_codecs_payloads_set_rtpmap_type_rate(codecs, NULL,
+			pj_strtoul(&stream->desc.fmt[i]), media, name, options, rtpmap->clock_rate);
 		/* Look for an optional associated fmtp attribute */
 		if (!(attr = pjmedia_sdp_media_find_attr2(stream, "fmtp", &rtpmap->pt))) {
 			continue;
@@ -205,8 +274,8 @@ static void get_codecs(struct ast_sip_session *session, const struct pjmedia_sdp
 			}
 		}
 	}
-	if ((tel_event==0) && (session->endpoint->dtmf == AST_SIP_DTMF_AUTO)) {
-                ast_rtp_instance_dtmf_mode_set(session_media->rtp, AST_RTP_DTMF_MODE_INBAND);
+	if (!tel_event && (session->endpoint->dtmf == AST_SIP_DTMF_AUTO)) {
+		ast_rtp_instance_dtmf_mode_set(session_media->rtp, AST_RTP_DTMF_MODE_INBAND);
 	}
 	/* Get the packetization, if it exists */
 	if ((attr = pjmedia_sdp_media_find_attr2(stream, "ptime", NULL))) {
@@ -252,8 +321,8 @@ static int set_caps(struct ast_sip_session *session, struct ast_sip_session_medi
 	/* get the joint capabilities between peer and endpoint */
 	ast_format_cap_get_compatible(caps, peer, joint);
 	if (!ast_format_cap_count(joint)) {
-		struct ast_str *usbuf = ast_str_alloca(256);
-		struct ast_str *thembuf = ast_str_alloca(256);
+		struct ast_str *usbuf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+		struct ast_str *thembuf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 		ast_rtp_codecs_payloads_destroy(&codecs);
 		ast_log(LOG_NOTICE, "No joint capabilities for '%s' media stream between our configuration(%s) and incoming SDP(%s)\n",
@@ -264,7 +333,7 @@ static int set_caps(struct ast_sip_session *session, struct ast_sip_session_medi
 	}
 
 	ast_rtp_codecs_payloads_copy(&codecs, ast_rtp_instance_get_codecs(session_media->rtp),
-				     session_media->rtp);
+		session_media->rtp);
 
 	ast_format_cap_append_from_cap(session->req_caps, joint, AST_MEDIA_TYPE_UNKNOWN);
 
@@ -304,20 +373,25 @@ static int set_caps(struct ast_sip_session *session, struct ast_sip_session_medi
 	return 0;
 }
 
-static pjmedia_sdp_attr* generate_rtpmap_attr(pjmedia_sdp_media *media, pj_pool_t *pool, int rtp_code,
-					      int asterisk_format, struct ast_format *format, int code)
+static pjmedia_sdp_attr* generate_rtpmap_attr(struct ast_sip_session *session, pjmedia_sdp_media *media, pj_pool_t *pool,
+					      int rtp_code, int asterisk_format, struct ast_format *format, int code)
 {
 	pjmedia_sdp_rtpmap rtpmap;
 	pjmedia_sdp_attr *attr = NULL;
 	char tmp[64];
+	enum ast_rtp_options options = session->endpoint->media.g726_non_standard ?
+		AST_RTP_OPT_G726_NONSTANDARD : 0;
 
 	snprintf(tmp, sizeof(tmp), "%d", rtp_code);
 	pj_strdup2(pool, &media->desc.fmt[media->desc.fmt_count++], tmp);
 	rtpmap.pt = media->desc.fmt[media->desc.fmt_count - 1];
 	rtpmap.clock_rate = ast_rtp_lookup_sample_rate2(asterisk_format, format, code);
-	pj_strdup2(pool, &rtpmap.enc_name, ast_rtp_lookup_mime_subtype2(asterisk_format, format, code, 0));
-	rtpmap.param.slen = 0;
-	rtpmap.param.ptr = NULL;
+	pj_strdup2(pool, &rtpmap.enc_name, ast_rtp_lookup_mime_subtype2(asterisk_format, format, code, options));
+	if (!pj_stricmp2(&rtpmap.enc_name, "opus")) {
+		pj_cstr(&rtpmap.param, "2");
+	} else {
+		pj_cstr(&rtpmap.param, NULL);
+	}
 
 	pjmedia_sdp_rtpmap_to_attr(pool, &rtpmap, &attr);
 
@@ -531,6 +605,9 @@ static enum ast_sip_session_media_encryption get_media_encryption_type(pj_str_t 
 
 	*optimistic = 0;
 
+	if (!transport_str) {
+		return AST_SIP_MEDIA_TRANSPORT_INVALID;
+	}
 	if (strstr(transport_str, "UDP/TLS")) {
 		return AST_SIP_MEDIA_ENCRYPT_DTLS;
 	} else if (strstr(transport_str, "SAVP")) {
@@ -952,7 +1029,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 	static const pj_str_t STR_IP6 = { "IP6", 3};
 	static const pj_str_t STR_SENDRECV = { "sendrecv", 8 };
 	pjmedia_sdp_media *media;
-	char hostip[PJ_INET6_ADDRSTRLEN+2];
+	const char *hostip = NULL;
 	struct ast_sockaddr addr;
 	char tmp[512];
 	pj_str_t stmp;
@@ -1000,16 +1077,16 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 
 	/* Add connection level details */
 	if (direct_media_enabled) {
-		ast_copy_string(hostip, ast_sockaddr_stringify_fmt(&session_media->direct_media_addr, AST_SOCKADDR_STR_ADDR), sizeof(hostip));
+		hostip = ast_sockaddr_stringify_fmt(&session_media->direct_media_addr, AST_SOCKADDR_STR_ADDR);
 	} else if (ast_strlen_zero(session->endpoint->media.address)) {
-		pj_sockaddr localaddr;
-
-		if (pj_gethostip(session->endpoint->media.rtp.ipv6 ? pj_AF_INET6() : pj_AF_INET(), &localaddr)) {
-			return -1;
-		}
-		pj_sockaddr_print(&localaddr, hostip, sizeof(hostip), 2);
+		hostip = ast_sip_get_host_ip_string(session->endpoint->media.rtp.ipv6 ? pj_AF_INET6() : pj_AF_INET());
 	} else {
-		ast_copy_string(hostip, session->endpoint->media.address, sizeof(hostip));
+		hostip = session->endpoint->media.address;
+	}
+
+	if (ast_strlen_zero(hostip)) {
+		ast_log(LOG_ERROR, "No local host IP available for stream %s\n", session_media->stream_type);
+		return -1;
 	}
 
 	media->conn->net_type = STR_IN;
@@ -1050,7 +1127,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 			continue;
 		}
 
-		if (!(attr = generate_rtpmap_attr(media, pool, rtp_code, 1, format, 0))) {
+		if (!(attr = generate_rtpmap_attr(session, media, pool, rtp_code, 1, format, 0))) {
 			ao2_ref(format, -1);
 			continue;
 		}
@@ -1070,12 +1147,16 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 	/* Add non-codec formats */
 	if (media_type != AST_MEDIA_TYPE_VIDEO) {
 		for (index = 1LL; index <= AST_RTP_MAX; index <<= 1) {
-			if (!(noncodec & index) || (rtp_code = ast_rtp_codecs_payload_code(ast_rtp_instance_get_codecs(session_media->rtp),
-											   0, NULL, index)) == -1) {
+			if (!(noncodec & index)) {
+				continue;
+			}
+			rtp_code = ast_rtp_codecs_payload_code(
+				ast_rtp_instance_get_codecs(session_media->rtp), 0, NULL, index);
+			if (rtp_code == -1) {
 				continue;
 			}
 
-			if (!(attr = generate_rtpmap_attr(media, pool, rtp_code, 0, NULL, index))) {
+			if (!(attr = generate_rtpmap_attr(session, media, pool, rtp_code, 0, NULL, index))) {
 				continue;
 			}
 
@@ -1173,7 +1254,7 @@ static int apply_negotiated_sdp_stream(struct ast_sip_session *session, struct a
 	/* Apply connection information to the RTP instance */
 	ast_sockaddr_set_port(addrs, remote_stream->desc.port);
 	ast_rtp_instance_set_remote_address(session_media->rtp, addrs);
-	if (set_caps(session, session_media, local_stream)) {
+	if (set_caps(session, session_media, remote_stream)) {
 		return 1;
 	}
 
@@ -1222,6 +1303,40 @@ static int apply_negotiated_sdp_stream(struct ast_sip_session *session, struct a
 	/* This purposely resets the encryption to the configured in case it gets added later */
 	session_media->encryption = session->endpoint->media.rtp.encryption;
 
+	if (session->endpoint->media.rtp.keepalive > 0 &&
+			stream_to_media_type(session_media->stream_type) == AST_MEDIA_TYPE_AUDIO) {
+		ast_rtp_instance_set_keepalive(session_media->rtp, session->endpoint->media.rtp.keepalive);
+		/* Schedule the initial keepalive early in case this is being used to punch holes through
+		 * a NAT. This way there won't be an awkward delay before media starts flowing in some
+		 * scenarios.
+		 */
+		AST_SCHED_DEL(sched, session_media->keepalive_sched_id);
+		session_media->keepalive_sched_id = ast_sched_add_variable(sched, 500, send_keepalive,
+			session_media, 1);
+	}
+
+	/* As the channel lock is not held during this process the scheduled item won't block if
+	 * it is hanging up the channel at the same point we are applying this negotiated SDP.
+	 */
+	AST_SCHED_DEL(sched, session_media->timeout_sched_id);
+
+	/* Due to the fact that we only ever have one scheduled timeout item for when we are both
+	 * off hold and on hold we don't need to store the two timeouts differently on the RTP
+	 * instance itself.
+	 */
+	ast_rtp_instance_set_timeout(session_media->rtp, 0);
+	if (session->endpoint->media.rtp.timeout && !session_media->held) {
+		ast_rtp_instance_set_timeout(session_media->rtp, session->endpoint->media.rtp.timeout);
+	} else if (session->endpoint->media.rtp.timeout_hold && session_media->held) {
+		ast_rtp_instance_set_timeout(session_media->rtp, session->endpoint->media.rtp.timeout_hold);
+	}
+
+	if (ast_rtp_instance_get_timeout(session_media->rtp)) {
+		session_media->timeout_sched_id = ast_sched_add_variable(sched,
+			ast_rtp_instance_get_timeout(session_media->rtp) * 1000, rtp_check_timeout,
+			session_media, 1);
+	}
+
 	return 1;
 }
 
@@ -1247,11 +1362,23 @@ static void change_outgoing_sdp_stream_media_address(pjsip_tx_data *tdata, struc
 	pj_strdup2(tdata->pool, &stream->conn->addr, transport->external_media_address);
 }
 
+/*! \brief Function which stops the RTP instance */
+static void stream_stop(struct ast_sip_session_media *session_media)
+{
+	if (!session_media->rtp) {
+		return;
+	}
+
+	AST_SCHED_DEL(sched, session_media->keepalive_sched_id);
+	AST_SCHED_DEL(sched, session_media->timeout_sched_id);
+	ast_rtp_instance_stop(session_media->rtp);
+}
+
 /*! \brief Function which destroys the RTP instance when session ends */
 static void stream_destroy(struct ast_sip_session_media *session_media)
 {
 	if (session_media->rtp) {
-		ast_rtp_instance_stop(session_media->rtp);
+		stream_stop(session_media);
 		ast_rtp_instance_destroy(session_media->rtp);
 	}
 	session_media->rtp = NULL;
@@ -1264,6 +1391,7 @@ static struct ast_sip_session_sdp_handler audio_sdp_handler = {
 	.create_outgoing_sdp_stream = create_outgoing_sdp_stream,
 	.apply_negotiated_sdp_stream = apply_negotiated_sdp_stream,
 	.change_outgoing_sdp_stream_media_address = change_outgoing_sdp_stream_media_address,
+	.stream_stop = stream_stop,
 	.stream_destroy = stream_destroy,
 };
 
@@ -1274,6 +1402,7 @@ static struct ast_sip_session_sdp_handler video_sdp_handler = {
 	.create_outgoing_sdp_stream = create_outgoing_sdp_stream,
 	.apply_negotiated_sdp_stream = apply_negotiated_sdp_stream,
 	.change_outgoing_sdp_stream_media_address = change_outgoing_sdp_stream_media_address,
+	.stream_stop = stream_stop,
 	.stream_destroy = stream_destroy,
 };
 

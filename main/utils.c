@@ -1256,8 +1256,8 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 		pthread_attr_init(attr);
 	}
 
-#ifdef __linux__
-	/* On Linux, pthread_attr_init() defaults to PTHREAD_EXPLICIT_SCHED,
+#if defined(__linux__) || defined(__FreeBSD__)
+	/* On Linux and FreeBSD , pthread_attr_init() defaults to PTHREAD_EXPLICIT_SCHED,
 	   which is kind of useless. Change this here to
 	   PTHREAD_INHERIT_SCHED; that way the -p option to set realtime
 	   priority will propagate down to new threads by default.
@@ -1621,6 +1621,136 @@ char *ast_unescape_c(char *src)
 	}
 	*dst = '\0';
 	return ret;
+}
+
+/*
+ * Standard escape sequences - Note, '\0' is not included as a valid character
+ * to escape, but instead is used here as a NULL terminator for the string.
+ */
+char escape_sequences[] = {
+	'\a', '\b', '\f', '\n', '\r', '\t', '\v', '\\', '\'', '\"', '\?', '\0'
+};
+
+/*
+ * Standard escape sequences output map (has to maintain matching order with
+ * escape_sequences). '\0' is included here as a NULL terminator for the string.
+ */
+static char escape_sequences_map[] = {
+	'a', 'b', 'f', 'n', 'r', 't', 'v', '\\', '\'', '"', '?', '\0'
+};
+
+char *ast_escape(char *dest, const char *s, size_t size, const char *to_escape)
+{
+	char *p;
+	char *c;
+
+	if (!dest || !size) {
+		return dest;
+	}
+	if (ast_strlen_zero(s)) {
+		*dest = '\0';
+		return dest;
+	}
+
+	if (ast_strlen_zero(to_escape)) {
+		ast_copy_string(dest, s, size);
+		return dest;
+	}
+
+	for (p = dest; *s && --size; ++s, ++p) {
+		/* If in the list of characters to escape then escape it */
+		if (strchr(to_escape, *s)) {
+			if (!--size) {
+				/* Not enough room left for the escape sequence. */
+				break;
+			}
+
+			/*
+			 * See if the character to escape is part of the standard escape
+			 * sequences. If so we'll have to use its mapped counterpart
+			 * otherwise just use the current character.
+			 */
+			c = strchr(escape_sequences, *s);
+			*p++ = '\\';
+			*p = c ? escape_sequences_map[c - escape_sequences] : *s;
+		} else {
+			*p = *s;
+		}
+	}
+	*p = '\0';
+
+	return dest;
+}
+
+char *ast_escape_c(char *dest, const char *s, size_t size)
+{
+	/*
+	 * Note - This is an optimized version of ast_escape. When looking only
+	 * for escape_sequences a couple of checks used in the generic case can
+	 * be left out thus making it slightly more efficient.
+	 */
+	char *p;
+	char *c;
+
+	if (!dest || !size) {
+		return dest;
+	}
+	if (ast_strlen_zero(s)) {
+		*dest = '\0';
+		return dest;
+	}
+
+	for (p = dest; *s && --size; ++s, ++p) {
+		/*
+		 * See if the character to escape is part of the standard escape
+		 * sequences. If so use its mapped counterpart.
+		 */
+		c = strchr(escape_sequences, *s);
+		if (c) {
+			if (!--size) {
+				/* Not enough room left for the escape sequence. */
+				break;
+			}
+
+			*p++ = '\\';
+			*p = escape_sequences_map[c - escape_sequences];
+		} else {
+			*p = *s;
+		}
+	}
+	*p = '\0';
+
+	return dest;
+}
+
+static char *escape_alloc(const char *s, size_t *size)
+{
+	if (!s) {
+		return NULL;
+	}
+
+	/*
+	 * The result string needs to be twice the size of the given
+	 * string just in case every character in it needs to be escaped.
+	 */
+	*size = strlen(s) * 2 + 1;
+	return ast_malloc(*size);
+}
+
+char *ast_escape_alloc(const char *s, const char *to_escape)
+{
+	size_t size = 0;
+	char *dest = escape_alloc(s, &size);
+
+	return ast_escape(dest, s, size, to_escape);
+}
+
+char *ast_escape_c_alloc(const char *s)
+{
+	size_t size = 0;
+	char *dest = escape_alloc(s, &size);
+
+	return ast_escape_c(dest, s, size);
 }
 
 int ast_build_string_va(char **buffer, size_t *space, const char *fmt, va_list ap)

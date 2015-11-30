@@ -83,6 +83,8 @@ struct ast_taskprocessor {
 	pthread_t thread;
 	/*! Indicates if the taskprocessor is currently executing a task */
 	unsigned int executing:1;
+	/*! Indicates that a high water warning has been issued on this task processor */
+	unsigned int high_water_warned:1;
 };
 
 /*!
@@ -127,9 +129,6 @@ static int tps_ping_handler(void *datap);
 
 /*! \brief Remove the front task off the taskprocessor queue */
 static struct tps_task *tps_taskprocessor_pop(struct ast_taskprocessor *tps);
-
-/*! \brief Return the size of the taskprocessor queue */
-static int tps_taskprocessor_depth(struct ast_taskprocessor *tps);
 
 static char *cli_tps_ping(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *cli_tps_report(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
@@ -506,7 +505,7 @@ static struct tps_task *tps_taskprocessor_pop(struct ast_taskprocessor *tps)
 	return task;
 }
 
-static int tps_taskprocessor_depth(struct ast_taskprocessor *tps)
+long ast_taskprocessor_size(struct ast_taskprocessor *tps)
 {
 	return (tps) ? tps->tps_queue_size : -1;
 }
@@ -593,7 +592,6 @@ static struct ast_taskprocessor *__allocate_taskprocessor(const char *name, stru
 		return NULL;
 	}
 	if (!(p->name = ast_strdup(name))) {
-		ao2_ref(p, -1);
 		return NULL;
 	}
 
@@ -692,15 +690,25 @@ void *ast_taskprocessor_unreference(struct ast_taskprocessor *tps)
 		return NULL;
 	}
 
+	/* To prevent another thread from finding and getting a reference to this
+	 * taskprocessor we hold the singletons lock. If we didn't do this then
+	 * they may acquire it and find that the listener has been shut down.
+	 */
+	ao2_lock(tps_singletons);
+
 	if (ao2_ref(tps, -1) > 3) {
+		ao2_unlock(tps_singletons);
 		return NULL;
 	}
+
 	/* If we're down to 3 references, then those must be:
 	 * 1. The reference we just got rid of
 	 * 2. The container
 	 * 3. The listener
 	 */
-	ao2_unlink(tps_singletons, tps);
+	ao2_unlink_flags(tps_singletons, tps, OBJ_NOLOCK);
+	ao2_unlock(tps_singletons);
+
 	listener_shutdown(tps->listener);
 	return NULL;
 }
@@ -724,6 +732,13 @@ static int taskprocessor_push(struct ast_taskprocessor *tps, struct tps_task *t)
 	ao2_lock(tps);
 	AST_LIST_INSERT_TAIL(&tps->tps_queue, t, list);
 	previous_size = tps->tps_queue_size++;
+
+	if (previous_size >= AST_TASKPROCESSOR_HIGH_WATER_LEVEL && !tps->high_water_warned) {
+		ast_log(LOG_WARNING, "The '%s' task processor queue reached %d scheduled tasks.\n",
+			tps->name, previous_size);
+		tps->high_water_warned = 1;
+	}
+
 	/* The currently executing task counts as still in queue */
 	was_empty = tps->executing ? 0 : previous_size == 0;
 	ao2_unlock(tps);
@@ -745,7 +760,7 @@ int ast_taskprocessor_execute(struct ast_taskprocessor *tps)
 {
 	struct ast_taskprocessor_local local;
 	struct tps_task *t;
-	int size;
+	long size;
 
 	ao2_lock(tps);
 	t = tps_taskprocessor_pop(tps);
@@ -777,7 +792,7 @@ int ast_taskprocessor_execute(struct ast_taskprocessor *tps)
 	 * after we pop an empty stack.
 	 */
 	tps->executing = 0;
-	size = tps_taskprocessor_depth(tps);
+	size = ast_taskprocessor_size(tps);
 	/* If we executed a task, bump the stats */
 	if (tps->stats) {
 		tps->stats->_tasks_processed_count++;

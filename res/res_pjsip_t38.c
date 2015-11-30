@@ -135,10 +135,13 @@ static void t38_change_state(struct ast_sip_session *session, struct ast_sip_ses
 	}
 
 	session->t38state = new_state;
-	ast_debug(2, "T.38 state changed to '%u' from '%u' on channel '%s'\n", new_state, old_state, ast_channel_name(session->channel));
+	ast_debug(2, "T.38 state changed to '%u' from '%u' on channel '%s'\n",
+		new_state, old_state,
+		session->channel ? ast_channel_name(session->channel) : "<gone>");
 
 	if (pj_timer_heap_cancel(pjsip_endpt_get_timer_heap(ast_sip_get_pjsip_endpoint()), &state->timer)) {
-		ast_debug(2, "Automatic T.38 rejection on channel '%s' terminated\n", ast_channel_name(session->channel));
+		ast_debug(2, "Automatic T.38 rejection on channel '%s' terminated\n",
+			session->channel ? ast_channel_name(session->channel) : "<gone>");
 		ao2_ref(session, -1);
 	}
 
@@ -198,7 +201,8 @@ static int t38_automatic_reject(void *obj)
 		return 0;
 	}
 
-	ast_debug(2, "Automatically rejecting T.38 request on channel '%s'\n", ast_channel_name(session->channel));
+	ast_debug(2, "Automatically rejecting T.38 request on channel '%s'\n",
+		session->channel ? ast_channel_name(session->channel) : "<gone>");
 
 	t38_change_state(session, session_media, datastore->data, T38_REJECTED);
 	ast_sip_session_resume_reinvite(session);
@@ -227,9 +231,9 @@ static struct t38_state *t38_state_get_or_alloc(struct ast_sip_session *session)
 		return datastore->data;
 	}
 
-	if (!(datastore = ast_sip_session_alloc_datastore(&t38_datastore, "t38")) ||
-		!(datastore->data = ast_calloc(1, sizeof(struct t38_state))) ||
-		ast_sip_session_add_datastore(session, datastore)) {
+	if (!(datastore = ast_sip_session_alloc_datastore(&t38_datastore, "t38"))
+		|| !(datastore->data = ast_calloc(1, sizeof(struct t38_state)))
+		|| ast_sip_session_add_datastore(session, datastore)) {
 		return NULL;
 	}
 
@@ -324,9 +328,13 @@ static int t38_interpret_parameters(void *obj)
 	case AST_T38_REQUEST_NEGOTIATE:         /* Request T38 */
 		/* Negotiation can not take place without a valid max_ifp value. */
 		if (!parameters->max_ifp) {
-			t38_change_state(data->session, session_media, state, T38_REJECTED);
 			if (data->session->t38state == T38_PEER_REINVITE) {
+				t38_change_state(data->session, session_media, state, T38_REJECTED);
 				ast_sip_session_resume_reinvite(data->session);
+			} else if (data->session->t38state == T38_ENABLED) {
+				t38_change_state(data->session, session_media, state, T38_DISABLED);
+				ast_sip_session_refresh(data->session, NULL, NULL, NULL,
+					AST_SIP_SESSION_REFRESH_METHOD_INVITE, 1);
 			}
 			break;
 		} else if (data->session->t38state == T38_PEER_REINVITE) {
@@ -470,6 +478,11 @@ static void t38_attach_framehook(struct ast_sip_session *session)
 		.chan_breakdown_cb = t38_masq,
 	};
 
+	/* If the channel's already gone, bail */
+	if (!session->channel) {
+		return;
+	}
+
 	/* Only attach the framehook if t38 is enabled for the endpoint */
 	if (!session->endpoint->media.t38.enabled) {
 		return;
@@ -504,14 +517,14 @@ static void t38_attach_framehook(struct ast_sip_session *session)
 	ast_channel_unlock(session->channel);
 }
 
-/*! \brief Function called when an INVITE goes out */
+/*! \brief Function called when an INVITE arrives */
 static int t38_incoming_invite_request(struct ast_sip_session *session, struct pjsip_rx_data *rdata)
 {
 	t38_attach_framehook(session);
 	return 0;
 }
 
-/*! \brief Function called when an INVITE comes in */
+/*! \brief Function called when an INVITE is sent */
 static void t38_outgoing_invite_request(struct ast_sip_session *session, struct pjsip_tx_data *tdata)
 {
 	t38_attach_framehook(session);
@@ -694,7 +707,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 	static const pj_str_t STR_T38UDPREDUNDANCY = { "t38UDPRedundancy", 16 };
 	struct t38_state *state;
 	pjmedia_sdp_media *media;
-	char hostip[PJ_INET6_ADDRSTRLEN+2];
+	const char *hostip = NULL;
 	struct ast_sockaddr addr;
 	char tmp[512];
 	pj_str_t stmp;
@@ -719,14 +732,13 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 	media->desc.transport = STR_UDPTL;
 
 	if (ast_strlen_zero(session->endpoint->media.address)) {
-		pj_sockaddr localaddr;
-
-		if (pj_gethostip(session->endpoint->media.t38.ipv6 ? pj_AF_INET6() : pj_AF_INET(), &localaddr)) {
-			return -1;
-		}
-		pj_sockaddr_print(&localaddr, hostip, sizeof(hostip), 2);
+		hostip = ast_sip_get_host_ip_string(session->endpoint->media.t38.ipv6 ? pj_AF_INET6() : pj_AF_INET());
 	} else {
-		ast_copy_string(hostip, session->endpoint->media.address, sizeof(hostip));
+		hostip = session->endpoint->media.address;
+	}
+
+	if (ast_strlen_zero(hostip)) {
+		return -1;
 	}
 
 	media->conn->net_type = STR_IN;

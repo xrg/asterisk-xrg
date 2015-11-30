@@ -548,6 +548,9 @@
 /* Define to 1 if CRYPTO has the OpenSSL Elliptic Curve Support feature. */
 #undef HAVE_OPENSSL_EC
 
+/* Define if your system has SSL_CTX_set_ecdh_auto declared. */
+#undef HAVE_OPENSSL_ECDH_AUTO
+
 /* Define to 1 if CRYPTO has the OpenSSL SRTP Extension Support feature. */
 #undef HAVE_OPENSSL_SRTP
 
@@ -1306,6 +1309,14 @@
 
 /* Number of bits in a file offset, on hosts where this is settable. */
 #undef _FILE_OFFSET_BITS
+
+/* Prevent clang array-bounds warning by not using strcmp from bits/string2.h
+   */
+#undef _HAVE_STRING_ARCH_strcmp
+
+/* Prevent clang array-bounds warning by not using strsep from bits/string2.h
+   */
+#undef _HAVE_STRING_ARCH_strsep
 
 /* Define to 1 to make fseeko visible on some hosts (e.g. glibc 2.2). */
 #undef _LARGEFILE_SOURCE

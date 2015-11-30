@@ -294,6 +294,18 @@ static void sorcery_config_internal_load(void *data, const struct ast_sorcery *s
 			continue;
 		}
 
+		/*  Confirm an object with this id does not already exist in the bucket.
+		 *  If it exists, however, the configuration is invalid so stop
+		 *  processing and destroy it. */
+		obj = ao2_find(objects, id, OBJ_KEY);
+
+		if (obj) {
+			ast_log(LOG_ERROR, "Config file '%s' could not be loaded; configuration contains a duplicate object: '%s' of type '%s'\n",
+				config->filename, id, type);
+			ast_config_destroy(cfg);
+			return;
+		}
+
 		if (!(obj = ast_sorcery_alloc(sorcery, type, id)) ||
 		    ast_sorcery_objectset_apply(sorcery, obj, ast_category_first(category))) {
 
@@ -336,8 +348,17 @@ static void sorcery_config_reload(void *data, const struct ast_sorcery *sorcery,
 
 static void *sorcery_config_open(const char *data)
 {
-	char *tmp = ast_strdupa(data), *filename = strsep(&tmp, ","), *option;
+	char *tmp;
+	char *filename;
+	char *option;
 	struct sorcery_config *config;
+
+	if (ast_strlen_zero(data)) {
+		return NULL;
+	}
+
+ 	tmp = ast_strdupa(data);
+ 	filename = strsep(&tmp, ",");
 
 	if (ast_strlen_zero(filename) || !(config = ao2_alloc_options(sizeof(*config) + strlen(filename) + 1, sorcery_config_destructor, AO2_ALLOC_OPT_LOCK_NOLOCK))) {
 		return NULL;

@@ -1383,15 +1383,15 @@ static int unload_module(void)
 	ast_cli_unregister_multiple(cli_realtime, ARRAY_LEN(cli_realtime));
 	ast_config_engine_deregister(&pgsql_engine);
 
+	/* Unlock so something else can destroy the lock. */
+	ast_mutex_unlock(&pgsql_lock);
+
 	/* Destroy cached table info */
 	AST_LIST_LOCK(&psql_tables);
 	while ((table = AST_LIST_REMOVE_HEAD(&psql_tables, list))) {
 		destroy_table(table);
 	}
 	AST_LIST_UNLOCK(&psql_tables);
-
-	/* Unlock so something else can destroy the lock. */
-	ast_mutex_unlock(&pgsql_lock);
 
 	return 0;
 }

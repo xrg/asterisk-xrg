@@ -124,7 +124,7 @@ empty:=
 space:=$(empty) $(empty)
 ASTTOPDIR:=$(subst $(space),\$(space),$(CURDIR))
 
-# Overwite config files on "make samples"
+# Overwite config files on "make samples" or other config installation targets
 OVERWRITE=y
 
 # Include debug and macro symbols in the executables (-g) and profiling info (-pg)
@@ -154,14 +154,21 @@ LINKER_SYMBOL_PREFIX=
 # Default install directory for DAHDI hooks.
 DAHDI_UDEV_HOOK_DIR = /usr/share/dahdi/span_config.d
 
-# If the file .asterisk.makeopts is present in your home directory, you can
-# include all of your favorite menuselect options so that every time you download
-# a new version of Asterisk, you don't have to run menuselect to set them.
-# The file /etc/asterisk.makeopts will also be included but can be overridden
-# by the file in your home directory.
+# This Makefile previously contained a note about the ability to use .asterisk.makeopts
+# from your home directory or /etc/asterisk.makeopts to set defaults for menuselect.
+# These files have never worked in this branch of Asterisk.  The work around is to
+# manually copy the file containing defaults before running 'make menuselect':
+#
+# cp ${HOME}/.asterisk.makeopts menuselect.makeopts
+#   or
+# cp /etc/asterisk.makeopts menuselect.makeopts
+#
+# As an alternative, menuselect/menuselect can be used by a script to enable or disable
+# individual options or entire categories.  To use this feature you must first
+# compile menuselect using 'make menuselect.makeopts'.  For information about parameters
+# supported run:
+# menuselect/menuselect --help
 
-GLOBAL_MAKEOPTS=$(wildcard /etc/asterisk.makeopts)
-USER_MAKEOPTS=$(wildcard ~/.asterisk.makeopts)
 
 MOD_SUBDIR_CFLAGS="-I$(ASTTOPDIR)/include"
 OTHER_SUBDIR_CFLAGS="-I$(ASTTOPDIR)/include"
@@ -254,10 +261,10 @@ MOD_SUBDIRS_MENUSELECT_TREE:=$(MOD_SUBDIRS:%=%-menuselect-tree)
 
 ifneq ($(findstring darwin,$(OSARCH)),)
   _ASTCFLAGS+=-D__Darwin__ -mmacosx-version-min=10.6
-  _SOLINK=-mmacosx-version-min=10.6 -Xlinker -undefined -Xlinker dynamic_lookup
+  _SOLINK=-mmacosx-version-min=10.6 -Wl,-undefined,dynamic_lookup
   _SOLINK+=/usr/lib/bundle1.o
   SOLINK=-bundle $(_SOLINK)
-  DYLINK=-Xlinker -dylib $(_SOLINK)
+  DYLINK=-Wl,-dylib $(_SOLINK)
   _ASTLDFLAGS+=-L/usr/local/lib
 else
 # These are used for all but Darwin
@@ -332,10 +339,10 @@ makeopts: configure
 	@echo "****"
 	@exit 1
 
-menuselect.makeopts: menuselect/menuselect menuselect-tree makeopts build_tools/menuselect-deps $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
+menuselect.makeopts: menuselect/menuselect menuselect-tree makeopts build_tools/menuselect-deps
 ifeq ($(filter %menuselect,$(MAKECMDGOALS)),)
 	menuselect/menuselect --check-deps $@
-	menuselect/menuselect --check-deps $@ $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
+	menuselect/menuselect --check-deps $@
 endif
 
 $(MOD_SUBDIRS_EMBED_LDSCRIPT):
@@ -393,7 +400,7 @@ defaults.h: makeopts .lastclean build_tools/make_defaults_h
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-main/version.c: FORCE .lastclean
+main/version.c: FORCE menuselect.makeopts .lastclean
 	@build_tools/make_version_c > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
@@ -423,6 +430,8 @@ _clean:
 	rm -f doc/core-en_US.xml
 	rm -f doc/full-en_US.xml
 	rm -f doc/rest-api/*.wiki
+	rm -f doxygen.log
+	rm -rf latex
 	rm -f rest-api-templates/*.pyc
 	@$(MAKE) -C menuselect clean
 	cp -f .cleancount .lastclean
@@ -439,6 +448,7 @@ distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	rm -f include/asterisk/autoconfig.h
 	rm -f include/asterisk/buildopts.h
 	rm -rf doc/api
+	rm -f doc/asterisk-ng-doxygen
 	rm -f build_tools/menuselect-deps
 
 datafiles: _all doc/core-en_US.xml
@@ -569,6 +579,7 @@ main-bininstall:
 	+@DESTDIR="$(DESTDIR)" ASTSBINDIR="$(ASTSBINDIR)" ASTLIBDIR="$(ASTLIBDIR)" $(SUBMAKE) -C main bininstall
 
 bininstall: _all installdirs $(SUBDIRS_INSTALL) main-bininstall
+	$(INSTALL) -m 755 contrib/scripts/astversion "$(DESTDIR)$(ASTSBINDIR)/"
 	$(INSTALL) -m 755 contrib/scripts/astgenkey "$(DESTDIR)$(ASTSBINDIR)/"
 	$(INSTALL) -m 755 contrib/scripts/autosupport "$(DESTDIR)$(ASTSBINDIR)/"
 	if [ ! -f /sbin/launchd ]; then \
@@ -641,7 +652,12 @@ install: badshell bininstall datafiles
 	@echo " + configuration files (overwriting any      +"
 	@echo " + existing config files), run:              +"
 	@echo " +                                           +"
-	@echo " +               $(mK) samples               +"
+	@echo " + For generic reference documentation:      +"
+	@echo " +   $(mK) samples                           +"
+	@echo " +                                           +"
+	@echo " + For a sample basic PBX:                   +"
+	@echo " +   $(mK) basic-pbx                         +"
+	@echo " +                                           +"
 	@echo " +                                           +"
 	@echo " +-----------------  or ---------------------+"
 	@echo " +                                           +"
@@ -659,24 +675,14 @@ isntall: install
 
 upgrade: bininstall
 
-# XXX why *.adsi is installed first ?
-adsi:
-	@echo Installing adsi config files...
-	$(INSTALL) -d "$(DESTDIR)$(ASTETCDIR)"
-	@for x in configs/samples/*.adsi; do \
-		dst="$(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x`" ; \
-		if [ -f "$${dst}" ] ; then \
-			echo "Overwriting $$x" ; \
-		else \
-			echo "Installing $$x" ; \
-		fi ; \
-		$(INSTALL) -m 644 "$$x" "$(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x`" ; \
-	done
 
-samples:
-	@echo Installing other config files...
-	@for x in configs/samples/*.sample; do \
-		dst="$(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x .sample`" ;	\
+# Install configuration files from the specified directory
+# Parameters:
+#  (1) the configuration directory to install from
+#  (2) the extension to strip off
+define INSTALL_CONFIGS
+	@for x in configs/$(1)/*$(2); do \
+		dst="$(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x $(2)`"; \
 		if [ -f "$${dst}" ]; then \
 			if [ "$(OVERWRITE)" = "y" ]; then \
 				if cmp -s "$${dst}" "$$x" ; then \
@@ -691,7 +697,7 @@ samples:
 		fi ; \
 		echo "Installing file $$x"; \
 		$(INSTALL) -m 644 "$$x" "$${dst}" ;\
-	done
+	done ; \
 	if [ "$(OVERWRITE)" = "y" ]; then \
 		echo "Updating asterisk.conf" ; \
 		sed -e 's|^astetcdir.*$$|astetcdir => $(ASTETCDIR)|' \
@@ -708,10 +714,28 @@ samples:
 			"$(DESTDIR)$(ASTCONFPATH)" > "$(DESTDIR)$(ASTCONFPATH).tmp" ; \
 		$(INSTALL) -m 644 "$(DESTDIR)$(ASTCONFPATH).tmp" "$(DESTDIR)$(ASTCONFPATH)" ; \
 		rm -f "$(DESTDIR)$(ASTCONFPATH).tmp" ; \
-	fi ; \
+	fi
+endef
+
+# XXX why *.adsi is installed first ?
+adsi:
+	@echo Installing adsi config files...
+	$(INSTALL) -d "$(DESTDIR)$(ASTETCDIR)"
+	@for x in configs/samples/*.adsi; do \
+		dst="$(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x`" ; \
+		if [ -f "$${dst}" ] ; then \
+			echo "Overwriting $$x" ; \
+		else \
+			echo "Installing $$x" ; \
+		fi ; \
+		$(INSTALL) -m 644 "$$x" "$(DESTDIR)$(ASTETCDIR)/`$(BASENAME) $$x`" ; \
+	done
+
+samples: adsi
+	@echo Installing other config files...
+	$(call INSTALL_CONFIGS,samples,.sample)
 	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/voicemail/default/1234/INBOX"
 	build_tools/make_sample_voicemail "$(DESTDIR)/$(ASTDATADIR)" "$(DESTDIR)/$(ASTSPOOLDIR)"
-
 	@for x in phoneprov/*; do \
 		dst="$(DESTDIR)$(ASTDATADIR)/$$x" ;	\
 		if [ -f "$${dst}" ]; then \
@@ -729,6 +753,10 @@ samples:
 		echo "Installing file $$x"; \
 		$(INSTALL) -m 644 "$$x" "$${dst}" ;\
 	done
+
+basic-pbx:
+	@echo Installing basic-pbx config files...
+	$(call INSTALL_CONFIGS,basic-pbx)
 
 webvmail:
 	@[ -d "$(DESTDIR)$(HTTP_DOCSDIR)/" ] || ( printf "http docs directory not found.\nUpdate assignment of variable HTTP_DOCSDIR in Makefile!\n" && exit 1 )
@@ -757,7 +785,8 @@ webvmail:
 	@echo " +-------------------------------------------+"
 
 progdocs:
-	# Note, Makefile conditionals must not be tabbed out. Wasted hours with that.
+# Note, Makefile conditionals must not be tabbed out. Wasted hours with that.
+	@cp doc/asterisk-ng-doxygen.in doc/asterisk-ng-doxygen
 ifeq ($(DOXYGEN),:)
 	@echo "Doxygen is not installed.  Please install and re-run the configuration script."
 else
@@ -765,20 +794,20 @@ ifeq ($(DOT),:)
 	@echo "DOT is not installed. Doxygen will not produce any diagrams. Please install and re-run the configuration script."
 else
 	# Enable DOT
-	@echo "HAVE_DOT = YES" >> contrib/asterisk-ng-doxygen
+	@echo "HAVE_DOT = YES" >> doc/asterisk-ng-doxygen
 endif
 	# Set Doxygen PROJECT_NUMBER variable
 ifneq ($(ASTERISKVERSION),UNKNOWN__and_probably_unsupported)
-	@echo "PROJECT_NUMBER = $(ASTERISKVERSION)" >> contrib/asterisk-ng-doxygen
+	@echo "PROJECT_NUMBER = $(ASTERISKVERSION)" >> doc/asterisk-ng-doxygen
 else
 	echo "Asterisk Version is unknown, not configuring Doxygen PROJECT_NUMBER."
 endif
-	# Validate Doxygen Configuration
-	@doxygen -u contrib/asterisk-ng-doxygen
+	# Validate and auto-update local copy
+	@doxygen -u doc/asterisk-ng-doxygen
 	# Run Doxygen
-	@doxygen contrib/asterisk-ng-doxygen
+	@doxygen doc/asterisk-ng-doxygen
 	# Remove configuration backup file
-	@rm -f contrib/asterisk-ng-doxygen.bak
+	@rm -f doc/asterisk-ng-doxygen.bak
 endif
 
 install-logrotate:
@@ -931,7 +960,7 @@ nmenuselect: menuselect/nmenuselect menuselect-tree menuselect.makeopts
 	-@menuselect/nmenuselect menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 # options for make in menuselect/
-MAKE_MENUSELECT=CC="$(CC)" CXX="$(CXX)" LD="" AR="" RANLIB="" \
+MAKE_MENUSELECT=CC="$(BUILD_CC)" CXX="$(CXX)" LD="" AR="" RANLIB="" \
 		CFLAGS="$(BUILD_CFLAGS)" LDFLAGS="$(BUILD_LDFLAGS)" \
 		$(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
 
@@ -976,6 +1005,7 @@ ifeq ($(PYTHON),:)
 	@echo "--------------------------------------------------------------------------"
 	@false
 else
+	@$(INSTALL) -d doc/rest-api
 	$(PYTHON) rest-api-templates/make_ari_stubs.py \
 		rest-api/resources.json .
 endif
@@ -1000,6 +1030,7 @@ endif
 .PHONY: validate-docs
 .PHONY: _clean
 .PHONY: ari-stubs
+.PHONY: basic-pbx
 .PHONY: $(SUBDIRS_INSTALL)
 .PHONY: $(SUBDIRS_DIST_CLEAN)
 .PHONY: $(SUBDIRS_CLEAN)

@@ -47,12 +47,51 @@ static void *aor_alloc(const char *name)
 	return aor;
 }
 
+/*! \brief Internal callback function which destroys the specified contact */
+static int destroy_contact(void *obj, void *arg, int flags)
+{
+	struct ast_sip_contact *contact = obj;
+
+	ast_sip_location_delete_contact(contact);
+
+	return CMP_MATCH;
+}
+
+static void aor_deleted_observer(const void *object)
+{
+	const struct ast_sip_aor *aor = object;
+	const char *aor_id = ast_sorcery_object_get_id(object);
+	/* Give enough space for ^ at the beginning and ;@ at the end, since that is our object naming scheme */
+	char regex[strlen(aor_id) + 4];
+	struct ao2_container *contacts;
+
+	if (aor->permanent_contacts) {
+		ao2_callback(aor->permanent_contacts, OBJ_NODATA | OBJ_MULTIPLE | OBJ_UNLINK, destroy_contact, NULL);
+	}
+
+	snprintf(regex, sizeof(regex), "^%s;@", aor_id);
+	if (!(contacts = ast_sorcery_retrieve_by_regex(ast_sip_get_sorcery(), "contact", regex))) {
+		return;
+	}
+	/* Destroy any contacts that may still exist that were made for this AoR */
+	ao2_callback(contacts, OBJ_NODATA | OBJ_MULTIPLE | OBJ_UNLINK, destroy_contact, NULL);
+
+	ao2_ref(contacts, -1);
+}
+
+/*! \brief Observer for contacts so state can be updated on respective endpoints */
+static const struct ast_sorcery_observer aor_observer = {
+	.deleted = aor_deleted_observer,
+};
+
+
 /*! \brief Destructor for contact */
 static void contact_destroy(void *obj)
 {
 	struct ast_sip_contact *contact = obj;
 
 	ast_string_field_free_memory(contact);
+	ao2_cleanup(contact->endpoint);
 }
 
 /*! \brief Allocator for contact */
@@ -101,12 +140,6 @@ static int contact_link_static(void *obj, void *arg, int flags)
 	return 0;
 }
 
-/*! \brief Simple callback function which returns immediately, used to grab the first contact of an AOR */
-static int contact_find_first(void *obj, void *arg, int flags)
-{
-	return CMP_MATCH | CMP_STOP;
-}
-
 struct ast_sip_contact *ast_sip_location_retrieve_first_aor_contact(const struct ast_sip_aor *aor)
 {
 	RAII_VAR(struct ao2_container *, contacts, NULL, ao2_cleanup);
@@ -117,7 +150,8 @@ struct ast_sip_contact *ast_sip_location_retrieve_first_aor_contact(const struct
 		return NULL;
 	}
 
-	contact = ao2_callback(contacts, 0, contact_find_first, NULL);
+	/* Get the first AOR contact in the container. */
+	contact = ao2_callback(contacts, 0, NULL, NULL);
 	return contact;
 }
 
@@ -188,18 +222,55 @@ struct ast_sip_contact *ast_sip_location_retrieve_contact_from_aor_list(const ch
 	return contact;
 }
 
+static int permanent_uri_sort_fn(const void *obj_left, const void *obj_right, int flags);
+static int cli_contact_populate_container(void *obj, void *arg, int flags);
+
+static int gather_contacts_for_aor(void *obj, void *arg, int flags)
+{
+	struct ao2_container *aor_contacts;
+	struct ast_sip_aor *aor = obj;
+	struct ao2_container *container = arg;
+
+	aor_contacts = ast_sip_location_retrieve_aor_contacts(aor);
+	if (!aor_contacts) {
+		return 0;
+	}
+	ao2_callback(aor_contacts, OBJ_MULTIPLE | OBJ_NODATA, cli_contact_populate_container,
+		container);
+	ao2_ref(aor_contacts, -1);
+	return CMP_MATCH;
+}
+
+struct ao2_container *ast_sip_location_retrieve_contacts_from_aor_list(const char *aor_list)
+{
+	struct ao2_container *contacts;
+
+	contacts = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_NOLOCK,
+		AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT, permanent_uri_sort_fn, NULL);
+	if (!contacts) {
+		return NULL;
+	}
+
+	ast_sip_for_each_aor(aor_list, gather_contacts_for_aor, contacts);
+
+	return contacts;
+}
+
 struct ast_sip_contact *ast_sip_location_retrieve_contact(const char *contact_name)
 {
 	return ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "contact", contact_name);
 }
 
 int ast_sip_location_add_contact(struct ast_sip_aor *aor, const char *uri,
-		struct timeval expiration_time, const char *path_info, const char *user_agent)
+		struct timeval expiration_time, const char *path_info, const char *user_agent,
+		struct ast_sip_endpoint *endpoint)
 {
 	char name[MAX_OBJECT_FIELD * 2 + 3];
 	RAII_VAR(struct ast_sip_contact *, contact, NULL, ao2_cleanup);
+	char hash[33];
 
-	snprintf(name, sizeof(name), "%s;@%s", ast_sorcery_object_get_id(aor), uri);
+	ast_md5_hash(hash, uri);
+	snprintf(name, sizeof(name), "%s;@%s", ast_sorcery_object_get_id(aor), hash);
 
 	if (!(contact = ast_sorcery_alloc(ast_sip_get_sorcery(), "contact", name))) {
 		return -1;
@@ -208,6 +279,7 @@ int ast_sip_location_add_contact(struct ast_sip_aor *aor, const char *uri,
 	ast_string_field_set(contact, uri, uri);
 	contact->expiration_time = expiration_time;
 	contact->qualify_frequency = aor->qualify_frequency;
+	contact->qualify_timeout = aor->qualify_timeout;
 	contact->authenticate_qualify = aor->authenticate_qualify;
 	if (path_info && aor->support_path) {
 		ast_string_field_set(contact, path, path_info);
@@ -221,6 +293,8 @@ int ast_sip_location_add_contact(struct ast_sip_aor *aor, const char *uri,
 		ast_string_field_set(contact, user_agent, user_agent);
 	}
 
+	contact->endpoint = ao2_bump(endpoint);
+
 	return ast_sorcery_create(ast_sip_get_sorcery(), contact);
 }
 
@@ -231,6 +305,14 @@ int ast_sip_location_update_contact(struct ast_sip_contact *contact)
 
 int ast_sip_location_delete_contact(struct ast_sip_contact *contact)
 {
+	void *contact_status_obj;
+
+	contact_status_obj = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), CONTACT_STATUS, ast_sorcery_object_get_id(contact));
+	if (contact_status_obj) {
+		ast_sorcery_delete(ast_sip_get_sorcery(), contact_status_obj);
+		ao2_ref(contact_status_obj, -1);
+	}
+
 	return ast_sorcery_delete(ast_sip_get_sorcery(), contact);
 }
 
@@ -246,29 +328,6 @@ static int expiration_struct2str(const void *obj, const intptr_t *args, char **b
 {
 	const struct ast_sip_contact *contact = obj;
 	return (ast_asprintf(buf, "%ld", contact->expiration_time.tv_sec) < 0) ? -1 : 0;
-}
-
-/*! \brief Helper function which validates a permanent contact */
-static int permanent_contact_validate(void *data)
-{
-	const char *value = data;
-	pj_pool_t *pool;
-	pj_str_t contact_uri;
-	static const pj_str_t HCONTACT = { "Contact", 7 };
-
-	pool = pjsip_endpt_create_pool(ast_sip_get_pjsip_endpoint(), "Permanent Contact Validation", 256, 256);
-	if (!pool) {
-		return -1;
-	}
-
-	pj_strdup2_with_null(pool, &contact_uri, value);
-	if (!pjsip_parse_hdr(pool, &HCONTACT, contact_uri.ptr, contact_uri.slen, NULL)) {
-		pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
-		return -1;
-	}
-
-	pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
-	return 0;
 }
 
 static int permanent_uri_sort_fn(const void *obj_left, const void *obj_right, int flags)
@@ -316,13 +375,8 @@ static int permanent_uri_handler(const struct aco_option *opt, struct ast_variab
 	contacts = ast_strdupa(var->value);
 	while ((contact_uri = strsep(&contacts, ","))) {
 		struct ast_sip_contact *contact;
+		struct ast_sip_contact_status *status;
 		char contact_id[strlen(aor_id) + strlen(contact_uri) + 2 + 1];
-
-		if (ast_sip_push_task_synchronous(NULL, permanent_contact_validate, contact_uri)) {
-			ast_log(LOG_ERROR, "Permanent URI on aor '%s' with contact '%s' failed to parse\n",
-				ast_sorcery_object_get_id(aor), contact_uri);
-			return -1;
-		}
 
 		if (!aor->permanent_contacts) {
 			aor->permanent_contacts = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_NOLOCK,
@@ -337,6 +391,13 @@ static int permanent_uri_handler(const struct aco_option *opt, struct ast_variab
 		if (!contact) {
 			return -1;
 		}
+
+		status = ast_res_pjsip_find_or_create_contact_status(contact);
+		if (!status) {
+			ao2_ref(contact, -1);
+			return -1;
+		}
+		ao2_ref(status, -1);
 
 		ast_string_field_set(contact, uri, contact_uri);
 		ao2_link(aor->permanent_contacts, contact);
@@ -544,13 +605,12 @@ struct ast_sip_endpoint_formatter endpoint_aor_formatter = {
 	.format_ami = format_ami_endpoint_aor
 };
 
-static struct ao2_container *cli_aor_get_container(void)
+static struct ao2_container *cli_aor_get_container(const char *regex)
 {
 	RAII_VAR(struct ao2_container *, container, NULL, ao2_cleanup);
 	struct ao2_container *s_container;
 
-	container = ast_sorcery_retrieve_by_fields(ast_sip_get_sorcery(), "aor",
-		AST_RETRIEVE_FLAG_MULTIPLE | AST_RETRIEVE_FLAG_ALL, NULL);
+	container = ast_sorcery_retrieve_by_regex(ast_sip_get_sorcery(), "aor", regex);
 	if (!container) {
 		return NULL;
 	}
@@ -648,12 +708,25 @@ static int cli_contact_iterate(void *container, ao2_callback_fn callback, void *
 	return ast_sip_for_each_contact(container, callback, args);
 }
 
-static struct ao2_container *cli_contact_get_container(void)
+static int cli_filter_contacts(void *obj, void *arg, int flags)
+{
+	struct ast_sip_contact_wrapper *wrapper = obj;
+	regex_t *regexbuf = arg;
+
+	if (!regexec(regexbuf, wrapper->contact_id, 0, NULL, 0)) {
+		return 0;
+	}
+
+	return CMP_MATCH;
+}
+
+static struct ao2_container *cli_contact_get_container(const char *regex)
 {
 	RAII_VAR(struct ao2_container *, parent_container, NULL, ao2_cleanup);
 	struct ao2_container *child_container;
+	regex_t regexbuf;
 
-	parent_container =  cli_aor_get_container();
+	parent_container =  cli_aor_get_container("");
 	if (!parent_container) {
 		return NULL;
 	}
@@ -666,12 +739,23 @@ static struct ao2_container *cli_contact_get_container(void)
 
 	ao2_callback(parent_container, OBJ_NODATA, cli_aor_gather_contacts, child_container);
 
+	if (!ast_strlen_zero(regex)) {
+		if (regcomp(&regexbuf, regex, REG_EXTENDED | REG_NOSUB)) {
+			ao2_ref(child_container, -1);
+			return NULL;
+		}
+		ao2_callback(child_container, OBJ_UNLINK | OBJ_MULTIPLE | OBJ_NODATA, cli_filter_contacts, &regexbuf);
+		regfree(&regexbuf);
+	}
+
 	return child_container;
 }
 
 static void *cli_contact_retrieve_by_id(const char *id)
 {
-	return ao2_find(cli_contact_get_container(), id, OBJ_KEY | OBJ_NOLOCK);
+	RAII_VAR(struct ao2_container *, container, cli_contact_get_container(""), ao2_cleanup);
+
+	return ao2_find(container, id, OBJ_KEY | OBJ_NOLOCK);
 }
 
 static int cli_contact_print_header(void *obj, void *arg, int flags)
@@ -712,8 +796,8 @@ static int cli_contact_print_body(void *obj, void *arg, int flags)
 		"Contact",
 		flexwidth, flexwidth,
 		wrapper->contact_id,
-		(status ? (status->status == AVAILABLE ? "Avail" : "Unavail") : "Unknown"),
-		(status ? ((long long) status->rtt) / 1000.0 : NAN));
+		ast_sip_get_contact_short_status_label(status ? status->status : UNKNOWN),
+		(status && (status->status != UNKNOWN) ? ((long long) status->rtt) / 1000.0 : NAN));
 
 	return 0;
 }
@@ -808,12 +892,14 @@ static int cli_aor_print_body(void *obj, void *arg, int flags)
 static struct ast_cli_entry cli_commands[] = {
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "List PJSIP Aors",
 		.command = "pjsip list aors",
-		.usage = "Usage: pjsip list aors\n"
-				 "       List the configured PJSIP Aors\n"),
+		.usage = "Usage: pjsip list aors [ like <pattern> ]\n"
+				"       List the configured PJSIP Aors\n"
+				"       Optional regular expression pattern is used to filter the list.\n"),
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Aors",
 		.command = "pjsip show aors",
-		.usage = "Usage: pjsip show aors\n"
-				 "       Show the configured PJSIP Aors\n"),
+		.usage = "Usage: pjsip show aors [ like <pattern> ]\n"
+				"       Show the configured PJSIP Aors\n"
+				"       Optional regular expression pattern is used to filter the list.\n"),
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Aor",
 		.command = "pjsip show aor",
 		.usage = "Usage: pjsip show aor <id>\n"
@@ -821,12 +907,14 @@ static struct ast_cli_entry cli_commands[] = {
 
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "List PJSIP Contacts",
 		.command = "pjsip list contacts",
-		.usage = "Usage: pjsip list contacts\n"
-				 "       List the configured PJSIP contacts\n"),
+		.usage = "Usage: pjsip list contacts [ like <pattern> ]\n"
+				"       List the configured PJSIP contacts\n"
+				"       Optional regular expression pattern is used to filter the list.\n"),
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Contacts",
 		.command = "pjsip show contacts",
-		.usage = "Usage: pjsip show contacts\n"
-				 "       Show the configured PJSIP contacts\n"),
+		.usage = "Usage: pjsip show contacts [ like <pattern> ]\n"
+				"       Show the configured PJSIP contacts\n"
+				"       Optional regular expression pattern is used to filter the list.\n"),
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Contact",
 		.command = "pjsip show contact",
 		.usage = "Usage: pjsip show contact\n"
@@ -836,6 +924,18 @@ static struct ast_cli_entry cli_commands[] = {
 struct ast_sip_cli_formatter_entry *contact_formatter;
 struct ast_sip_cli_formatter_entry *aor_formatter;
 
+/*! \brief Always create a contact_status for each contact */
+static int contact_apply_handler(const struct ast_sorcery *sorcery, void *object)
+{
+	struct ast_sip_contact_status *status;
+	struct ast_sip_contact *contact = object;
+
+	status = ast_res_pjsip_find_or_create_contact_status(contact);
+	ao2_cleanup(status);
+
+	return status ? 0 : -1;
+}
+
 /*! \brief Initialize sorcery with location support */
 int ast_sip_initialize_sorcery_location(void)
 {
@@ -843,17 +943,20 @@ int ast_sip_initialize_sorcery_location(void)
 	ast_sorcery_apply_default(sorcery, "contact", "astdb", "registrar");
 	ast_sorcery_apply_default(sorcery, "aor", "config", "pjsip.conf,criteria=type=aor");
 
-	if (ast_sorcery_object_register(sorcery, "contact", contact_alloc, NULL, NULL) ||
+	if (ast_sorcery_object_register(sorcery, "contact", contact_alloc, NULL, contact_apply_handler) ||
 		ast_sorcery_object_register(sorcery, "aor", aor_alloc, NULL, NULL)) {
 		return -1;
 	}
+
+	ast_sorcery_observer_add(sorcery, "aor", &aor_observer);
 
 	ast_sorcery_object_field_register(sorcery, "contact", "type", "", OPT_NOOP_T, 0, 0);
 	ast_sorcery_object_field_register(sorcery, "contact", "uri", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_contact, uri));
 	ast_sorcery_object_field_register(sorcery, "contact", "path", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_contact, path));
 	ast_sorcery_object_field_register_custom(sorcery, "contact", "expiration_time", "", expiration_str2struct, expiration_struct2str, NULL, 0, 0);
 	ast_sorcery_object_field_register(sorcery, "contact", "qualify_frequency", 0, OPT_UINT_T,
-					  PARSE_IN_RANGE, FLDSET(struct ast_sip_contact, qualify_frequency), 0, 86400);
+		PARSE_IN_RANGE, FLDSET(struct ast_sip_contact, qualify_frequency), 0, 86400);
+	ast_sorcery_object_field_register(sorcery, "contact", "qualify_timeout", "3.0", OPT_DOUBLE_T, 0, FLDSET(struct ast_sip_contact, qualify_timeout));
 	ast_sorcery_object_field_register(sorcery, "contact", "outbound_proxy", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_contact, outbound_proxy));
 	ast_sorcery_object_field_register(sorcery, "contact", "user_agent", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_contact, user_agent));
 
@@ -862,6 +965,7 @@ int ast_sip_initialize_sorcery_location(void)
 	ast_sorcery_object_field_register(sorcery, "aor", "maximum_expiration", "7200", OPT_UINT_T, 0, FLDSET(struct ast_sip_aor, maximum_expiration));
 	ast_sorcery_object_field_register(sorcery, "aor", "default_expiration", "3600", OPT_UINT_T, 0, FLDSET(struct ast_sip_aor, default_expiration));
 	ast_sorcery_object_field_register(sorcery, "aor", "qualify_frequency", 0, OPT_UINT_T, PARSE_IN_RANGE, FLDSET(struct ast_sip_aor, qualify_frequency), 0, 86400);
+	ast_sorcery_object_field_register(sorcery, "aor", "qualify_timeout", "3.0", OPT_DOUBLE_T, 0, FLDSET(struct ast_sip_aor, qualify_timeout));
 	ast_sorcery_object_field_register(sorcery, "aor", "authenticate_qualify", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_aor, authenticate_qualify));
 	ast_sorcery_object_field_register(sorcery, "aor", "max_contacts", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_aor, max_contacts));
 	ast_sorcery_object_field_register(sorcery, "aor", "remove_existing", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_aor, remove_existing));
@@ -907,6 +1011,7 @@ int ast_sip_initialize_sorcery_location(void)
 
 int ast_sip_destroy_sorcery_location(void)
 {
+	ast_sorcery_observer_remove(ast_sip_get_sorcery(), "aor", &aor_observer);
 	ast_cli_unregister_multiple(cli_commands, ARRAY_LEN(cli_commands));
 	ast_sip_unregister_cli_formatter(contact_formatter);
 	ast_sip_unregister_cli_formatter(aor_formatter);

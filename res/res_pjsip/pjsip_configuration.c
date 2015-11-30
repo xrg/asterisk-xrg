@@ -19,6 +19,7 @@
 #include "asterisk/utils.h"
 #include "asterisk/sorcery.h"
 #include "asterisk/callerid.h"
+#include "asterisk/test.h"
 
 /*! \brief Number of buckets for persistent endpoint information */
 #define PERSISTENT_BUCKETS 53
@@ -55,49 +56,213 @@ static int persistent_endpoint_cmp(void *obj, void *arg, int flags)
 	return !strcmp(ast_endpoint_get_resource(persistent1->endpoint), id) ? CMP_MATCH | CMP_STOP : 0;
 }
 
+/*! \brief Structure for communicating contact status to
+ * persistent_endpoint_update_state from the contact/contact_status
+ * observers.
+ */
+struct sip_contact_status {
+	char *uri;
+	enum ast_sip_contact_status_type status;
+	int64_t rtt;
+};
+
 /*! \brief Callback function for changing the state of an endpoint */
-static int persistent_endpoint_update_state(void *obj, void *arg, int flags)
+static int persistent_endpoint_update_state(void *obj, void *arg, void *data, int flags)
 {
 	struct sip_persistent_endpoint *persistent = obj;
+	struct ast_endpoint *endpoint = persistent->endpoint;
 	char *aor = arg;
-	RAII_VAR(struct ast_sip_contact *, contact, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
+	struct sip_contact_status *status = data;
+	struct ao2_container *contacts;
+	struct ast_json *blob;
+	struct ao2_iterator i;
+	struct ast_sip_contact *contact;
+	enum ast_endpoint_state state = AST_ENDPOINT_OFFLINE;
 
-	if (!ast_strlen_zero(aor) && !strstr(persistent->aors, aor)) {
+	if (!ast_strlen_zero(aor)) {
+		if (!strstr(persistent->aors, aor)) {
+			return 0;
+		}
+
+		if (status) {
+			char rtt[32];
+			snprintf(rtt, 31, "%" PRId64, status->rtt);
+			blob = ast_json_pack("{s: s, s: s, s: s, s: s, s: s}",
+				"contact_status", ast_sip_get_contact_status_label(status->status),
+				"aor", aor,
+				"uri", status->uri,
+				"roundtrip_usec", rtt,
+				"endpoint_name", ast_endpoint_get_resource(endpoint));
+			ast_endpoint_blob_publish(endpoint, ast_endpoint_contact_state_type(), blob);
+			ast_json_unref(blob);
+		}
+	}
+	/* Find all the contacts for this endpoint.  If ANY are available,
+	 * mark the endpoint as ONLINE.
+	 */
+	contacts = ast_sip_location_retrieve_contacts_from_aor_list(persistent->aors);
+	if (contacts) {
+		i = ao2_iterator_init(contacts, 0);
+		while (state == AST_ENDPOINT_OFFLINE && (contact = ao2_iterator_next(&i))) {
+			struct ast_sip_contact_status *contact_status;
+			const char *contact_id = ast_sorcery_object_get_id(contact);
+
+			contact_status = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(),
+				CONTACT_STATUS, contact_id);
+
+			if (contact_status && contact_status->status != UNAVAILABLE) {
+				state = AST_ENDPOINT_ONLINE;
+			}
+			ao2_cleanup(contact_status);
+			ao2_ref(contact, -1);
+		}
+		ao2_iterator_destroy(&i);
+		ao2_ref(contacts, -1);
+	}
+
+	/* If there was no state change, don't publish anything. */
+	if (ast_endpoint_get_state(endpoint) == state) {
 		return 0;
 	}
 
-	if ((contact = ast_sip_location_retrieve_contact_from_aor_list(persistent->aors))) {
-		ast_endpoint_set_state(persistent->endpoint, AST_ENDPOINT_ONLINE);
+	if (state == AST_ENDPOINT_ONLINE) {
+		ast_endpoint_set_state(endpoint, AST_ENDPOINT_ONLINE);
 		blob = ast_json_pack("{s: s}", "peer_status", "Reachable");
+		ast_verb(1, "Endpoint %s is now Reachable\n", ast_endpoint_get_resource(endpoint));
 	} else {
-		ast_endpoint_set_state(persistent->endpoint, AST_ENDPOINT_OFFLINE);
+		ast_endpoint_set_state(endpoint, AST_ENDPOINT_OFFLINE);
 		blob = ast_json_pack("{s: s}", "peer_status", "Unreachable");
+		ast_verb(1, "Endpoint %s is now Unreachable\n", ast_endpoint_get_resource(endpoint));
 	}
 
-	ast_endpoint_blob_publish(persistent->endpoint, ast_endpoint_state_type(), blob);
-
-	ast_devstate_changed(AST_DEVICE_UNKNOWN, AST_DEVSTATE_CACHABLE, "PJSIP/%s", ast_endpoint_get_resource(persistent->endpoint));
+	ast_endpoint_blob_publish(endpoint, ast_endpoint_state_type(), blob);
+	ast_json_unref(blob);
+	ast_devstate_changed(AST_DEVICE_UNKNOWN, AST_DEVSTATE_CACHABLE, "PJSIP/%s", ast_endpoint_get_resource(endpoint));
 
 	return 0;
 }
 
 /*! \brief Function called when stuff relating to a contact happens (created/deleted) */
-static void persistent_endpoint_contact_observer(const void *object)
+static void persistent_endpoint_contact_created_observer(const void *object)
 {
-	char *id = ast_strdupa(ast_sorcery_object_get_id(object)), *aor = NULL;
+	const struct ast_sip_contact *contact = object;
+	char *id = ast_strdupa(ast_sorcery_object_get_id(contact));
+	char *aor = NULL;
+	char *contact_uri = NULL;
+	struct sip_contact_status status;
 
-	aor = strsep(&id, ";@");
+	aor = id;
+	/* Dynamic contacts are delimited with ";@" and static ones with "@@" */
+	if ((contact_uri = strstr(id, ";@")) || (contact_uri = strstr(id, "@@"))) {
+		*contact_uri = '\0';
+		contact_uri += 2;
+	} else {
+		contact_uri = id;
+	}
 
-	ao2_callback(persistent_endpoints, OBJ_NODATA, persistent_endpoint_update_state, aor);
+	status.uri = contact_uri;
+	status.status = CREATED;
+	status.rtt = 0;
+
+	ast_verb(1, "Contact %s/%s has been created\n", aor, contact_uri);
+
+	ao2_callback_data(persistent_endpoints, OBJ_NODATA, persistent_endpoint_update_state, aor, &status);
+}
+
+/*! \brief Function called when stuff relating to a contact happens (created/deleted) */
+static void persistent_endpoint_contact_deleted_observer(const void *object)
+{
+	char *id = ast_strdupa(ast_sorcery_object_get_id(object));
+	char *aor = NULL;
+	char *contact_uri = NULL;
+	struct sip_contact_status status;
+
+	aor = id;
+	/* Dynamic contacts are delimited with ";@" and static ones with "@@" */
+	if ((contact_uri = strstr(id, ";@")) || (contact_uri = strstr(id, "@@"))) {
+		*contact_uri = '\0';
+		contact_uri += 2;
+	} else {
+		contact_uri = id;
+	}
+
+	ast_verb(1, "Contact %s/%s has been deleted\n", aor, contact_uri);
+
+	status.uri = contact_uri;
+	status.status = REMOVED;
+	status.rtt = 0;
+
+	ao2_callback_data(persistent_endpoints, OBJ_NODATA, persistent_endpoint_update_state, aor, &status);
 }
 
 /*! \brief Observer for contacts so state can be updated on respective endpoints */
 static const struct ast_sorcery_observer state_contact_observer = {
-	.created = persistent_endpoint_contact_observer,
-	.deleted = persistent_endpoint_contact_observer,
+	.created = persistent_endpoint_contact_created_observer,
+	.deleted = persistent_endpoint_contact_deleted_observer,
 };
 
+/*! \brief Function called when stuff relating to a contact status happens (updated) */
+static void persistent_endpoint_contact_status_observer(const void *object)
+{
+	const struct ast_sip_contact_status *contact_status = object;
+	char *id = ast_strdupa(ast_sorcery_object_get_id(object));
+	char *aor = NULL;
+	char *contact_uri = NULL;
+	struct sip_contact_status status;
+
+	/* If rtt_start is set (this is the outgoing OPTIONS), ignore. */
+	if (contact_status->rtt_start.tv_sec > 0) {
+		return;
+	}
+
+	aor = id;
+	/* Dynamic contacts are delimited with ";@" and static ones with "@@" */
+	if ((contact_uri = strstr(id, ";@")) || (contact_uri = strstr(id, "@@"))) {
+		*contact_uri = '\0';
+		contact_uri += 2;
+	} else {
+		contact_uri = id;
+	}
+
+	if (contact_status->status == contact_status->last_status) {
+		ast_debug(3, "Contact %s status didn't change: %s, RTT: %.3f msec\n",
+			contact_uri, ast_sip_get_contact_status_label(contact_status->status),
+			contact_status->rtt / 1000.0);
+		return;
+	} else {
+		ast_verb(1, "Contact %s/%s is now %s.  RTT: %.3f msec\n", aor, contact_uri,
+			ast_sip_get_contact_status_label(contact_status->status),
+			contact_status->rtt / 1000.0);
+	}
+
+	ast_test_suite_event_notify("AOR_CONTACT_UPDATE",
+		"Contact: %s\r\n"
+			"Status: %s",
+		ast_sorcery_object_get_id(contact_status),
+		ast_sip_get_contact_status_label(contact_status->status));
+
+	status.uri = contact_uri;
+	status.status = contact_status->status;
+	status.rtt = contact_status->rtt;
+
+	ao2_callback_data(persistent_endpoints, OBJ_NODATA, persistent_endpoint_update_state, aor, &status);
+}
+
+/*! \brief Observer for contacts so state can be updated on respective endpoints */
+static const struct ast_sorcery_observer state_contact_status_observer = {
+	.updated = persistent_endpoint_contact_status_observer,
+};
+
+static void endpoint_deleted_observer(const void *object)
+{
+	const struct ast_sip_endpoint *endpoint = object;
+
+	ao2_find(persistent_endpoints, ast_endpoint_get_resource(endpoint->persistent), OBJ_SEARCH_KEY | OBJ_UNLINK | OBJ_NODATA);
+}
+
+static const struct ast_sorcery_observer endpoint_observers = {
+	.deleted = endpoint_deleted_observer,
+};
 
 static int dtmf_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
@@ -248,6 +413,10 @@ int ast_sip_auth_vector_init(struct ast_sip_auth_vector *auths, const char *valu
 	}
 
 	while ((val = strsep(&auth_names, ","))) {
+		if (ast_strlen_zero(val)) {
+			continue;
+		}
+
 		val = ast_strdup(val);
 		if (!val) {
 			goto failure;
@@ -546,7 +715,7 @@ static int media_encryption_handler(const struct aco_option *opt, struct ast_var
 
 static const char *media_encryption_map[] = {
 	[AST_SIP_MEDIA_TRANSPORT_INVALID] = "invalid",
-	[AST_SIP_MEDIA_ENCRYPT_NONE] = "none",
+	[AST_SIP_MEDIA_ENCRYPT_NONE] = "no",
 	[AST_SIP_MEDIA_ENCRYPT_SDES] = "sdes",
 	[AST_SIP_MEDIA_ENCRYPT_DTLS] = "dtls",
 };
@@ -916,7 +1085,7 @@ static struct ast_endpoint *persistent_endpoint_find_or_create(const struct ast_
 		if (ast_strlen_zero(persistent->aors)) {
 			ast_endpoint_set_state(persistent->endpoint, AST_ENDPOINT_UNKNOWN);
 		} else {
-			persistent_endpoint_update_state(persistent, NULL, 0);
+			persistent_endpoint_update_state(persistent, NULL, NULL, 0);
 		}
 
 		ao2_link_flags(persistent_endpoints, persistent, OBJ_NOLOCK);
@@ -924,29 +1093,6 @@ static struct ast_endpoint *persistent_endpoint_find_or_create(const struct ast_
 
 	ao2_ref(persistent->endpoint, +1);
 	return persistent->endpoint;
-}
-
-/*! \brief Helper function which validates an outbound proxy */
-static int outbound_proxy_validate(void *data)
-{
-	const char *proxy = data;
-	pj_pool_t *pool;
-	pj_str_t tmp;
-	static const pj_str_t ROUTE_HNAME = { "Route", 5 };
-
-	pool = pjsip_endpt_create_pool(ast_sip_get_pjsip_endpoint(), "Outbound Proxy Validation", 256, 256);
-	if (!pool) {
-		return -1;
-	}
-
-	pj_strdup2_with_null(pool, &tmp, proxy);
-	if (!pjsip_parse_hdr(pool, &ROUTE_HNAME, tmp.ptr, tmp.slen, NULL)) {
-		pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
-		return -1;
-	}
-
-	pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
-	return 0;
 }
 
 /*! \brief Callback function for when an object is finalized */
@@ -958,12 +1104,7 @@ static int sip_endpoint_apply_handler(const struct ast_sorcery *sorcery, void *o
 		return -1;
 	}
 
-	if (!ast_strlen_zero(endpoint->outbound_proxy) &&
-		ast_sip_push_task_synchronous(NULL, outbound_proxy_validate, (char*)endpoint->outbound_proxy)) {
-		ast_log(LOG_ERROR, "Invalid outbound proxy '%s' specified on endpoint '%s'\n",
-			endpoint->outbound_proxy, ast_sorcery_object_get_id(endpoint));
-		return -1;
-	} else if (endpoint->extensions.timer.min_se < 90) {
+	if (endpoint->extensions.timer.min_se < 90) {
 		ast_log(LOG_ERROR, "Session timer minimum expires time must be 90 or greater on endpoint '%s'\n",
 			ast_sorcery_object_get_id(endpoint));
 		return -1;
@@ -1265,13 +1406,12 @@ static int ami_show_endpoints(struct mansession *s, const struct message *m)
 	return 0;
 }
 
-static struct ao2_container *cli_endpoint_get_container(void)
+static struct ao2_container *cli_endpoint_get_container(const char *regex)
 {
 	RAII_VAR(struct ao2_container *, container, NULL, ao2_cleanup);
 	struct ao2_container *s_container;
 
-	container = ast_sorcery_retrieve_by_fields(sip_sorcery, "endpoint",
-		AST_RETRIEVE_FLAG_MULTIPLE | AST_RETRIEVE_FLAG_ALL, NULL);
+	container = ast_sorcery_retrieve_by_regex(sip_sorcery, "endpoint", regex);
 	if (!container) {
 		return NULL;
 	}
@@ -1385,12 +1525,26 @@ static int cli_endpoint_gather_channels(void *obj, void *arg, int flags)
 	return 0;
 }
 
-static struct ao2_container *cli_channel_get_container(void)
+static int cli_filter_channels(void *obj, void *arg, int flags)
+{
+	struct ast_channel_snapshot *channel = obj;
+	regex_t *regexbuf = arg;
+
+	if (!regexec(regexbuf, channel->name, 0, NULL, 0)
+		|| !regexec(regexbuf, channel->appl, 0, NULL, 0)) {
+		return 0;
+	}
+
+	return CMP_MATCH;
+}
+
+static struct ao2_container *cli_channel_get_container(const char *regex)
 {
 	RAII_VAR(struct ao2_container *, parent_container, NULL, ao2_cleanup);
 	struct ao2_container *child_container;
+	regex_t regexbuf;
 
-	parent_container = cli_endpoint_get_container();
+	parent_container = cli_endpoint_get_container("");
 	if (!parent_container) {
 		return NULL;
 	}
@@ -1401,6 +1555,15 @@ static struct ao2_container *cli_channel_get_container(void)
 	}
 
 	ao2_callback(parent_container, OBJ_NODATA, cli_endpoint_gather_channels, child_container);
+
+	if (!ast_strlen_zero(regex)) {
+		if (regcomp(&regexbuf, regex, REG_EXTENDED | REG_NOSUB)) {
+			ao2_ref(child_container, -1);
+			return NULL;
+		}
+		ao2_callback(child_container, OBJ_UNLINK | OBJ_MULTIPLE | OBJ_NODATA, cli_filter_channels, &regexbuf);
+		regfree(&regexbuf);
+	}
 
 	return child_container;
 }
@@ -1414,7 +1577,7 @@ static const char *cli_channel_get_id(const void *obj)
 
 static void *cli_channel_retrieve_by_id(const char *id)
 {
-	RAII_VAR(struct ao2_container *, container, cli_channel_get_container(), ao2_cleanup);
+	RAII_VAR(struct ao2_container *, container, cli_channel_get_container(""), ao2_cleanup);
 
 	return ao2_find(container, id, OBJ_KEY | OBJ_NOLOCK);
 }
@@ -1616,12 +1779,14 @@ static int cli_endpoint_print_body(void *obj, void *arg, int flags)
 static struct ast_cli_entry cli_commands[] = {
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "List PJSIP Channels",
 		.command = "pjsip list channels",
-		.usage = "Usage: pjsip list channels\n"
-				 "       List the active PJSIP channels\n"),
+		.usage = "Usage: pjsip list channels [ like <pattern> ]\n"
+				"       List the active PJSIP channels\n"
+				"       Optional regular expression pattern is used to filter the list.\n"),
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Channels",
 		.command = "pjsip show channels",
-		.usage = "Usage: pjsip show channels\n"
-				 "       List(detailed) the active PJSIP channels\n"),
+		.usage = "Usage: pjsip show channels [ like <pattern> ]\n"
+				"       List(detailed) the active PJSIP channels\n"
+				"       Optional regular expression pattern is used to filter the list.\n"),
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Channel",
 		.command = "pjsip show channel",
 		.usage = "Usage: pjsip show channel\n"
@@ -1629,12 +1794,14 @@ static struct ast_cli_entry cli_commands[] = {
 
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "List PJSIP Endpoints",
 		.command = "pjsip list endpoints",
-		.usage = "Usage: pjsip list endpoints\n"
-				 "       List the configured PJSIP endpoints\n"),
+		.usage = "Usage: pjsip list endpoints [ like <pattern> ]\n"
+				"       List the configured PJSIP endpoints\n"
+				"       Optional regular expression pattern is used to filter the list.\n"),
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Endpoints",
 		.command = "pjsip show endpoints",
-		.usage = "Usage: pjsip show endpoints\n"
-				 "       List(detailed) the configured PJSIP endpoints\n"),
+		.usage = "Usage: pjsip show endpoints [ like <pattern> ]\n"
+				"       List(detailed) the configured PJSIP endpoints\n"
+				"       Optional regular expression pattern is used to filter the list.\n"),
 	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Endpoint",
 		.command = "pjsip show endpoint",
 		.usage = "Usage: pjsip show endpoint <id>\n"
@@ -1726,6 +1893,9 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "use_avpf", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.rtp.use_avpf));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "force_avp", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.rtp.force_avp));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "media_use_received_transport", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.rtp.use_received_transport));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "rtp_keepalive", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_endpoint, media.rtp.keepalive));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "rtp_timeout", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_endpoint, media.rtp.timeout));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "rtp_timeout_hold", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_endpoint, media.rtp.timeout_hold));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "one_touch_recording", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, info.recording.enabled));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "inband_progress", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, inband_progress));
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "call_group", "", group_handler, callgroup_to_str, NULL, 0, 0);
@@ -1768,10 +1938,11 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "dtls_fingerprint", "", dtls_handler, dtlsfingerprint_to_str, NULL, 0, 0);
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "srtp_tag_32", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.rtp.srtp_tag_32));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "media_encryption_optimistic", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.rtp.encryption_optimistic));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "g726_non_standard", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.g726_non_standard));
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "redirect_method", "user", redirect_handler, NULL, NULL, 0, 0);
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "set_var", "", set_var_handler, set_var_to_str, set_var_to_vl, 0, 0);
-	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "message_context", "", OPT_STRINGFIELD_T, 1, STRFLDSET(struct ast_sip_endpoint, message_context));
-	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "accountcode", "", OPT_STRINGFIELD_T, 1, STRFLDSET(struct ast_sip_endpoint, accountcode));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "message_context", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_endpoint, message_context));
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "accountcode", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_endpoint, accountcode));
 
 	if (ast_sip_initialize_sorcery_transport()) {
 		ast_log(LOG_ERROR, "Failed to register SIP transport support with sorcery\n");
@@ -1794,7 +1965,9 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 		return -1;
 	}
 
+	ast_sorcery_observer_add(sip_sorcery, "endpoint", &endpoint_observers);
 	ast_sorcery_observer_add(sip_sorcery, "contact", &state_contact_observer);
+	ast_sorcery_observer_add(sip_sorcery, CONTACT_STATUS, &state_contact_status_observer);
 
 	if (ast_sip_initialize_sorcery_domain_alias()) {
 		ast_log(LOG_ERROR, "Failed to register SIP domain aliases support with sorcery\n");
@@ -1851,6 +2024,8 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 
 void ast_res_pjsip_destroy_configuration(void)
 {
+	ast_sorcery_observer_remove(sip_sorcery, CONTACT_STATUS, &state_contact_status_observer);
+	ast_sorcery_observer_remove(sip_sorcery, "contact", &state_contact_observer);
 	ast_sip_destroy_sorcery_global();
 	ast_sip_destroy_sorcery_location();
 	ast_sip_destroy_sorcery_auth();

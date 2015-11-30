@@ -160,10 +160,10 @@ static struct ast_sip_session_supplement chan_pjsip_ack_supplement = {
 static enum ast_rtp_glue_result chan_pjsip_get_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance **instance)
 {
 	struct ast_sip_channel_pvt *channel = ast_channel_tech_pvt(chan);
-	struct chan_pjsip_pvt *pvt = channel->pvt;
+	struct chan_pjsip_pvt *pvt;
 	struct ast_sip_endpoint *endpoint;
 
-	if (!pvt || !channel->session || !pvt->media[SIP_MEDIA_AUDIO]->rtp) {
+	if (!channel || !channel->session || !(pvt = channel->pvt) || !pvt->media[SIP_MEDIA_AUDIO]->rtp) {
 		return AST_RTP_GLUE_RESULT_FORBID;
 	}
 
@@ -388,7 +388,9 @@ static struct ast_channel *chan_pjsip_new(struct ast_sip_session *session, int s
 	chan = ast_channel_alloc_with_endpoint(1, state,
 		S_COR(session->id.number.valid, session->id.number.str, ""),
 		S_COR(session->id.name.valid, session->id.name.str, ""),
-		session->endpoint->accountcode, "", "", assignedids, requestor, 0,
+		session->endpoint->accountcode,
+		exten, session->endpoint->context,
+		assignedids, requestor, 0,
 		session->endpoint->persistent, "PJSIP/%s-%08x",
 		ast_sorcery_object_get_id(session->endpoint),
 		(unsigned) ast_atomic_fetchadd_int((int *) &chan_idx, +1));
@@ -445,8 +447,6 @@ static struct ast_channel *chan_pjsip_new(struct ast_sip_session *session, int s
 	ast_party_id_copy(&ast_channel_caller(chan)->id, &session->id);
 	ast_party_id_copy(&ast_channel_caller(chan)->ani, &session->id);
 
-	ast_channel_context_set(chan, session->endpoint->context);
-	ast_channel_exten_set(chan, S_OR(exten, "s"));
 	ast_channel_priority_set(chan, 1);
 
 	ast_channel_callgroup_set(chan, session->endpoint->pickup.callgroup);
@@ -625,8 +625,19 @@ static struct ast_frame *chan_pjsip_read(struct ast_channel *ast)
 		return f;
 	}
 
+	ast_rtp_instance_set_last_rx(media->rtp, time(NULL));
+
 	if (f->frametype != AST_FRAME_VOICE) {
 		return f;
+	}
+
+	if (ast_format_cap_iscompatible_format(channel->session->endpoint->media.codecs, f->subclass.format) == AST_FORMAT_CMP_NOT_EQUAL) {
+		ast_debug(1, "Oooh, got a frame with format of %s on channel '%s' when endpoint '%s' is not configured for it\n",
+			ast_format_get_name(f->subclass.format), ast_channel_name(ast),
+			ast_sorcery_object_get_id(channel->session->endpoint));
+
+		ast_frfree(f);
+		return &ast_null_frame;
 	}
 
 	if (channel->session->dsp) {
@@ -662,7 +673,7 @@ static int chan_pjsip_write(struct ast_channel *ast, struct ast_frame *frame)
 			return 0;
 		}
 		if (ast_format_cap_iscompatible_format(ast_channel_nativeformats(ast), frame->subclass.format) == AST_FORMAT_CMP_NOT_EQUAL) {
-			struct ast_str *cap_buf = ast_str_alloca(128);
+			struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 			struct ast_str *write_transpath = ast_str_alloca(256);
 			struct ast_str *read_transpath = ast_str_alloca(256);
 
@@ -1375,6 +1386,8 @@ static void transfer_refer(struct ast_sip_session *session, const char *target)
 	enum ast_control_transfer message = AST_TRANSFER_SUCCESS;
 	pj_str_t tmp;
 	pjsip_tx_data *packet;
+	const char *ref_by_val;
+	char local_info[pj_strlen(&session->inv_session->dlg->local.info_str) + 1];
 
 	if (pjsip_xfer_create_uac(session->inv_session->dlg, NULL, &sub) != PJ_SUCCESS) {
 		message = AST_TRANSFER_FAILED;
@@ -1389,6 +1402,14 @@ static void transfer_refer(struct ast_sip_session *session, const char *target)
 		pjsip_evsub_terminate(sub, PJ_FALSE);
 
 		return;
+	}
+
+	ref_by_val = pbx_builtin_getvar_helper(session->channel, "SIPREFERREDBYHDR");
+	if (!ast_strlen_zero(ref_by_val)) {
+		ast_sip_add_header(packet, "Referred-By", ref_by_val);
+	} else {
+		ast_copy_pj_str(local_info, &session->inv_session->dlg->local.info_str, sizeof(local_info));
+		ast_sip_add_header(packet, "Referred-By", local_info);
 	}
 
 	pjsip_xfer_send_request(sub, packet);
@@ -1751,9 +1772,17 @@ static int hangup(void *data)
 static int chan_pjsip_hangup(struct ast_channel *ast)
 {
 	struct ast_sip_channel_pvt *channel = ast_channel_tech_pvt(ast);
-	struct chan_pjsip_pvt *pvt = channel->pvt;
-	int cause = hangup_cause2sip(ast_channel_hangupcause(channel->session->channel));
-	struct hangup_data *h_data = hangup_data_alloc(cause, ast);
+	struct chan_pjsip_pvt *pvt;
+	int cause;
+	struct hangup_data *h_data;
+
+	if (!channel || !channel->session) {
+		return -1;
+	}
+
+	pvt = channel->pvt;
+	cause = hangup_cause2sip(ast_channel_hangupcause(channel->session->channel));
+	h_data = hangup_data_alloc(cause, ast);
 
 	if (!h_data) {
 		goto failure;
@@ -1815,6 +1844,7 @@ static int request(void *obj)
 	if (ast_strlen_zero(endpoint_name)) {
 		ast_log(LOG_ERROR, "Unable to create PJSIP channel with empty endpoint name\n");
 		req_data->cause = AST_CAUSE_CHANNEL_UNACCEPTABLE;
+		return -1;
 	} else if (!(endpoint = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "endpoint", endpoint_name))) {
 		ast_log(LOG_ERROR, "Unable to create PJSIP channel - endpoint '%s' was not found\n", endpoint_name);
 		req_data->cause = AST_CAUSE_NO_ROUTE_DESTINATION;
@@ -2055,7 +2085,8 @@ static int chan_pjsip_incoming_request(struct ast_sip_session *session, struct p
 		return 0;
 	}
 
-	if (session->inv_session->state >= PJSIP_INV_STATE_CONFIRMED) {
+	/* Check for a to-tag to determine if this is a reinvite */
+	if (rdata->msg_info.to->tag.slen) {
 		/* Weird case. We've received a reinvite but we don't have a channel. The most
 		 * typical case for this happening is that a blind transfer fails, and so the
 		 * transferer attempts to reinvite himself back into the call. We already got
@@ -2102,8 +2133,9 @@ static int call_pickup_incoming_request(struct ast_sip_session *session, pjsip_r
 	struct ast_features_pickup_config *pickup_cfg;
 	struct ast_channel *chan;
 
-	/* We don't care about reinvites */
-	if (session->inv_session->state >= PJSIP_INV_STATE_CONFIRMED) {
+	/* Check for a to-tag to determine if this is a reinvite */
+	if (rdata->msg_info.to->tag.slen) {
+		/* We don't care about reinvites */
 		return 0;
 	}
 
@@ -2150,8 +2182,9 @@ static int pbx_start_incoming_request(struct ast_sip_session *session, pjsip_rx_
 {
 	int res;
 
-	/* We don't care about reinvites */
-	if (session->inv_session->state >= PJSIP_INV_STATE_CONFIRMED) {
+	/* Check for a to-tag to determine if this is a reinvite */
+	if (rdata->msg_info.to->tag.slen) {
+		/* We don't care about reinvites */
 		return 0;
 	}
 

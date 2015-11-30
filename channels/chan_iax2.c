@@ -395,8 +395,6 @@ static int (*iax2_regfunk)(const char *username, int onoff) = NULL;
 static struct io_context *io;
 static struct ast_sched_context *sched;
 
-#define DONT_RESCHEDULE -2
-
 static iax2_format iax2_capability = IAX_CAPABILITY_FULLBANDWIDTH;
 
 static int iaxdebug = 0;
@@ -864,6 +862,8 @@ struct chan_iax2_pvt {
 	int frames_dropped;
 	/*! received frame count: (just for stats) */
 	int frames_received;
+	/*! Destroying this call initiated. */
+	int destroy_initiated;
 	/*! num bytes used for calltoken ie, even an empty ie should contain 2 */
 	unsigned char calltoken_ie_len;
 	/*! hold all signaling frames from the pbx thread until we have a destination callno */
@@ -1438,13 +1438,6 @@ static int iax2_is_control_frame_allowed(int subtype)
 	return is_allowed;
 }
 
-static void mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_message *msg)
-{
-	/* The MWI subscriptions exist just so the core knows we care about those
-	 * mailboxes.  However, we just grab the events out of the cache when it
-	 * is time to send MWI, since it is only sent with a REGACK. */
-}
-
 static void network_change_stasis_subscribe(void)
 {
 	if (!network_change_sub) {
@@ -1679,23 +1672,48 @@ static int iax2_sched_add(struct ast_sched_context *con, int when,
 	return ast_sched_add(con, when, callback, data);
 }
 
+/*
+ * \brief Acquire the iaxsl[callno] if call exists and not having ongoing hangup.
+ * \param callno Call number to lock.
+ * \return 0 If call disappeared or has ongoing hangup procedure. 1 If call found and mutex is locked.
+ */
+static int iax2_lock_callno_unless_destroyed(int callno)
+{
+	ast_mutex_lock(&iaxsl[callno]);
+
+	/* We acquired the lock; but the call was already destroyed (we came after full hang up procedures)
+	 * or destroy initiated (in middle of hang up procedure. */
+	if (!iaxs[callno] || iaxs[callno]->destroy_initiated) {
+		ast_debug(3, "I wanted to lock callno %d, but it is dead or going to die.\n", callno);
+		ast_mutex_unlock(&iaxsl[callno]);
+		return 0;
+	}
+
+	/* Lock acquired, and callno is alive and kicking. */
+	return 1;
+}
+
 static int send_ping(const void *data);
 
 static void __send_ping(const void *data)
 {
-	int callno = (long) data;
+	int callno = PTR_TO_CALLNO(data);
 
-	ast_mutex_lock(&iaxsl[callno]);
+	if (iax2_lock_callno_unless_destroyed(callno) == 0) {
+		ast_debug(3, "Hangup initiated on call %d, aborting __send_ping\n", callno);
+		return;
+	}
 
-	if (iaxs[callno]) {
-		if (iaxs[callno]->peercallno) {
-			send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_PING, 0, NULL, 0, -1);
-			if (iaxs[callno]->pingid != DONT_RESCHEDULE) {
-				iaxs[callno]->pingid = iax2_sched_add(sched, ping_time * 1000, send_ping, data);
-			}
-		}
-	} else {
-		ast_debug(1, "I was supposed to send a PING with callno %d, but no such call exists.\n", callno);
+	/* Mark pingid as invalid scheduler id. */
+	iaxs[callno]->pingid = -1;
+
+	/* callno is now locked. */
+	if (iaxs[callno]->peercallno) {
+		/* Send PING packet. */
+		send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_PING, 0, NULL, 0, -1);
+
+		/* Schedule sending next ping. */
+		iaxs[callno]->pingid = iax2_sched_add(sched, ping_time * 1000, send_ping, data);
 	}
 
 	ast_mutex_unlock(&iaxsl[callno]);
@@ -1703,13 +1721,6 @@ static void __send_ping(const void *data)
 
 static int send_ping(const void *data)
 {
-	int callno = (long) data;
-	ast_mutex_lock(&iaxsl[callno]);
-	if (iaxs[callno] && iaxs[callno]->pingid != DONT_RESCHEDULE) {
-		iaxs[callno]->pingid = -1;
-	}
-	ast_mutex_unlock(&iaxsl[callno]);
-
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__send_ping, data))
 #endif
@@ -1750,19 +1761,23 @@ static int send_lagrq(const void *data);
 
 static void __send_lagrq(const void *data)
 {
-	int callno = (long) data;
+	int callno = PTR_TO_CALLNO(data);
 
-	ast_mutex_lock(&iaxsl[callno]);
+	if (iax2_lock_callno_unless_destroyed(callno) == 0) {
+		ast_debug(3, "Hangup initiated on call %d, aborting __send_lagrq\n", callno);
+		return;
+	}
 
-	if (iaxs[callno]) {
-		if (iaxs[callno]->peercallno) {
-			send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_LAGRQ, 0, NULL, 0, -1);
-			if (iaxs[callno]->lagid != DONT_RESCHEDULE) {
-				iaxs[callno]->lagid = iax2_sched_add(sched, lagrq_time * 1000, send_lagrq, data);
-			}
-		}
-	} else {
-		ast_debug(1, "I was supposed to send a LAGRQ with callno %d, but no such call exists.\n", callno);
+	/* Mark lagid as invalid scheduler id. */
+	iaxs[callno]->lagid = -1;
+
+	/* callno is now locked. */
+	if (iaxs[callno]->peercallno) {
+		/* Send LAGRQ packet. */
+		send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_LAGRQ, 0, NULL, 0, -1);
+
+		/* Schedule sending next lagrq. */
+		iaxs[callno]->lagid = iax2_sched_add(sched, lagrq_time * 1000, send_lagrq, data);
 	}
 
 	ast_mutex_unlock(&iaxsl[callno]);
@@ -1770,13 +1785,6 @@ static void __send_lagrq(const void *data)
 
 static int send_lagrq(const void *data)
 {
-	int callno = (long) data;
-	ast_mutex_lock(&iaxsl[callno]);
-	if (iaxs[callno] && iaxs[callno]->lagid != DONT_RESCHEDULE) {
-		iaxs[callno]->lagid = -1;
-	}
-	ast_mutex_unlock(&iaxsl[callno]);
-
 #ifdef SCHED_MULTITHREADED
 	if (schedule_action(__send_lagrq, data))
 #endif
@@ -2060,6 +2068,16 @@ static int iax2_getpeername(struct ast_sockaddr addr, char *host, int len)
 	return res;
 }
 
+/* Call AST_SCHED_DEL on a scheduled task if it is found in scheduler. */
+static int iax2_delete_from_sched(const void* data)
+{
+	int sched_id = (int)(long)data;
+
+	AST_SCHED_DEL(sched, sched_id);
+
+	return 0;
+}
+
 /*!\note Assumes the lock on the pvt is already held, when
  * iax2_destroy_helper() is called. */
 static void iax2_destroy_helper(struct chan_iax2_pvt *pvt)
@@ -2076,11 +2094,27 @@ static void iax2_destroy_helper(struct chan_iax2_pvt *pvt)
 
 		ast_clear_flag64(pvt, IAX_MAXAUTHREQ);
 	}
-	/* No more pings or lagrq's */
-	AST_SCHED_DEL_SPINLOCK(sched, pvt->pingid, &iaxsl[pvt->callno]);
-	pvt->pingid = DONT_RESCHEDULE;
-	AST_SCHED_DEL_SPINLOCK(sched, pvt->lagid, &iaxsl[pvt->callno]);
-	pvt->lagid = DONT_RESCHEDULE;
+
+
+	/* Mark call destroy initiated flag. */
+	pvt->destroy_initiated = 1;
+
+	/*
+	 * Schedule deleting the scheduled (but didn't run yet) PINGs or LAGRQs.
+	 * Already running tasks will be terminated because of destroy_initiated.
+	 *
+	 * Don't call AST_SCHED_DEL from this thread for pingid and lagid because
+	 * it leads to a deadlock between the scheduler thread callback locking
+	 * the callno mutex and this thread which holds the callno mutex one or
+	 * more times.  It is better to have another thread delete the scheduled
+	 * callbacks which doesn't lock the callno mutex.
+	 */
+	iax2_sched_add(sched, 0, iax2_delete_from_sched, (void*)(long)pvt->pingid);
+	iax2_sched_add(sched, 0, iax2_delete_from_sched, (void*)(long)pvt->lagid);
+
+	pvt->pingid = -1;
+	pvt->lagid = -1;
+
 	AST_SCHED_DEL(sched, pvt->autoid);
 	AST_SCHED_DEL(sched, pvt->authid);
 	AST_SCHED_DEL(sched, pvt->initid);
@@ -3782,7 +3816,7 @@ static char *handle_cli_iax2_show_peer(struct ast_cli_entry *e, int cmd, struct 
 	char status[30];
 	char cbuf[256];
 	struct iax2_peer *peer;
-	struct ast_str *codec_buf = ast_str_alloca(256);
+	struct ast_str *codec_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 	struct ast_str *encmethods = ast_str_alloca(256);
 	int load_realtime = 0;
 
@@ -5555,8 +5589,8 @@ static enum ast_bridge_result iax2_bridge(struct ast_channel *c0, struct ast_cha
 			return AST_BRIDGE_FAILED_NOWARN;
 		}
 		if (!(ast_format_cap_identical(ast_channel_nativeformats(c0), ast_channel_nativeformats(c1)))) {
-			struct ast_str *c0_buf = ast_str_alloca(64);
-			struct ast_str *c1_buf = ast_str_alloca(64);
+			struct ast_str *c0_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+			struct ast_str *c1_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 			ast_verb(3, "Operating with different codecs [%s] [%s] , can't native bridge...\n",
 				ast_format_cap_get_names(ast_channel_nativeformats(c0), &c0_buf),
@@ -7087,7 +7121,7 @@ static char *handle_cli_iax2_unregister(struct ast_cli_entry *e, int cmd, struct
 
 	p = find_peer(a->argv[2], 1);
 	if (p) {
-		if (p->expire > 0) {
+		if (p->expire > -1) {
 			struct iax2_peer *peer;
 
 			peer = ao2_find(peers, a->argv[2], OBJ_KEY);
@@ -7119,8 +7153,8 @@ static char *complete_iax2_unregister(const char *line, const char *word, int po
 	if (pos == 2) {
 		struct ao2_iterator i = ao2_iterator_init(peers, 0);
 		while ((p = ao2_iterator_next(&i))) {
-			if (!strncasecmp(p->name, word, wordlen) &&
-				++which > state && p->expire > 0) {
+			if (!strncasecmp(p->name, word, wordlen) && 
+				++which > state && p->expire > -1) {
 				res = ast_strdup(p->name);
 				peer_unref(p);
 				break;
@@ -10788,9 +10822,9 @@ static int socket_process_helper(struct iax2_thread *thread)
 									break;
 								}
 								if (authdebug) {
-									struct ast_str *peer_buf = ast_str_alloca(64);
-									struct ast_str *cap_buf = ast_str_alloca(64);
-									struct ast_str *peer_form_buf = ast_str_alloca(64);
+									struct ast_str *peer_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+									struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+									struct ast_str *peer_form_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 									if (ast_test_flag64(iaxs[fr->callno], IAX_CODEC_NOCAP)) {
 										ast_log(LOG_NOTICE, "Rejected connect attempt from %s, requested '%s' incompatible with our capability '%s'.\n",
@@ -10835,9 +10869,9 @@ static int socket_process_helper(struct iax2_thread *thread)
 								}
 
 								if (!format) {
-									struct ast_str *peer_buf = ast_str_alloca(64);
-									struct ast_str *cap_buf = ast_str_alloca(64);
-									struct ast_str *peer_form_buf = ast_str_alloca(64);
+									struct ast_str *peer_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+									struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+									struct ast_str *peer_form_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 									memset(&ied0, 0, sizeof(ied0));
 									iax_ie_append_str(&ied0, IAX_IE_CAUSE, "Unable to negotiate codec");
@@ -11015,8 +11049,8 @@ static int socket_process_helper(struct iax2_thread *thread)
 						break;
 					}
 					if (authdebug) {
-						struct ast_str *peer_buf = ast_str_alloca(64);
-						struct ast_str *cap_buf = ast_str_alloca(64);
+						struct ast_str *peer_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+						struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 						ast_log(LOG_NOTICE, "Rejected call to %s, format %s incompatible with our capability %s.\n",
 							ast_sockaddr_stringify(&addr),
@@ -11029,7 +11063,7 @@ static int socket_process_helper(struct iax2_thread *thread)
 					ast_set_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED);
 					iax2_lock_owner(fr->callno);
 					if (iaxs[fr->callno] && iaxs[fr->callno]->owner && native) {
-						struct ast_str *cap_buf = ast_str_alloca(64);
+						struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 						/* Switch us to use a compatible format */
 						iax2_codec_pref_best_bitfield2cap(
@@ -11233,9 +11267,9 @@ static int socket_process_helper(struct iax2_thread *thread)
 						iax2_codec_pref_string(&iaxs[fr->callno]->prefs, host_pref_buf, sizeof(host_pref_buf) - 1);
 					}
 					if (!format) {
-						struct ast_str *cap_buf = ast_str_alloca(64);
-						struct ast_str *peer_buf = ast_str_alloca(64);
-						struct ast_str *peer_form_buf = ast_str_alloca(64);
+						struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+						struct ast_str *peer_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+						struct ast_str *peer_form_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 						if(!ast_test_flag64(iaxs[fr->callno], IAX_CODEC_NOCAP)) {
 							ast_debug(1, "We don't do requested format %s, falling back to peer capability '%s'\n",
@@ -11296,9 +11330,9 @@ static int socket_process_helper(struct iax2_thread *thread)
 								}
 							}
 							if (!format) {
-								struct ast_str *cap_buf = ast_str_alloca(64);
-								struct ast_str *peer_buf = ast_str_alloca(64);
-								struct ast_str *peer_form_buf = ast_str_alloca(64);
+								struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+								struct ast_str *peer_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+								struct ast_str *peer_form_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 								ast_log(LOG_ERROR, "No best format in %s???\n",
 									iax2_getformatname_multiple(iaxs[fr->callno]->peercapability & iaxs[fr->callno]->capability, &cap_buf));
@@ -11422,7 +11456,7 @@ immediatedial:
 							break;
 						}
 					} else {
-						struct ast_str *cap_buf = ast_str_alloca(64);
+						struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 						ast_set_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED);
 						ast_verb(3, "Accepting DIAL from %s, formats = %s\n",
 								ast_sockaddr_stringify(&addr),
@@ -12503,8 +12537,8 @@ static struct ast_channel *iax2_request(const char *type, struct ast_format_cap 
 
 			res = ast_translator_best_choice(cap, ast_channel_nativeformats(c), &best_fmt_cap, &best_fmt_native);
 			if (res < 0) {
-				struct ast_str *native_cap_buf = ast_str_alloca(256);
-				struct ast_str *cap_buf = ast_str_alloca(256);
+				struct ast_str *native_cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
+				struct ast_str *cap_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 				ast_log(LOG_WARNING, "Unable to create translator path for %s to %s on %s\n",
 					ast_format_cap_get_names(ast_channel_nativeformats(c), &native_cap_buf),
@@ -13036,7 +13070,10 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 
 		mailbox_specific_topic = ast_mwi_topic(peer->mailbox);
 		if (mailbox_specific_topic) {
-			peer->mwi_event_sub = stasis_subscribe_pool(mailbox_specific_topic, mwi_event_cb, NULL);
+			/* The MWI subscriptions exist just so the core knows we care about those
+			 * mailboxes.  However, we just grab the events out of the cache when it
+			 * is time to send MWI, since it is only sent with a REGACK. */
+			peer->mwi_event_sub = stasis_subscribe_pool(mailbox_specific_topic, stasis_subscription_cb_noop, NULL);
 		}
 	}
 
@@ -14354,7 +14391,7 @@ static int function_iaxpeer(struct ast_channel *chan, const char *cmd, char *dat
 	} else  if (!strcasecmp(colname, "callerid_num")) {
 		ast_copy_string(buf, peer->cid_num, len);
 	} else  if (!strcasecmp(colname, "codecs")) {
-		struct ast_str *codec_buf = ast_str_alloca(256);
+		struct ast_str *codec_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 
 		iax2_getformatname_multiple(peer->capability, &codec_buf);
 		ast_copy_string(buf, ast_str_buffer(codec_buf), len);
@@ -14647,7 +14684,6 @@ static void cleanup_thread_list(void *head)
 
 static int __unload_module(void)
 {
-	struct ast_context *con;
 	int x;
 
 	network_change_stasis_unsubscribe();
@@ -14724,9 +14760,7 @@ static int __unload_module(void)
 	sched = NULL;
 	ao2_ref(peercnts, -1);
 
-	con = ast_context_find(regcontext);
-	if (con)
-		ast_context_destroy(con, "IAX2");
+	ast_context_destroy_by_name(regcontext, "IAX2");
 	ast_unload_realtime("iaxpeers");
 
 	ao2_ref(iax2_tech.capabilities, -1);

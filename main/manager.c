@@ -2811,6 +2811,7 @@ AST_THREADSTORAGE(userevent_buf);
  */
 void astman_append(struct mansession *s, const char *fmt, ...)
 {
+	int res;
 	va_list ap;
 	struct ast_str *buf;
 
@@ -2819,8 +2820,11 @@ void astman_append(struct mansession *s, const char *fmt, ...)
 	}
 
 	va_start(ap, fmt);
-	ast_str_set_va(&buf, 0, fmt, ap);
+	res = ast_str_set_va(&buf, 0, fmt, ap);
 	va_end(ap);
+	if (res == AST_DYNSTR_BUILD_FAILED) {
+		return;
+	}
 
 	if (s->f != NULL || s->session->f != NULL) {
 		send_string(s, ast_str_buffer(buf));
@@ -2880,6 +2884,7 @@ void astman_send_error(struct mansession *s, const struct message *m, char *erro
 
 void astman_send_error_va(struct mansession *s, const struct message *m, const char *fmt, ...)
 {
+	int res;
 	va_list ap;
 	struct ast_str *buf;
 	char *msg;
@@ -2889,8 +2894,11 @@ void astman_send_error_va(struct mansession *s, const struct message *m, const c
 	}
 
 	va_start(ap, fmt);
-	ast_str_set_va(&buf, 0, fmt, ap);
+	res = ast_str_set_va(&buf, 0, fmt, ap);
 	va_end(ap);
+	if (res == AST_DYNSTR_BUILD_FAILED) {
+		return;
+	}
 
 	/* astman_append will use the same underlying buffer, so copy the message out
 	 * before sending the response */
@@ -3469,18 +3477,18 @@ static int action_getconfigjson(struct mansession *s, const struct message *m)
 		category_name = ast_category_get_name(cur_category);
 		astman_append(s, "%s\"", comma1 ? "," : "");
 		astman_append_json(s, category_name);
-		astman_append(s, "\":[");
+		astman_append(s, "\":{");
 		comma1 = 1;
 
 		if (ast_category_is_template(cur_category)) {
-			astman_append(s, "istemplate:1");
+			astman_append(s, "\"istemplate\":1");
 			comma2 = 1;
 		}
 
 		if ((templates = ast_category_get_templates(cur_category))
 			&& ast_str_strlen(templates) > 0) {
 			astman_append(s, "%s", comma2 ? "," : "");
-			astman_append(s, "templates:\"%s\"", ast_str_buffer(templates));
+			astman_append(s, "\"templates\":\"%s\"", ast_str_buffer(templates));
 			ast_free(templates);
 			comma2 = 1;
 		}
@@ -3494,7 +3502,7 @@ static int action_getconfigjson(struct mansession *s, const struct message *m)
 			comma2 = 1;
 		}
 
-		astman_append(s, "]");
+		astman_append(s, "}");
 	}
 	astman_append(s, "}\r\n\r\n");
 
@@ -4331,7 +4339,7 @@ static int action_status(struct mansession *s, const struct message *m)
 	struct ast_str *write_transpath = ast_str_alloca(256);
 	struct ast_str *read_transpath = ast_str_alloca(256);
 	struct ast_channel *chan;
-	struct ast_str *codec_buf = ast_str_alloca(64);
+	struct ast_str *codec_buf = ast_str_alloca(AST_FORMAT_CAP_NAMES_LEN);
 	int channels = 0;
 	int all = ast_strlen_zero(name); /* set if we want all channels */
 	char id_text[256];
@@ -5961,9 +5969,6 @@ static int manager_modulecheck(struct mansession *s, const struct message *m)
 	const char *module = astman_get_header(m, "Module");
 	const char *id = astman_get_header(m, "ActionID");
 	char idText[256];
-#if !defined(LOW_MEMORY)
-	const char *version;
-#endif
 	char filename[PATH_MAX];
 	char *cut;
 
@@ -5980,11 +5985,6 @@ static int manager_modulecheck(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Module not loaded");
 		return 0;
 	}
-	snprintf(cut, (sizeof(filename) - strlen(filename)) - 1, ".c");
-	ast_debug(1, "**** ModuleCheck .c file %s\n", filename);
-#if !defined(LOW_MEMORY)
-	version = ast_file_version_find(filename);
-#endif
 
 	if (!ast_strlen_zero(id)) {
 		snprintf(idText, sizeof(idText), "ActionID: %s\r\n", id);
@@ -5993,7 +5993,7 @@ static int manager_modulecheck(struct mansession *s, const struct message *m)
 	}
 	astman_append(s, "Response: Success\r\n%s", idText);
 #if !defined(LOW_MEMORY)
-	astman_append(s, "Version: %s\r\n\r\n", version ? version : "");
+	astman_append(s, "Version: %s\r\n\r\n", ast_get_version());
 #endif
 	return 0;
 }
@@ -6763,9 +6763,9 @@ static int ast_manager_register_struct(struct manager_action *act)
 			return -1;
 		}
 		if (ret > 0) { /* Insert these alphabetically */
-			prev = cur;
 			break;
 		}
+		prev = cur;
 	}
 
 	ao2_t_ref(act, +1, "action object added to list");

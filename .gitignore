@@ -1,36 +1,39 @@
-*.o
+# git ls-files --others --exclude-from=.git/info/exclude
+# Lines that start with '#' are comments.
+# For a project mostly in C, the following would be a good set of
+# exclude patterns (uncomment them if you want to use them):
+# *.[oa]
+# *~
+
+# See .gitignore in subdirectories for more ignored files
+
 *~
-.*.o.d
-*.exports
+*.[oadi]
+*.gz
+*.ii
+*.oo
+*.eo
 *.so
+*.exports
+*.moduleinfo
+*.makeopts
+*.makedeps
 .applied
 .cleancount
 .depend
 .lastclean
-.tags-depend
-.tags-sources
-.version
-TAGS
 aclocal.m4
-agi/eagi-sphinx-test
-agi/eagi-test
-agi/strcompat.c
 autom4te.cache
-build_tools/menuselect-deps
-main/version.c
-config.cache
 config.log
 config.status
 defaults.h
-.lastclean
-main/asterisk
 makeopts
 makeopts.embed_rules
-.*.makeopts
-.*.moduleinfo
-.makeopts
-menuselect.makeopts
 menuselect-tree
-tags
-.moduleinfo
-.version
+*.sha1
+*.pyc
+*.gcno
+*.gcda
+latex
+doxygen.log
+

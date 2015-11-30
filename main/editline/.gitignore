@@ -1,3 +1,5 @@
+*.o_a
+Makefile
 common.h
 config.cache
 config.h
@@ -7,8 +9,5 @@ fcns.c
 fcns.h
 help.c
 help.h
-Makefile
-vi.h
 makelist
-*.o_a
-libedit.a
+vi.h

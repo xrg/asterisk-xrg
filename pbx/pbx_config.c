@@ -133,8 +133,6 @@ static char *complete_dialplan_remove_context(struct ast_cli_args *);
 
 static char *handle_cli_dialplan_remove_context(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct ast_context *con;
-
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "dialplan remove context";
@@ -150,16 +148,11 @@ static char *handle_cli_dialplan_remove_context(struct ast_cli_entry *e, int cmd
 		return CLI_SHOWUSAGE;
 	}
 
-	con = ast_context_find(a->argv[3]);
-
-	if (!con) {
-		ast_cli(a->fd, "There is no such context as '%s'\n",
-                        a->argv[3]);
-                return CLI_SUCCESS;
+	if (ast_context_destroy_by_name(a->argv[3], NULL)) {
+		ast_cli(a->fd, "There is no such context as '%s'\n", a->argv[3]);
+		return CLI_SUCCESS;
 	} else {
-		ast_context_destroy(con, registrar);
-		ast_cli(a->fd, "Removing context '%s'\n",
-			a->argv[3]);
+		ast_cli(a->fd, "Removed context '%s'\n", a->argv[3]);
 		return CLI_SUCCESS;
 	}
 }
@@ -2080,9 +2073,9 @@ static int load_module(void)
 		ast_cli_register(&cli_dialplan_save);
 	ast_cli_register_multiple(cli_pbx_config, ARRAY_LEN(cli_pbx_config));
 
-	res = ast_manager_register_xml_core(AMI_EXTENSION_ADD,
+	res = ast_manager_register_xml(AMI_EXTENSION_ADD,
 		EVENT_FLAG_SYSTEM, manager_dialplan_extension_add);
-	res |= ast_manager_register_xml_core(AMI_EXTENSION_REMOVE,
+	res |= ast_manager_register_xml(AMI_EXTENSION_REMOVE,
 		EVENT_FLAG_SYSTEM, manager_dialplan_extension_remove);
 
 	if (res) {

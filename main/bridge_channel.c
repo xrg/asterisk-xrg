@@ -1761,6 +1761,17 @@ static void after_bridge_move_channel(struct ast_channel *chan_bridged, void *da
 		return;
 	}
 
+	/* The ast_channel_move function will end up updating the connected line information
+	 * on chan_target to the value we have here, but will not inform it. To ensure that
+	 * AST_FRAME_READ_ACTION_CONNECTED_LINE_MACRO is executed we wipe it away here. If
+	 * we don't do this then the change will be considered redundant, since the connected
+	 * line information is already there (despite the channel not being told).
+	 */
+	ast_channel_lock(chan_target);
+	ast_party_connected_line_free(ast_channel_connected_indicated(chan_target));
+	ast_party_connected_line_init(ast_channel_connected_indicated(chan_target));
+	ast_channel_unlock(chan_target);
+
 	if ((payload_size = ast_connected_line_build_data(connected_line_data,
 		sizeof(connected_line_data), &connected_target, NULL)) != -1) {
 		struct ast_control_read_action_payload *frame_payload;
@@ -1773,6 +1784,15 @@ static void after_bridge_move_channel(struct ast_channel *chan_bridged, void *da
 		memcpy(frame_payload->payload, connected_line_data, payload_size);
 		ast_queue_control_data(chan_target, AST_CONTROL_READ_ACTION, frame_payload, frame_size);
 	}
+
+	/* A connected line update is queued so that if chan_target is remotely involved with
+	 * anything (such as dialing a channel) the other channel(s) will be informed of the
+	 * new channel they are involved with.
+	 */
+	ast_channel_lock(chan_target);
+	ast_connected_line_copy_from_caller(&connected_target, ast_channel_caller(chan_target));
+	ast_channel_queue_connected_line_update(chan_target, &connected_target, NULL);
+	ast_channel_unlock(chan_target);
 
 	ast_party_connected_line_free(&connected_target);
 }
@@ -1893,6 +1913,13 @@ static void bridge_channel_handle_action(struct ast_bridge_channel *bridge_chann
 		break;
 	default:
 		break;
+	}
+
+	/* While invoking an action it is possible for the channel to be hung up. So
+	 * that the bridge respects this we check here and if hung up kick it out.
+	 */
+	if (bridge_channel->chan && ast_check_hangup_locked(bridge_channel->chan)) {
+		ast_bridge_channel_kick(bridge_channel, 0);
 	}
 }
 
@@ -2540,7 +2567,27 @@ static void bridge_channel_event_join_leave(struct ast_bridge_channel *bridge_ch
 	ao2_iterator_destroy(&iter);
 }
 
-int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel)
+void bridge_channel_internal_wait(struct bridge_channel_internal_cond *cond)
+{
+	ast_mutex_lock(&cond->lock);
+	while (!cond->done) {
+		ast_cond_wait(&cond->cond, &cond->lock);
+	}
+	ast_mutex_unlock(&cond->lock);
+}
+
+void bridge_channel_internal_signal(struct bridge_channel_internal_cond *cond)
+{
+	if (cond) {
+		ast_mutex_lock(&cond->lock);
+		cond->done = 1;
+		ast_cond_signal(&cond->cond);
+		ast_mutex_unlock(&cond->lock);
+	}
+}
+
+int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel,
+				 struct bridge_channel_internal_cond *cond)
 {
 	int res = 0;
 	struct ast_bridge_features *channel_features;
@@ -2570,6 +2617,7 @@ int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel)
 			bridge_channel->bridge->uniqueid,
 			bridge_channel,
 			ast_channel_name(bridge_channel->chan));
+		bridge_channel_internal_signal(cond);
 		return -1;
 	}
 	ast_channel_internal_bridge_set(bridge_channel->chan, bridge_channel->bridge);
@@ -2603,6 +2651,8 @@ int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel)
 		res = -1;
 	}
 	bridge_reconfigured(bridge_channel->bridge, !bridge_channel->inhibit_colp);
+
+	bridge_channel_internal_signal(cond);
 
 	if (bridge_channel->state == BRIDGE_CHANNEL_STATE_WAIT) {
 		/*

@@ -455,6 +455,74 @@ AST_TEST_DEFINE(escape_semicolons_test)
 	return AST_TEST_PASS;
 }
 
+AST_TEST_DEFINE(escape_test)
+{
+	char buf[128];
+
+#define TEST_ESCAPE(s, to_escape, expected) \
+	!strcmp(ast_escape(buf, s, ARRAY_LEN(buf), to_escape), expected)
+
+#define TEST_ESCAPE_C(s, expected) \
+	!strcmp(ast_escape_c(buf, s, ARRAY_LEN(buf)), expected)
+
+#define TEST_ESCAPE_ALLOC(s, to_escape, expected)		\
+	({													\
+		int res = 0;									\
+		char *a_buf = ast_escape_alloc(s, to_escape);	\
+		if (a_buf) {									\
+			res = !strcmp(a_buf, expected);				\
+			ast_free(a_buf);							\
+		}												\
+		res;											\
+	})
+
+#define TEST_ESCAPE_C_ALLOC(s, expected)				\
+	({													\
+		int res = 0;									\
+		char *a_buf = ast_escape_c_alloc(s);			\
+		if (a_buf) {									\
+			res = !strcmp(a_buf, expected);				\
+			ast_free(a_buf);							\
+		}												\
+		res;											\
+	})
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "escape";
+		info->category = "/main/strings/";
+		info->summary = "Test ast_escape";
+		info->description = "Test escaping values in a string";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	ast_test_validate(test, TEST_ESCAPE("null escape", NULL, "null escape"));
+	ast_test_validate(test, TEST_ESCAPE("empty escape", "", "empty escape"));
+	ast_test_validate(test, TEST_ESCAPE("", "Z", ""));
+	ast_test_validate(test, TEST_ESCAPE("no matching escape", "Z", "no matching escape"));
+	ast_test_validate(test, TEST_ESCAPE("escape Z", "Z", "escape \\Z"));
+	ast_test_validate(test, TEST_ESCAPE("Z", "Z", "\\Z"));
+	ast_test_validate(test, TEST_ESCAPE(";;", ";", "\\;\\;"));
+	ast_test_validate(test, TEST_ESCAPE("escape \n", "\n", "escape \\n"));
+	ast_test_validate(test, TEST_ESCAPE("escape \n again \n", "\n", "escape \\n again \\n"));
+
+	ast_test_validate(test, TEST_ESCAPE_C("", ""));
+	ast_test_validate(test, TEST_ESCAPE_C("escape \a\b\f\n\r\t\v\\\'\"\?",
+		"escape \\a\\b\\f\\n\\r\\t\\v\\\\\\\'\\\"\\?"));
+
+	ast_test_validate(test, TEST_ESCAPE_ALLOC("", "Z", ""));
+	ast_test_validate(test, TEST_ESCAPE_ALLOC("Z", "Z", "\\Z"));
+	ast_test_validate(test, TEST_ESCAPE_ALLOC("a", "Z", "a"));
+
+	ast_test_validate(test, TEST_ESCAPE_C_ALLOC("", ""));
+	ast_test_validate(test, TEST_ESCAPE_C_ALLOC("\n", "\\n"));
+	ast_test_validate(test, TEST_ESCAPE_C_ALLOC("a", "a"));
+
+	return AST_TEST_PASS;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(str_test);
@@ -462,6 +530,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(ends_with_test);
 	AST_TEST_UNREGISTER(strsep_test);
 	AST_TEST_UNREGISTER(escape_semicolons_test);
+	AST_TEST_UNREGISTER(escape_test);
 	return 0;
 }
 
@@ -472,6 +541,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(ends_with_test);
 	AST_TEST_REGISTER(strsep_test);
 	AST_TEST_REGISTER(escape_semicolons_test);
+	AST_TEST_REGISTER(escape_test);
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
