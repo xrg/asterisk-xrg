@@ -1133,7 +1133,6 @@ fi
 %endif
 %if %{build_tds}
 %exclude						%{_sysconfdir}/asterisk/*tds*.conf
-%else
 %exclude                                                %{modulesdir}/cel_tds.so
 %exclude                                                %{modulesdir}/cdr_tds.so
 %endif
@@ -1148,6 +1147,7 @@ fi
 %attr(0755,root,root)					%{_sbindir}/asterisk
 %attr(0755,root,root)					%{_sbindir}/astgenkey
 %attr(0755,root,root)					%{_sbindir}/astman
+%attr(0755,root,root)                                   %{_sbindir}/astversion
 %attr(0755,root,root)					%{_sbindir}/autosupport
 %attr(0755,root,root)					%{_sbindir}/muted
                                                         %{_sbindir}/rasterisk
@@ -1232,6 +1232,7 @@ fi
 %attr(0755,root,root) %{modulesdir}/chan_motif.so
 %attr(0755,root,root) %{modulesdir}/chan_phone.so
 %attr(0755,root,root) %{modulesdir}/chan_sip.so
+%attr(0755,root,root) %{modulesdir}/chan_mgcp.so
 
 %attr(0755,root,root) %{modulesdir}/codec_adpcm.so
 %attr(0755,root,root) %{modulesdir}/codec_alaw.so
@@ -1282,6 +1283,7 @@ fi
 %attr(0755,root,root) %{modulesdir}/func_global.so
 %attr(0755,root,root) %{modulesdir}/func_groupcount.so
 %attr(0755,root,root) %{modulesdir}/func_hangupcause.so
+%attr(0755,root,root) %{modulesdir}/func_holdintercept.so
 %attr(0755,root,root) %{modulesdir}/func_iconv.so
 %attr(0755,root,root) %{modulesdir}/func_jitterbuffer.so
 %attr(0755,root,root) %{modulesdir}/func_lock.so
@@ -1371,6 +1373,7 @@ fi
 %attr(0755,root,root) %{modulesdir}/res_sorcery_config.so
 %attr(0755,root,root) %{modulesdir}/res_sorcery_memory.so
 %attr(0755,root,root) %{modulesdir}/res_sorcery_realtime.so
+%attr(0755,root,root) %{modulesdir}/res_sorcery_memory_cache.so
 %attr(0755,root,root) %{modulesdir}/res_stasis.so
 %attr(0755,root,root) %{modulesdir}/res_stasis_answer.so
 %attr(0755,root,root) %{modulesdir}/res_stasis_device_state.so
@@ -1687,13 +1690,14 @@ fi
 %attr(0755,root,root) %{modulesdir}/res_ari_device_states.so
 %attr(0755,root,root) %{modulesdir}/res_ari_endpoints.so
 %attr(0755,root,root) %{modulesdir}/res_ari_events.so
-%attr(0755,root,root) %{modulesdir}/res_ari_mailboxes.so
+# %attr(0755,root,root) %{modulesdir}/res_ari_mailboxes.so
 %attr(0755,root,root) %{modulesdir}/res_ari_model.so
 %attr(0755,root,root) %{modulesdir}/res_ari_playbacks.so
 %attr(0755,root,root) %{modulesdir}/res_ari_recordings.so
 %attr(0755,root,root) %{modulesdir}/res_ari_sounds.so
 %attr(0755,asterisk,asterisk) %dir %{astvardir}/rest-api/
 %attr(0640,asterisk,asterisk) %config(noreplace) %{astvardir}/rest-api/*.json
+
 
 
 %files docs
