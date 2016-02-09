@@ -26,6 +26,7 @@
 #include "asterisk/sorcery.h"
 #include "include/res_pjsip_private.h"
 #include "asterisk/res_pjsip_cli.h"
+#include "asterisk/statsd.h"
 
 /*! \brief Destructor for AOR */
 static void aor_destroy(void *obj)
@@ -91,6 +92,7 @@ static void contact_destroy(void *obj)
 	struct ast_sip_contact *contact = obj;
 
 	ast_string_field_free_memory(contact);
+	ast_free(contact->aor);
 	ao2_cleanup(contact->endpoint);
 }
 
@@ -98,12 +100,27 @@ static void contact_destroy(void *obj)
 static void *contact_alloc(const char *name)
 {
 	struct ast_sip_contact *contact = ast_sorcery_generic_alloc(sizeof(*contact), contact_destroy);
+	char *id = ast_strdupa(name);
+	char *aor = id;
+	char *aor_separator = NULL;
 
 	if (!contact) {
 		return NULL;
 	}
 
 	if (ast_string_field_init(contact, 256)) {
+		ao2_cleanup(contact);
+		return NULL;
+	}
+
+	/* Dynamic contacts are delimited with ";@" and static ones with "@@" */
+	if ((aor_separator = strstr(id, ";@")) || (aor_separator = strstr(id, "@@"))) {
+		*aor_separator = '\0';
+	}
+	ast_assert(aor_separator != NULL);
+
+	contact->aor = ast_strdup(aor);
+	if (!contact->aor) {
 		ao2_cleanup(contact);
 		return NULL;
 	}
@@ -305,14 +322,6 @@ int ast_sip_location_update_contact(struct ast_sip_contact *contact)
 
 int ast_sip_location_delete_contact(struct ast_sip_contact *contact)
 {
-	void *contact_status_obj;
-
-	contact_status_obj = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), CONTACT_STATUS, ast_sorcery_object_get_id(contact));
-	if (contact_status_obj) {
-		ast_sorcery_delete(ast_sip_get_sorcery(), contact_status_obj);
-		ao2_ref(contact_status_obj, -1);
-	}
-
 	return ast_sorcery_delete(ast_sip_get_sorcery(), contact);
 }
 
@@ -376,7 +385,8 @@ static int permanent_uri_handler(const struct aco_option *opt, struct ast_variab
 	while ((contact_uri = strsep(&contacts, ","))) {
 		struct ast_sip_contact *contact;
 		struct ast_sip_contact_status *status;
-		char contact_id[strlen(aor_id) + strlen(contact_uri) + 2 + 1];
+		char hash[33];
+		char contact_id[strlen(aor_id) + sizeof(hash) + 2];
 
 		if (!aor->permanent_contacts) {
 			aor->permanent_contacts = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_NOLOCK,
@@ -386,11 +396,14 @@ static int permanent_uri_handler(const struct aco_option *opt, struct ast_variab
 			}
 		}
 
-		snprintf(contact_id, sizeof(contact_id), "%s@@%s", aor_id, contact_uri);
+		ast_md5_hash(hash, contact_uri);
+		snprintf(contact_id, sizeof(contact_id), "%s@@%s", aor_id, hash);
 		contact = ast_sorcery_alloc(ast_sip_get_sorcery(), "contact", contact_id);
 		if (!contact) {
 			return -1;
 		}
+
+		ast_string_field_set(contact, uri, contact_uri);
 
 		status = ast_res_pjsip_find_or_create_contact_status(contact);
 		if (!status) {
@@ -399,7 +412,6 @@ static int permanent_uri_handler(const struct aco_option *opt, struct ast_variab
 		}
 		ao2_ref(status, -1);
 
-		ast_string_field_set(contact, uri, contact_uri);
 		ao2_link(aor->permanent_contacts, contact);
 		ao2_ref(contact, -1);
 	}
@@ -762,12 +774,12 @@ static int cli_contact_print_header(void *obj, void *arg, int flags)
 {
 	struct ast_sip_cli_context *context = arg;
 	int indent = CLI_INDENT_TO_SPACES(context->indent_level);
-	int filler = CLI_LAST_TABSTOP - indent - 18;
+	int filler = CLI_LAST_TABSTOP - indent - 23;
 
 	ast_assert(context->output_buffer != NULL);
 
 	ast_str_append(&context->output_buffer, 0,
-		"%*s:  <Aor/ContactUri%*.*s>  <Status....>  <RTT(ms)..>\n",
+		"%*s:  <Aor/ContactUri%*.*s> <Hash....> <Status> <RTT(ms)..>\n",
 		indent, "Contact", filler, filler, CLI_HEADER_FILLER);
 
 	return 0;
@@ -780,22 +792,26 @@ static int cli_contact_print_body(void *obj, void *arg, int flags)
 	struct ast_sip_cli_context *context = arg;
 	int indent;
 	int flexwidth;
+	const char *contact_id = ast_sorcery_object_get_id(contact);
+	const char *hash_start = contact_id + strlen(contact->aor) + 2;
 
 	RAII_VAR(struct ast_sip_contact_status *, status,
-		ast_sorcery_retrieve_by_id( ast_sip_get_sorcery(), CONTACT_STATUS, ast_sorcery_object_get_id(contact)),
+		ast_sorcery_retrieve_by_id( ast_sip_get_sorcery(), CONTACT_STATUS, contact_id),
 		ao2_cleanup);
 
 	ast_assert(contact->uri != NULL);
 	ast_assert(context->output_buffer != NULL);
 
 	indent = CLI_INDENT_TO_SPACES(context->indent_level);
-	flexwidth = CLI_LAST_TABSTOP - indent - 2;
+	flexwidth = CLI_LAST_TABSTOP - indent - 9 - strlen(contact->aor) + 1;
 
-	ast_str_append(&context->output_buffer, 0, "%*s:  %-*.*s  %-12.12s  %11.3f\n",
+	ast_str_append(&context->output_buffer, 0, "%*s:  %s/%-*.*s %-10.10s %-7.7s %11.3f\n",
 		indent,
 		"Contact",
+		contact->aor,
 		flexwidth, flexwidth,
-		wrapper->contact_id,
+		contact->uri,
+		hash_start,
 		ast_sip_get_contact_short_status_label(status ? status->status : UNKNOWN),
 		(status && (status->status != UNKNOWN) ? ((long long) status->rtt) / 1000.0 : NAN));
 
@@ -940,6 +956,8 @@ static int contact_apply_handler(const struct ast_sorcery *sorcery, void *object
 int ast_sip_initialize_sorcery_location(void)
 {
 	struct ast_sorcery *sorcery = ast_sip_get_sorcery();
+	int i;
+
 	ast_sorcery_apply_default(sorcery, "contact", "astdb", "registrar");
 	ast_sorcery_apply_default(sorcery, "aor", "config", "pjsip.conf,criteria=type=aor");
 
@@ -1005,6 +1023,15 @@ int ast_sip_initialize_sorcery_location(void)
 	ast_sip_register_cli_formatter(contact_formatter);
 	ast_sip_register_cli_formatter(aor_formatter);
 	ast_cli_register_multiple(cli_commands, ARRAY_LEN(cli_commands));
+
+	/*
+	 * Reset StatsD gauges in case we didn't shut down cleanly.
+	 * Note that this must done here, as contacts will create the contact_status
+	 * object before PJSIP options handling is initialized.
+	 */
+	for (i = 0; i <= REMOVED; i++) {
+		ast_statsd_log_full_va("PJSIP.contacts.states.%s", AST_STATSD_GAUGE, 0, 1.0, ast_sip_get_contact_status_label(i));
+	}
 
 	return 0;
 }

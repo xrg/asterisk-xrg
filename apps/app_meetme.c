@@ -2936,7 +2936,7 @@ static void meetme_menu_admin(enum menu_modes *menu_mode, int *dtmf, struct ast_
 		tweak_talk_volume(user, VOL_UP);
 		break;
 	default:
-		menu_mode = MENU_DISABLED;
+		*menu_mode = MENU_DISABLED;
 		/* Play an error message! */
 		if (!ast_streamfile(chan, "conf-errormenu", ast_channel_language(chan))) {
 			ast_waitstream(chan, "");
@@ -5774,6 +5774,9 @@ static void meetme_set_defaults(void)
 
 	/*  Logging of participants defaults to ON for compatibility reasons */
 	rt_log_members = 1;
+
+	/* Set default number of buffers to be allocated. */
+	audio_buffers = DEFAULT_AUDIO_BUFFERS;
 }
 
 static void load_config_meetme(int reload)

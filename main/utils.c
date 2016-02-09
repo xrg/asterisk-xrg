@@ -1213,7 +1213,7 @@ static void *dummy_start(void *data)
 
 	lock_info->thread_id = pthread_self();
 	lock_info->lwp = ast_get_tid();
-	lock_info->thread_name = strdup(a.name);
+	lock_info->thread_name = ast_strdup(a.name);
 
 	pthread_mutexattr_init(&mutex_attr);
 	pthread_mutexattr_settype(&mutex_attr, AST_MUTEX_KIND);
@@ -1404,7 +1404,13 @@ int ast_carefulwrite(int fd, char *s, int len, int timeoutms)
 
 		if (res < 0 && errno != EAGAIN && errno != EINTR) {
 			/* fatal error from write() */
-			ast_log(LOG_ERROR, "write() returned error: %s\n", strerror(errno));
+			if (errno == EPIPE) {
+#ifndef STANDALONE
+				ast_debug(1, "write() failed due to reading end being closed: %s\n", strerror(errno));
+#endif
+			} else {
+				ast_log(LOG_ERROR, "write() returned error: %s\n", strerror(errno));
+			}
 			return -1;
 		}
 
@@ -2931,4 +2937,47 @@ int ast_str_to_eid(struct ast_eid *eid, const char *s)
 int ast_eid_cmp(const struct ast_eid *eid1, const struct ast_eid *eid2)
 {
 	return memcmp(eid1, eid2, sizeof(*eid1));
+}
+
+int ast_file_is_readable(const char *filename)
+{
+#if defined(HAVE_EACCESS) || defined(HAVE_EUIDACCESS)
+#if defined(HAVE_EUIDACCESS) && !defined(HAVE_EACCESS)
+#define eaccess euidaccess
+#endif
+	return eaccess(filename, R_OK) == 0;
+#else
+	int fd = open(filename, O_RDONLY |  O_NONBLOCK);
+	if (fd < 0) {
+		return 0;
+	}
+	close(fd);
+	return 1;
+#endif
+}
+
+int ast_compare_versions(const char *version1, const char *version2)
+{
+	unsigned int major[2] = { 0 };
+	unsigned int minor[2] = { 0 };
+	unsigned int patch[2] = { 0 };
+	unsigned int extra[2] = { 0 };
+	int res;
+
+	sscanf(version1, "%u.%u.%u.%u", &major[0], &minor[0], &patch[0], &extra[0]);
+	sscanf(version2, "%u.%u.%u.%u", &major[1], &minor[1], &patch[1], &extra[1]);
+
+	res = major[0] - major[1];
+	if (res) {
+		return res;
+	}
+	res = minor[0] - minor[1];
+	if (res) {
+		return res;
+	}
+	res = patch[0] - patch[1];
+	if (res) {
+		return res;
+	}
+	return extra[0] - extra[1];
 }

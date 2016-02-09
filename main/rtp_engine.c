@@ -1634,18 +1634,34 @@ int ast_rtp_dtls_cfg_parse(struct ast_rtp_dtls_cfg *dtls_cfg, const char *name, 
 		}
 	} else if (!strcasecmp(name, "dtlscertfile")) {
 		ast_free(dtls_cfg->certfile);
+		if (!ast_strlen_zero(value) && !ast_file_is_readable(value)) {
+			ast_log(LOG_ERROR, "%s file %s does not exist or is not readable\n", name, value);
+			return -1;
+		}
 		dtls_cfg->certfile = ast_strdup(value);
 	} else if (!strcasecmp(name, "dtlsprivatekey")) {
 		ast_free(dtls_cfg->pvtfile);
+		if (!ast_strlen_zero(value) && !ast_file_is_readable(value)) {
+			ast_log(LOG_ERROR, "%s file %s does not exist or is not readable\n", name, value);
+			return -1;
+		}
 		dtls_cfg->pvtfile = ast_strdup(value);
 	} else if (!strcasecmp(name, "dtlscipher")) {
 		ast_free(dtls_cfg->cipher);
 		dtls_cfg->cipher = ast_strdup(value);
 	} else if (!strcasecmp(name, "dtlscafile")) {
 		ast_free(dtls_cfg->cafile);
+		if (!ast_strlen_zero(value) && !ast_file_is_readable(value)) {
+			ast_log(LOG_ERROR, "%s file %s does not exist or is not readable\n", name, value);
+			return -1;
+		}
 		dtls_cfg->cafile = ast_strdup(value);
 	} else if (!strcasecmp(name, "dtlscapath") || !strcasecmp(name, "dtlscadir")) {
 		ast_free(dtls_cfg->capath);
+		if (!ast_strlen_zero(value) && !ast_file_is_readable(value)) {
+			ast_log(LOG_ERROR, "%s file %s does not exist or is not readable\n", name, value);
+			return -1;
+		}
 		dtls_cfg->capath = ast_strdup(value);
 	} else if (!strcasecmp(name, "dtlssetup")) {
 		if (!strcasecmp(value, "active")) {
@@ -1992,12 +2008,12 @@ static struct ast_json *rtcp_report_to_json(struct stasis_message *msg,
 		}
 	}
 
-	json_rtcp_report = ast_json_pack("{s: i, s: i, s: i, s: O, s: O}",
+	json_rtcp_report = ast_json_pack("{s: i, s: i, s: i, s: o, s: o}",
 			"ssrc", payload->report->ssrc,
 			"type", payload->report->type,
 			"report_count", payload->report->reception_report_count,
-			"sender_information", json_rtcp_sender_info ? json_rtcp_sender_info : ast_json_null(),
-			"report_blocks", json_rtcp_report_blocks);
+			"sender_information", json_rtcp_sender_info ? ast_json_ref(json_rtcp_sender_info) : ast_json_ref(ast_json_null()),
+			"report_blocks", ast_json_ref(json_rtcp_report_blocks));
 	if (!json_rtcp_report) {
 		return NULL;
 	}
@@ -2009,10 +2025,10 @@ static struct ast_json *rtcp_report_to_json(struct stasis_message *msg,
 		}
 	}
 
-	return ast_json_pack("{s: O, s: O, s: O}",
-		"channel", payload->snapshot ? json_channel : ast_json_null(),
-		"rtcp_report", json_rtcp_report,
-		"blob", payload->blob);
+	return ast_json_pack("{s: o, s: o, s: o}",
+		"channel", payload->snapshot ? ast_json_ref(json_channel) : ast_json_ref(ast_json_null()),
+		"rtcp_report", ast_json_ref(json_rtcp_report),
+		"blob", ast_json_deep_copy(payload->blob));
 }
 
 static void rtp_rtcp_report_dtor(void *obj)

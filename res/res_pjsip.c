@@ -42,9 +42,11 @@
 #include "asterisk/res_pjsip_cli.h"
 #include "asterisk/test.h"
 #include "asterisk/res_pjsip_presence_xml.h"
+#include "asterisk/res_pjproject.h"
 
 /*** MODULEINFO
 	<depend>pjproject</depend>
+	<depend>res_pjproject</depend>
 	<depend>res_sorcery_config</depend>
 	<depend>res_sorcery_memory</depend>
 	<depend>res_sorcery_astdb</depend>
@@ -231,6 +233,14 @@
 						Be aware that the <literal>external_media_address</literal> option, set in Transport
 						configuration, can also affect the final media address used in the SDP.
 					</para></note>
+					</description>
+				</configOption>
+				<configOption name="bind_rtp_to_media_address">
+					<synopsis>Bind the RTP instance to the media_address</synopsis>
+					<description><para>
+						If media_address is specified, this option causes the RTP instance to be bound to the
+						specified ip address which causes the packets to be sent from that address.
+					</para>
 					</description>
 				</configOption>
 				<configOption name="force_rport" default="yes">
@@ -1271,6 +1281,10 @@
 				<configOption name="user_agent" default="Asterisk &lt;Asterisk Version&gt;">
 					<synopsis>Value used in User-Agent header for SIP requests and Server header for SIP responses.</synopsis>
 				</configOption>
+				<configOption name="regcontext" default="">
+                                        <synopsis>When set, Asterisk will dynamically create and destroy a NoOp priority 1 extension for a given
+					peer who registers or unregisters with us.</synopsis>
+                                </configOption>
 				<configOption name="default_outbound_endpoint" default="default_outbound_endpoint">
 					<synopsis>Endpoint to use when sending an outbound request to a URI without a specified endpoint.</synopsis>
 				</configOption>
@@ -2208,6 +2222,57 @@ struct ast_sip_endpoint *ast_sip_identify_endpoint(pjsip_rx_data *rdata)
 	return endpoint;
 }
 
+static int do_cli_dump_endpt(void *v_a)
+{
+	struct ast_cli_args *a = v_a;
+
+	ast_pjproject_log_intercept_begin(a->fd);
+	pjsip_endpt_dump(ast_sip_get_pjsip_endpoint(), a->argc == 4 ? PJ_TRUE : PJ_FALSE);
+	ast_pjproject_log_intercept_end();
+
+	return 0;
+}
+
+static char *cli_dump_endpt(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	switch (cmd) {
+	case CLI_INIT:
+#ifdef AST_DEVMODE
+		e->command = "pjsip dump endpt [details]";
+		e->usage =
+			"Usage: pjsip dump endpt [details]\n"
+			"       Dump the res_pjsip endpt internals.\n"
+			"\n"
+			"Warning: PJPROJECT documents that the function used by this\n"
+			"CLI command may cause a crash when asking for details because\n"
+			"it tries to access all active memory pools.\n";
+#else
+		/*
+		 * In non-developer mode we will not document or make easily accessible
+		 * the details option even though it is still available.  The user has
+		 * to know it exists to use it.  Presumably they would also be aware of
+		 * the potential crash warning.
+		 */
+		e->command = "pjsip dump endpt";
+		e->usage =
+			"Usage: pjsip dump endpt\n"
+			"       Dump the res_pjsip endpt internals.\n";
+#endif /* AST_DEVMODE */
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (4 < a->argc
+		|| (a->argc == 4 && strcasecmp(a->argv[3], "details"))) {
+		return CLI_SHOWUSAGE;
+	}
+
+	ast_sip_push_task_synchronous(NULL, do_cli_dump_endpt, a);
+
+	return CLI_SUCCESS;
+}
+
 static char *cli_show_endpoint_identifiers(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define ENDPOINT_IDENTIFIER_FORMAT "%-20.20s\n"
@@ -2271,8 +2336,9 @@ static char *cli_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 }
 
 static struct ast_cli_entry cli_commands[] = {
-        AST_CLI_DEFINE(cli_show_settings, "Show global and system configuration options"),
-        AST_CLI_DEFINE(cli_show_endpoint_identifiers, "List registered endpoint identifiers")
+	AST_CLI_DEFINE(cli_dump_endpt, "Dump the res_pjsip endpt internals"),
+	AST_CLI_DEFINE(cli_show_settings, "Show global and system configuration options"),
+	AST_CLI_DEFINE(cli_show_endpoint_identifiers, "List registered endpoint identifiers")
 };
 
 AST_RWLIST_HEAD_STATIC(endpoint_formatters, ast_sip_endpoint_formatter);
@@ -3155,9 +3221,11 @@ static pj_status_t endpt_send_request(struct ast_sip_endpoint *endpoint,
 		char errmsg[PJ_ERR_MSG_SIZE];
 
 		if (timeout > 0) {
-			pj_timer_heap_cancel_if_active(pjsip_endpt_get_timer_heap(endpt),
+			int timers_cancelled = pj_timer_heap_cancel_if_active(pjsip_endpt_get_timer_heap(endpt),
 				req_wrapper->timeout_timer, TIMER_INACTIVE);
-			ao2_ref(req_wrapper, -1);
+			if (timers_cancelled > 0) {
+				ao2_ref(req_wrapper, -1);
+			}
 		}
 
 		/* Complain of failure to send the request. */
@@ -3377,23 +3445,34 @@ int ast_sip_append_body(pjsip_tx_data *tdata, const char *body_text)
 	return 0;
 }
 
+struct ast_taskprocessor *ast_sip_create_serializer_group_named(const char *name, struct ast_serializer_shutdown_group *shutdown_group)
+{
+	return ast_threadpool_serializer_group(name, sip_threadpool, shutdown_group);
+}
+
 struct ast_taskprocessor *ast_sip_create_serializer_group(struct ast_serializer_shutdown_group *shutdown_group)
 {
-	struct ast_taskprocessor *serializer;
-	char name[AST_UUID_STR_LEN];
+	char tps_name[AST_TASKPROCESSOR_MAX_NAME + 1];
 
-	ast_uuid_generate_str(name, sizeof(name));
+	/* Create name with seq number appended. */
+	ast_taskprocessor_build_name(tps_name, sizeof(tps_name), "pjsip-group-serializer");
 
-	serializer = ast_threadpool_serializer_group(name, sip_threadpool, shutdown_group);
-	if (!serializer) {
-		return NULL;
-	}
-	return serializer;
+	return ast_sip_create_serializer_group_named(tps_name, shutdown_group);
+}
+
+struct ast_taskprocessor *ast_sip_create_serializer_named(const char *name)
+{
+	return ast_sip_create_serializer_group_named(name, NULL);
 }
 
 struct ast_taskprocessor *ast_sip_create_serializer(void)
 {
-	return ast_sip_create_serializer_group(NULL);
+	char tps_name[AST_TASKPROCESSOR_MAX_NAME + 1];
+
+	/* Create name with seq number appended. */
+	ast_taskprocessor_build_name(tps_name, sizeof(tps_name), "pjsip-serializer");
+
+	return ast_sip_create_serializer_group_named(tps_name, NULL);
 }
 
 /*!
@@ -3423,10 +3502,14 @@ static void serializer_pool_shutdown(void)
  */
 static int serializer_pool_setup(void)
 {
+	char tps_name[AST_TASKPROCESSOR_MAX_NAME + 1];
 	int idx;
 
 	for (idx = 0; idx < SERIALIZER_POOL_SIZE; ++idx) {
-		serializer_pool[idx] = ast_sip_create_serializer();
+		/* Create name with seq number appended. */
+		ast_taskprocessor_build_name(tps_name, sizeof(tps_name), "pjsip/default");
+
+		serializer_pool[idx] = ast_sip_create_serializer_named(tps_name);
 		if (!serializer_pool[idx]) {
 			serializer_pool_shutdown();
 			return -1;
@@ -3832,6 +3915,8 @@ static int load_module(void)
 	pj_status_t status;
 	struct ast_threadpool_options options;
 
+	CHECK_PJPROJECT_MODULE_LOADED();
+
 	if (pj_init() != PJ_SUCCESS) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
@@ -3993,6 +4078,8 @@ static int load_module(void)
 	AST_TEST_REGISTER(xml_sanitization_end_null);
 	AST_TEST_REGISTER(xml_sanitization_exceeds_buffer);
 
+	ast_pjproject_ref();
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
@@ -4047,6 +4134,8 @@ static int unload_module(void)
 	ast_threadpool_shutdown(sip_threadpool);
 
 	ast_sip_destroy_cli();
+	ast_pjproject_unref();
+
 	return 0;
 }
 

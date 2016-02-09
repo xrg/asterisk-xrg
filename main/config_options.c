@@ -71,6 +71,9 @@ struct aco_option {
 	aco_option_handler handler;
 	unsigned int flags;
 	unsigned int no_doc:1;
+#ifdef AST_DEVMODE
+	unsigned int doc_unavailable:1;
+#endif
 	unsigned char deprecated:1;
 	size_t argc;
 	intptr_t args[0];
@@ -183,17 +186,19 @@ static int link_option_to_types(struct aco_info *info, struct aco_type **types, 
 			ast_log(LOG_ERROR, "Attempting to register option using uninitialized type\n");
 			return -1;
 		}
-		if (!ao2_link(type->internal->opts, opt)
-#ifdef AST_XML_DOCS
-				|| (!info->hidden &&
-					!opt->no_doc &&
-					xmldoc_update_config_option(types, info->module, opt->name, type->name, opt->default_val, opt->match_type == ACO_REGEX, opt->type))
-#endif /* AST_XML_DOCS */
-		) {
+		if (!ao2_link(type->internal->opts, opt)) {
 			do {
 				ao2_unlink(types[idx - 1]->internal->opts, opt);
 			} while (--idx);
 			return -1;
+		}
+#ifdef AST_XML_DOCS
+		if (!info->hidden && !opt->no_doc &&
+			xmldoc_update_config_option(types, info->module, opt->name, type->name, opt->default_val, opt->match_type == ACO_REGEX, opt->type)) {
+#ifdef AST_DEVMODE
+			opt->doc_unavailable = 1;
+#endif
+#endif
 		}
 	}
 	/* The container(s) should hold the only ref to opt */
@@ -716,6 +721,14 @@ int aco_process_var(struct aco_type *type, const char *cat, struct ast_variable 
 		ast_log(LOG_ERROR, "BUG! Somehow a config option for %s/%s was created with no handler!\n", cat, var->name);
 		return -1;
 	}
+
+#ifdef AST_DEVMODE
+	if (opt->doc_unavailable) {
+		ast_log(LOG_ERROR, "Config option '%s' of type '%s' is not completely documented and can not be set\n", var->name, type->name);
+		return -1;
+	}
+#endif
+
 	if (opt->handler(opt, var, obj)) {
 		ast_log(LOG_ERROR, "Error parsing %s=%s at line %d of %s\n", var->name, var->value, var->lineno, var->file);
 		return -1;
@@ -1050,7 +1063,7 @@ static int xmldoc_update_config_option(struct aco_type **types, const char *modu
 	}
 
 	if (!(option = ast_xml_xpath_get_first_result(results))) {
-		ast_log(LOG_WARNING, "Could obtain results for option '%s' with type '%s' in module '%s'\n", name, object_name, module);
+		ast_log(LOG_WARNING, "Could not obtain results for option '%s' with type '%s' in module '%s'\n", name, object_name, module);
 		return XMLDOC_STRICT ? -1 : 0;
 	}
 	ast_xml_set_attribute(option, "regex", regex ? "true" : "false");

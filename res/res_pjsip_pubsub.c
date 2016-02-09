@@ -1202,8 +1202,6 @@ static void subscription_tree_destructor(void *obj)
 
 	ast_debug(3, "Destroying subscription tree %p\n", sub_tree);
 
-	remove_subscription(sub_tree);
-
 	ao2_cleanup(sub_tree->endpoint);
 
 	destroy_subscriptions(sub_tree->root);
@@ -1234,6 +1232,7 @@ static void subscription_setup_dialog(struct sip_subscription_tree *sub_tree, pj
 static struct sip_subscription_tree *allocate_subscription_tree(struct ast_sip_endpoint *endpoint)
 {
 	struct sip_subscription_tree *sub_tree;
+	char tps_name[AST_TASKPROCESSOR_MAX_NAME + 1];
 
 	sub_tree = ao2_alloc(sizeof *sub_tree, subscription_tree_destructor);
 	if (!sub_tree) {
@@ -1242,7 +1241,11 @@ static struct sip_subscription_tree *allocate_subscription_tree(struct ast_sip_e
 
 	ast_module_ref(ast_module_info->self);
 
-	sub_tree->serializer = ast_sip_create_serializer();
+	/* Create name with seq number appended. */
+	ast_taskprocessor_build_name(tps_name, sizeof(tps_name), "pjsip/pubsub/%s",
+		ast_sorcery_object_get_id(endpoint));
+
+	sub_tree->serializer = ast_sip_create_serializer_named(tps_name);
 	if (!sub_tree->serializer) {
 		ao2_ref(sub_tree, -1);
 		return NULL;
@@ -3290,6 +3293,7 @@ static void pubsub_on_evsub_state(pjsip_evsub *evsub, pjsip_event *event)
 		}
 	}
 
+	remove_subscription(sub_tree);
 	pjsip_evsub_set_mod_data(evsub, pubsub_module.id, NULL);
 	sub_tree->evsub = NULL;
 	ast_sip_dialog_set_serializer(sub_tree->dlg, NULL);

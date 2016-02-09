@@ -997,9 +997,9 @@ static struct ao2_container *threadt;
 static struct ao2_container *peers;
 static struct ao2_container *peers_by_ip;
 
-/*! \brief  A bogus peer, to be used when authentication should fail */
-static struct sip_peer *bogus_peer;
-/*! \brief  We can recognise the bogus peer by this invalid MD5 hash */
+/*! \brief A bogus peer, to be used when authentication should fail */
+static AO2_GLOBAL_OBJ_STATIC(g_bogus_peer);
+/*! \brief We can recognize the bogus peer by this invalid MD5 hash */
 #define BOGUS_PEER_MD5SECRET "intentionally_invalid_md5_string"
 
 /*! \brief  The register list: Other SIP proxies we register with and receive calls from */
@@ -1713,6 +1713,7 @@ static int publish_expire(const void *data)
 	ast_assert(esc != NULL);
 
 	ao2_unlink(esc->compositor, esc_entry);
+	esc_entry->sched_id = -1;
 	ao2_ref(esc_entry, -1);
 	return 0;
 }
@@ -1745,6 +1746,11 @@ static struct sip_esc_entry *create_esc_entry(struct event_state_compositor *esc
 	/* Bump refcount for scheduler */
 	ao2_ref(esc_entry, +1);
 	esc_entry->sched_id = ast_sched_add(sched, expires_ms, publish_expire, esc_entry);
+	if (esc_entry->sched_id == -1) {
+		ao2_ref(esc_entry, -1);
+		ao2_ref(esc_entry, -1);
+		return NULL;
+	}
 
 	/* Note: This links the esc_entry into the ESC properly */
 	create_new_sip_etag(esc_entry, 0);
@@ -3964,6 +3970,13 @@ static int retrans_pkt(const void *data)
 			}
 
 			/* For non-invites, a maximum of 4 secs */
+			if (INT_MAX / pkt->timer_a < pkt->timer_t1) {
+				/*
+				 * Uh Oh, we will have an integer overflow.
+				 * Recalculate previous timeout time instead.
+				 */
+				pkt->timer_a = pkt->timer_a / 2;
+			}
 			siptimer_a = pkt->timer_t1 * pkt->timer_a;	/* Double each time */
 			if (pkt->method != SIP_INVITE && siptimer_a > 4000) {
 				siptimer_a = 4000;
@@ -4750,6 +4763,11 @@ static int sip_queryoption(struct ast_channel *chan, int option, void *data, int
 	enum ast_t38_state state = T38_STATE_UNAVAILABLE;
 	struct sip_pvt *p = (struct sip_pvt *) ast_channel_tech_pvt(chan);
 	char *cp;
+
+	if (!p) {
+		ast_debug(1, "Attempt to Ref a null pointer. Sip private structure is gone!\n");
+		return -1;
+	}
 
 	sip_pvt_lock(p);
 
@@ -9360,6 +9378,9 @@ static int sip_register(const char *value, int lineno)
 		return -1;
 	}
 
+	reg->expire = -1;
+	reg->timeout = -1;
+
 	if (ast_string_field_init(reg, 256)) {
 		ao2_t_ref(reg, -1, "failed to string_field_init, drop reg");
 		return -1;
@@ -9435,6 +9456,8 @@ static int sip_subscribe_mwi(const char *value, int lineno)
 		return -1;
 	}
 
+	mwi->resub = -1;
+
 	if (ast_string_field_init(mwi, 256)) {
 		ao2_t_ref(mwi, -1, "failed to string_field_init, drop mwi");
 		return -1;
@@ -9449,7 +9472,6 @@ static int sip_subscribe_mwi(const char *value, int lineno)
 	}
 	ast_string_field_set(mwi, hostname, hostname);
 	ast_string_field_set(mwi, mailbox, mailbox);
-	mwi->resub = -1;
 	mwi->portno = portnum;
 	mwi->transport = transport;
 
@@ -10612,7 +10634,11 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	/* Setup audio address and port */
 	if (p->rtp) {
 		if (sa && portno > 0) {
-			start_ice(p->rtp, (req->method != SIP_RESPONSE) ? 0 : 1);
+			/* Start ICE negotiation here, only when it is response, and setting that we are conrolling agent,
+			   as we are offerer */
+			if (req->method == SIP_RESPONSE) {
+				start_ice(p->rtp, 1);
+			}
 			ast_sockaddr_set_port(sa, portno);
 			ast_rtp_instance_set_remote_address(p->rtp, sa);
 			if (debug) {
@@ -13386,6 +13412,11 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		if (!doing_directmedia) {
 			if (ast_test_flag(&p->flags[2], SIP_PAGE3_ICE_SUPPORT)) {
 				add_ice_to_sdp(p->rtp, &a_audio);
+				/* Start ICE negotiation, and setting that we are controlled agent,
+				   as this is response to offer */
+				if (resp->method == SIP_RESPONSE) {
+					start_ice(p->rtp, 0);
+				}
 			}
 
 			add_dtls_to_sdp(p->rtp, &a_audio);
@@ -15128,6 +15159,12 @@ static int manager_sipnotify(struct mansession *s, const struct message *m)
 			header = header->next;
 		}
 	}
+
+	/* Now that we have the peer's address, set our ip and change callid */
+	ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
+	build_via(p);
+
+	change_callid_pvt(p, NULL);
 
 	sip_scheddestroy(p, SIP_TRANS_TIMEOUT);
 	transmit_invite(p, SIP_NOTIFY, 0, 2, NULL);
@@ -17169,8 +17206,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 	/* If we don't want username disclosure, use the bogus_peer when a user
 	 * is not found. */
 	if (!peer && sip_cfg.alwaysauthreject && sip_cfg.autocreatepeer == AUTOPEERS_DISABLED) {
-		peer = bogus_peer;
-		sip_ref_peer(peer, "register_verify: ref the bogus_peer");
+		peer = ao2_t_global_obj_ref(g_bogus_peer, "register_verify: Get the bogus peer.");
 	}
 
 	if (!(peer && ast_apply_acl(peer->acl, addr, "SIP Peer ACL: "))) {
@@ -18423,6 +18459,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 	enum check_auth_result res;
 	int debug = sip_debug_test_addr(addr);
 	struct sip_peer *peer;
+	struct sip_peer *bogus_peer;
 
 	if (sipmethod == SIP_SUBSCRIBE) {
 		/* For subscribes, match on device name only; for other methods,
@@ -18462,8 +18499,13 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		/* If you do mind, we use a peer that will never authenticate.
 		 * This ensures that we follow the same code path as regular
 		 * auth: less chance for username disclosure. */
-		peer = bogus_peer;
-		sip_ref_peer(peer, "sip_ref_peer: check_peer_ok: must ref bogus_peer so unreffing it does not fail");
+		peer = ao2_t_global_obj_ref(g_bogus_peer, "check_peer_ok: Get the bogus peer.");
+		if (!peer) {
+			return AUTH_DONT_KNOW;
+		}
+		bogus_peer = peer;
+	} else {
+		bogus_peer = NULL;
 	}
 
 	/*  build_peer, called through sip_find_peer, is not able to check the
@@ -31515,6 +31557,8 @@ static int reload_config(enum channelreloadreason reason)
 	sip_cfg.peer_rtupdate = TRUE;
 	global_dynamic_exclude_static = 0;	/* Exclude static peers */
 	sip_cfg.tcp_enabled = FALSE;
+	sip_cfg.websocket_enabled = TRUE;
+	sip_cfg.websocket_write_timeout = AST_DEFAULT_WEBSOCKET_WRITE_TIMEOUT;
 
 	/* Session-Timers */
 	global_st_mode = SESSION_TIMER_MODE_ACCEPT;
@@ -32288,6 +32332,12 @@ static int reload_config(enum channelreloadreason reason)
 		ast_log(LOG_ERROR, "SIP TCP Server start failed. Not listening on TCP socket.\n");
 	} else {
 		ast_debug(2, "SIP TCP server started\n");
+		if (sip_tcp_desc.accept_fd >= 0) {
+			int flags = 1;
+			if (setsockopt(sip_tcp_desc.accept_fd, SOL_SOCKET, SO_KEEPALIVE, &flags, sizeof(flags))) {
+				ast_log(LOG_ERROR, "Error enabling TCP keep-alive on sip socket: %s\n", strerror(errno));
+			}
+		}
 	}
 
 	/* Start TLS server if needed */
@@ -32307,6 +32357,13 @@ static int reload_config(enum channelreloadreason reason)
 		if (default_tls_cfg.enabled && sip_tls_desc.accept_fd == -1) {
 			ast_log(LOG_ERROR, "TLS Server start failed. Not listening on TLS socket.\n");
 			sip_tls_desc.tls_cfg = NULL;
+		}
+		if (sip_tls_desc.accept_fd >= 0) {
+			int flags = 1;
+			if (setsockopt(sip_tls_desc.accept_fd, SOL_SOCKET, SO_KEEPALIVE, &flags, sizeof(flags))) {
+				ast_log(LOG_ERROR, "Error enabling TCP keep-alive on sip socket: %s\n", strerror(errno));
+				sip_tls_desc.tls_cfg = NULL;
+			}
 		}
 	} else if (sip_tls_desc.tls_cfg->enabled) {
 		sip_tls_desc.tls_cfg = NULL;
@@ -32992,8 +33049,8 @@ static int sip_sipredirect(struct sip_pvt *p, const char *dest)
 
 			memset(ldomain, 0, sizeof(ldomain));
 			local_to_header++;
-			/* This is okey because lhost and lport are as big as tmp */
-			sscanf(local_to_header, "%256[^<>; ]", ldomain);
+			/* Will copy no more than 255 chars plus null terminator. */
+			sscanf(local_to_header, "%255[^<>; ]", ldomain);
 			if (ast_strlen_zero(ldomain)) {
 				ast_log(LOG_ERROR, "Can't find the host address\n");
 				return 0;
@@ -33212,7 +33269,7 @@ static int sip_do_reload(enum channelreloadreason reason)
 /*! \brief Force reload of module from cli */
 static char *sip_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	static struct sip_peer *tmp_peer, *new_peer;
+	static struct sip_peer *new_peer;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -33235,13 +33292,13 @@ static char *sip_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a
 	ast_mutex_unlock(&sip_reload_lock);
 	restart_monitor();
 
-	tmp_peer = bogus_peer;
 	/* Create new bogus peer possibly with new global settings. */
 	if ((new_peer = temp_peer("(bogus_peer)"))) {
 		ast_string_field_set(new_peer, md5secret, BOGUS_PEER_MD5SECRET);
 		ast_clear_flag(&new_peer->flags[0], SIP_INSECURE);
-		bogus_peer = new_peer;
-		ao2_t_ref(tmp_peer, -1, "unref the old bogus_peer during reload");
+		ao2_t_global_obj_replace_unref(g_bogus_peer, new_peer,
+			"Replacing the old bogus peer during reload.");
+		ao2_t_ref(new_peer, -1, "done with new_peer");
 	} else {
 		ast_log(LOG_ERROR, "Could not update the fake authentication peer.\n");
 		/* You probably have bigger (memory?) issues to worry about though.. */
@@ -34495,6 +34552,8 @@ static int unload_module(void);
  */
 static int load_module(void)
 {
+	struct sip_peer *bogus_peer;
+
 	ast_verbose("SIP channel loading...\n");
 
 	if (STASIS_MESSAGE_TYPE_INIT(session_timeout_type)) {
@@ -34566,6 +34625,8 @@ static int load_module(void)
 	/* Make sure the auth will always fail. */
 	ast_string_field_set(bogus_peer, md5secret, BOGUS_PEER_MD5SECRET);
 	ast_clear_flag(&bogus_peer->flags[0], SIP_INSECURE);
+	ao2_t_global_obj_replace_unref(g_bogus_peer, bogus_peer, "Set the initial bogus peer.");
+	ao2_t_ref(bogus_peer, -1, "Module load is done with the bogus peer.");
 
 	/* Prepare the version that does not require DTMF BEGIN frames.
 	 * We need to use tricks such as memcpy and casts because the variable
@@ -34848,7 +34909,7 @@ static int unload_module(void)
 		ast_debug(2, "TCP/TLS thread container did not become empty :(\n");
 	}
 
-	ao2_t_cleanup(bogus_peer, "unref the bogus_peer");
+	ao2_t_global_obj_release(g_bogus_peer, "Release the bogus peer.");
 
 	ao2_t_cleanup(peers, "unref the peers table");
 	ao2_t_cleanup(peers_by_ip, "unref the peers_by_ip table");

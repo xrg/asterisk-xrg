@@ -615,6 +615,9 @@
 ;disallow=      ; Media Codec s to disallow (default: "")
 ;dtmf_mode=rfc4733      ; DTMF mode (default: "rfc4733")
 ;media_address=         ; IP address used in SDP for media handling (default: "")
+;bind_rtp_to_media_address=     ; Bind the RTP session to the media_address.
+                                ; This causes all RTP packets to be sent from
+                                ; the specified address. (default: "no")
 ;force_rport=yes        ; Force use of return port (default: "yes")
 ;ice_support=no ; Enable the ICE mechanism to help traverse NAT (default: "no")
 ;identify_by=username   ; Way s for Endpoint to be identified (default:
@@ -885,6 +888,10 @@
                             ; startup that qualifies should be attempted on all
                             ; contacts.  If greater than the qualify_frequency
                             ; for an aor, qualify_frequency will be used instead.
+; If regcontext is specified, Asterisk will dynamically create and destroy a
+; NoOp priority 1 extension for a given endpoint who registers or unregisters
+; with us. The extension added is the name of the endpoint.
+;regcontext=sipregistrations
 
 ; MODULE PROVIDING BELOW SECTION(S): res_pjsip_acl
 ;==========================ACL SECTION OPTIONS=========================
@@ -933,6 +940,15 @@
                         ; 407 become subject to this retry interval.
 ;server_uri=    ; SIP URI of the server to register against (default: "")
 ;transport=     ; Transport used for outbound authentication (default: "")
+;line=          ; When enabled this option will cause a 'line' parameter to be
+                ; added to the Contact header placed into the outgoing
+                ; registration request. If the remote server sends a call
+                ; this line parameter will be used to establish a relationship
+                ; to the outbound registration, ultimately causing the
+                ; configured endpoint to be used (default: "no")
+;endpoint=      ; When line support is enabled this configured endpoint name
+                ; is used for incoming calls that are related to the outbound
+                ; registration (default: "")
 ;type=  ; Must be of type registration (default: "")
 
 

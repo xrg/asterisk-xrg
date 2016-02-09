@@ -100,7 +100,10 @@ export LDCONFIG
 export LDCONFIG_FLAGS
 export PYTHON
 
--include makeopts
+# makeopts is required unless the goal is clean or distclean
+ifeq ($(findstring clean,$(MAKECMDGOALS)),)
+include makeopts
+endif
 
 # start the primary CFLAGS and LDFLAGS with any that were provided
 # to the configure script
@@ -1010,6 +1013,10 @@ else
 		rest-api/resources.json .
 endif
 
+check-alembic: makeopts
+	@find contrib/ast-db-manage/ -name '*.pyc' -delete
+	@ALEMBIC=$(ALEMBIC) build_tools/make_check_alembic config cdr voicemail >&2
+
 .PHONY: menuselect
 .PHONY: main
 .PHONY: sounds
@@ -1031,6 +1038,7 @@ endif
 .PHONY: _clean
 .PHONY: ari-stubs
 .PHONY: basic-pbx
+.PHONY: check-alembic
 .PHONY: $(SUBDIRS_INSTALL)
 .PHONY: $(SUBDIRS_DIST_CLEAN)
 .PHONY: $(SUBDIRS_CLEAN)

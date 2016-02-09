@@ -1356,10 +1356,10 @@ static int base_process_party_a(struct cdr_object *cdr, struct ast_channel_snaps
 
 	ast_assert(strcasecmp(snapshot->name, cdr->party_a.snapshot->name) == 0);
 
-	/* Ignore any snapshots from a dead or dying channel */
+	/* Finalize the CDR if we're in hangup logic and we're set to do so */
 	if (ast_test_flag(&snapshot->softhangup_flags, AST_SOFTHANGUP_HANGUP_EXEC)
-			&& ast_test_flag(&mod_cfg->general->settings, CDR_END_BEFORE_H_EXTEN)) {
-		cdr_object_check_party_a_hangup(cdr);
+		&& ast_test_flag(&mod_cfg->general->settings, CDR_END_BEFORE_H_EXTEN)) {
+		cdr_object_finalize(cdr);
 		return 0;
 	}
 
@@ -2953,7 +2953,7 @@ int ast_cdr_setvar(const char *channel_name, const char *name, const char *value
 		for (it_cdr = cdr; it_cdr; it_cdr = it_cdr->next) {
 			struct varshead *headp = NULL;
 
-			if (it_cdr->fn_table == &finalized_state_fn_table) {
+			if (it_cdr->fn_table == &finalized_state_fn_table && it_cdr->next != NULL) {
 				continue;
 			}
 			if (!strcasecmp(channel_name, it_cdr->party_a.snapshot->name)) {

@@ -170,6 +170,8 @@ struct ast_sip_contact {
 	double qualify_timeout;
 	/*! Endpoint that added the contact, only available in observers */
 	struct ast_sip_endpoint *endpoint;
+	/*! The name of the aor this contact belongs to */
+	char *aor;
 };
 
 #define CONTACT_STATUS "contact_status"
@@ -201,6 +203,10 @@ struct ast_sip_contact_status {
 	int64_t rtt;
 	/*! Last status for a contact (default - unavailable) */
 	enum ast_sip_contact_status_type last_status;
+	/*! The name of the aor this contact_status belongs to */
+	char *aor;
+	/*! The original contact's URI */
+	char *uri;
 };
 
 /*!
@@ -565,6 +571,8 @@ struct ast_sip_endpoint_media_configuration {
 	unsigned int cos_video;
 	/*! Is g.726 packed in a non standard way */
 	unsigned int g726_non_standard;
+	/*! Bind the RTP instance to the media_address */
+	unsigned int bind_rtp_to_media_address;
 };
 
 /*!
@@ -1118,6 +1126,21 @@ struct ast_sip_endpoint *ast_sip_get_artificial_endpoint(void);
  */
 struct ast_taskprocessor *ast_sip_create_serializer(void);
 
+/*!
+ * \brief Create a new serializer for SIP tasks
+ * \since 13.8.0
+ *
+ * See \ref ast_threadpool_serializer for more information on serializers.
+ * SIP creates serializers so that tasks operating on similar data will run
+ * in sequence.
+ *
+ * \param name Name of the serializer. (must be unique)
+ *
+ * \retval NULL Failure
+ * \retval non-NULL Newly-created serializer
+ */
+struct ast_taskprocessor *ast_sip_create_serializer_named(const char *name);
+
 struct ast_serializer_shutdown_group;
 
 /*!
@@ -1134,6 +1157,22 @@ struct ast_serializer_shutdown_group;
  * \retval non-NULL Newly-created serializer
  */
 struct ast_taskprocessor *ast_sip_create_serializer_group(struct ast_serializer_shutdown_group *shutdown_group);
+
+/*!
+ * \brief Create a new serializer for SIP tasks
+ * \since 13.8.0
+ *
+ * See \ref ast_threadpool_serializer for more information on serializers.
+ * SIP creates serializers so that tasks operating on similar data will run
+ * in sequence.
+ *
+ * \param name Name of the serializer. (must be unique)
+ * \param shutdown_group Group shutdown controller. (NULL if no group association)
+ *
+ * \retval NULL Failure
+ * \retval non-NULL Newly-created serializer
+ */
+struct ast_taskprocessor *ast_sip_create_serializer_group_named(const char *name, struct ast_serializer_shutdown_group *shutdown_group);
 
 /*!
  * \brief Set a serializer on a SIP dialog so requests and responses are automatically serialized
@@ -2034,6 +2073,17 @@ void ast_sip_unregister_supplement(struct ast_sip_supplement *supplement);
  * \retval the system debug setting.
  */
 char *ast_sip_get_debug(void);
+
+/*!
+ * \brief Retrieve the global regcontext setting.
+ *
+ * \since 13.8.0
+ *
+ * \note returned string needs to be de-allocated by caller.
+ *
+ * \retval the global regcontext setting
+ */
+char *ast_sip_get_regcontext(void);
 
 /*!
  * \brief Retrieve the global endpoint_identifier_order setting.

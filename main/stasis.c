@@ -462,22 +462,29 @@ struct stasis_subscription *internal_stasis_subscribe(
 	}
 
 	/* The ao2 lock is used for join_cond. */
-	sub = ao2_t_alloc(sizeof(*sub), subscription_dtor, topic->name);
+	sub = ao2_t_alloc(sizeof(*sub), subscription_dtor, stasis_topic_name(topic));
 	if (!sub) {
 		return NULL;
 	}
 	ast_uuid_generate_str(sub->uniqueid, sizeof(sub->uniqueid));
 
 	if (needs_mailbox) {
-		/* With a small number of subscribers, a thread-per-sub is
-		 * acceptable. For larger number of subscribers, a thread
+		char tps_name[AST_TASKPROCESSOR_MAX_NAME + 1];
+
+		/* Create name with seq number appended. */
+		ast_taskprocessor_build_name(tps_name, sizeof(tps_name), "sub%c:%s",
+			use_thread_pool ? 'p' : 'm',
+			stasis_topic_name(topic));
+
+		/*
+		 * With a small number of subscribers, a thread-per-sub is
+		 * acceptable. For a large number of subscribers, a thread
 		 * pool should be used.
 		 */
 		if (use_thread_pool) {
-			sub->mailbox = ast_threadpool_serializer(sub->uniqueid, pool);
+			sub->mailbox = ast_threadpool_serializer(tps_name, pool);
 		} else {
-			sub->mailbox = ast_taskprocessor_get(sub->uniqueid,
-				TPS_REF_DEFAULT);
+			sub->mailbox = ast_taskprocessor_get(tps_name, TPS_REF_DEFAULT);
 		}
 		if (!sub->mailbox) {
 			return NULL;
@@ -1274,8 +1281,8 @@ static struct ast_json *multi_user_event_to_json(
 
 	ast_json_object_set(out, "type", ast_json_string_create("ChannelUserevent"));
 	ast_json_object_set(out, "timestamp", ast_json_timeval(*tv, NULL));
-	ast_json_object_set(out, "eventname", ast_json_ref(ast_json_object_get(blob, "eventname")));
-	ast_json_object_set(out, "userevent", ast_json_ref(blob)); /* eventname gets duplicated, that's ok */
+	ast_json_object_set(out, "eventname", ast_json_string_create(ast_json_string_get((ast_json_object_get(blob, "eventname")))));
+	ast_json_object_set(out, "userevent", ast_json_deep_copy(blob));
 
 	for (type = 0; type < STASIS_UMOS_MAX; ++type) {
 		for (i = 0; i < AST_VECTOR_SIZE(&multi->snapshots[type]); ++i) {
