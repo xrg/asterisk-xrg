@@ -1,7 +1,7 @@
 %define git_repo asterisk
 
 %define _requires_exceptions perl(Carp::Heavy)
-%define sounds_core_version 1.4.27
+%define sounds_core_version 1.5
 
 %define build_h323	0
 %{?_without_h323:	%global build_h323 0}
@@ -1363,6 +1363,7 @@ fi
 %attr(0755,root,root) %{modulesdir}/res_format_attr_h263.so
 %attr(0755,root,root) %{modulesdir}/res_format_attr_h264.so
 %attr(0755,root,root) %{modulesdir}/res_format_attr_opus.so
+%attr(0755,root,root) %{modulesdir}/res_format_attr_vp8.so
 %attr(0755,root,root) %{modulesdir}/res_hep.so
 %attr(0755,root,root) %{modulesdir}/res_hep_rtcp.so
 %attr(0755,root,root) %{modulesdir}/res_http_websocket.so
@@ -1554,6 +1555,7 @@ fi
 %attr(0755,root,root) %{modulesdir}/cdr_odbc.so
 %attr(0755,root,root) %{modulesdir}/func_odbc.so
 %attr(0755,root,root) %{modulesdir}/res_config_odbc.so
+%attr(0755,root,root) %{modulesdir}/res_odbc_transaction.so
 %attr(0755,root,root) %{modulesdir}/res_odbc.so
 %attr(0755,root,root) %{modulesdir}/cel_odbc.so
 %endif
