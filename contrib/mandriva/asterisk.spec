@@ -158,6 +158,8 @@ BuildRequires:	wget
 BuildRequires: neon-devel
 BuildRequires: libical-devel
 BuildRequires: libxml2-devel
+BuildRequires: libuuid-devel
+BuildRequires: net-snmp-devel
 %if %{build_imap}
 
 %endif
@@ -1159,7 +1161,7 @@ fi
 %attr(0755,root,root)                                   %{_sbindir}/astdb2bdb
 %attr(0755,root,root)					%{_sbindir}/astdb2sqlite3
 
-%attr(0755,root,root)		%dir			%{_libdir}/asterisk
+%attr(0755,root,root)	%dir			%{_libdir}/asterisk
 %attr(0755,root,root)                                   %{_libdir}/libasteriskssl.so.*
                                                         %{_libdir}/libasteriskssl.so
 
@@ -1384,7 +1386,7 @@ fi
 %attr(0755,root,root) %{modulesdir}/res_statsd.so
 
 
-#attr(0755,asterisk,asterisk)	%dir			%{astvardir}
+%attr(0755,asterisk,asterisk)	%dir			%{astvardir}
 %ghost							%{astvardir}/astdb
 %attr(0755,root,root)		%dir			%{astvardir}/agi-bin 
 %attr(0755,root,root)		%dir			%{astvardir}/images
