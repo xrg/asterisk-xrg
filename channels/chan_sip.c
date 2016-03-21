@@ -710,7 +710,7 @@ static const struct  cfsip_methods {
  */
 static const struct sip_reasons {
 	enum AST_REDIRECTING_REASON code;
-	char * const text;
+	const char *text;
 } sip_reason_table[] = {
 	{ AST_REDIRECTING_REASON_UNKNOWN, "unknown" },
 	{ AST_REDIRECTING_REASON_USER_BUSY, "user-busy" },
@@ -723,8 +723,8 @@ static const struct sip_reasons {
 	{ AST_REDIRECTING_REASON_FOLLOW_ME, "follow-me" },
 	{ AST_REDIRECTING_REASON_OUT_OF_ORDER, "out-of-service" },
 	{ AST_REDIRECTING_REASON_AWAY, "away" },
-	{ AST_REDIRECTING_REASON_CALL_FWD_DTE, "unknown"},
-	{ AST_REDIRECTING_REASON_SEND_TO_VM, "send_to_vm"},
+	{ AST_REDIRECTING_REASON_CALL_FWD_DTE, "cf_dte" },		/* Non-standard */
+	{ AST_REDIRECTING_REASON_SEND_TO_VM, "send_to_vm" },	/* Non-standard */
 };
 
 
@@ -1377,7 +1377,6 @@ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_socka
 static void sip_registry_destroy(void *reg);
 static int sip_register(const char *value, int lineno);
 static const char *regstate2str(enum sipregistrystate regstate) attribute_const;
-static int sip_reregister(const void *data);
 static int __sip_do_register(struct sip_registry *r);
 static int sip_reg_timeout(const void *data);
 static void sip_send_all_registers(void);
@@ -1491,7 +1490,6 @@ static void change_t38_state(struct sip_pvt *p, int state);
 
 /*------ Session-Timers functions --------- */
 static void proc_422_rsp(struct sip_pvt *p, struct sip_request *rsp);
-static int  proc_session_timer(const void *vp);
 static void stop_session_timer(struct sip_pvt *p);
 static void start_session_timer(struct sip_pvt *p);
 static void restart_session_timer(struct sip_pvt *p);
@@ -1508,10 +1506,15 @@ static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance *i
 
 /*!--- SIP MWI Subscription support */
 static int sip_subscribe_mwi(const char *value, int lineno);
-static void sip_subscribe_mwi_destroy(void *data);
 static void sip_send_all_mwi_subscriptions(void);
-static int sip_subscribe_mwi_do(const void *data);
 static int __sip_subscribe_mwi_do(struct sip_subscription_mwi *mwi);
+
+/* Scheduler id start/stop/reschedule functions. */
+static void stop_provisional_keepalive(struct sip_pvt *pvt);
+static void do_stop_session_timer(struct sip_pvt *pvt);
+static void stop_reinvite_retry(struct sip_pvt *pvt);
+static void stop_retrans_pkt(struct sip_pkt *pkt);
+static void stop_t38_abort_timer(struct sip_pvt *pvt);
 
 /*! \brief Definition of this channel for PBX channel registration */
 struct ast_channel_tech sip_tech = {
@@ -2375,52 +2378,54 @@ static int map_s_x(const struct _map_x_s *table, const char *s, int errorvalue)
 	return errorvalue;
 }
 
-static enum AST_REDIRECTING_REASON sip_reason_str_to_code(const char *text)
+/*!
+ * \internal
+ * \brief Determine if the given string is a SIP token.
+ * \since 13.8.0
+ *
+ * \param str String to determine if is a SIP token.
+ *
+ * \note A token is defined by RFC3261 Section 25.1
+ *
+ * \return Non-zero if the string is a SIP token.
+ */
+static int sip_is_token(const char *str)
 {
-	enum AST_REDIRECTING_REASON ast = AST_REDIRECTING_REASON_UNKNOWN;
-	int i;
+	int is_token;
 
-	for (i = 0; i < ARRAY_LEN(sip_reason_table); ++i) {
-		if (!strcasecmp(text, sip_reason_table[i].text)) {
-			ast = sip_reason_table[i].code;
-			break;
-		}
+	if (ast_strlen_zero(str)) {
+		/* An empty string is not a token. */
+		return 0;
 	}
 
-	return ast;
+	is_token = 1;
+	do {
+		if (!isalnum(*str)
+			&& !strchr("-.!%*_+`'~", *str)) {
+			/* The character is not allowed in a token. */
+			is_token = 0;
+			break;
+		}
+	} while (*++str);
+
+	return is_token;
 }
 
-static const char *sip_reason_code_to_str(struct ast_party_redirecting_reason *reason, int *table_lookup)
+static const char *sip_reason_code_to_str(struct ast_party_redirecting_reason *reason)
 {
-	int code = reason->code;
+	int idx;
+	int code;
 
-	/* If there's a specific string set, then we just
-	 * use it.
-	 */
+	/* use specific string if given */
 	if (!ast_strlen_zero(reason->str)) {
-		/* If we care about whether this can be found in
-		 * the table, then we need to check about that.
-		 */
-		if (table_lookup) {
-			/* If the string is literally "unknown" then don't bother with the lookup
-			 * because it can lead to a false negative.
-			 */
-			if (!strcasecmp(reason->str, "unknown") ||
-					sip_reason_str_to_code(reason->str) != AST_REDIRECTING_REASON_UNKNOWN) {
-				*table_lookup = TRUE;
-			} else {
-				*table_lookup = FALSE;
-			}
-		}
 		return reason->str;
 	}
 
-	if (table_lookup) {
-		*table_lookup = TRUE;
-	}
-
-	if (code >= 0 && code < ARRAY_LEN(sip_reason_table)) {
-		return sip_reason_table[code].text;
+	code = reason->code;
+	for (idx = 0; idx < ARRAY_LEN(sip_reason_table); ++idx) {
+		if (code == sip_reason_table[idx].code) {
+			return sip_reason_table[idx].text;
+		}
 	}
 
 	return "unknown";
@@ -3243,6 +3248,58 @@ static void ref_proxy(struct sip_pvt *pvt, struct sip_proxy *proxy)
 	}
 }
 
+static void do_dialog_unlink_sched_items(struct sip_pvt *dialog)
+{
+	struct sip_pkt *cp;
+
+	/* remove all current packets in this dialog */
+	sip_pvt_lock(dialog);
+	while ((cp = dialog->packets)) {
+		/* Unlink and destroy the packet object. */
+		dialog->packets = dialog->packets->next;
+		AST_SCHED_DEL_UNREF(sched, cp->retransid,
+			ao2_t_ref(cp, -1, "Stop scheduled packet retransmission"));
+		ao2_t_ref(cp, -1, "Packet retransmission list");
+	}
+	sip_pvt_unlock(dialog);
+
+	AST_SCHED_DEL_UNREF(sched, dialog->waitid,
+		dialog_unref(dialog, "Stop scheduled waitid"));
+
+	AST_SCHED_DEL_UNREF(sched, dialog->initid,
+		dialog_unref(dialog, "Stop scheduled initid"));
+
+	AST_SCHED_DEL_UNREF(sched, dialog->reinviteid,
+		dialog_unref(dialog, "Stop scheduled reinviteid"));
+
+	AST_SCHED_DEL_UNREF(sched, dialog->autokillid,
+		dialog_unref(dialog, "Stop scheduled autokillid"));
+
+	AST_SCHED_DEL_UNREF(sched, dialog->request_queue_sched_id,
+		dialog_unref(dialog, "Stop scheduled request_queue_sched_id"));
+
+	AST_SCHED_DEL_UNREF(sched, dialog->provisional_keepalive_sched_id,
+		dialog_unref(dialog, "Stop scheduled provisional keepalive"));
+
+	AST_SCHED_DEL_UNREF(sched, dialog->t38id,
+		dialog_unref(dialog, "Stop scheduled t38id"));
+
+	if (dialog->stimer) {
+		dialog->stimer->st_active = FALSE;
+		do_stop_session_timer(dialog);
+	}
+}
+
+/* Run by the sched thread. */
+static int __dialog_unlink_sched_items(const void *data)
+{
+	struct sip_pvt *dialog = (void *) data;
+
+	do_dialog_unlink_sched_items(dialog);
+	dialog_unref(dialog, "Stop scheduled items for unlink action");
+	return 0;
+}
+
 /*!
  * \brief Unlink a dialog from the dialogs container, as well as any other places
  * that it may be currently stored.
@@ -3252,7 +3309,6 @@ static void ref_proxy(struct sip_pvt *pvt, struct sip_proxy *proxy)
  */
 void dialog_unlink_all(struct sip_pvt *dialog)
 {
-	struct sip_pkt *cp;
 	struct ast_channel *owner;
 
 	dialog_ref(dialog, "Let's bump the count in the unlink so it doesn't accidentally become dead before we are done");
@@ -3290,41 +3346,14 @@ void dialog_unlink_all(struct sip_pvt *dialog)
 		dialog->relatedpeer->call = dialog_unref(dialog->relatedpeer->call, "unset the relatedpeer->call field in tandem with relatedpeer field itself");
 	}
 
-	/* remove all current packets in this dialog */
-	while((cp = dialog->packets)) {
-		dialog->packets = dialog->packets->next;
-		AST_SCHED_DEL(sched, cp->retransid);
-		dialog_unref(cp->owner, "remove all current packets in this dialog, and the pointer to the dialog too as part of __sip_destroy");
-		if (cp->data) {
-			ast_free(cp->data);
-		}
-		ast_free(cp);
-	}
-
-	AST_SCHED_DEL_UNREF(sched, dialog->waitid, dialog_unref(dialog, "when you delete the waitid sched, you should dec the refcount for the stored dialog ptr"));
-
-	AST_SCHED_DEL_UNREF(sched, dialog->initid, dialog_unref(dialog, "when you delete the initid sched, you should dec the refcount for the stored dialog ptr"));
-
-	if (dialog->reinviteid > -1) {
-		AST_SCHED_DEL_UNREF(sched, dialog->reinviteid, dialog_unref(dialog, "clear ref for reinvite_timeout"));
-	}
-
-	if (dialog->autokillid > -1) {
-		AST_SCHED_DEL_UNREF(sched, dialog->autokillid, dialog_unref(dialog, "when you delete the autokillid sched, you should dec the refcount for the stored dialog ptr"));
-	}
-
-	if (dialog->request_queue_sched_id > -1) {
-		AST_SCHED_DEL_UNREF(sched, dialog->request_queue_sched_id, dialog_unref(dialog, "when you delete the request_queue_sched_id sched, you should dec the refcount for the stored dialog ptr"));
-	}
-
-	AST_SCHED_DEL_UNREF(sched, dialog->provisional_keepalive_sched_id, dialog_unref(dialog, "when you delete the provisional_keepalive_sched_id, you should dec the refcount for the stored dialog ptr"));
-
-	if (dialog->t38id > -1) {
-		AST_SCHED_DEL_UNREF(sched, dialog->t38id, dialog_unref(dialog, "when you delete the t38id sched, you should dec the refcount for the stored dialog ptr"));
-	}
-
-	if (dialog->stimer) {
-		stop_session_timer(dialog);
+	dialog_ref(dialog, "Stop scheduled items for unlink action");
+	if (ast_sched_add(sched, 0, __dialog_unlink_sched_items, dialog) < 0) {
+		/*
+		 * Uh Oh.  Fall back to unscheduling things immediately
+		 * despite the potential deadlock risk.
+		 */
+		dialog_unref(dialog, "Failed to schedule stop scheduled items for unlink action");
+		do_dialog_unlink_sched_items(dialog);
 	}
 
 	dialog_unref(dialog, "Let's unbump the count in the unlink so the poor pvt can disappear if it is time");
@@ -3925,10 +3954,17 @@ static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
 	return;
 }
 
-/*! \brief Retransmit SIP message if no answer (Called from scheduler) */
+/*!
+ * \brief Retransmit SIP message if no answer
+ *
+ * \note Run by the sched thread.
+ */
 static int retrans_pkt(const void *data)
 {
-	struct sip_pkt *pkt = (struct sip_pkt *)data, *prev, *cur = NULL;
+	struct sip_pkt *pkt = (struct sip_pkt *) data;
+	struct sip_pkt *prev;
+	struct sip_pkt *cur;
+	struct ast_channel *owner_chan;
 	int reschedule = DEFAULT_RETRANS;
 	int xmitres = 0;
 	/* how many ms until retrans timeout is reached */
@@ -3993,6 +4029,7 @@ static int retrans_pkt(const void *data)
 
 		if (sip_debug_test_pvt(pkt->owner)) {
 			const struct ast_sockaddr *dst = sip_real_dst(pkt->owner);
+
 			ast_verbose("Retransmitting #%d (%s) to %s:\n%s\n---\n",
 				pkt->retrans, sip_nat_mode(pkt->owner),
 				ast_sockaddr_stringify(dst),
@@ -4013,7 +4050,7 @@ static int retrans_pkt(const void *data)
 				reschedule = diff;
 			}
 			sip_pvt_unlock(pkt->owner);
-			return  reschedule;
+			return reschedule;
 		}
 	}
 
@@ -4043,16 +4080,11 @@ static int retrans_pkt(const void *data)
 		append_history(pkt->owner, "MaxRetries", "%s", pkt->is_fatal ? "(Critical)" : "(Non-critical)");
 	}
 
+	sip_pvt_unlock(pkt->owner);	/* SIP_PVT, not channel */
+	owner_chan = sip_pvt_lock_full(pkt->owner);
+
 	if (pkt->is_fatal) {
-		while(pkt->owner->owner && ast_channel_trylock(pkt->owner->owner)) {
-			sip_pvt_unlock(pkt->owner);	/* SIP_PVT, not channel */
-			usleep(1);
-			sip_pvt_lock(pkt->owner);
-		}
-		if (pkt->owner->owner && !ast_channel_hangupcause(pkt->owner->owner)) {
-			ast_channel_hangupcause_set(pkt->owner->owner, AST_CAUSE_NO_USER_RESPONSE);
-		}
-		if (pkt->owner->owner) {
+		if (owner_chan) {
 			ast_log(LOG_WARNING, "Hanging up call %s - no reply to our critical packet (see https://wiki.asterisk.org/wiki/display/AST/SIP+Retransmissions).\n", pkt->owner->callid);
 
 			if (pkt->is_resp &&
@@ -4073,8 +4105,10 @@ static int retrans_pkt(const void *data)
 				/* there is nothing left to do, mark the dialog as gone */
 				sip_alreadygone(pkt->owner);
 			}
-			ast_queue_hangup_with_cause(pkt->owner->owner, AST_CAUSE_NO_USER_RESPONSE);
-			ast_channel_unlock(pkt->owner->owner);
+			if (!ast_channel_hangupcause(owner_chan)) {
+				ast_channel_hangupcause_set(owner_chan, AST_CAUSE_NO_USER_RESPONSE);
+			}
+			ast_queue_hangup_with_cause(owner_chan, AST_CAUSE_NO_USER_RESPONSE);
 		} else {
 			/* If no channel owner, destroy now */
 
@@ -4092,36 +4126,66 @@ static int retrans_pkt(const void *data)
 	       check_pendings(pkt->owner);
 	}
 
+	if (owner_chan) {
+		ast_channel_unlock(owner_chan);
+		ast_channel_unref(owner_chan);
+	}
+
 	if (pkt->method == SIP_BYE) {
 		/* We're not getting answers on SIP BYE's.  Tear down the call anyway. */
 		sip_alreadygone(pkt->owner);
-		if (pkt->owner->owner) {
-			ast_channel_unlock(pkt->owner->owner);
-		}
 		append_history(pkt->owner, "ByeFailure", "Remote peer doesn't respond to bye. Destroying call anyway.");
 		pvt_set_needdestroy(pkt->owner, "no response to BYE");
 	}
 
-	/* Remove the packet */
+	/* Unlink and destroy the packet object. */
 	for (prev = NULL, cur = pkt->owner->packets; cur; prev = cur, cur = cur->next) {
 		if (cur == pkt) {
+			/* Unlink the node from the list. */
 			UNLINK(cur, pkt->owner->packets, prev);
-			sip_pvt_unlock(pkt->owner);
-			if (pkt->owner) {
-				pkt->owner = dialog_unref(pkt->owner,"pkt is being freed, its dialog ref is dead now");
-			}
-			if (pkt->data) {
-				ast_free(pkt->data);
-			}
-			pkt->data = NULL;
-			ast_free(pkt);
-			return 0;
+			ao2_t_ref(pkt, -1, "Packet retransmission list (retransmission complete)");
+			break;
 		}
 	}
-	/* error case */
-	ast_log(LOG_WARNING, "Weird, couldn't find packet owner!\n");
+
+	/*
+	 * If the object was not in the list then we were in the process of
+	 * stopping retransmisions while we were sending this retransmission.
+	 */
+
 	sip_pvt_unlock(pkt->owner);
+	ao2_t_ref(pkt, -1, "Scheduled packet retransmission complete");
 	return 0;
+}
+
+/* Run by the sched thread. */
+static int __stop_retrans_pkt(const void *data)
+{
+	struct sip_pkt *pkt = (void *) data;
+
+	AST_SCHED_DEL_UNREF(sched, pkt->retransid,
+		ao2_t_ref(pkt, -1, "Stop scheduled packet retransmission"));
+	ao2_t_ref(pkt, -1, "Stop packet retransmission action");
+	return 0;
+}
+
+static void stop_retrans_pkt(struct sip_pkt *pkt)
+{
+	ao2_t_ref(pkt, +1, "Stop packet retransmission action");
+	if (ast_sched_add(sched, 0, __stop_retrans_pkt, pkt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(pkt, -1, "Failed to schedule stop packet retransmission action");
+	}
+}
+
+static void sip_pkt_dtor(void *vdoomed)
+{
+	struct sip_pkt *pkt = (void *) vdoomed;
+
+	if (pkt->owner) {
+		dialog_unref(pkt->owner, "Retransmission packet is being destroyed");
+	}
+	ast_free(pkt->data);
 }
 
 /*!
@@ -4154,12 +4218,14 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 		}
 	}
 
-	if (!(pkt = ast_calloc(1, sizeof(*pkt)))) {
+	pkt = ao2_alloc_options(sizeof(*pkt), sip_pkt_dtor, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!pkt) {
 		return AST_FAILURE;
 	}
 	/* copy data, add a terminator and save length */
-	if (!(pkt->data = ast_str_create(ast_str_strlen(data)))) {
-		ast_free(pkt);
+	pkt->data = ast_str_create(ast_str_strlen(data));
+	if (!pkt->data) {
+		ao2_t_ref(pkt, -1, "Failed to initialize");
 		return AST_FAILURE;
 	}
 	ast_str_set(&pkt->data, 0, "%s%s", ast_str_buffer(data), "\0");
@@ -4169,8 +4235,11 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 	pkt->is_resp = resp;
 	pkt->is_fatal = fatal;
 	pkt->owner = dialog_ref(p, "__sip_reliable_xmit: setting pkt->owner");
+
+	/* The retransmission list owns a pkt ref */
 	pkt->next = p->packets;
 	p->packets = pkt;	/* Add it to the queue */
+
 	if (resp) {
 		/* Parse out the response code */
 		if (sscanf(ast_str_buffer(pkt->data), "SIP/2.0 %30u", &respid) == 1) {
@@ -4178,7 +4247,6 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 		}
 	}
 	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
-	pkt->retransid = -1;
 	if (pkt->timer_t1) {
 		siptimer_a = pkt->timer_t1;
 	}
@@ -4187,7 +4255,12 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 	pkt->retrans_stop_time = 64 * (pkt->timer_t1 ? pkt->timer_t1 : DEFAULT_TIMER_T1); /* time in ms after pkt->time_sent to stop retransmission */
 
 	/* Schedule retransmission */
-	AST_SCHED_REPLACE_VARIABLE(pkt->retransid, sched, siptimer_a, retrans_pkt, pkt, 1);
+	ao2_t_ref(pkt, +1, "Schedule packet retransmission");
+	pkt->retransid = ast_sched_add_variable(sched, siptimer_a, retrans_pkt, pkt, 1);
+	if (pkt->retransid < 0) {
+		ao2_t_ref(pkt, -1, "Failed to schedule packet retransmission");
+	}
+
 	if (sipdebug) {
 		ast_debug(4, "*** SIP TIMER: Initializing retransmit timer on packet: Id  #%d\n", pkt->retransid);
 	}
@@ -4197,11 +4270,11 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 	if (xmitres == XMIT_ERROR) {	/* Serious network trouble, no need to try again */
 		append_history(pkt->owner, "XmitErr", "%s", pkt->is_fatal ? "(Critical)" : "(Non-critical)");
 		ast_log(LOG_ERROR, "Serious Network Trouble; __sip_xmit returns error for pkt data\n");
-		AST_SCHED_DEL(sched, pkt->retransid);
+
+		/* Unlink and destroy the packet object. */
 		p->packets = pkt->next;
-		pkt->owner = dialog_unref(pkt->owner,"pkt is being freed, its dialog ref is dead now");
-		ast_free(pkt->data);
-		ast_free(pkt);
+		stop_retrans_pkt(pkt);
+		ao2_t_ref(pkt, -1, "Packet retransmission list");
 		return AST_FAILURE;
 	} else {
 		/* This is odd, but since the retrans timer starts at 500ms and the do_monitor thread
@@ -4228,6 +4301,7 @@ static int __sip_autodestruct(const void *data)
 	/* If this is a subscription, tell the phone that we got a timeout */
 	if (p->subscribed && p->subscribed != MWI_NOTIFICATION && p->subscribed != CALL_COMPLETION) {
 		struct state_notify_data data = { 0, };
+
 		data.state = AST_EXTENSION_DEACTIVATED;
 
 		transmit_state_notify(p, &data, 1, TRUE);	/* Send last notification */
@@ -4241,6 +4315,7 @@ static int __sip_autodestruct(const void *data)
 	if (p->packets) {
 		if (!p->needdestroy) {
 			char method_str[31];
+
 			ast_debug(3, "Re-scheduled destruction of SIP call %s\n", p->callid ? p->callid : "<unknown>");
 			append_history(p, "ReliableXmit", "timeout");
 			if (sscanf(p->lastmsg, "Tx: %30s", method_str) == 1 || sscanf(p->lastmsg, "Rx: %30s", method_str) == 1) {
@@ -4255,65 +4330,117 @@ static int __sip_autodestruct(const void *data)
 		}
 	}
 
-	/* Reset schedule ID */
-	p->autokillid = -1;
-
 	/*
 	 * Lock both the pvt and the channel safely so that we can queue up a frame.
 	 */
 	owner = sip_pvt_lock_full(p);
 	if (owner) {
-		ast_log(LOG_WARNING, "Autodestruct on dialog '%s' with owner %s in place (Method: %s). Rescheduling destruction for 10000 ms\n", p->callid, ast_channel_name(owner), sip_methods[p->method].text);
+		ast_log(LOG_WARNING,
+			"Autodestruct on dialog '%s' with owner %s in place (Method: %s). Rescheduling destruction for 10000 ms\n",
+			p->callid, ast_channel_name(owner), sip_methods[p->method].text);
 		ast_queue_hangup_with_cause(owner, AST_CAUSE_PROTOCOL_ERROR);
 		ast_channel_unlock(owner);
 		ast_channel_unref(owner);
 		sip_pvt_unlock(p);
 		return 10000;
-	} else if (p->refer && !p->alreadygone) {
+	}
+
+	/* Reset schedule ID */
+	p->autokillid = -1;
+
+	if (p->refer && !p->alreadygone) {
 		ast_debug(3, "Finally hanging up channel after transfer: %s\n", p->callid);
 		stop_media_flows(p);
 		transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, 1);
 		append_history(p, "ReferBYE", "Sending BYE on transferer call leg %s", p->callid);
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+		sip_pvt_unlock(p);
 	} else {
 		append_history(p, "AutoDestroy", "%s", p->callid);
 		ast_debug(3, "Auto destroying SIP dialog '%s'\n", p->callid);
 		sip_pvt_unlock(p);
 		dialog_unlink_all(p); /* once it's unlinked and unrefd everywhere, it'll be freed automagically */
-		sip_pvt_lock(p);
-		/* dialog_unref(p, "unref dialog-- no other matching conditions"); -- unlink all now should finish off the dialog's references and free it. */
-		/* sip_destroy(p); */		/* Go ahead and destroy dialog. All attempts to recover is done */
-		/* sip_destroy also absorbs the reference */
 	}
 
-	sip_pvt_unlock(p);
-
-	dialog_unref(p, "The ref to a dialog passed to this sched callback is going out of scope; unref it.");
+	dialog_unref(p, "autokillid complete");
 
 	return 0;
 }
 
-/*! \brief Schedule final destruction of SIP dialog.  This can not be canceled.
- *  This function is used to keep a dialog around for a period of time in order
- *  to properly respond to any retransmits. */
-void sip_scheddestroy_final(struct sip_pvt *p, int ms)
+static void do_cancel_destroy(struct sip_pvt *pvt)
 {
-	if (p->final_destruction_scheduled) {
-		return; /* already set final destruction */
-	}
-
-	sip_scheddestroy(p, ms);
-	if (p->autokillid != -1) {
-		p->final_destruction_scheduled = 1;
+	if (-1 < pvt->autokillid) {
+		append_history(pvt, "CancelDestroy", "");
+		AST_SCHED_DEL_UNREF(sched, pvt->autokillid,
+			dialog_unref(pvt, "Stop scheduled autokillid"));
 	}
 }
 
-/*! \brief Schedule destruction of SIP dialog */
-void sip_scheddestroy(struct sip_pvt *p, int ms)
+/* Run by the sched thread. */
+static int __sip_cancel_destroy(const void *data)
 {
-	if (p->final_destruction_scheduled) {
-		return; /* already set final destruction */
+	struct sip_pvt *pvt = (void *) data;
+
+	sip_pvt_lock(pvt);
+	do_cancel_destroy(pvt);
+	sip_pvt_unlock(pvt);
+	dialog_unref(pvt, "Cancel destroy action");
+	return 0;
+}
+
+void sip_cancel_destroy(struct sip_pvt *pvt)
+{
+	if (pvt->final_destruction_scheduled) {
+		return;
 	}
+
+	dialog_ref(pvt, "Cancel destroy action");
+	if (ast_sched_add(sched, 0, __sip_cancel_destroy, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule cancel destroy action");
+		ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+	}
+}
+
+struct sip_scheddestroy_data {
+	struct sip_pvt *pvt;
+	int ms;
+};
+
+/* Run by the sched thread. */
+static int __sip_scheddestroy(const void *data)
+{
+	struct sip_scheddestroy_data *sched_data = (void *) data;
+	struct sip_pvt *pvt = sched_data->pvt;
+	int ms = sched_data->ms;
+
+	ast_free(sched_data);
+
+	sip_pvt_lock(pvt);
+	do_cancel_destroy(pvt);
+
+	if (pvt->do_history) {
+		append_history(pvt, "SchedDestroy", "%d ms", ms);
+	}
+
+	dialog_ref(pvt, "Schedule autokillid");
+	pvt->autokillid = ast_sched_add(sched, ms, __sip_autodestruct, pvt);
+	if (pvt->autokillid < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule autokillid");
+	}
+
+	if (pvt->stimer) {
+		stop_session_timer(pvt);
+	}
+	sip_pvt_unlock(pvt);
+	dialog_unref(pvt, "Destroy action");
+	return 0;
+}
+
+static int sip_scheddestroy_full(struct sip_pvt *p, int ms)
+{
+	struct sip_scheddestroy_data *sched_data;
 
 	if (ms < 0) {
 		if (p->timer_t1 == 0) {
@@ -4325,37 +4452,44 @@ void sip_scheddestroy(struct sip_pvt *p, int ms)
 		ms = p->timer_t1 * 64;
 	}
 	if (sip_debug_test_pvt(p)) {
-		ast_verbose("Scheduling destruction of SIP dialog '%s' in %d ms (Method: %s)\n", p->callid, ms, sip_methods[p->method].text);
-	}
-	if (sip_cancel_destroy(p)) {
-		ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+		ast_verbose("Scheduling destruction of SIP dialog '%s' in %d ms (Method: %s)\n",
+			p->callid, ms, sip_methods[p->method].text);
 	}
 
-	if (p->do_history) {
-		append_history(p, "SchedDestroy", "%d ms", ms);
+	sched_data = ast_malloc(sizeof(*sched_data));
+	if (!sched_data) {
+		/* Uh Oh.  Expect bad behavior. */
+		return -1;
 	}
-	p->autokillid = ast_sched_add(sched, ms, __sip_autodestruct, dialog_ref(p, "setting ref as passing into ast_sched_add for __sip_autodestruct"));
-
-	if (p->stimer && p->stimer->st_active == TRUE && p->stimer->st_schedid > -1) {
-		stop_session_timer(p);
-	}
-}
-
-/*! \brief Cancel destruction of SIP dialog.
- * Be careful as this also absorbs the reference - if you call it
- * from within the scheduler, this might be the last reference.
- */
-int sip_cancel_destroy(struct sip_pvt *p)
-{
-	if (p->final_destruction_scheduled) {
-		return 0;
-	}
-
-	if (p->autokillid > -1) {
-		append_history(p, "CancelDestroy", "");
-		AST_SCHED_DEL_UNREF(sched, p->autokillid, dialog_unref(p, "remove ref for autokillid"));
+	sched_data->pvt = p;
+	sched_data->ms = ms;
+	dialog_ref(p, "Destroy action");
+	if (ast_sched_add(sched, 0, __sip_scheddestroy, sched_data) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(p, "Failed to schedule destroy action");
+		ast_free(sched_data);
+		return -1;
 	}
 	return 0;
+}
+
+void sip_scheddestroy(struct sip_pvt *p, int ms)
+{
+	if (p->final_destruction_scheduled) {
+		return; /* already set final destruction */
+	}
+	sip_scheddestroy_full(p, ms);
+}
+
+void sip_scheddestroy_final(struct sip_pvt *p, int ms)
+{
+	if (p->final_destruction_scheduled) {
+		return; /* already set final destruction */
+	}
+
+	if (!sip_scheddestroy_full(p, ms)) {
+		p->final_destruction_scheduled = 1;
+	}
 }
 
 /*! \brief Acknowledges receipt of a packet and stops retransmission
@@ -4390,33 +4524,11 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 				if (sipdebug)
 					ast_debug(4, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
 			}
-			/* This odd section is designed to thwart a
-			 * race condition in the packet scheduler. There are
-			 * two conditions under which deleting the packet from the
-			 * scheduler can fail.
-			 *
-			 * 1. The packet has been removed from the scheduler because retransmission
-			 * is being attempted. The problem is that if the packet is currently attempting
-			 * retransmission and we are at this point in the code, then that MUST mean
-			 * that retrans_pkt is waiting on p's lock. Therefore we will relinquish the
-			 * lock temporarily to allow retransmission.
-			 *
-			 * 2. The packet has reached its maximum number of retransmissions and has
-			 * been permanently removed from the packet scheduler. If this is the case, then
-			 * the packet's retransid will be set to -1. The atomicity of the setting and checking
-			 * of the retransid to -1 is ensured since in both cases p's lock is held.
-			 */
-			while (cur->retransid > -1 && ast_sched_del(sched, cur->retransid)) {
-				sip_pvt_unlock(p);
-				usleep(1);
-				sip_pvt_lock(p);
-			}
+
+			/* Unlink and destroy the packet object. */
 			UNLINK(cur, p->packets, prev);
-			dialog_unref(cur->owner, "unref pkt cur->owner dialog from sip ack before freeing pkt");
-			if (cur->data) {
-				ast_free(cur->data);
-			}
-			ast_free(cur);
+			stop_retrans_pkt(cur);
+			ao2_t_ref(cur, -1, "Packet retransmission list");
 			break;
 		}
 	}
@@ -4457,7 +4569,7 @@ int __sip_semi_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 				if (sipdebug)
 					ast_debug(4, "*** SIP TIMER: Cancelling retransmission #%d - %s (got response)\n", cur->retransid, sip_methods[sipmethod].text);
 			}
-			AST_SCHED_DEL(sched, cur->retransid);
+			stop_retrans_pkt(cur);
 			res = TRUE;
 			break;
 		}
@@ -4483,25 +4595,14 @@ static void add_blank(struct sip_request *req)
 	}
 }
 
+/* Run by the sched thread. */
 static int send_provisional_keepalive_full(struct sip_pvt *pvt, int with_sdp)
 {
 	const char *msg = NULL;
 	struct ast_channel *chan;
 	int res = 0;
-	int old_sched_id = pvt->provisional_keepalive_sched_id;
 
 	chan = sip_pvt_lock_full(pvt);
-	/* Check that nothing has changed while we were waiting for the lock */
-	if (old_sched_id != pvt->provisional_keepalive_sched_id) {
-		/* Keepalive has been cancelled or rescheduled, clean up and leave */
-		if (chan) {
-			ast_channel_unlock(chan);
-			chan = ast_channel_unref(chan);
-		}
-		sip_pvt_unlock(pvt);
-		dialog_unref(pvt, "dialog ref for provisional keepalive");
-		return 0;
-	}
 
 	if (!pvt->last_provisional || !strncasecmp(pvt->last_provisional, "100", 3)) {
 		msg = "183 Session Progress";
@@ -4514,25 +4615,23 @@ static int send_provisional_keepalive_full(struct sip_pvt *pvt, int with_sdp)
 			transmit_response(pvt, S_OR(msg, pvt->last_provisional), &pvt->initreq);
 		}
 		res = PROVIS_KEEPALIVE_TIMEOUT;
-	}
-
-	if (chan) {
-		ast_channel_unlock(chan);
-		chan = ast_channel_unref(chan);
-	}
-
-	if (!res) {
+	} else {
 		pvt->provisional_keepalive_sched_id = -1;
 	}
 
 	sip_pvt_unlock(pvt);
+	if (chan) {
+		ast_channel_unlock(chan);
+		ast_channel_unref(chan);
+	}
 
 	if (!res) {
-		dialog_unref(pvt, "dialog ref for provisional keepalive");
+		dialog_unref(pvt, "Schedule provisional keepalive complete");
 	}
 	return res;
 }
 
+/* Run by the sched thread. */
 static int send_provisional_keepalive(const void *data)
 {
 	struct sip_pvt *pvt = (struct sip_pvt *) data;
@@ -4540,6 +4639,7 @@ static int send_provisional_keepalive(const void *data)
 	return send_provisional_keepalive_full(pvt, 0);
 }
 
+/* Run by the sched thread. */
 static int send_provisional_keepalive_with_sdp(const void *data)
 {
 	struct sip_pvt *pvt = (void *) data;
@@ -4547,12 +4647,73 @@ static int send_provisional_keepalive_with_sdp(const void *data)
 	return send_provisional_keepalive_full(pvt, 1);
 }
 
+/* Run by the sched thread. */
+static int __update_provisional_keepalive_full(struct sip_pvt *pvt, int with_sdp)
+{
+	AST_SCHED_DEL_UNREF(sched, pvt->provisional_keepalive_sched_id,
+		dialog_unref(pvt, "Stop scheduled provisional keepalive for update"));
+
+	sip_pvt_lock(pvt);
+	if (pvt->invitestate < INV_COMPLETED) {
+		/* Provisional keepalive is still needed. */
+		dialog_ref(pvt, "Schedule provisional keepalive");
+		pvt->provisional_keepalive_sched_id = ast_sched_add(sched, PROVIS_KEEPALIVE_TIMEOUT,
+			with_sdp ? send_provisional_keepalive_with_sdp : send_provisional_keepalive,
+			pvt);
+		if (pvt->provisional_keepalive_sched_id < 0) {
+			dialog_unref(pvt, "Failed to schedule provisional keepalive");
+		}
+	}
+	sip_pvt_unlock(pvt);
+
+	dialog_unref(pvt, "Update provisional keepalive action");
+	return 0;
+}
+
+/* Run by the sched thread. */
+static int __update_provisional_keepalive(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+
+	return __update_provisional_keepalive_full(pvt, 0);
+}
+
+/* Run by the sched thread. */
+static int __update_provisional_keepalive_with_sdp(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+
+	return __update_provisional_keepalive_full(pvt, 1);
+}
+
 static void update_provisional_keepalive(struct sip_pvt *pvt, int with_sdp)
 {
-	AST_SCHED_DEL_UNREF(sched, pvt->provisional_keepalive_sched_id, dialog_unref(pvt, "when you delete the provisional_keepalive_sched_id, you should dec the refcount for the stored dialog ptr"));
+	dialog_ref(pvt, "Update provisional keepalive action");
+	if (ast_sched_add(sched, 0,
+		with_sdp ? __update_provisional_keepalive_with_sdp : __update_provisional_keepalive,
+		pvt) < 0) {
+		dialog_unref(pvt, "Failed to schedule update provisional keepalive action");
+	}
+}
 
-	pvt->provisional_keepalive_sched_id = ast_sched_add(sched, PROVIS_KEEPALIVE_TIMEOUT,
-		with_sdp ? send_provisional_keepalive_with_sdp : send_provisional_keepalive, dialog_ref(pvt, "Increment refcount to pass dialog pointer to sched callback"));
+/* Run by the sched thread. */
+static int __stop_provisional_keepalive(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+
+	AST_SCHED_DEL_UNREF(sched, pvt->provisional_keepalive_sched_id,
+		dialog_unref(pvt, "Stop scheduled provisional keepalive"));
+	dialog_unref(pvt, "Stop provisional keepalive action");
+	return 0;
+}
+
+static void stop_provisional_keepalive(struct sip_pvt *pvt)
+{
+	dialog_ref(pvt, "Stop provisional keepalive action");
+	if (ast_sched_add(sched, 0, __stop_provisional_keepalive, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule stop provisional keepalive action");
+	}
 }
 
 static void add_required_respheader(struct sip_request *req)
@@ -4608,7 +4769,7 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 
 	/* If we are sending a final response to an INVITE, stop retransmitting provisional responses */
 	if (p->initreq.method == SIP_INVITE && reliable == XMIT_CRITICAL) {
-		AST_SCHED_DEL_UNREF(sched, p->provisional_keepalive_sched_id, dialog_unref(p, "when you delete the provisional_keepalive_sched_id, you should dec the refcount for the stored dialog ptr"));
+		stop_provisional_keepalive(p);
 	}
 
 	res = (reliable) ?
@@ -6332,8 +6493,6 @@ static void sip_registry_destroy(void *obj)
 		reg->call = dialog_unref(reg->call, "unref reg->call");
 		/* reg->call = sip_destroy(reg->call); */
 	}
-	AST_SCHED_DEL(sched, reg->expire);
-	AST_SCHED_DEL(sched, reg->timeout);
 
 	ast_string_field_free_memory(reg);
 }
@@ -6342,12 +6501,12 @@ static void sip_registry_destroy(void *obj)
 static void sip_subscribe_mwi_destroy(void *data)
 {
 	struct sip_subscription_mwi *mwi = data;
+
 	if (mwi->call) {
 		mwi->call->mwi = NULL;
 		mwi->call = dialog_unref(mwi->call, "sip_subscription_mwi destruction");
 	}
 
-	AST_SCHED_DEL(sched, mwi->resub);
 	ast_string_field_free_memory(mwi);
 }
 
@@ -6361,18 +6520,17 @@ static void offered_media_list_destroy(struct sip_pvt *p)
 	}
 }
 
-/*! \brief Execute destruction of SIP dialog structure, release memory */
-void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
+/*! \brief ao2 destructor for SIP dialog structure */
+static void sip_pvt_dtor(void *vdoomed)
 {
+	struct sip_pvt *p = vdoomed;
 	struct sip_request *req;
 
+	ast_debug(3, "Destroying SIP dialog %s\n", p->callid);
+
 	/* Destroy Session-Timers if allocated */
- 	if (p->stimer) {
-		p->stimer->quit_flag = 1;
-		stop_session_timer(p);
-		ast_free(p->stimer);
-		p->stimer = NULL;
-	}
+	ast_free(p->stimer);
+	p->stimer = NULL;
 
 	if (sip_debug_test_pvt(p))
 		ast_verbose("Really destroying SIP dialog '%s' Method: %s\n", p->callid, sip_methods[p->method].text);
@@ -6384,14 +6542,12 @@ void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 
 	/* Unlink us from the owner if we have one */
 	if (p->owner) {
-		if (lockowner)
-			ast_channel_lock(p->owner);
+		ast_channel_lock(p->owner);
 		ast_debug(1, "Detaching from %s\n", ast_channel_name(p->owner));
 		ast_channel_tech_pvt_set(p->owner, NULL);
 		/* Make sure that the channel knows its backend is going away */
 		ast_channel_softhangup_internal_flag_add(p->owner, AST_SOFTHANGUP_DEV);
-		if (lockowner)
-			ast_channel_unlock(p->owner);
+		ast_channel_unlock(p->owner);
 		/* Give the channel a chance to react before deallocation */
 		usleep(1);
 	}
@@ -6701,24 +6857,6 @@ static int update_call_counter(struct sip_pvt *fup, int event)
 	return 0;
 }
 
-
-static void sip_destroy_fn(void *p)
-{
-	sip_destroy(p);
-}
-
-/*! \brief Destroy SIP call structure.
- * Make it return NULL so the caller can do things like
- *	foo = sip_destroy(foo);
- * and reduce the chance of bugs due to dangling pointers.
- */
-struct sip_pvt *sip_destroy(struct sip_pvt *p)
-{
-	ast_debug(3, "Destroying SIP dialog %s\n", p->callid);
-	__sip_destroy(p, TRUE, TRUE);
-	return NULL;
-}
-
 /*! \brief Convert SIP hangup causes to Asterisk hangup causes */
 int hangup_sip2cause(int cause)
 {
@@ -6891,19 +7029,42 @@ const char *hangup_cause2sip(int cause)
 	return 0;
 }
 
+/* Run by the sched thread. */
 static int reinvite_timeout(const void *data)
 {
 	struct sip_pvt *dialog = (struct sip_pvt *) data;
-	struct ast_channel *owner = sip_pvt_lock_full(dialog);
+	struct ast_channel *owner;
+
+	owner = sip_pvt_lock_full(dialog);
 	dialog->reinviteid = -1;
 	check_pendings(dialog);
 	if (owner) {
 		ast_channel_unlock(owner);
 		ast_channel_unref(owner);
 	}
-	ao2_unlock(dialog);
-	dialog_unref(dialog, "unref for reinvite timeout");
+	sip_pvt_unlock(dialog);
+	dialog_unref(dialog, "reinviteid complete");
 	return 0;
+}
+
+/* Run by the sched thread. */
+static int __stop_reinviteid(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+
+	AST_SCHED_DEL_UNREF(sched, pvt->reinviteid,
+		dialog_unref(pvt, "Stop scheduled reinviteid"));
+	dialog_unref(pvt, "Stop reinviteid action");
+	return 0;
+}
+
+static void stop_reinviteid(struct sip_pvt *pvt)
+{
+	dialog_ref(pvt, "Stop reinviteid action");
+	if (ast_sched_add(sched, 0, __stop_reinviteid, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule stop reinviteid action");
+	}
 }
 
 /*! \brief  sip_hangup: Hangup SIP call
@@ -7020,7 +7181,8 @@ static int sip_hangup(struct ast_channel *ast)
 				}
 			} else {	/* Incoming call, not up */
 				const char *res;
-				AST_SCHED_DEL_UNREF(sched, p->provisional_keepalive_sched_id, dialog_unref(p, "when you delete the provisional_keepalive_sched_id, you should dec the refcount for the stored dialog ptr"));
+
+				stop_provisional_keepalive(p);
 				if (p->hangupcause && (res = hangup_cause2sip(p->hangupcause)))
 					transmit_response_reliable(p, res, &p->initreq);
 				else
@@ -7028,7 +7190,7 @@ static int sip_hangup(struct ast_channel *ast)
 				p->invitestate = INV_TERMINATED;
 			}
 		} else {	/* Call is in UP state, send BYE */
-			if (p->stimer->st_active == TRUE) {
+			if (p->stimer) {
 				stop_session_timer(p);
 			}
 
@@ -7088,16 +7250,20 @@ static int sip_hangup(struct ast_channel *ast)
 				   but we can't send one while we have "INVITE" outstanding. */
 				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);
 				ast_clear_flag(&p->flags[0], SIP_NEEDREINVITE);
-				AST_SCHED_DEL_UNREF(sched, p->waitid, dialog_unref(p, "when you delete the waitid sched, you should dec the refcount for the stored dialog ptr"));
-				if (sip_cancel_destroy(p)) {
-					ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
-				}
+				stop_reinvite_retry(p);
+				sip_cancel_destroy(p);
+
 				/* If we have an ongoing reinvite, there is a chance that we have gotten a provisional
 				 * response, but something weird has happened and we will never receive a final response.
 				 * So, just in case, check for pending actions after a bit of time to trigger the pending
 				 * bye that we are setting above */
 				if (p->ongoing_reinvite && p->reinviteid < 0) {
-					p->reinviteid = ast_sched_add(sched, 32 * p->timer_t1, reinvite_timeout, dialog_ref(p, "ref for reinvite_timeout"));
+					p->reinviteid = ast_sched_add(sched, 32 * p->timer_t1,
+						reinvite_timeout, dialog_ref(p, "Schedule reinviteid"));
+					if (p->reinviteid < 0) {
+						/* Uh Oh.  Expect bad behavior. */
+						dialog_unref(p, "Failed to schedule reinviteid");
+					}
 				}
 			}
 		}
@@ -7202,8 +7368,8 @@ static int sip_answer(struct ast_channel *ast)
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 		/* RFC says the session timer starts counting on 200,
 		 * not on INVITE. */
-		if (p->stimer->st_active == TRUE) {
-			start_session_timer(p);
+		if (p->stimer) {
+			restart_session_timer(p);
 		}
 	}
 	sip_pvt_unlock(p);
@@ -7466,13 +7632,13 @@ static int interpret_t38_parameters(struct sip_pvt *p, const struct ast_control_
 		/* Negotiation can not take place without a valid max_ifp value. */
 		if (!parameters->max_ifp) {
 			if (p->t38.state == T38_PEER_REINVITE) {
-				AST_SCHED_DEL_UNREF(sched, p->t38id, dialog_unref(p, "when you delete the t38id sched, you should dec the refcount for the stored dialog ptr"));
+				stop_t38_abort_timer(p);
 				transmit_response_reliable(p, "488 Not acceptable here", &p->initreq);
 			}
 			change_t38_state(p, T38_REJECTED);
 			break;
 		} else if (p->t38.state == T38_PEER_REINVITE) {
-			AST_SCHED_DEL_UNREF(sched, p->t38id, dialog_unref(p, "when you delete the t38id sched, you should dec the refcount for the stored dialog ptr"));
+			stop_t38_abort_timer(p);
 			p->t38.our_parms = *parameters;
 			/* modify our parameters to conform to the peer's parameters,
 			 * based on the rules in the ITU T.38 recommendation
@@ -7506,17 +7672,19 @@ static int interpret_t38_parameters(struct sip_pvt *p, const struct ast_control_
 	case AST_T38_REFUSED:
 	case AST_T38_REQUEST_TERMINATE:         /* Shutdown T38 */
 		if (p->t38.state == T38_PEER_REINVITE) {
-			AST_SCHED_DEL_UNREF(sched, p->t38id, dialog_unref(p, "when you delete the t38id sched, you should dec the refcount for the stored dialog ptr"));
+			stop_t38_abort_timer(p);
 			change_t38_state(p, T38_REJECTED);
 			transmit_response_reliable(p, "488 Not acceptable here", &p->initreq);
-		} else if (p->t38.state == T38_ENABLED)
+		} else if (p->t38.state == T38_ENABLED) {
+			change_t38_state(p, T38_DISABLED);
 			transmit_reinvite_with_sdp(p, FALSE, FALSE);
+		}
 		break;
 	case AST_T38_REQUEST_PARMS: {		/* Application wants remote's parameters re-sent */
 		struct ast_control_t38_parameters parameters = p->t38.their_parms;
 
 		if (p->t38.state == T38_PEER_REINVITE) {
-			AST_SCHED_DEL_UNREF(sched, p->t38id, dialog_unref(p, "when you delete the t38id sched, you should dec the refcount for the stored dialog ptr"));
+			stop_t38_abort_timer(p);
 			parameters.max_ifp = ast_udptl_get_far_max_ifp(p->udptl);
 			parameters.request_response = AST_T38_REQUEST_NEGOTIATE;
 			if (p->owner) {
@@ -8593,12 +8761,12 @@ static struct sip_st_dlg* sip_st_alloc(struct sip_pvt *const p)
 		return p->stimer;
 	}
 
-	if (!(stp = ast_calloc(1, sizeof(struct sip_st_dlg))))
+	if (!(stp = ast_calloc(1, sizeof(struct sip_st_dlg)))) {
 		return NULL;
+	}
+	stp->st_schedid = -1;           /* Session-Timers ast_sched scheduler id */
 
 	p->stimer = stp;
-
-	stp->st_schedid = -1;           /* Session-Timers ast_sched scheduler id */
 
 	return p->stimer;
 }
@@ -8622,7 +8790,7 @@ struct sip_pvt *__sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 {
 	struct sip_pvt *p;
 
-	p = __ao2_alloc_debug(sizeof(*p), sip_destroy_fn,
+	p = __ao2_alloc_debug(sizeof(*p), sip_pvt_dtor,
 		AO2_ALLOC_OPT_LOCK_MUTEX, "allocate a dialog(pvt) struct",
 		file, line, func, 1);
 	if (!p) {
@@ -9078,7 +9246,7 @@ static void forked_invite_init(struct sip_request *req, const char *new_theirtag
  * \post pvt is locked
  * \post pvt->owner is locked and its reference count is increased (if pvt->owner is not NULL)
  *
- * \returns a pointer to the locked and reffed pvt->owner channel if it exists.
+ * \return a pointer to the locked and reffed pvt->owner channel if it exists.
  */
 static struct ast_channel *sip_pvt_lock_full(struct sip_pvt *pvt)
 {
@@ -10670,6 +10838,10 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		} else if (udptlportno > 0) {
 			if (debug)
 				ast_verbose("Got T.38 Re-invite without audio. Keeping RTP active during T.38 session.\n");
+
+			/* Force media to go through us for T.38. */
+			memset(&p->redirip, 0, sizeof(p->redirip));
+
 			/* Prevent audio RTCP reads */
 			if (p->owner) {
 				ast_channel_set_fd(p->owner, 1, -1);
@@ -13440,7 +13612,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 
 		ast_str_append(&m_modem, 0, "m=image %d udptl t38\r\n", ast_sockaddr_port(&udptldest));
 
-		if (ast_sockaddr_cmp(&udptldest, &dest)) {
+		if (ast_sockaddr_cmp_addr(&udptldest, &dest)) {
 			ast_str_append(&m_modem, 0, "c=IN %s %s\r\n",
 					(ast_sockaddr_is_ipv6(&udptldest) && !ast_sockaddr_is_ipv4_mapped(&udptldest)) ?
 					"IP6" : "IP4", ast_sockaddr_stringify_addr_remote(&udptldest));
@@ -13780,6 +13952,29 @@ static int determine_firstline_parts(struct sip_request *req)
 static int transmit_reinvite_with_sdp(struct sip_pvt *p, int t38version, int oldsdp)
 {
 	struct sip_request req;
+
+	if (t38version) {
+		/* Force media to go through us for T.38. */
+		memset(&p->redirip, 0, sizeof(p->redirip));
+	}
+	if (p->rtp) {
+		if (t38version) {
+			/* Silence RTCP while audio RTP is inactive */
+			ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_RTCP, 0);
+			if (p->owner) {
+				/* Prevent audio RTCP reads */
+				ast_channel_set_fd(p->owner, 1, -1);
+			}
+		} else if (ast_sockaddr_isnull(&p->redirip)) {
+			/* Enable RTCP since it will be inactive if we're coming back
+			 * with this reinvite */
+			ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_RTCP, 1);
+			if (p->owner) {
+				/* Enable audio RTCP reads */
+				ast_channel_set_fd(p->owner, 1, ast_rtp_instance_fd(p->rtp, 1));
+			}
+		}
+	}
 
 	reqprep(&req, p, ast_test_flag(&p->flags[0], SIP_REINVITE_UPDATE) ?  SIP_UPDATE : SIP_INVITE, 0, 1);
 
@@ -14183,7 +14378,7 @@ static void add_diversion(struct sip_request *req, struct sip_pvt *pvt)
 {
 	struct ast_party_id diverting_from;
 	const char *reason;
-	int found_in_table;
+	const char *quote_str;
 	char header_text[256];
 	char encoded_number[SIPBUFSIZE/2];
 
@@ -14208,17 +14403,18 @@ static void add_diversion(struct sip_request *req, struct sip_pvt *pvt)
 		ast_copy_string(encoded_number, diverting_from.number.str, sizeof(encoded_number));
 	}
 
-	reason = sip_reason_code_to_str(&ast_channel_redirecting(pvt->owner)->reason, &found_in_table);
+	reason = sip_reason_code_to_str(&ast_channel_redirecting(pvt->owner)->reason);
+
+	/* Reason is either already quoted or it is a token to not need quotes added. */
+	quote_str = *reason == '\"' || sip_is_token(reason) ? "" : "\"";
 
 	/* We at least have a number to place in the Diversion header, which is enough */
 	if (!diverting_from.name.valid
 		|| ast_strlen_zero(diverting_from.name.str)) {
 		snprintf(header_text, sizeof(header_text), "<sip:%s@%s>;reason=%s%s%s",
-				encoded_number,
-				ast_sockaddr_stringify_host_remote(&pvt->ourip),
-				found_in_table ? "" : "\"",
-				reason,
-				found_in_table ? "" : "\"");
+			encoded_number,
+			ast_sockaddr_stringify_host_remote(&pvt->ourip),
+			quote_str, reason, quote_str);
 	} else {
 		char escaped_name[SIPBUFSIZE/2];
 		if (sip_cfg.pedanticsipchecking) {
@@ -14227,12 +14423,10 @@ static void add_diversion(struct sip_request *req, struct sip_pvt *pvt)
 			ast_copy_string(escaped_name, diverting_from.name.str, sizeof(escaped_name));
 		}
 		snprintf(header_text, sizeof(header_text), "\"%s\" <sip:%s@%s>;reason=%s%s%s",
-				escaped_name,
-				encoded_number,
-				ast_sockaddr_stringify_host_remote(&pvt->ourip),
-				found_in_table ? "" : "\"",
-				reason,
-				found_in_table ? "" : "\"");
+			escaped_name,
+			encoded_number,
+			ast_sockaddr_stringify_host_remote(&pvt->ourip),
+			quote_str, reason, quote_str);
 	}
 
 	add_header(req, "Diversion", header_text);
@@ -14443,20 +14637,94 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 	return send_request(p, &req, init ? XMIT_CRITICAL : XMIT_RELIABLE, p->ocseq);
 }
 
-/*! \brief Send a subscription or resubscription for MWI */
+/*!
+ * \brief Send a subscription or resubscription for MWI
+ *
+ * \note Run by the sched thread.
+ */
 static int sip_subscribe_mwi_do(const void *data)
 {
-	struct sip_subscription_mwi *mwi = (struct sip_subscription_mwi*)data;
-
-	if (!mwi) {
-		return -1;
-	}
+	struct sip_subscription_mwi *mwi = (struct sip_subscription_mwi *) data;
 
 	mwi->resub = -1;
 	__sip_subscribe_mwi_do(mwi);
-	ao2_t_ref(mwi, -1, "unref mwi to balance ast_sched_add");
+	ao2_t_ref(mwi, -1, "Scheduled mwi resub complete");
 
 	return 0;
+}
+
+/* Run by the sched thread. */
+static int __shutdown_mwi_subscription(const void *data)
+{
+	struct sip_subscription_mwi *mwi = (void *) data;
+
+	AST_SCHED_DEL_UNREF(sched, mwi->resub,
+		ao2_t_ref(mwi, -1, "Stop scheduled mwi resub"));
+
+	if (mwi->dnsmgr) {
+		ast_dnsmgr_release(mwi->dnsmgr);
+		mwi->dnsmgr = NULL;
+		ao2_t_ref(mwi, -1, "dnsmgr release");
+	}
+
+	ao2_t_ref(mwi, -1, "Shutdown MWI subscription action");
+	return 0;
+}
+
+static void shutdown_mwi_subscription(struct sip_subscription_mwi *mwi)
+{
+	ao2_t_ref(mwi, +1, "Shutdown MWI subscription action");
+	if (ast_sched_add(sched, 0, __shutdown_mwi_subscription, mwi) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(mwi, -1, "Failed to schedule shutdown MWI subscription action");
+	}
+}
+
+struct mwi_subscription_data {
+	struct sip_subscription_mwi *mwi;
+	int ms;
+};
+
+/* Run by the sched thread. */
+static int __start_mwi_subscription(const void *data)
+{
+	struct mwi_subscription_data *sched_data = (void *) data;
+	struct sip_subscription_mwi *mwi = sched_data->mwi;
+	int ms = sched_data->ms;
+
+	ast_free(sched_data);
+
+	AST_SCHED_DEL_UNREF(sched, mwi->resub,
+		ao2_t_ref(mwi, -1, "Stop scheduled mwi resub"));
+
+	ao2_t_ref(mwi, +1, "Schedule mwi resub");
+	mwi->resub = ast_sched_add(sched, ms, sip_subscribe_mwi_do, mwi);
+	if (mwi->resub < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(mwi, -1, "Failed to schedule mwi resub");
+	}
+
+	ao2_t_ref(mwi, -1, "Start MWI subscription action");
+	return 0;
+}
+
+static void start_mwi_subscription(struct sip_subscription_mwi *mwi, int ms)
+{
+	struct mwi_subscription_data *sched_data;
+
+	sched_data = ast_malloc(sizeof(*sched_data));
+	if (!sched_data) {
+		/* Uh Oh.  Expect bad behavior. */
+		return;
+	}
+	sched_data->mwi = mwi;
+	sched_data->ms = ms;
+	ao2_t_ref(mwi, +1, "Start MWI subscription action");
+	if (ast_sched_add(sched, 0, __start_mwi_subscription, sched_data) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(mwi, -1, "Failed to schedule start MWI subscription action");
+		ast_free(sched_data);
+	}
 }
 
 static void on_dns_update_registry(struct ast_sockaddr *old, struct ast_sockaddr *new, void *data)
@@ -15264,7 +15532,7 @@ static const struct _map_x_s regstatestrings[] = {
 	{ REG_STATE_AUTHSENT, "Auth. Sent"},
 	{ REG_STATE_REGISTERED, "Registered"},
 	{ REG_STATE_REJECTED, "Rejected"},
-	{ REG_STATE_TIMEOUT, "Timeout"},
+	{ REG_STATE_TIMEOUT, "Registered"},/* Hidden state.  We are renewing registration. */
 	{ REG_STATE_NOAUTH, "No Authentication"},
 	{ -1, NULL } /* terminator */
 };
@@ -15280,21 +15548,21 @@ static void sip_publish_registry(const char *username, const char *domain, const
 	ast_system_publish_registry("SIP", username, domain, status, NULL);
 }
 
-/*! \brief Update registration with SIP Proxy.
+/*!
+ * \brief Update registration with SIP Proxy.
+ *
+ * \details
  * Called from the scheduler when the previous registration expires,
  * so we don't have to cancel the pending event.
  * We assume the reference so the sip_registry is valid, since it
  * is stored in the scheduled event anyways.
+ *
+ * \note Run by the sched thread.
  */
 static int sip_reregister(const void *data)
 {
 	/* if we are here, we know that we need to reregister. */
 	struct sip_registry *r = (struct sip_registry *) data;
-
-	/* if we couldn't get a reference to the registry object, punt */
-	if (!r) {
-		return 0;
-	}
 
 	if (r->call && r->call->do_history) {
 		append_history(r->call, "RegistryRenew", "Account: %s@%s", r->username, r->hostname);
@@ -15307,8 +15575,25 @@ static int sip_reregister(const void *data)
 
 	r->expire = -1;
 	r->expiry = r->configured_expiry;
+	switch (r->regstate) {
+	case REG_STATE_UNREGISTERED:
+	case REG_STATE_REGSENT:
+	case REG_STATE_AUTHSENT:
+		break;
+	case REG_STATE_REJECTED:
+	case REG_STATE_NOAUTH:
+	case REG_STATE_FAILED:
+		/* Restarting registration as unregistered */
+		r->regstate = REG_STATE_UNREGISTERED;
+		break;
+	case REG_STATE_TIMEOUT:
+	case REG_STATE_REGISTERED:
+		/* Registration needs to be renewed. */
+		r->regstate = REG_STATE_TIMEOUT;
+		break;
+	}
 	__sip_do_register(r);
-	ao2_t_ref(r, -1, "unref the re-register scheduled event");
+	ao2_t_ref(r, -1, "Scheduled reregister timeout complete");
 	return 0;
 }
 
@@ -15323,21 +15608,83 @@ static int __sip_do_register(struct sip_registry *r)
 	return res;
 }
 
-/*! \brief Registration timeout, register again
+struct reregister_data {
+	struct sip_registry *reg;
+	int ms;
+};
+
+/* Run by the sched thread. */
+static int __start_reregister_timeout(const void *data)
+{
+	struct reregister_data *sched_data = (void *) data;
+	struct sip_registry *reg = sched_data->reg;
+	int ms = sched_data->ms;
+
+	ast_free(sched_data);
+
+	AST_SCHED_DEL_UNREF(sched, reg->expire,
+		ao2_t_ref(reg, -1, "Stop scheduled reregister timeout"));
+
+	ao2_t_ref(reg, +1, "Schedule reregister timeout");
+	reg->expire = ast_sched_add(sched, ms, sip_reregister, reg);
+	if (reg->expire < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(reg, -1, "Failed to schedule reregister timeout");
+	}
+
+	ao2_t_ref(reg, -1, "Start reregister timeout action");
+	return 0;
+}
+
+static void start_reregister_timeout(struct sip_registry *reg, int ms)
+{
+	struct reregister_data *sched_data;
+
+	sched_data = ast_malloc(sizeof(*sched_data));
+	if (!sched_data) {
+		/* Uh Oh.  Expect bad behavior. */
+		return;
+	}
+	sched_data->reg = reg;
+	sched_data->ms = ms;
+	ao2_t_ref(reg, +1, "Start reregister timeout action");
+	if (ast_sched_add(sched, 0, __start_reregister_timeout, sched_data) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(reg, -1, "Failed to schedule start reregister timeout action");
+		ast_free(sched_data);
+	}
+}
+
+/*!
+ * \brief Registration request timeout, register again
+ *
+ * \details
  * Registered as a timeout handler during transmit_register(),
  * to retransmit the packet if a reply does not come back.
- * This is called by the scheduler so the event is not pending anymore when
+ *
+ * \note This is called by the scheduler so the event is not pending anymore when
  * we are called.
+ *
+ * \note Run by the sched thread.
  */
 static int sip_reg_timeout(const void *data)
 {
-
-	/* if we are here, our registration timed out, so we'll just do it over */
 	struct sip_registry *r = (struct sip_registry *)data; /* the ref count should have been bumped when the sched item was added */
 	struct sip_pvt *p;
 
-	/* if we couldn't get a reference to the registry object, punt */
-	if (!r) {
+	switch (r->regstate) {
+	case REG_STATE_UNREGISTERED:
+	case REG_STATE_REGSENT:
+	case REG_STATE_AUTHSENT:
+	case REG_STATE_TIMEOUT:
+		break;
+	default:
+		/*
+		 * Registration completed because we got a request response
+		 * and we couldn't stop the scheduled entry in time.
+		 */
+		r->timeout = -1;
+		ao2_t_ref(r, -1, "Scheduled register timeout completed early");
 		return 0;
 	}
 
@@ -15379,8 +15726,58 @@ static int sip_reg_timeout(const void *data)
 		ast_log(LOG_NOTICE, "   -- Registration for '%s@%s' timed out, trying again (Attempt #%d)\n", r->username, r->hostname, r->regattempts);
 	}
 	sip_publish_registry(r->username, r->hostname, regstate2str(r->regstate));
-	ao2_t_ref(r, -1, "unreffing registry_unref r");
+	ao2_t_ref(r, -1, "Scheduled register timeout complete");
 	return 0;
+}
+
+/* Run by the sched thread. */
+static int __stop_register_timeout(const void *data)
+{
+	struct sip_registry *reg = (struct sip_registry *) data;
+
+	AST_SCHED_DEL_UNREF(sched, reg->timeout,
+		ao2_t_ref(reg, -1, "Stop scheduled register timeout"));
+	ao2_t_ref(reg, -1, "Stop register timeout action");
+	return 0;
+}
+
+static void stop_register_timeout(struct sip_registry *reg)
+{
+	ao2_t_ref(reg, +1, "Stop register timeout action");
+	if (ast_sched_add(sched, 0, __stop_register_timeout, reg) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(reg, -1, "Failed to schedule stop register timeout action");
+	}
+}
+
+/* Run by the sched thread. */
+static int __start_register_timeout(const void *data)
+{
+	struct sip_registry *reg = (struct sip_registry *) data;
+
+	AST_SCHED_DEL_UNREF(sched, reg->timeout,
+		ao2_t_ref(reg, -1, "Stop scheduled register timeout"));
+
+	ao2_t_ref(reg, +1, "Schedule register timeout");
+	reg->timeout = ast_sched_add(sched, global_reg_timeout * 1000, sip_reg_timeout, reg);
+	if (reg->timeout < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(reg, -1, "Failed to schedule register timeout");
+	}
+	ast_debug(1, "Scheduled a registration timeout for %s id  #%d \n",
+		reg->hostname, reg->timeout);
+
+	ao2_t_ref(reg, -1, "Start register timeout action");
+	return 0;
+}
+
+static void start_register_timeout(struct sip_registry *reg)
+{
+	ao2_t_ref(reg, +1, "Start register timeout action");
+	if (ast_sched_add(sched, 0, __start_register_timeout, reg) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(reg, -1, "Failed to schedule start register timeout action");
+	}
 }
 
 static const char *sip_sanitized_host(const char *host)
@@ -15496,16 +15893,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			 * probably DNS.  We need to reschedule a registration try */
 			dialog_unlink_all(p);
 			p = dialog_unref(p, "unref dialog after unlink_all");
-			if (r->timeout > -1) {
-				AST_SCHED_REPLACE_UNREF(r->timeout, sched, global_reg_timeout * 1000, sip_reg_timeout, r,
-										ao2_t_ref(_data, -1, "del for REPLACE of registry ptr"),
-										ao2_t_ref(r, -1, "object ptr dec when SCHED_REPLACE add failed"),
-										ao2_t_ref(r, +1, "add for REPLACE registry ptr"));
-				ast_log(LOG_WARNING, "Still have a registration timeout for %s@%s (create_addr() error), %d\n", r->username, r->hostname, r->timeout);
-			} else {
-				r->timeout = ast_sched_add(sched, global_reg_timeout * 1000, sip_reg_timeout, ao2_t_bump(r, "add for REPLACE registry ptr"));
-				ast_log(LOG_WARNING, "Probably a DNS error for registration to %s@%s, trying REGISTER again (after %d seconds)\n", r->username, r->hostname, global_reg_timeout);
-			}
+			ast_log(LOG_WARNING, "Probably a DNS error for registration to %s@%s, trying REGISTER again (after %d seconds)\n",
+				r->username, r->hostname, global_reg_timeout);
+			start_register_timeout(r);
 			r->regattempts++;
 			return 0;
 		}
@@ -15568,14 +15958,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 	/* set up a timeout */
 	if (auth == NULL)  {
-		if (r->timeout > -1) {
-			ast_log(LOG_WARNING, "Still have a registration timeout, #%d - deleting it\n", r->timeout);
-		}
-		AST_SCHED_REPLACE_UNREF(r->timeout, sched, global_reg_timeout * 1000, sip_reg_timeout, r,
-								ao2_t_ref(_data, -1, "reg ptr unrefed from del in SCHED_REPLACE"),
-								ao2_t_ref(r, -1, "reg ptr unrefed from add failure in SCHED_REPLACE"),
-								ao2_t_ref(r, +1, "reg ptr reffed from add in SCHED_REPLACE"));
-		ast_debug(1, "Scheduled a registration timeout for %s id  #%d \n", r->hostname, r->timeout);
+		start_register_timeout(r);
 	}
 
 	snprintf(from, sizeof(from), "<sip:%s@%s>;tag=%s", r->username, S_OR(r->regdomain, sip_sanitized_host(p->tohost)), p->tag);
@@ -16843,6 +17226,7 @@ static void acl_change_event_stasis_unsubscribe(void)
 	acl_change_sub = stasis_unsubscribe_and_join(acl_change_sub);
 }
 
+/* Run by the sched thread. */
 static int network_change_sched_cb(const void *data)
 {
 	network_change_sched_id = -1;
@@ -17232,8 +17616,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 			ast_copy_flags(&p->flags[0], &peer->flags[0], SIP_NAT_FORCE_RPORT);
 
 			if (!(res = check_auth(p, req, peer->name, peer->secret, peer->md5secret, SIP_REGISTER, uri2, XMIT_UNRELIABLE))) {
-				if (sip_cancel_destroy(p))
-					ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+				sip_cancel_destroy(p);
 
 				if (check_request_transport(peer, req)) {
 					ast_set_flag(&p->flags[0], SIP_PENDINGBYE);
@@ -17287,8 +17670,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 				ao2_t_link(peers_by_ip, peer, "link peer into peers-by-ip table");
 			}
 			ao2_lock(peer);
-			if (sip_cancel_destroy(p))
-				ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+			sip_cancel_destroy(p);
 			switch (parse_register_contact(p, peer, req)) {
 			case PARSE_REGISTER_DENIED:
 				ast_log(LOG_WARNING, "Registration denied because of contact ACL\n");
@@ -17662,6 +18044,9 @@ static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq, char **name, c
 	char *params, *reason_param = NULL;
 	struct sip_request *req;
 
+	ast_assert(reason_code != NULL);
+	ast_assert(reason_str != NULL);
+
 	req = oreq ? oreq : &p->initreq;
 
 	ast_copy_string(tmp, sip_get_header(req, "Diversion"), sizeof(tmp));
@@ -17695,16 +18080,6 @@ static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq, char **name, c
 			if ((end = strchr(reason_param, ';'))) {
 				*end = '\0';
 			}
-			/* Remove enclosing double-quotes */
-			if (*reason_param == '"')
-				reason_param = ast_strip_quoted(reason_param, "\"", "\"");
-			if (!ast_strlen_zero(reason_param)) {
-				sip_set_redirstr(p, reason_param);
-				if (p->owner) {
-					pbx_builtin_setvar_helper(p->owner, "__PRIREDIRECTREASON", p->redircause);
-					pbx_builtin_setvar_helper(p->owner, "__SIPREDIRECTREASON", reason_param);
-				}
-			}
 		}
 	}
 
@@ -17736,12 +18111,27 @@ static int get_rdnis(struct sip_pvt *p, struct sip_request *oreq, char **name, c
 	}
 
 	if (!ast_strlen_zero(reason_param)) {
-		if (reason_code) {
-			*reason_code = sip_reason_str_to_code(reason_param);
+		*reason_str = ast_strdup(reason_param);
+
+		/* Remove any enclosing double-quotes */
+		if (*reason_param == '"') {
+			reason_param = ast_strip_quoted(reason_param, "\"", "\"");
 		}
 
-		if (reason_str) {
-			*reason_str = ast_strdup(reason_param);
+		*reason_code = ast_redirecting_reason_parse(reason_param);
+		if (*reason_code < 0) {
+			*reason_code = AST_REDIRECTING_REASON_UNKNOWN;
+		} else {
+			ast_free(*reason_str);
+			*reason_str = ast_strdup("");
+		}
+
+		if (!ast_strlen_zero(reason_param)) {
+			sip_set_redirstr(p, reason_param);
+			if (p->owner) {
+				pbx_builtin_setvar_helper(p->owner, "__PRIREDIRECTREASON", p->redircause);
+				pbx_builtin_setvar_helper(p->owner, "__SIPREDIRECTREASON", reason_param);
+			}
 		}
 	}
 
@@ -22701,10 +23091,11 @@ static void change_redirecting_information(struct sip_pvt *p, struct sip_request
 		redirecting->to.name.str = redirecting_to_name;
 	}
 	redirecting->reason.code = reason;
+	ast_free(redirecting->reason.str);
+	redirecting->reason.str = reason_str;
 	if (reason_str) {
-		ast_debug(3, "Got redirecting reason %s\n", reason_str);
-		ast_free(redirecting->reason.str);
-		redirecting->reason.str = reason_str;
+		ast_debug(3, "Got redirecting reason %s\n", ast_strlen_zero(reason_str)
+			? sip_reason_code_to_str(&redirecting->reason) : reason_str);
 	}
 }
 
@@ -22824,10 +23215,13 @@ static void parse_moved_contact(struct sip_pvt *p, struct sip_request *req, char
 	}
 }
 
-/*! \brief Check pending actions on SIP call
+/*!
+ * \brief Check pending actions on SIP call
  *
  * \note both sip_pvt and sip_pvt's owner channel (if present)
  *  must be locked for this function.
+ *
+ * \note Run by the sched thread.
  */
 static void check_pendings(struct sip_pvt *p)
 {
@@ -22835,13 +23229,14 @@ static void check_pendings(struct sip_pvt *p)
 		if (p->reinviteid > -1) {
 			/* Outstanding p->reinviteid timeout, so wait... */
 			return;
-		} else if (p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA) {
+		}
+		if (p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA) {
 			/* if we can't BYE, then this is really a pending CANCEL */
 			p->invitestate = INV_CANCELLED;
 			transmit_request(p, SIP_CANCEL, p->lastinvite, XMIT_RELIABLE, FALSE);
 			/* If the cancel occurred on an initial invite, cancel the pending BYE */
 			if (!ast_test_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED)) {
-				ast_clear_flag(&p->flags[0], SIP_PENDINGBYE);
+				ast_clear_flag(&p->flags[0], SIP_PENDINGBYE | SIP_NEEDREINVITE);
 			}
 			/* Actually don't destroy us yet, wait for the 487 on our original
 			   INVITE, but do set an autodestruct just in case we never get it. */
@@ -22857,12 +23252,16 @@ static void check_pendings(struct sip_pvt *p)
 			}
 			/* Perhaps there is an SD change INVITE outstanding */
 			transmit_request_with_auth(p, SIP_BYE, 0, XMIT_RELIABLE, TRUE);
-			ast_clear_flag(&p->flags[0], SIP_PENDINGBYE);
+			ast_clear_flag(&p->flags[0], SIP_PENDINGBYE | SIP_NEEDREINVITE);
 		}
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 	} else if (ast_test_flag(&p->flags[0], SIP_NEEDREINVITE)) {
 		/* if we can't REINVITE, hold it for later */
-		if (p->pendinginvite || p->invitestate == INV_CALLING || p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA || p->waitid > -1) {
+		if (p->pendinginvite
+			|| p->invitestate == INV_CALLING
+			|| p->invitestate == INV_PROCEEDING
+			|| p->invitestate == INV_EARLY_MEDIA
+			|| p->waitid > -1) {
 			ast_debug(2, "NOT Sending pending reinvite (yet) on '%s'\n", p->callid);
 		} else {
 			ast_debug(2, "Sending pending reinvite on '%s'\n", p->callid);
@@ -22873,30 +23272,75 @@ static void check_pendings(struct sip_pvt *p)
 	}
 }
 
-/*! \brief Reset the NEEDREINVITE flag after waiting when we get 491 on a Re-invite
-	to avoid race conditions between asterisk servers.
-	Called from the scheduler.
-*/
+/* Run by the sched thread. */
+static int __sched_check_pendings(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+	struct ast_channel *owner;
+
+	owner = sip_pvt_lock_full(pvt);
+	check_pendings(pvt);
+	if (owner) {
+		ast_channel_unlock(owner);
+		ast_channel_unref(owner);
+	}
+	sip_pvt_unlock(pvt);
+
+	dialog_unref(pvt, "Check pending actions action");
+	return 0;
+}
+
+static void sched_check_pendings(struct sip_pvt *pvt)
+{
+	dialog_ref(pvt, "Check pending actions action");
+	if (ast_sched_add(sched, 0, __sched_check_pendings, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule check pending actions action");
+	}
+}
+
+/*!
+ * \brief Reset the NEEDREINVITE flag after waiting when we get 491 on a Re-invite
+ * to avoid race conditions between asterisk servers.
+ *
+ * \note Run by the sched thread.
+ */
 static int sip_reinvite_retry(const void *data)
 {
 	struct sip_pvt *p = (struct sip_pvt *) data;
 	struct ast_channel *owner;
 
-	sip_pvt_lock(p); /* called from schedule thread which requires a lock */
-	while ((owner = p->owner) && ast_channel_trylock(owner)) {
-		sip_pvt_unlock(p);
-		usleep(1);
-		sip_pvt_lock(p);
-	}
+	owner = sip_pvt_lock_full(p);
 	ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
 	p->waitid = -1;
 	check_pendings(p);
 	sip_pvt_unlock(p);
 	if (owner) {
 		ast_channel_unlock(owner);
+		ast_channel_unref(owner);
 	}
-	dialog_unref(p, "unref the dialog ptr from sip_reinvite_retry, because it held a dialog ptr");
+	dialog_unref(p, "Schedule waitid complete");
 	return 0;
+}
+
+/* Run by the sched thread. */
+static int __stop_reinvite_retry(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+
+	AST_SCHED_DEL_UNREF(sched, pvt->waitid,
+		dialog_unref(pvt, "Stop scheduled waitid"));
+	dialog_unref(pvt, "Stop reinvite retry action");
+	return 0;
+}
+
+static void stop_reinvite_retry(struct sip_pvt *pvt)
+{
+	dialog_ref(pvt, "Stop reinvite retry action");
+	if (ast_sched_add(sched, 0, __stop_reinvite_retry, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule stop reinvite retry action");
+	}
 }
 
 /*!
@@ -23100,9 +23544,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 
 	if ((resp >= 200 && reinvite)) {
 		p->ongoing_reinvite = 0;
-		if (p->reinviteid > -1) {
-			AST_SCHED_DEL_UNREF(sched, p->reinviteid, dialog_unref(p, "unref dialog for reinvite timeout because of a final response"));
-		}
+		stop_reinviteid(p);
 	}
 
 	/* Final response, clear out pending invite */
@@ -23120,16 +23562,16 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 	switch (resp) {
 	case 100:	/* Trying */
 	case 101:	/* Dialog establishment */
-		if (!req->ignore && p->invitestate != INV_CANCELLED && sip_cancel_destroy(p)) {
-			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+		if (!req->ignore && p->invitestate != INV_CANCELLED) {
+			sip_cancel_destroy(p);
 		}
-		check_pendings(p);
+		sched_check_pendings(p);
 		break;
 
 	case 180:	/* 180 Ringing */
 	case 182:       /* 182 Queued */
-		if (!req->ignore && p->invitestate != INV_CANCELLED && sip_cancel_destroy(p)) {
-			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+		if (!req->ignore && p->invitestate != INV_CANCELLED) {
+			sip_cancel_destroy(p);
 		}
 		/* Store Route-set from provisional SIP responses so
 		 * early-dialog request can be routed properly
@@ -23181,12 +23623,13 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			}
 			ast_rtp_instance_activate(p->rtp);
 		}
-		check_pendings(p);
+		sched_check_pendings(p);
 		break;
 
 	case 181:	/* Call Is Being Forwarded */
-		if (!req->ignore && (p->invitestate != INV_CANCELLED) && sip_cancel_destroy(p))
-			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+		if (!req->ignore && p->invitestate != INV_CANCELLED) {
+			sip_cancel_destroy(p);
+		}
 		/* Store Route-set from provisional SIP responses so
 		 * early-dialog request can be routed properly
 		 * */
@@ -23213,12 +23656,12 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			ast_party_redirecting_free(&redirecting);
 			sip_handle_cc(p, req, AST_CC_CCNR);
 		}
-		check_pendings(p);
+		sched_check_pendings(p);
 		break;
 
 	case 183:	/* Session progress */
-		if (!req->ignore && (p->invitestate != INV_CANCELLED) && sip_cancel_destroy(p)) {
-			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+		if (!req->ignore && p->invitestate != INV_CANCELLED) {
+			sip_cancel_destroy(p);
 		}
 		/* Store Route-set from provisional SIP responses so
 		 * early-dialog request can be routed properly
@@ -23274,12 +23717,12 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				ast_queue_control(p->owner, AST_CONTROL_RINGING);
 			}
 		}
-		check_pendings(p);
+		sched_check_pendings(p);
 		break;
 
 	case 200:	/* 200 OK on invite - someone's answering our call */
-		if (!req->ignore && (p->invitestate != INV_CANCELLED) && sip_cancel_destroy(p)) {
-			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+		if (!req->ignore && p->invitestate != INV_CANCELLED) {
+			sip_cancel_destroy(p);
 		}
 		p->authtries = 0;
 		if (find_sdp(req)) {
@@ -23424,7 +23867,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		p->invitestate = INV_TERMINATED;
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, TRUE);
-		check_pendings(p);
+		sched_check_pendings(p);
 		break;
 
 	case 407: /* Proxy authentication */
@@ -23504,14 +23947,22 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		if (p->owner && !req->ignore) {
 			struct ast_party_redirecting redirecting;
 			struct ast_set_party_redirecting update_redirecting;
+			char *quoted_rest = ast_alloca(strlen(rest) + 3);
+
 			ast_party_redirecting_set_init(&redirecting, ast_channel_redirecting(p->owner));
 			memset(&update_redirecting, 0, sizeof(update_redirecting));
 
-			redirecting.reason.code = sip_reason_str_to_code(rest);
-			redirecting.reason.str = ast_strdup(rest);
+			redirecting.reason.code = ast_redirecting_reason_parse(rest);
+			if (redirecting.reason.code < 0) {
+				sprintf(quoted_rest, "\"%s\"", rest);/* Safe */
+
+				redirecting.reason.code = AST_REDIRECTING_REASON_UNKNOWN;
+				redirecting.reason.str = quoted_rest;
+			} else {
+				redirecting.reason.str = "";
+			}
 
 			ast_channel_queue_redirecting_update(p->owner, &redirecting, &update_redirecting);
-			ast_party_redirecting_free(&redirecting);
 
 			ast_queue_control(p->owner, AST_CONTROL_BUSY);
 		}
@@ -23528,7 +23979,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			update_call_counter(p, DEC_CALL_LIMIT);
 			append_history(p, "Hangup", "Got 487 on CANCEL request from us on call without owner. Killing this dialog.");
 		}
-		check_pendings(p);
+		sched_check_pendings(p);
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		break;
 	case 415: /* Unsupported media type */
@@ -23560,6 +24011,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				/* Reset the flag after a while
 				 */
 				int wait;
+
 				/* RFC 3261, if owner of call, wait between 2.1 to 4 seconds,
 				 * if not owner of call, wait 0 to 2 seconds */
 				if (p->outgoing_call) {
@@ -23567,7 +24019,12 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				} else {
 					wait = ast_random() % 2000;
 				}
-				p->waitid = ast_sched_add(sched, wait, sip_reinvite_retry, dialog_ref(p, "passing dialog ptr into sched structure based on waitid for sip_reinvite_retry."));
+				dialog_ref(p, "Schedule waitid for sip_reinvite_retry.");
+				p->waitid = ast_sched_add(sched, wait, sip_reinvite_retry, p);
+				if (p->waitid < 0) {
+					/* Uh Oh.  Expect bad behavior. */
+					dialog_ref(p, "Failed to schedule waitid");
+				}
 				ast_debug(2, "Reinvite race. Scheduled sip_reinvite_retry in %d secs in handle_response_invite (waitid %d, dialog '%s')\n",
 						wait, p->waitid, p->callid);
 			}
@@ -23682,9 +24139,7 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 			p->options = NULL;
 		}
 		p->mwi->subscribed = 1;
-		if ((p->mwi->resub = ast_sched_add(sched, mwi_expiry * 1000, sip_subscribe_mwi_do, ao2_t_bump(p->mwi, "mwi ast_sched_add"))) < 0) {
-			ao2_t_ref(p->mwi, -1, "mwi ast_sched_add < 0");
-		}
+		start_mwi_subscription(p->mwi, mwi_expiry * 1000);
 		break;
 	case 401:
 	case 407:
@@ -23855,8 +24310,8 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 			break;
 		}
 		ast_log(LOG_WARNING, "Forbidden - wrong password on authentication for REGISTER for '%s' to '%s'\n", p->registry->username, p->registry->hostname);
-		AST_SCHED_DEL_UNREF(sched, r->timeout, ao2_t_ref(r, -1, "reg ptr unref from handle_response_register 403"));
 		r->regstate = REG_STATE_NOAUTH;
+		stop_register_timeout(r);
 		sip_publish_registry(r->username, r->hostname, regstate2str(r->regstate));
 		pvt_set_needdestroy(p, "received 403 response");
 		break;
@@ -23866,8 +24321,8 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 		if (r->call)
 			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 404");
 		r->regstate = REG_STATE_REJECTED;
+		stop_register_timeout(r);
 		sip_publish_registry(r->username, r->hostname, regstate2str(r->regstate));
-		AST_SCHED_DEL_UNREF(sched, r->timeout, ao2_t_ref(r, -1, "reg ptr unref from handle_response_register 404"));
 		break;
 	case 407:	/* Proxy auth */
 		if (p->authtries == MAX_AUTHTRIES || do_register_auth(p, req, resp)) {
@@ -23886,7 +24341,6 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 	case 423:	/* Interval too brief */
 		r->expiry = atoi(sip_get_header(req, "Min-Expires"));
 		ast_log(LOG_WARNING, "Got 423 Interval too brief for service %s@%s, minimum is %d seconds\n", p->registry->username, p->registry->hostname, r->expiry);
-		AST_SCHED_DEL_UNREF(sched, r->timeout, ao2_t_ref(r, -1, "reg ptr unref from handle_response_register 423"));
 		if (r->call) {
 			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 423");
 			pvt_set_needdestroy(p, "received 423 response");
@@ -23895,6 +24349,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 			ast_log(LOG_WARNING, "Required expiration time from %s@%s is too high, giving up\n", p->registry->username, p->registry->hostname);
 			r->expiry = r->configured_expiry;
 			r->regstate = REG_STATE_REJECTED;
+			stop_register_timeout(r);
 		} else {
 			r->regstate = REG_STATE_UNREGISTERED;
 			transmit_register(r, SIP_REGISTER, NULL, NULL);
@@ -23910,8 +24365,8 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 		if (r->call)
 			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 4xx");
 		r->regstate = REG_STATE_REJECTED;
+		stop_register_timeout(r);
 		sip_publish_registry(r->username, r->hostname, regstate2str(r->regstate));
-		AST_SCHED_DEL_UNREF(sched, r->timeout, ao2_t_ref(r, -1, "reg ptr unref from handle_response_register 479"));
 		break;
 	case 200:	/* 200 OK */
 		if (!r) {
@@ -23920,15 +24375,15 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 			return 0;
 		}
 
-		r->regstate = REG_STATE_REGISTERED;
-		r->regtime = ast_tvnow();		/* Reset time of last successful registration */
-		sip_publish_registry(r->username, r->hostname, regstate2str(r->regstate));
-		r->regattempts = 0;
 		ast_debug(1, "Registration successful\n");
 		if (r->timeout > -1) {
 			ast_debug(1, "Cancelling timeout %d\n", r->timeout);
 		}
-		AST_SCHED_DEL_UNREF(sched, r->timeout, ao2_t_ref(r, -1, "reg ptr unref from handle_response_register 200"));
+		r->regstate = REG_STATE_REGISTERED;
+		stop_register_timeout(r);
+		r->regtime = ast_tvnow();		/* Reset time of last successful registration */
+		sip_publish_registry(r->username, r->hostname, regstate2str(r->regstate));
+		r->regattempts = 0;
 		if (r->call)
 			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 200");
 		ao2_t_replace(p->registry, NULL, "unref registry entry p->registry");
@@ -23982,10 +24437,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 		r->refresh= (int) expires_ms / 1000;
 
 		/* Schedule re-registration before we expire */
-		AST_SCHED_REPLACE_UNREF(r->expire, sched, expires_ms, sip_reregister, r,
-								ao2_t_ref(_data, -1, "unref in REPLACE del fail"),
-								ao2_t_ref(r, -1, "unref in REPLACE add fail"),
-								ao2_t_ref(r, +1, "The Addition side of REPLACE"));
+		start_reregister_timeout(r, expires_ms);
 	}
 	return 1;
 }
@@ -24560,8 +25012,9 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				}
 			} else if ((resp >= 100) && (resp < 200)) {
 				if (sipmethod == SIP_INVITE) {
-					if (!req->ignore && sip_cancel_destroy(p))
-						ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+					if (!req->ignore) {
+						sip_cancel_destroy(p);
+					}
 					if (find_sdp(req))
 						process_sdp(p, req, SDP_T38_NONE);
 					if (p->owner) {
@@ -24627,8 +25080,9 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		default:	/* Errors without handlers */
 			if ((resp >= 100) && (resp < 200)) {
 				if (sipmethod == SIP_INVITE) {	/* re-invite */
-					if (!req->ignore && sip_cancel_destroy(p))
-						ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+					if (!req->ignore) {
+						sip_cancel_destroy(p);
+					}
 				}
 			} else if ((resp >= 200) && (resp < 300)) { /* on any unrecognized 2XX response do the following */
 				if (sipmethod == SIP_INVITE) {
@@ -24645,10 +25099,10 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				case 502: /* Bad gateway */
 				case 503: /* Service Unavailable */
 				case 504: /* Server timeout */
-
 					/* re-invite failed */
-					if (sipmethod == SIP_INVITE && sip_cancel_destroy(p))
-						ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+					if (sipmethod == SIP_INVITE) {
+						sip_cancel_destroy(p);
+					}
 					break;
 				}
 			}
@@ -25105,25 +25559,87 @@ static int do_magic_pickup(struct ast_channel *channel, const char *extension, c
 	return 0;
 }
 
-/*! \brief Called to deny a T38 reinvite if the core does not respond to our request */
+/*!
+ * \brief Called to deny a T38 reinvite if the core does not respond to our request
+ *
+ * \note Run by the sched thread.
+ */
 static int sip_t38_abort(const void *data)
 {
-	struct sip_pvt *p = (struct sip_pvt *) data;
+	struct sip_pvt *pvt = (struct sip_pvt *) data;
+	struct ast_channel *owner;
 
-	sip_pvt_lock(p);
-	/* an application may have taken ownership of the T.38 negotiation on this
-	 * channel while we were waiting to grab the lock... if it did, the scheduler
-	 * id will have been reset to -1, which is our indication that we do *not*
-	 * want to abort the negotiation process
+	owner = sip_pvt_lock_full(pvt);
+	pvt->t38id = -1;
+
+	/*
+	 * An application may have taken ownership of the T.38 negotiation
+	 * on the channel while we were waiting to grab the lock.  If it
+	 * did, the T.38 state will have been changed.  This is our
+	 * indication that we do *not* want to abort the negotiation
+	 * process.
 	 */
-	if (p->t38id != -1) {
-		change_t38_state(p, T38_REJECTED);
-		transmit_response_reliable(p, "488 Not acceptable here", &p->initreq);
-		p->t38id = -1;
-		dialog_unref(p, "unref the dialog ptr from sip_t38_abort, because it held a dialog ptr");
+	if (pvt->t38.state == T38_PEER_REINVITE) {
+		/* Still waiting for a response on timeout so reject the offer. */
+		change_t38_state(pvt, T38_REJECTED);
+		transmit_response_reliable(pvt, "488 Not acceptable here", &pvt->initreq);
 	}
-	sip_pvt_unlock(p);
+
+	if (owner) {
+		ast_channel_unlock(owner);
+		ast_channel_unref(owner);
+	}
+	sip_pvt_unlock(pvt);
+	dialog_unref(pvt, "t38id complete");
 	return 0;
+}
+
+/* Run by the sched thread. */
+static int __stop_t38_abort_timer(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+
+	AST_SCHED_DEL_UNREF(sched, pvt->t38id,
+		dialog_unref(pvt, "Stop scheduled t38id"));
+	dialog_unref(pvt, "Stop t38id action");
+	return 0;
+}
+
+static void stop_t38_abort_timer(struct sip_pvt *pvt)
+{
+	dialog_ref(pvt, "Stop t38id action");
+	if (ast_sched_add(sched, 0, __stop_t38_abort_timer, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule stop t38id action");
+	}
+}
+
+/* Run by the sched thread. */
+static int __start_t38_abort_timer(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+
+	AST_SCHED_DEL_UNREF(sched, pvt->t38id,
+		dialog_unref(pvt, "Stop scheduled t38id"));
+
+	dialog_ref(pvt, "Schedule t38id");
+	pvt->t38id = ast_sched_add(sched, 5000, sip_t38_abort, pvt);
+	if (pvt->t38id < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule t38id");
+	}
+
+	dialog_unref(pvt, "Start t38id action");
+	return 0;
+}
+
+static void start_t38_abort_timer(struct sip_pvt *pvt)
+{
+	dialog_ref(pvt, "Start t38id action");
+	if (ast_sched_add(sched, 0, __start_t38_abort_timer, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule start t38id action");
+	}
 }
 
 /*!
@@ -25596,8 +26112,8 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, str
 	if (!req->ignore) {
 		int newcall = (p->initreq.headers ? TRUE : FALSE);
 
-		if (sip_cancel_destroy(p))
-			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
+		sip_cancel_destroy(p);
+
 		/* This also counts as a pending invite */
 		p->pendinginvite = seqno;
 		check_via(p, req);
@@ -25866,7 +26382,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, str
 	/* Check if OLI/ANI-II is present in From: */
 	parse_oli(req, p->owner);
 
-	if (reinvite && p->stimer->st_active == TRUE) {
+	if (reinvite && p->stimer) {
 		restart_session_timer(p);
 	}
 
@@ -26008,11 +26524,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, str
 			transmit_response(p, "100 Trying", req);
 
 			if (p->t38.state == T38_PEER_REINVITE) {
-				if (p->t38id > -1) {
-					/* reset t38 abort timer */
-					AST_SCHED_DEL_UNREF(sched, p->t38id, dialog_unref(p, "remove ref for t38id"));
-				}
-				p->t38id = ast_sched_add(sched, 5000, sip_t38_abort, dialog_ref(p, "passing dialog ptr into sched structure based on t38id for sip_t38_abort."));
+				start_t38_abort_timer(p);
 			} else if (p->t38.state == T38_ENABLED) {
 				ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 				transmit_response_with_t38_sdp(p, "200 OK", req, (reinvite ? XMIT_RELIABLE : (req->ignore ?  XMIT_UNRELIABLE : XMIT_CRITICAL)));
@@ -26561,13 +27073,10 @@ static int handle_request_cancel(struct sip_pvt *p, struct sip_request *req)
 		 */
 		for (pkt = p->packets, prev_pkt = NULL; pkt; prev_pkt = pkt, pkt = pkt->next) {
 			if (pkt->seqno == p->lastinvite && pkt->response_code == 487) {
-				AST_SCHED_DEL(sched, pkt->retransid);
+				/* Unlink and destroy the packet object. */
 				UNLINK(pkt, p->packets, prev_pkt);
-				dialog_unref(pkt->owner, "unref packet->owner from dialog");
-				if (pkt->data) {
-					ast_free(pkt->data);
-				}
-				ast_free(pkt);
+				stop_retrans_pkt(pkt);
+				ao2_t_ref(pkt, -1, "Packet retransmission list");
 				break;
 			}
 		}
@@ -26789,7 +27298,7 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 
 	/* Destroy any pending invites so we won't try to do another
 	 * scheduled reINVITE. */
-	AST_SCHED_DEL_UNREF(sched, p->waitid, dialog_unref(p, "decrement refcount from sip_destroy because waitid won't be scheduled"));
+	stop_reinvite_retry(p);
 
 	return 1;
 }
@@ -27868,10 +28377,13 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 						action, p->exten, p->context, p->username);
 			}
 		}
-		if (p->autokillid > -1 && sip_cancel_destroy(p))	/* Remove subscription expiry for renewals */
-			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
-		if (p->expiry > 0)
-			sip_scheddestroy(p, (p->expiry + 10) * 1000);	/* Set timer for destruction of call at expiration */
+
+		/* Remove subscription expiry for renewals */
+		sip_cancel_destroy(p);
+		if (p->expiry > 0) {
+			/* Set timer for destruction of call at expiration */
+			sip_scheddestroy(p, (p->expiry + 10) * 1000);
+		}
 
 		if (p->subscribed == MWI_NOTIFICATION) {
 			ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
@@ -28318,7 +28830,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 					ast_queue_control(p->owner, AST_CONTROL_SRCCHANGE);
 				}
 			}
-			check_pendings(p);
+			sched_check_pendings(p);
 		} else if (p->glareinvite == seqno) {
 			/* handle ack for the 491 pending sent for glareinvite */
 			p->glareinvite = 0;
@@ -29085,41 +29597,110 @@ static void acl_change_stasis_cb(void *data, struct stasis_subscription *sub,
 	restart_monitor();
 }
 
-/*! \brief Session-Timers: Restart session timer */
-static void restart_session_timer(struct sip_pvt *p)
+/*!
+ * \brief Session-Timers: Process session refresh timeout event
+ *
+ * \note Run by the sched thread.
+ */
+static int proc_session_timer(const void *vp)
 {
-	if (p->stimer->st_active == TRUE) {
-		ast_debug(2, "Session timer stopped: %d - %s\n", p->stimer->st_schedid, p->callid);
-		AST_SCHED_DEL_UNREF(sched, p->stimer->st_schedid,
-				dialog_unref(p, "Removing session timer ref"));
-		start_session_timer(p);
+	struct sip_pvt *p = (struct sip_pvt *) vp;
+	struct sip_st_dlg *stimer = p->stimer;
+	int res = 0;
+
+	ast_assert(stimer != NULL);
+
+	ast_debug(2, "Session timer expired: %d - %s\n", stimer->st_schedid, p->callid);
+
+	if (!p->owner) {
+		goto return_unref;
+	}
+
+	if ((stimer->st_active != TRUE) || (ast_channel_state(p->owner) != AST_STATE_UP)) {
+		goto return_unref;
+	}
+
+	if (stimer->st_ref == SESSION_TIMER_REFRESHER_US) {
+		res = 1;
+		if (T38_ENABLED == p->t38.state) {
+			transmit_reinvite_with_sdp(p, TRUE, TRUE);
+		} else {
+			transmit_reinvite_with_sdp(p, FALSE, TRUE);
+		}
+	} else {
+		struct ast_channel *owner;
+
+		ast_log(LOG_WARNING, "Session-Timer expired - %s\n", p->callid);
+
+		owner = sip_pvt_lock_full(p);
+		if (owner) {
+			send_session_timeout(owner, "SIPSessionTimer");
+			ast_softhangup_nolock(owner, AST_SOFTHANGUP_DEV);
+			ast_channel_unlock(owner);
+			ast_channel_unref(owner);
+		}
+		sip_pvt_unlock(p);
+	}
+
+return_unref:
+	if (!res) {
+		/* Session timer processing is no longer needed. */
+		ast_debug(2, "Session timer stopped: %d - %s\n",
+			stimer->st_schedid, p->callid);
+		/* Don't pass go, don't collect $200.. we are the scheduled
+		 * callback. We can rip ourself out here. */
+		stimer->st_schedid = -1;
+		stimer->st_active = FALSE;
+
+		/* If we are not asking to be rescheduled, then we need to release our
+		 * reference to the dialog. */
+		dialog_unref(p, "Session timer st_schedid complete");
+	}
+
+	return res;
+}
+
+static void do_stop_session_timer(struct sip_pvt *pvt)
+{
+	struct sip_st_dlg *stimer = pvt->stimer;
+
+	if (-1 < stimer->st_schedid) {
+		ast_debug(2, "Session timer stopped: %d - %s\n",
+			stimer->st_schedid, pvt->callid);
+		AST_SCHED_DEL_UNREF(sched, stimer->st_schedid,
+			dialog_unref(pvt, "Stop scheduled session timer st_schedid"));
 	}
 }
 
+/* Run by the sched thread. */
+static int __stop_session_timer(const void *data)
+{
+	struct sip_pvt *pvt = (void *) data;
+
+	do_stop_session_timer(pvt);
+	dialog_unref(pvt, "Stop session timer action");
+	return 0;
+}
 
 /*! \brief Session-Timers: Stop session timer */
-static void stop_session_timer(struct sip_pvt *p)
+static void stop_session_timer(struct sip_pvt *pvt)
 {
-	if (p->stimer->st_active == TRUE) {
-		p->stimer->st_active = FALSE;
-		ast_debug(2, "Session timer stopped: %d - %s\n", p->stimer->st_schedid, p->callid);
-		AST_SCHED_DEL_UNREF(sched, p->stimer->st_schedid,
-				dialog_unref(p, "removing session timer ref"));
+	struct sip_st_dlg *stimer = pvt->stimer;
+
+	stimer->st_active = FALSE;
+	dialog_ref(pvt, "Stop session timer action");
+	if (ast_sched_add(sched, 0, __stop_session_timer, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule stop session timer action");
 	}
 }
 
-
-/*! \brief Session-Timers: Start session timer */
-static void start_session_timer(struct sip_pvt *p)
+/* Run by the sched thread. */
+static int __start_session_timer(const void *data)
 {
+	struct sip_pvt *pvt = (void *) data;
+	struct sip_st_dlg *stimer = pvt->stimer;
 	unsigned int timeout_ms;
-
-	if (p->stimer->st_schedid > -1) {
-		/* in the event a timer is already going, stop it */
-		ast_debug(2, "Session timer stopped: %d - %s\n", p->stimer->st_schedid, p->callid);
-		AST_SCHED_DEL_UNREF(sched, p->stimer->st_schedid,
-			dialog_unref(p, "unref stimer->st_schedid from dialog"));
-	}
 
 	/*
 	 * RFC 4028 Section 10
@@ -29130,96 +29711,49 @@ static void start_session_timer(struct sip_pvt *p)
 	 * interval is RECOMMENDED.
 	 */
 
-	timeout_ms = (1000 * p->stimer->st_interval);
-	if (p->stimer->st_ref == SESSION_TIMER_REFRESHER_US) {
+	timeout_ms = (1000 * stimer->st_interval);
+	if (stimer->st_ref == SESSION_TIMER_REFRESHER_US) {
 		timeout_ms /= 2;
 	} else {
 		timeout_ms -= MIN(timeout_ms / 3, 32000);
 	}
 
-	p->stimer->st_schedid = ast_sched_add(sched, timeout_ms, proc_session_timer,
-			dialog_ref(p, "adding session timer ref"));
+	/* in the event a timer is already going, stop it */
+	do_stop_session_timer(pvt);
 
-	if (p->stimer->st_schedid < 0) {
-		dialog_unref(p, "removing session timer ref");
-		ast_log(LOG_ERROR, "ast_sched_add failed - %s\n", p->callid);
+	dialog_ref(pvt, "Schedule session timer st_schedid");
+	stimer->st_schedid = ast_sched_add(sched, timeout_ms, proc_session_timer, pvt);
+	if (stimer->st_schedid < 0) {
+		dialog_unref(pvt, "Failed to schedule session timer st_schedid");
 	} else {
-		p->stimer->st_active = TRUE;
-		ast_debug(2, "Session timer started: %d - %s %ums\n", p->stimer->st_schedid, p->callid, timeout_ms);
+		ast_debug(2, "Session timer started: %d - %s %ums\n",
+			stimer->st_schedid, pvt->callid, timeout_ms);
 	}
+
+	dialog_unref(pvt, "Start session timer action");
+	return 0;
 }
 
-
-/*! \brief Session-Timers: Process session refresh timeout event */
-static int proc_session_timer(const void *vp)
+/*! \brief Session-Timers: Start session timer */
+static void start_session_timer(struct sip_pvt *pvt)
 {
-	struct sip_pvt *p = (struct sip_pvt *) vp;
-	int res = 0;
+	struct sip_st_dlg *stimer = pvt->stimer;
 
-	if (!p->stimer) {
-		ast_log(LOG_WARNING, "Null stimer in proc_session_timer - %s\n", p->callid);
-		goto return_unref;
+	stimer->st_active = TRUE;
+	dialog_ref(pvt, "Start session timer action");
+	if (ast_sched_add(sched, 0, __start_session_timer, pvt) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		dialog_unref(pvt, "Failed to schedule start session timer action");
 	}
-
-	ast_debug(2, "Session timer expired: %d - %s\n", p->stimer->st_schedid, p->callid);
-
-	if (!p->owner) {
-		goto return_unref;
-	}
-
-	if ((p->stimer->st_active != TRUE) || (ast_channel_state(p->owner) != AST_STATE_UP)) {
-		goto return_unref;
-	}
-
-	if (p->stimer->st_ref == SESSION_TIMER_REFRESHER_US) {
-		res = 1;
-		if (T38_ENABLED == p->t38.state) {
-			transmit_reinvite_with_sdp(p, TRUE, TRUE);
-		} else {
-			transmit_reinvite_with_sdp(p, FALSE, TRUE);
-		}
-	} else {
-		if (p->stimer->quit_flag) {
-			goto return_unref;
-		}
-		ast_log(LOG_WARNING, "Session-Timer expired - %s\n", p->callid);
-		sip_pvt_lock(p);
-		while (p->owner && ast_channel_trylock(p->owner)) {
-			sip_pvt_unlock(p);
-			usleep(1);
-			if (p->stimer && p->stimer->quit_flag) {
-				goto return_unref;
-			}
-			sip_pvt_lock(p);
-		}
-
-		send_session_timeout(p->owner, "SIPSessionTimer");
-		ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
-		ast_channel_unlock(p->owner);
-		sip_pvt_unlock(p);
-	}
-
-return_unref:
-	if (!res) {
-		/* An error occurred.  Stop session timer processing */
-		if (p->stimer) {
-			ast_debug(2, "Session timer stopped: %d - %s\n", p->stimer->st_schedid, p->callid);
-			/* Don't pass go, don't collect $200.. we are the scheduled
-			 * callback. We can rip ourself out here. */
-			p->stimer->st_schedid = -1;
-			/* Calling stop_session_timer is nice for consistent debug
-			 * logs. */
-			stop_session_timer(p);
-		}
-
-		/* If we are not asking to be rescheduled, then we need to release our
-		 * reference to the dialog. */
-		dialog_unref(p, "removing session timer ref");
-	}
-
-	return res;
 }
 
+/*! \brief Session-Timers: Restart session timer */
+static void restart_session_timer(struct sip_pvt *p)
+{
+	if (p->stimer->st_active == TRUE) {
+		start_session_timer(p);
+	}
+}
 
 /*! \brief Session-Timers: Function for parsing Min-SE header */
 int parse_minse (const char *p_hdrval, int *const p_interval)
@@ -31332,9 +31866,11 @@ static void display_nat_warning(const char *cat, int reason, struct ast_flags *f
 	}
 }
 
-static int cleanup_registration(void *obj, void *arg, int flags)
+/* Run by the sched thread. */
+static int __cleanup_registration(const void *data)
 {
-	struct sip_registry *reg = obj;
+	struct sip_registry *reg = (struct sip_registry *) data;
+
 	ao2_lock(reg);
 
 	if (reg->call) {
@@ -31343,12 +31879,12 @@ static int cleanup_registration(void *obj, void *arg, int flags)
 		dialog_unlink_all(reg->call);
 		reg->call = dialog_unref(reg->call, "remove iterator->call from registry traversal");
 	}
-	if (reg->expire > -1) {
-		AST_SCHED_DEL_UNREF(sched, reg->expire, ao2_t_ref(reg, -1, "reg ptr unref from reload config"));
-	}
-	if (reg->timeout > -1) {
-		AST_SCHED_DEL_UNREF(sched, reg->timeout, ao2_t_ref(reg, -1, "reg ptr unref from reload config"));
-	}
+
+	AST_SCHED_DEL_UNREF(sched, reg->expire,
+		ao2_t_ref(reg, -1, "Stop scheduled reregister timeout"));
+	AST_SCHED_DEL_UNREF(sched, reg->timeout,
+		ao2_t_ref(reg, -1, "Stop scheduled register timeout"));
+
 	if (reg->dnsmgr) {
 		ast_dnsmgr_release(reg->dnsmgr);
 		reg->dnsmgr = NULL;
@@ -31356,6 +31892,21 @@ static int cleanup_registration(void *obj, void *arg, int flags)
 	}
 
 	ao2_unlock(reg);
+
+	ao2_t_ref(reg, -1, "cleanup_registration action");
+	return 0;
+}
+
+static int cleanup_registration(void *obj, void *arg, int flags)
+{
+	struct sip_registry *reg = obj;
+
+	ao2_t_ref(reg, +1, "cleanup_registration action");
+	if (ast_sched_add(sched, 0, __cleanup_registration, reg) < 0) {
+		/* Uh Oh.  Expect bad behavior. */
+		ao2_t_ref(reg, -1, "Failed to schedule cleanup_registration action");
+	}
+
 	return CMP_MATCH;
 }
 
@@ -32765,14 +33316,6 @@ static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance *i
 	} else if (!ast_sockaddr_isnull(&p->redirip)) {
 		memset(&p->redirip, 0, sizeof(p->redirip));
 		changed = 1;
-
-		if (p->rtp) {
-			/* Enable RTCP since it will be inactive if we're coming back
-			 * from a reinvite */
-			ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_RTCP, 1);
-			/* Enable audio RTCP reads */
-			ast_channel_set_fd(chan, 1, ast_rtp_instance_fd(p->rtp, 1));
-		}
 	}
 
 	if (vinstance) {
@@ -33159,10 +33702,7 @@ static void sip_send_all_registers(void)
 	while ((iterator = ao2_t_iterator_next(&iter, "sip_send_all_registers iter"))) {
 		ao2_lock(iterator);
 		ms += regspacing;
-		AST_SCHED_REPLACE_UNREF(iterator->expire, sched, ms, sip_reregister, iterator,
-								ao2_t_ref(_data, -1, "REPLACE sched del decs the refcount"),
-								ao2_t_ref(iterator, -1, "REPLACE sched add failure decs the refcount"),
-								ao2_t_ref(iterator, +1, "REPLACE sched add incs the refcount"));
+		start_reregister_timeout(iterator, ms);
 		ao2_unlock(iterator);
 		ao2_t_ref(iterator, -1, "sip_send_all_registers iter");
 	}
@@ -33173,18 +33713,12 @@ static void sip_send_all_registers(void)
 static void sip_send_all_mwi_subscriptions(void)
 {
 	struct ao2_iterator iter;
-	struct sip_subscription_mwi *iterator;
+	struct sip_subscription_mwi *mwi;
 
 	iter = ao2_iterator_init(subscription_mwi_list, 0);
-	while ((iterator = ao2_t_iterator_next(&iter, "sip_send_all_mwi_subscriptions iter"))) {
-		ao2_lock(iterator);
-		AST_SCHED_DEL(sched, iterator->resub);
-		ao2_t_ref(iterator, +1, "mwi added to schedule");
-		if ((iterator->resub = ast_sched_add(sched, 1, sip_subscribe_mwi_do, iterator)) < 0) {
-			ao2_t_ref(iterator, -1, "mwi failed to schedule");
-		}
-		ao2_unlock(iterator);
-		ao2_t_ref(iterator, -1, "sip_send_all_mwi_subscriptions iter");
+	while ((mwi = ao2_t_iterator_next(&iter, "sip_send_all_mwi_subscriptions iter"))) {
+		start_mwi_subscription(mwi, 1);
+		ao2_t_ref(mwi, -1, "sip_send_all_mwi_subscriptions iter");
 	}
 	ao2_iterator_destroy(&iter);
 }
@@ -34845,6 +35379,20 @@ static int unload_module(void)
 		ast_mutex_unlock(&monlock);
 	}
 
+	cleanup_all_regs();
+
+	{
+		struct ao2_iterator iter;
+		struct sip_subscription_mwi *mwi;
+
+		iter = ao2_iterator_init(subscription_mwi_list, 0);
+		while ((mwi = ao2_t_iterator_next(&iter, "unload_module iter"))) {
+			shutdown_mwi_subscription(mwi);
+			ao2_t_ref(mwi, -1, "unload_module iter");
+		}
+		ao2_iterator_destroy(&iter);
+	}
+
 	/* Destroy all the dialogs and free their memory */
 	i = ao2_iterator_init(dialogs, 0);
 	while ((p = ao2_t_iterator_next(&i, "iterate thru dialogs"))) {
@@ -34852,6 +35400,13 @@ static int unload_module(void)
 		ao2_t_ref(p, -1, "throw away iterator result");
 	}
 	ao2_iterator_destroy(&i);
+
+	/*
+	 * Since the monitor thread runs the scheduled events and we
+	 * just stopped the monitor thread above, we have to run any
+	 * pending scheduled immediate events in this thread.
+	 */
+	ast_sched_runq(sched);
 
 	/* Free memory for local network address mask */
 	ast_free_ha(localaddr);
@@ -34872,28 +35427,6 @@ static int unload_module(void)
 	ast_free(default_tls_cfg.cafile);
 	ast_free(default_tls_cfg.capath);
 
-	cleanup_all_regs();
-	ao2_cleanup(registry_list);
-
-	{
-		struct ao2_iterator iter;
-		struct sip_subscription_mwi *iterator;
-
-		iter = ao2_iterator_init(subscription_mwi_list, 0);
-		while ((iterator = ao2_t_iterator_next(&iter, "unload_module iter"))) {
-			ao2_lock(iterator);
-			if (iterator->dnsmgr) {
-				ast_dnsmgr_release(iterator->dnsmgr);
-				iterator->dnsmgr = NULL;
-				ao2_t_ref(iterator, -1, "dnsmgr release");
-			}
-			ao2_unlock(iterator);
-			ao2_t_ref(iterator, -1, "unload_module iter");
-		}
-		ao2_iterator_destroy(&iter);
-	}
-	ao2_cleanup(subscription_mwi_list);
-
 	/*
 	 * Wait awhile for the TCP/TLS thread container to become empty.
 	 *
@@ -34908,6 +35441,9 @@ static int unload_module(void)
 	if (!wait_count) {
 		ast_debug(2, "TCP/TLS thread container did not become empty :(\n");
 	}
+
+	ao2_cleanup(registry_list);
+	ao2_cleanup(subscription_mwi_list);
 
 	ao2_t_global_obj_release(g_bogus_peer, "Release the bogus peer.");
 
@@ -34928,6 +35464,7 @@ static int unload_module(void)
 	close(sipsock);
 	io_context_destroy(io);
 	ast_sched_context_destroy(sched);
+	sched = NULL;
 	ast_context_destroy_by_name(used_context, "SIP");
 	ast_unload_realtime("sipregs");
 	ast_unload_realtime("sippeers");

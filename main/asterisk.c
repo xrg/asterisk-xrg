@@ -1608,15 +1608,14 @@ static void *listener(void *unused)
 			if (errno != EINTR)
 				ast_log(LOG_WARNING, "Accept returned %d: %s\n", s, strerror(errno));
 		} else {
-#if !defined(SO_PASSCRED)
-			{
-#else
+#if defined(SO_PASSCRED)
 			int sckopt = 1;
 			/* turn on socket credentials passing. */
 			if (setsockopt(s, SOL_SOCKET, SO_PASSCRED, &sckopt, sizeof(sckopt)) < 0) {
 				ast_log(LOG_WARNING, "Unable to turn on socket credentials passing\n");
-			} else {
+			} else
 #endif
+			{
 				for (x = 0; x < AST_MAX_CONNECTS; x++) {
 					if (consoles[x].fd >= 0) {
 						continue;
@@ -4528,6 +4527,11 @@ static void asterisk_daemon(int isroot, const char *runuser, const char *rungrou
 
 	if (ast_ssl_init()) {
 		printf("Failed: ast_ssl_init\n%s", term_quit());
+		exit(1);
+	}
+
+	if (ast_pj_init()) {
+		printf("Failed: ast_pj_init\n%s", term_quit());
 		exit(1);
 	}
 

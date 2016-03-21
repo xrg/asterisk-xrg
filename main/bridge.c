@@ -2187,7 +2187,7 @@ int bridge_do_move(struct ast_bridge *dst_bridge, struct ast_bridge_channel *bri
 
 	bridge_channel_moving(bridge_channel, orig_bridge, dst_bridge);
 
-	if (bridge_channel_internal_push(bridge_channel)) {
+	if (bridge_channel_internal_push_full(bridge_channel, optimized)) {
 		/* Try to put the channel back into the original bridge. */
 		ast_bridge_features_remove(bridge_channel->features,
 			AST_BRIDGE_HOOK_REMOVE_ON_PULL);
@@ -2200,7 +2200,6 @@ int bridge_do_move(struct ast_bridge *dst_bridge, struct ast_bridge_channel *bri
 					AST_BRIDGE_HOOK_REMOVE_ON_PULL);
 				ast_bridge_channel_leave_bridge(bridge_channel,
 					BRIDGE_CHANNEL_STATE_END_NO_DISSOLVE, bridge_channel->bridge->cause);
-				bridge_channel_settle_owed_events(orig_bridge, bridge_channel);
 			}
 		} else {
 			ast_bridge_channel_leave_bridge(bridge_channel,
@@ -2208,7 +2207,7 @@ int bridge_do_move(struct ast_bridge *dst_bridge, struct ast_bridge_channel *bri
 			bridge_channel_settle_owed_events(orig_bridge, bridge_channel);
 		}
 		res = -1;
-	} else {
+	} else if (!optimized) {
 		bridge_channel_settle_owed_events(orig_bridge, bridge_channel);
 	}
 
@@ -4037,19 +4036,25 @@ static enum ast_transfer_result attended_transfer_bridge(struct ast_channel *cha
 	BRIDGE_LOCK_ONE_OR_BOTH(bridge1, bridge2);
 
 	if (bridge2) {
-		RAII_VAR(struct ast_channel *, local_chan2, NULL, ao2_cleanup);
 		struct ast_channel *locals[2];
 
-		ast_channel_lock(local_chan);
-		local_chan2 = ast_local_get_peer(local_chan);
-		ast_channel_unlock(local_chan);
+		/* Have to lock everything just in case a hangup comes in early */
+		ast_local_lock_all(local_chan, &locals[0], &locals[1]);
+		if (!locals[0] || !locals[1]) {
+			ast_log(LOG_ERROR, "Transfer failed probably due to an early hangup - "
+				"missing other half of '%s'\n", ast_channel_name(local_chan));
+			ast_local_unlock_all(local_chan);
+			ao2_cleanup(local_chan);
+			return AST_BRIDGE_TRANSFER_FAIL;
+		}
 
-		ast_assert(local_chan2 != NULL);
-
-		locals[0] = local_chan;
-		locals[1] = local_chan2;
+		/* Make sure the peer is properly set */
+		if (local_chan != locals[0]) {
+			SWAP(locals[0], locals[1]);
+		}
 
 		ast_attended_transfer_message_add_link(transfer_msg, locals);
+		ast_local_unlock_all(local_chan);
 	} else {
 		ast_attended_transfer_message_add_app(transfer_msg, app, local_chan);
 	}

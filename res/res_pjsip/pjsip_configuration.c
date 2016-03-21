@@ -413,7 +413,7 @@ int ast_sip_auth_vector_init(struct ast_sip_auth_vector *auths, const char *valu
 		return -1;
 	}
 
-	while ((val = strsep(&auth_names, ","))) {
+	while ((val = ast_strip(strsep(&auth_names, ",")))) {
 		if (ast_strlen_zero(val)) {
 			continue;
 		}
@@ -480,7 +480,11 @@ static int ident_handler(const struct aco_option *opt, struct ast_variable *var,
 	char *idents = ast_strdupa(var->value);
 	char *val;
 
-	while ((val = strsep(&idents, ","))) {
+	while ((val = ast_strip(strsep(&idents, ",")))) {
+		if (ast_strlen_zero(val)) {
+			continue;
+		}
+
 		if (!strcasecmp(val, "username")) {
 			endpoint->ident_method |= AST_SIP_ENDPOINT_IDENTIFY_BY_USERNAME;
 		} else {
@@ -2026,18 +2030,24 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 
 void ast_res_pjsip_destroy_configuration(void)
 {
+	if (!sip_sorcery) {
+		return;
+	}
+
 	ast_sorcery_observer_remove(sip_sorcery, CONTACT_STATUS, &state_contact_status_observer);
 	ast_sorcery_observer_remove(sip_sorcery, "contact", &state_contact_observer);
 	ast_sip_destroy_sorcery_global();
 	ast_sip_destroy_sorcery_location();
 	ast_sip_destroy_sorcery_auth();
 	ast_sip_destroy_sorcery_transport();
+	ast_sorcery_unref(sip_sorcery);
+	sip_sorcery = NULL;
 	ast_manager_unregister(AMI_SHOW_ENDPOINT);
 	ast_manager_unregister(AMI_SHOW_ENDPOINTS);
 	ast_cli_unregister_multiple(cli_commands, ARRAY_LEN(cli_commands));
 	ast_sip_unregister_cli_formatter(endpoint_formatter);
 	ast_sip_unregister_cli_formatter(channel_formatter);
-	ast_sorcery_unref(sip_sorcery);
+	ast_sip_destroy_cli();
 	ao2_cleanup(persistent_endpoints);
 }
 

@@ -12,6 +12,35 @@
 --- Functionality changes from Asterisk 13.7.0 to Asterisk 13.8.0 ------------
 ------------------------------------------------------------------------------
 
+res_pjsip_caller_id
+------------------
+ * Per RFC3325, the 'From' header is now anonymized on outgoing calls when
+   caller id presentation is prohibited.
+
+res_pjsip_config_wizard
+------------------
+ * A new command (pjsip export config_wizard primitives) has been added that
+   will export all the pjsip objects it created to the console or a file
+   suitable for reuse in a pjsip.conf file.
+
+Build System
+------------------
+ * To help insure that Asterisk is compiled and run with the same known
+   version of pjproject, a new option (--with-pjproject-bundled) has been
+   added to ./configure.  When specified, the version of pjproject specified
+   in third-party/versions.mak will be downloaded and configured.  When you
+   make Asterisk, the build process will also automatically build pjproject
+   and Asterisk will be statically linked to it.  Once a particular version
+   of pjproject is configured and built, it won't be configured or built
+   again unless you run a 'make distclean'.
+
+   To facilitate testing, when 'make install' is run, the pjsua and pjsystest
+   utilities and the pjproject python bindings will be installed in
+   ASTDATADIR/third-party/pjproject.
+
+   The default behavior remains building with the shared pjproject
+   installation, if any.
+
 app_confbridge
 ------------------
  * Added CONFBRIDGE_INFO(muted,) for querying the muted conference state.
@@ -23,6 +52,36 @@ app_confbridge
    conference state and made the locked column a yes/no value instead of a
    locked/unlocked value.
 
+REDIRECTING(reason)
+------------------
+ * The REDIRECTING(reason) value is now treated consistently between
+   chan_sip and chan_pjsip.
+
+   Both channel drivers match incoming reason values with values documented
+   by REDIRECTING(reason) and values documented by RFC5806 regardless of
+   whether they are quoted or not.  RFC5806 values are mapped to the
+   equivalent REDIRECTING(reason) documented value and is set in
+   REDIRECTING(reason).  e.g., an incoming RFC5806 'unconditional' value or a
+   quoted string version ('"unconditional"') is converted to
+   REDIRECTING(reason)'s 'cfu' value.  The user's dialplan only needs to deal
+   with 'cfu' instead of any of the aliases.
+
+   The incoming 480 response reason text supported by chan_sip checks for
+   known reason values and if not matched then puts quotes around the reason
+   string and assigns that to REDIRECTING(reason).
+
+   Both channel drivers send outgoing known REDIRECTING(reason) values as the
+   unquoted RFC5806 equivalent.  User custom values are either sent as is or
+   with added quotes if SIP doesn't allow a character within the value as
+   part of a RFC3261 Section 25.1 token.  Note that there are still
+   limitations on what characters can be put in a custom user value.  e.g.,
+   embedding quotes in the middle of the reason string is just going to cause
+   you grief.
+
+ * Setting a REDIRECTING(reason) value now recognizes RFC5806 aliases.
+   e.g., Setting REDIRECTING(reason) to 'unconditional' is converted to the
+   'cfu' value.
+
 res_pjproject
 ------------------
  * This module is the successor of res_pjsip_log_forwarder.  As well as
@@ -31,8 +90,23 @@ res_pjproject
    This displays the compiled-in options of the pjproject installation
    Asterisk is currently running against.
 
+ * Another feature of this module is the ability to map pjproject log levels
+   to Asterisk log levels, or to suppress the pjproject log messages
+   altogether.  Many of the messages emitted by pjproject itself are the result
+   of errors which Asterisk will ultimately handle so the messages can be
+   misleading or just noise.  A new config file (pjproject.conf) has been added
+   to configure the mapping and a new CLI command (pjproject show log mappings)
+   has been added to display the mappings currently in use.
+
 res_pjsip
 ------------------
+ * Transports are now reloadable.  In testing, no in-progress calls were
+   disrupted if the ip address or port weren't changed, but the possibility
+   still exists.  To make sure there are no unintentional drops, a new option
+   'allow_reload', which defaults to 'no' has been added to transport.  If
+   left at the default, changes to the particular transport will be ignored.
+   If set to 'yes', changes (if any) will be applied.
+
  * Added new global option (regcontext) to pjsip. When set, Asterisk will
    dynamically create and destroy a NoOp priority 1 extension
    for a given endpoint who registers or unregisters with us.

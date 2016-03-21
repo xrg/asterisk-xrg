@@ -105,6 +105,8 @@ static void *contact_status_alloc(const char *name)
 	return status;
 }
 
+AST_MUTEX_DEFINE_STATIC(creation_lock);
+
 /*!
  * \brief Retrieve a ast_sip_contact_status object from sorcery creating
  *        one if not found.
@@ -112,6 +114,7 @@ static void *contact_status_alloc(const char *name)
 struct ast_sip_contact_status *ast_res_pjsip_find_or_create_contact_status(const struct ast_sip_contact *contact)
 {
 	struct ast_sip_contact_status *status;
+	SCOPED_MUTEX(lock, &creation_lock);
 
 	status = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), CONTACT_STATUS,
 		ast_sorcery_object_get_id(contact));
@@ -278,7 +281,7 @@ static int on_endpoint(void *obj, void *arg, int flags)
 	}
 
 	aors = ast_strdupa(endpoint->aors);
-	while ((aor_name = strsep(&aors, ","))) {
+	while ((aor_name = ast_strip(strsep(&aors, ",")))) {
 		struct ast_sip_aor *aor;
 		struct ao2_container *contacts;
 
@@ -803,7 +806,7 @@ static int cli_qualify_contacts(void *data)
 	}
 
 	aors = ast_strdupa(endpoint->aors);
-	while ((aor_name = strsep(&aors, ","))) {
+	while ((aor_name = ast_strip(strsep(&aors, ",")))) {
 		struct ast_sip_aor *aor;
 		struct ao2_container *contacts;
 
@@ -907,7 +910,7 @@ static int ami_sip_qualify(struct mansession *s, const struct message *m)
 	}
 
 	aors = ast_strdupa(endpoint->aors);
-	while ((aor_name = strsep(&aors, ","))) {
+	while ((aor_name = ast_strip(strsep(&aors, ",")))) {
 		struct ast_sip_aor *aor;
 		struct ao2_container *contacts;
 
@@ -1095,7 +1098,7 @@ static int qualify_and_schedule_all_cb(void *obj, void *arg, int flags)
 	}
 
 	aors = ast_strdupa(endpoint->aors);
-	while ((aor_name = strsep(&aors, ","))) {
+	while ((aor_name = ast_strip(strsep(&aors, ",")))) {
 		struct ast_sip_aor *aor;
 		struct ao2_container *contacts;
 

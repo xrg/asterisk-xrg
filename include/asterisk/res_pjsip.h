@@ -54,33 +54,58 @@ struct pjsip_tpfactory;
 struct pjsip_tls_setting;
 struct pjsip_tpselector;
 
+/*! \brief Maximum number of ciphers supported for a TLS transport */
+#define SIP_TLS_MAX_CIPHERS 64
+
 /*!
  * \brief Structure for SIP transport information
  */
 struct ast_sip_transport_state {
 	/*! \brief Transport itself */
 	struct pjsip_transport *transport;
-
 	/*! \brief Transport factory */
 	struct pjsip_tpfactory *factory;
+	/*!
+	 * Transport id
+	 * \since 13.8.0
+	 */
+	char *id;
+	/*!
+	 * Transport type
+	 * \since 13.8.0
+	 */
+	enum ast_transport type;
+	/*!
+	 * Address and port to bind to
+	 * \since 13.8.0
+	 */
+	pj_sockaddr host;
+	/*!
+	 * TLS settings
+	 * \since 13.8.0
+	 */
+	pjsip_tls_setting tls;
+	/*!
+	 * Configured TLS ciphers
+	 * \since 13.8.0
+	 */
+	pj_ssl_cipher ciphers[SIP_TLS_MAX_CIPHERS];
+	/*!
+	 * Optional local network information, used for NAT purposes
+	 * \since 13.8.0
+	 */
+	struct ast_ha *localnet;
+	/*!
+	 * DNS manager for refreshing the external address
+	 * \since 13.8.0
+	 */
+	struct ast_dnsmgr_entry *external_address_refresher;
+	/*!
+	 * Optional external address information
+	 * \since 13.8.0
+	 */
+	struct ast_sockaddr external_address;
 };
-
-#define SIP_SORCERY_DOMAIN_ALIAS_TYPE "domain_alias"
-
-/*!
- * Details about a SIP domain alias
- */
-struct ast_sip_domain_alias {
-	/*! Sorcery object details */
-	SORCERY_OBJECT(details);
-	AST_DECLARE_STRING_FIELDS(
-		/*! Domain to be aliased to */
-		AST_STRING_FIELD(domain);
-	);
-};
-
-/*! \brief Maximum number of ciphers supported for a TLS transport */
-#define SIP_TLS_MAX_CIPHERS 64
 
 /*
  * \brief Transport to bind to
@@ -108,23 +133,51 @@ struct ast_sip_transport {
 		);
 	/*! Type of transport */
 	enum ast_transport type;
-	/*! Address and port to bind to */
+	/*!
+	 * \deprecated Moved to ast_sip_transport_state
+	 * \version 13.8.0 deprecated
+	 * Address and port to bind to
+	 */
 	pj_sockaddr host;
 	/*! Number of simultaneous asynchronous operations */
 	unsigned int async_operations;
 	/*! Optional external port for signaling */
 	unsigned int external_signaling_port;
-	/*! TLS settings */
+	/*!
+	 * \deprecated Moved to ast_sip_transport_state
+	 * \version 13.7.1 deprecated
+	 * TLS settings
+	 */
 	pjsip_tls_setting tls;
-	/*! Configured TLS ciphers */
+	/*!
+	 * \deprecated Moved to ast_sip_transport_state
+	 * \version 13.7.1 deprecated
+	 * Configured TLS ciphers
+	 */
 	pj_ssl_cipher ciphers[SIP_TLS_MAX_CIPHERS];
-	/*! Optional local network information, used for NAT purposes */
+	/*!
+	 * \deprecated Moved to ast_sip_transport_state
+	 * \version 13.7.1 deprecated
+	 * Optional local network information, used for NAT purposes
+	 */
 	struct ast_ha *localnet;
-	/*! DNS manager for refreshing the external address */
+	/*!
+	 * \deprecated Moved to ast_sip_transport_state
+	 * \version 13.7.1 deprecated
+	 * DNS manager for refreshing the external address
+	 */
 	struct ast_dnsmgr_entry *external_address_refresher;
-	/*! Optional external address information */
+	/*!
+	 * \deprecated Moved to ast_sip_transport_state
+	 * \version 13.7.1 deprecated
+	 * Optional external address information
+	 */
 	struct ast_sockaddr external_address;
-	/*! Transport state information */
+	/*!
+	 * \deprecated
+	 * \version 13.7.1 deprecated
+	 * Transport state information
+	 */
 	struct ast_sip_transport_state *state;
 	/*! QOS DSCP TOS bits */
 	unsigned int tos;
@@ -132,6 +185,22 @@ struct ast_sip_transport {
 	unsigned int cos;
 	/*! Write timeout */
 	int write_timeout;
+	/*! Allow reload */
+	int allow_reload;
+};
+
+#define SIP_SORCERY_DOMAIN_ALIAS_TYPE "domain_alias"
+
+/*!
+ * Details about a SIP domain alias
+ */
+struct ast_sip_domain_alias {
+	/*! Sorcery object details */
+	SORCERY_OBJECT(details);
+	AST_DECLARE_STRING_FIELDS(
+		/*! Domain to be aliased to */
+		AST_STRING_FIELD(domain);
+	);
 };
 
 /*!
@@ -2171,5 +2240,58 @@ const char *ast_sip_get_host_ip_string(int af);
  * \since 13.7.0
  */
 long ast_sip_threadpool_queue_size(void);
+
+/*!
+ * \brief Retrieve transport state
+ * \since 13.7.1
+ *
+ * @param transport_id
+ * @returns transport_state
+ *
+ * \note ao2_cleanup(...) or ao2_ref(...,  -1) must be called on the returned object
+ */
+struct ast_sip_transport_state *ast_sip_get_transport_state(const char *transport_id);
+
+/*!
+ * \brief Retrieves all transport states
+ * \since 13.7.1
+ *
+ * @returns ao2_container
+ *
+ * \note ao2_cleanup(...) or ao2_ref(...,  -1) must be called on the returned object
+ */
+struct ao2_container *ast_sip_get_transport_states(void);
+
+/*!
+ * \brief Sets pjsip_tpselector from ast_sip_transport
+ * \since 13.8.0
+ *
+ * \param transport The transport to be used
+ * \param selector The selector to be populated
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_sip_set_tpselector_from_transport(const struct ast_sip_transport *transport, pjsip_tpselector *selector);
+
+/*!
+ * \brief Sets pjsip_tpselector from ast_sip_transport
+ * \since 13.8.0
+ *
+ * \param transport_name The name of the transport to be used
+ * \param selector The selector to be populated
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_sip_set_tpselector_from_transport_name(const char *transport_name, pjsip_tpselector *selector);
+
+/*!
+ * \brief Set name and number information on an identity header.
+ *
+ * \param pool Memory pool to use for string duplication
+ * \param id_hdr A From, P-Asserted-Identity, or Remote-Party-ID header to modify
+ * \param id The identity information to apply to the header
+ */
+void ast_sip_modify_id_header(pj_pool_t *pool, pjsip_fromto_hdr *id_hdr,
+	const struct ast_party_id *id);
 
 #endif /* _RES_PJSIP_H */

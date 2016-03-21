@@ -36,4 +36,5 @@ menuselect-tree
 *.gcda
 latex
 doxygen.log
+out/
 
