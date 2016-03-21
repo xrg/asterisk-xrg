@@ -223,12 +223,7 @@ endif
 	$(CMD_PREFIX) $(CC) $(STATIC_BUILD) -o $@ $(CC_LDFLAGS_SO) $^ $(CC_LIBS)
 
 $(ASTSSL_LIB): $(ASTSSL_LIB).$(ASTSSL_SO_VERSION)
-	$(ECHO_PREFIX) echo "   [LN] $< -> $@"
-ifneq ($(LDCONFIG),)
-	$(CMD_PREFIX) $(LDCONFIG) $(LDCONFIG_FLAGS) . 2>/dev/null
-else
 	$(CMD_PREFIX) $(LN) -sf $< $@
-endif
 
 else # Darwin
 ASTSSL_LIB:=libasteriskssl.dylib
