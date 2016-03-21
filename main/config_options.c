@@ -1053,7 +1053,7 @@ static int xmldoc_update_config_option(struct aco_type **types, const char *modu
 	ast_assert(ARRAY_LEN(aco_option_type_string) > type);
 
 	if (!config_info || !(config_option = find_xmldoc_option(config_info, types, name))) {
-		ast_log(LOG_ERROR, "XML Documentation for option '%s' in modules '%s' not found!\n", name, module);
+		ast_log(LOG_WARNING, "XML Documentation for option '%s' in modules '%s' not found!\n", name, module);
 		return XMLDOC_STRICT ? -1 : 0;
 	}
 
