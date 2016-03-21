@@ -1376,6 +1376,7 @@ static char *sip_prune_realtime(struct ast_cli_entry *e, int cmd, struct ast_cli
 static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us, struct sip_pvt *p);
 static void sip_registry_destroy(void *reg);
 static int sip_register(const char *value, int lineno);
+static int sip_reregister(const void *data);
 static const char *regstate2str(enum sipregistrystate regstate) attribute_const;
 static int __sip_do_register(struct sip_registry *r);
 static int sip_reg_timeout(const void *data);
