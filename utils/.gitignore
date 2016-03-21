@@ -18,6 +18,8 @@ check_expr2.dSYM/
 conf2ael
 db1-ast/libdb1.a
 hashtab.c
+hashtest
+hashtest2
 lock.c
 md5.c
 muted
