@@ -7484,6 +7484,22 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 			sip_pvt_unlock(p);
 		}
 		break;
+        case AST_FRAME_CNG:
+                if (p) {
+                        sip_pvt_lock(p);
+                        if ((p->t38.state != T38_ENABLED) && (p->rtp) &&
+                                        (p->invitestate > INV_EARLY_MEDIA)) {
+                                /* Note: in case of early media, don't send CNG, but drop frame */
+                                p->lastrtptx = time(NULL);
+                                res = ast_rtp_instance_write(p->rtp, frame);
+                        }
+                        else {
+                                /* drop this frame */
+                                res = 0;
+                        }
+                        sip_pvt_unlock(p);
+                }
+                break;
 	default:
 		ast_log(LOG_WARNING, "Can't send %u type frames with SIP write\n", frame->frametype);
 		return 0;
