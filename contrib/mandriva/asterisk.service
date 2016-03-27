@@ -20,20 +20,13 @@ ExecReload=/usr/sbin/asterisk -rx 'core reload'
 # http://0pointer.de/public/systemd-man/systemd.service.html
 # http://0pointer.de/public/systemd-man/systemd.exec.html
 
-#Nice=0
+Nice=-10
+IOSchedulingClass=realtime
+Restart=on-abort
+RestartSec=4
 #UMask=0002
-#LimitCORE=infinity
+LimitCORE=infinity
 #LimitNOFILE=
-#Restart=always
-#RestartSec=4
-
-# If you uncomment the following you should add '-c' to the ExecStart line above
-
-#TTYPath=/dev/tty7
-#StandardInput=tty
-#StandardOutput=tty
-#StandardError=tty
-
 PrivateTmp=true
 
 [Install]
