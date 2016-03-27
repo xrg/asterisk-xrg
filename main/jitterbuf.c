@@ -155,7 +155,7 @@ static int check_resync(jitterbuf *jb, long ts, long now, long ms, const enum jb
 				return -1;
 			}
 		} else {
-			jb->info.last_delay = *delay;
+			// jb->info.last_delay = *delay;
 			jb->info.cnt_delay_discont = 0;
 		}
 	}
