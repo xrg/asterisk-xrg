@@ -6,9 +6,7 @@ After=network.target
 Type=simple
 Environment=HOME=/var/lib/asterisk
 WorkingDirectory=/var/lib/asterisk
-User=asterisk
-Group=asterisk
-ExecStart=/usr/sbin/asterisk -f -C /etc/asterisk/asterisk.conf
+ExecStart=/usr/sbin/asterisk -U asterisk -G asterisk -p -f -C /etc/asterisk/asterisk.conf
 ExecStop=/usr/sbin/asterisk -rx 'core stop now'
 ExecReload=/usr/sbin/asterisk -rx 'core reload'
 
