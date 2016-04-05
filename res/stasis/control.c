@@ -87,21 +87,19 @@ static void control_dtor(void *obj)
 {
 	struct stasis_app_control *control = obj;
 
+	ao2_cleanup(control->command_queue);
+
+	ast_channel_cleanup(control->channel);
+	ao2_cleanup(control->app);
+
+	ast_cond_destroy(&control->wait_cond);
 	AST_LIST_HEAD_DESTROY(&control->add_rules);
 	AST_LIST_HEAD_DESTROY(&control->remove_rules);
-
-	/* We may have a lingering silence generator; free it */
-	ast_channel_stop_silence_generator(control->channel, control->silgen);
-	control->silgen = NULL;
-
-	ao2_cleanup(control->command_queue);
-	ast_cond_destroy(&control->wait_cond);
-	ao2_cleanup(control->app);
 }
 
 struct stasis_app_control *control_create(struct ast_channel *channel, struct stasis_app *app)
 {
-	RAII_VAR(struct stasis_app_control *, control, NULL, ao2_cleanup);
+	struct stasis_app_control *control;
 	int res;
 
 	control = ao2_alloc(sizeof(*control), control_dtor);
@@ -109,28 +107,29 @@ struct stasis_app_control *control_create(struct ast_channel *channel, struct st
 		return NULL;
 	}
 
-	control->app = ao2_bump(app);
+	AST_LIST_HEAD_INIT(&control->add_rules);
+	AST_LIST_HEAD_INIT(&control->remove_rules);
 
 	res = ast_cond_init(&control->wait_cond, NULL);
 	if (res != 0) {
 		ast_log(LOG_ERROR, "Error initializing ast_cond_t: %s\n",
 			strerror(errno));
+		ao2_ref(control, -1);
 		return NULL;
 	}
+
+	control->app = ao2_bump(app);
+
+	ast_channel_ref(channel);
+	control->channel = channel;
 
 	control->command_queue = ao2_container_alloc_list(
 		AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL, NULL);
-
 	if (!control->command_queue) {
+		ao2_ref(control, -1);
 		return NULL;
 	}
 
-	control->channel = channel;
-
-	AST_LIST_HEAD_INIT(&control->add_rules);
-	AST_LIST_HEAD_INIT(&control->remove_rules);
-
-	ao2_ref(control, +1);
 	return control;
 }
 
@@ -252,6 +251,11 @@ static struct stasis_app_command *exec_command_on_condition(
 	}
 
 	ao2_lock(control->command_queue);
+	if (control->is_done) {
+		ao2_unlock(control->command_queue);
+		ao2_ref(command, -1);
+		return NULL;
+	}
 	if (can_exec_fn && (retval = can_exec_fn(control))) {
 		ao2_unlock(control->command_queue);
 		command_complete(command, retval);
@@ -403,7 +407,10 @@ int control_is_done(struct stasis_app_control *control)
 
 void control_mark_done(struct stasis_app_control *control)
 {
+	/* Locking necessary to sync with other threads adding commands to the queue. */
+	ao2_lock(control->command_queue);
 	control->is_done = 1;
+	ao2_unlock(control->command_queue);
 }
 
 struct stasis_app_control_continue_data {
@@ -428,7 +435,7 @@ static int app_control_continue(struct stasis_app_control *control,
 	/* Called from stasis_app_exec thread; no lock needed */
 	ast_explicit_goto(control->channel, continue_data->context, continue_data->extension, continue_data->priority);
 
-	control->is_done = 1;
+	control_mark_done(control);
 
 	return 0;
 }
@@ -785,8 +792,7 @@ void stasis_app_control_silence_start(struct stasis_app_control *control)
 	stasis_app_send_command_async(control, app_control_silence_start, NULL, NULL);
 }
 
-static int app_control_silence_stop(struct stasis_app_control *control,
-	struct ast_channel *chan, void *data)
+void control_silence_stop_now(struct stasis_app_control *control)
 {
 	if (control->silgen) {
 		ast_debug(3, "%s: Stopping silence generator\n",
@@ -795,7 +801,12 @@ static int app_control_silence_stop(struct stasis_app_control *control,
 			control->channel, control->silgen);
 		control->silgen = NULL;
 	}
+}
 
+static int app_control_silence_stop(struct stasis_app_control *control,
+	struct ast_channel *chan, void *data)
+{
+	control_silence_stop_now(control);
 	return 0;
 }
 
@@ -1112,24 +1123,36 @@ int stasis_app_control_queue_control(struct stasis_app_control *control,
 	return ast_queue_control(control->channel, frame_type);
 }
 
+void control_flush_queue(struct stasis_app_control *control)
+{
+	struct ao2_iterator iter;
+	struct stasis_app_command *command;
+
+	iter = ao2_iterator_init(control->command_queue, AO2_ITERATOR_UNLINK);
+	while ((command = ao2_iterator_next(&iter))) {
+		command_complete(command, -1);
+		ao2_ref(command, -1);
+	}
+	ao2_iterator_destroy(&iter);
+}
+
 int control_dispatch_all(struct stasis_app_control *control,
 	struct ast_channel *chan)
 {
 	int count = 0;
-	struct ao2_iterator i;
-	void *obj;
+	struct ao2_iterator iter;
+	struct stasis_app_command *command;
 
 	ast_assert(control->channel == chan);
 
-	i = ao2_iterator_init(control->command_queue, AO2_ITERATOR_UNLINK);
-
-	while ((obj = ao2_iterator_next(&i))) {
-		RAII_VAR(struct stasis_app_command *, command, obj, ao2_cleanup);
+	iter = ao2_iterator_init(control->command_queue, AO2_ITERATOR_UNLINK);
+	while ((command = ao2_iterator_next(&iter))) {
 		command_invoke(command, control, chan);
+		ao2_ref(command, -1);
 		++count;
 	}
+	ao2_iterator_destroy(&iter);
 
-	ao2_iterator_destroy(&i);
 	return count;
 }
 

@@ -310,6 +310,8 @@ struct ast_sip_aor {
 	unsigned int support_path;
 	/*! Qualify timeout. 0 is diabled. */
 	double qualify_timeout;
+	/* Voicemail extension to set in Message-Account */
+	char *voicemail_extension;
 };
 
 /*!
@@ -464,6 +466,10 @@ struct ast_sip_mwi_configuration {
 	);
 	/* Should mailbox states be combined into a single notification? */
 	unsigned int aggregate;
+	/* Should a subscribe replace unsolicited notifies? */
+	unsigned int subscribe_replaces_unsolicited;
+	/* Voicemail extension to set in Message-Account */
+	char *voicemail_extension;
 };
 
 /*!
@@ -2164,6 +2170,16 @@ char *ast_sip_get_regcontext(void);
 char *ast_sip_get_endpoint_identifier_order(void);
 
 /*!
+ * \brief Retrieve the default voicemail extension.
+ * \since 13.9.0
+ *
+ * \note returned string needs to be de-allocated by caller.
+ *
+ * \retval the default voicemail extension
+ */
+char *ast_sip_get_default_voicemail_extension(void);
+
+/*!
  * \brief Retrieve the global default from user.
  *
  * This is the value placed in outbound requests' From header if there
@@ -2191,6 +2207,14 @@ void ast_sip_get_default_from_user(char *from_user, size_t size);
  * \retval the keep alive interval.
  */
 unsigned int ast_sip_get_keep_alive_interval(void);
+
+/*!
+ * \brief Retrieve the system contact expiration check interval setting.
+ *
+ * \retval the contact expiration check interval.
+ */
+unsigned int ast_sip_get_contact_expiration_check_interval(void);
+
 
 /*!
  * \brief Retrieve the system max initial qualify time.
@@ -2293,5 +2317,6 @@ int ast_sip_set_tpselector_from_transport_name(const char *transport_name, pjsip
  */
 void ast_sip_modify_id_header(pj_pool_t *pool, pjsip_fromto_hdr *id_hdr,
 	const struct ast_party_id *id);
+
 
 #endif /* _RES_PJSIP_H */

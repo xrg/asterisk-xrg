@@ -302,6 +302,12 @@
 						configuration.
 					</para></description>
 				</configOption>
+				<configOption name="mwi_subscribe_replaces_unsolicited">
+					<synopsis>An MWI subscribe will replace sending unsolicited NOTIFYs</synopsis>
+				</configOption>
+				<configOption name="voicemail_extension">
+					<synopsis>The voicemail extension to send in the NOTIFY Message-Account header</synopsis>
+				</configOption>
 				<configOption name="moh_suggest" default="default">
 					<synopsis>Default Music On Hold class</synopsis>
 				</configOption>
@@ -1135,6 +1141,9 @@
 						endpoint configuration section to enable unsolicited MWI NOTIFYs to the endpoint.
 					</para></description>
 				</configOption>
+				<configOption name="voicemail_extension">
+					<synopsis>The voicemail extension to send in the NOTIFY Message-Account header</synopsis>
+				</configOption>
 				<configOption name="maximum_expiration" default="7200">
 					<synopsis>Maximum time to keep an AoR</synopsis>
 					<description><para>
@@ -1279,6 +1288,9 @@
 				<configOption name="keep_alive_interval" default="0">
 					<synopsis>The interval (in seconds) to send keepalives to active connection-oriented transports.</synopsis>
 				</configOption>
+				<configOption name="contact_expiration_check_interval" default="30">
+					<synopsis>The interval (in seconds) to check for expired contacts.</synopsis>
+				</configOption>
 				<configOption name="max_initial_qualify_time" default="0">
 					<synopsis>The maximum amount of time from startup that qualifies should be attempted on all contacts.
 					If greater than the qualify_frequency for an aor, qualify_frequency will be used instead.</synopsis>
@@ -1295,6 +1307,9 @@
                                 </configOption>
 				<configOption name="default_outbound_endpoint" default="default_outbound_endpoint">
 					<synopsis>Endpoint to use when sending an outbound request to a URI without a specified endpoint.</synopsis>
+				</configOption>
+				<configOption name="default_voicemail_extension">
+					<synopsis>The voicemail extension to send in the NOTIFY Message-Account header if not specified on endpoint or aor</synopsis>
 				</configOption>
 				<configOption name="debug" default="no">
 					<synopsis>Enable/Disable SIP debug logging.  Valid options include yes|no or
@@ -2863,6 +2878,7 @@ static int create_out_of_dialog_request(const pjsip_method *method, struct ast_s
 	pj_pool_t *pool;
 	pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
 	pjsip_uri *sip_uri;
+	const char *fromuser;
 
 	if (ast_strlen_zero(uri)) {
 		if (!endpoint && (!contact || ast_strlen_zero(contact->uri))) {
@@ -2909,7 +2925,8 @@ static int create_out_of_dialog_request(const pjsip_method *method, struct ast_s
 		return -1;
 	}
 
-	if (sip_dialog_create_from(pool, &from, endpoint ? endpoint->fromuser : NULL,
+	fromuser = endpoint ? (!ast_strlen_zero(endpoint->fromuser) ? endpoint->fromuser : ast_sorcery_object_get_id(endpoint)) : NULL;
+	if (sip_dialog_create_from(pool, &from, fromuser,
 				endpoint ? endpoint->fromdomain : NULL, &remote_uri, &selector)) {
 		ast_log(LOG_ERROR, "Unable to create From header for %.*s request to endpoint %s\n",
 				(int) pj_strlen(&method->name), pj_strbuf(&method->name),
@@ -3204,6 +3221,7 @@ static pj_status_t endpt_send_request(struct ast_sip_endpoint *endpoint,
 	struct send_request_wrapper *req_wrapper;
 	pj_status_t ret_val;
 	pjsip_endpoint *endpt = ast_sip_get_pjsip_endpoint();
+	pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
 
 	/* Create wrapper to detect if the callback was actually called on an error. */
 	req_wrapper = ao2_alloc(sizeof(*req_wrapper), send_request_wrapper_destructor);
@@ -3253,6 +3271,11 @@ static pj_status_t endpt_send_request(struct ast_sip_endpoint *endpoint,
 	 * transaction callback is executed.
 	 */
 	ao2_ref(req_wrapper, +1);
+
+	if (endpoint) {
+		sip_get_tpselector_from_endpoint(endpoint, &selector);
+		pjsip_tx_data_set_transport(tdata, &selector);
+	}
 
 	ret_val = pjsip_endpt_send_request(endpt, tdata, -1, req_wrapper, endpt_send_request_cb);
 	if (ret_val != PJ_SUCCESS) {

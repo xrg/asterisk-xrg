@@ -41,6 +41,16 @@
 struct stasis_app_control *control_create(struct ast_channel *channel, struct stasis_app *app);
 
 /*!
+ * \brief Flush the control command queue.
+ * \since 13.9.0
+ *
+ * \param control Control object to flush command queue.
+ *
+ * \return Nothing
+ */
+void control_flush_queue(struct stasis_app_control *control);
+
+/*!
  * \brief Dispatch all commands enqueued to this control.
  *
  * \param control Control object to dispatch.
@@ -107,6 +117,14 @@ struct stasis_app *control_app(struct stasis_app_control *control);
 int control_add_channel_to_bridge(
 	struct stasis_app_control *control,
 	struct ast_channel *chan, void *obj);
+
+/*!
+ * \brief Stop playing silence to a channel right now.
+ * \since 13.9.0
+ *
+ * \param control The control for chan
+ */
+void control_silence_stop_now(struct stasis_app_control *control);
 
 
 #endif /* _ASTERISK_RES_STASIS_CONTROL_H */

@@ -2274,6 +2274,7 @@ static int __rtp_sendto(struct ast_rtp_instance *instance, void *buf, size_t siz
 	if (res > 0) {
 		ast_rtp_instance_set_last_tx(instance, time(NULL));
 	}
+
 	return res;
 }
 
@@ -2284,7 +2285,16 @@ static int rtcp_sendto(struct ast_rtp_instance *instance, void *buf, size_t size
 
 static int rtp_sendto(struct ast_rtp_instance *instance, void *buf, size_t size, int flags, struct ast_sockaddr *sa, int *ice)
 {
-	return __rtp_sendto(instance, buf, size, flags, sa, 0, ice, 1);
+	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+	int hdrlen = 12;
+	int res;
+
+	if ((res = __rtp_sendto(instance, buf, size, flags, sa, 0, ice, 1)) > 0) {
+		rtp->txcount++;
+		rtp->txoctetcount += (res - hdrlen);
+	}
+
+	return res;
 }
 
 static int rtp_get_rate(struct ast_format *format)
@@ -3352,9 +3362,6 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 				ast_set_flag(rtp, FLAG_NAT_INACTIVE_NOWARN);
 			}
 		} else {
-			rtp->txcount++;
-			rtp->txoctetcount += (res - hdrlen);
-
 			if (rtp->rtcp && rtp->rtcp->schedid < 0) {
 				ast_debug(1, "Starting RTCP transmission on RTP instance '%p'\n", instance);
 				ao2_ref(instance, +1);
@@ -4288,6 +4295,9 @@ static int bridge_p2p_rtp_write(struct ast_rtp_instance *instance, unsigned int 
 		return -1;
 	}
 
+	rtp->rxcount++;
+	rtp->rxoctetcount += (len - hdrlen);
+
 	/* If the payload coming in is not one of the negotiated ones then send it to the core, this will cause formats to change and the bridge to break */
 	if (ast_rtp_codecs_find_payload_code(ast_rtp_instance_get_codecs(instance1), bridged_payload) == -1) {
 		ast_debug(1, "Unsupported payload type received \n");
@@ -4518,6 +4528,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 
 		rtp->seedrxseqno = 0;
 		rtp->rxcount = 0;
+		rtp->rxoctetcount = 0;
 		rtp->cycles = 0;
 		rtp->lastrxseqno = 0;
 		rtp->last_seqno = 0;
@@ -4561,6 +4572,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	}
 
 	rtp->rxcount++;
+	rtp->rxoctetcount += (res - hdrlen);
 	if (rtp->rxcount == 1) {
 		rtp->seedrxseqno = seqno;
 	}
@@ -4962,6 +4974,8 @@ static int ast_rtp_get_stat(struct ast_rtp_instance *instance, struct ast_rtp_in
 
 	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_TXCOUNT, -1, stats->txcount, rtp->txcount);
 	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_RXCOUNT, -1, stats->rxcount, rtp->rxcount);
+	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_TXOCTETCOUNT, -1, stats->txoctetcount, rtp->txoctetcount);
+	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_RXOCTETCOUNT, -1, stats->rxoctetcount, rtp->rxoctetcount);
 
 	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_TXPLOSS, AST_RTP_INSTANCE_STAT_COMBINED_LOSS, stats->txploss, rtp->rtcp->reported_lost);
 	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_RXPLOSS, AST_RTP_INSTANCE_STAT_COMBINED_LOSS, stats->rxploss, rtp->rtcp->expected_prior - rtp->rtcp->received_prior);

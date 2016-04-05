@@ -265,7 +265,13 @@ static enum stasis_app_control_channel_result check_rule_recording(
 	return STASIS_APP_CHANNEL_RECORDING;
 }
 
-struct stasis_app_control_rule rule_recording = {
+/*
+ * XXX This only works because there is one and only one rule in
+ * the system so it can be added to any number of channels
+ * without issue.  However, as soon as there is another rule then
+ * watch out for weirdness because of cross linked lists.
+ */
+static struct stasis_app_control_rule rule_recording = {
 	.check_rule = check_rule_recording
 };
 
@@ -358,6 +364,7 @@ static void recording_dtor(void *obj)
 	struct stasis_app_recording *recording = obj;
 
 	ast_free(recording->absolute_name);
+	ao2_cleanup(recording->control);
 	ao2_cleanup(recording->options);
 }
 
@@ -413,6 +420,7 @@ struct stasis_app_recording *stasis_app_control_record(
 
 	ao2_ref(options, +1);
 	recording->options = options;
+	ao2_ref(control, +1);
 	recording->control = control;
 	recording->state = STASIS_APP_RECORDING_STATE_QUEUED;
 
@@ -465,15 +473,7 @@ const char *stasis_app_recording_get_name(
 
 struct stasis_app_recording *stasis_app_recording_find_by_name(const char *name)
 {
-	RAII_VAR(struct stasis_app_recording *, recording, NULL, ao2_cleanup);
-
-	recording = ao2_find(recordings, name, OBJ_KEY);
-	if (recording == NULL) {
-		return NULL;
-	}
-
-	ao2_ref(recording, +1);
-	return recording;
+	return ao2_find(recordings, name, OBJ_KEY);
 }
 
 struct ast_json *stasis_app_recording_to_json(

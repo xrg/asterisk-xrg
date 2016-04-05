@@ -24218,7 +24218,6 @@ fi
 if test "$USE_PJPROJECT" != "no" ; then
    if test "$PJPROJECT_BUNDLED" = "yes" ; then
 
-
 	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for embedded pjproject (may have to download)" >&5
 $as_echo_n "checking for embedded pjproject (may have to download)... " >&6; }
 	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: configuring" >&5

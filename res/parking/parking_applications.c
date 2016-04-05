@@ -90,6 +90,47 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				call on that extension. If the extension is already in use then execution
 				will continue at the next priority.
 			</para>
+			<para>If the <literal>parkeddynamic</literal> option is enabled in
+				<filename>res_parking.conf</filename> the following variables can be
+				used to dynamically create new parking lots. When using dynamic parking
+				lots, be aware of the conditions as explained in the notes section
+				below.
+			</para>
+			<para>The <variable>PARKINGDYNAMIC</variable> variable specifies the
+				parking lot to use as a template to create a dynamic parking lot. It
+				is an error to specify a non-existent parking lot for the template.
+				If not set then the default parking lot is used as the template.
+			</para>
+			<para>The <variable>PARKINGDYNCONTEXT</variable> variable specifies the
+				dialplan context to use for the newly created dynamic parking lot. If
+				not set then the context from the parking lot template is used. The
+				context is created if it does not already exist and the new parking lot
+				needs to create extensions.
+			</para>
+			<para>The <variable>PARKINGDYNEXTEN</variable> variable specifies the
+				<literal>parkext</literal> to use for the newly created dynamic
+				parking lot. If not set then the <literal>parkext</literal> is used from
+				the parking lot template. If the template does not specify a
+				<literal>parkext</literal> then no extensions are created for the newly
+				created parking lot. The dynamic parking lot cannot be created if it
+				needs to create extensions that overlap existing parking lot extensions.
+				The only exception to this is for the <literal>parkext</literal>
+				extension and only if neither of the overlaping parking lot's
+				<literal>parkext</literal> is exclusive.
+			</para>
+			<para>The <variable>PARKINGDYNPOS</variable> variable specifies the
+				parking positions to use for the newly created dynamic parking lot. If
+				not set then the <literal>parkpos</literal> from the parking lot template
+				is used.
+			</para>
+			<note>
+				<para>This application must be used as the first extension priority
+					to be recognized as a parking access extension for blind transfers.
+					Blind transfers and the DTMF one-touch parking feature need this
+					distinction to operate properly. The parking access extension in
+					this case is treated like a dialplan hint.
+				</para>
+			</note>
 		</description>
 		<see-also>
 			<ref type="application">ParkedCall</ref>
@@ -339,16 +380,17 @@ static int setup_park_common_datastore(struct ast_channel *parkee, const char *p
 		ast_datastore_free(datastore);
 		return -1;
 	}
+	datastore->data = park_datastore;
 
-	if (parker_uuid) {
-		park_datastore->parker_uuid = ast_strdup(parker_uuid);
+	park_datastore->parker_uuid = ast_strdup(parker_uuid);
+	if (!park_datastore->parker_uuid) {
+		ast_datastore_free(datastore);
+		return -1;
 	}
 
 	ast_channel_lock(parkee);
-
 	attended_transfer = pbx_builtin_getvar_helper(parkee, "ATTENDEDTRANSFER");
 	blind_transfer = pbx_builtin_getvar_helper(parkee, "BLINDTRANSFER");
-
 	if (!ast_strlen_zero(attended_transfer)) {
 		parker_dial_string = ast_strdupa(attended_transfer);
 	} else if (!ast_strlen_zero(blind_transfer)) {
@@ -356,7 +398,6 @@ static int setup_park_common_datastore(struct ast_channel *parkee, const char *p
 		/* Ensure that attended_transfer is NULL and not an empty string. */
 		attended_transfer = NULL;
 	}
-
 	ast_channel_unlock(parkee);
 
 	if (!ast_strlen_zero(parker_dial_string)) {
@@ -365,6 +406,10 @@ static int setup_park_common_datastore(struct ast_channel *parkee, const char *p
 			parker_dial_string,
 			attended_transfer ? "ATTENDEDTRANSFER" : "BLINDTRANSFER");
 		park_datastore->parker_dial_string = ast_strdup(parker_dial_string);
+		if (!park_datastore->parker_dial_string) {
+			ast_datastore_free(datastore);
+			return -1;
+		}
 	}
 
 	park_datastore->randomize = randomize;
@@ -373,10 +418,13 @@ static int setup_park_common_datastore(struct ast_channel *parkee, const char *p
 
 	if (comeback_override) {
 		park_datastore->comeback_override = ast_strdup(comeback_override);
+		if (!park_datastore->comeback_override) {
+			ast_datastore_free(datastore);
+			return -1;
+		}
 	}
 
 
-	datastore->data = park_datastore;
 	ast_channel_lock(parkee);
 	ast_channel_datastore_add(parkee, datastore);
 	ast_channel_unlock(parkee);
@@ -391,23 +439,23 @@ struct park_common_datastore *get_park_common_datastore_copy(struct ast_channel 
 	struct park_common_datastore *data_copy;
 
 	SCOPED_CHANNELLOCK(lock, parkee);
+
 	if (!(datastore = ast_channel_datastore_find(parkee, &park_common_info, NULL))) {
 		return NULL;
 	}
 
 	data = datastore->data;
 
-	if (!data) {
-		/* This data should always be populated if this datastore was appended to the channel */
-		ast_assert(0);
-	}
+	/* This data should always be populated if this datastore was appended to the channel */
+	ast_assert(data != NULL);
 
 	data_copy = ast_calloc(1, sizeof(*data_copy));
 	if (!data_copy) {
 		return NULL;
 	}
 
-	if (!(data_copy->parker_uuid = ast_strdup(data->parker_uuid))) {
+	data_copy->parker_uuid = ast_strdup(data->parker_uuid);
+	if (!data_copy->parker_uuid) {
 		park_common_datastore_free(data_copy);
 		return NULL;
 	}
@@ -455,9 +503,8 @@ struct ast_bridge *park_common_setup(struct ast_channel *parkee, struct ast_chan
 
 	lot = parking_lot_find_by_name(lot_name);
 	if (!lot) {
-		lot = parking_create_dynamic_lot(lot_name, parkee);
+		lot = parking_create_dynamic_lot(lot_name, parker);
 	}
-
 	if (!lot) {
 		ast_log(LOG_ERROR, "Could not find parking lot: '%s'\n", lot_name);
 		return NULL;
@@ -504,7 +551,7 @@ static int park_app_exec(struct ast_channel *chan, const char *data)
 	struct ast_bridge_features chan_features;
 	int res;
 	int silence_announcements = 0;
-	const char *transferer;
+	int blind_transfer;
 
 	/* Answer the channel if needed */
 	if (ast_channel_state(chan) != AST_STATE_UP) {
@@ -512,15 +559,12 @@ static int park_app_exec(struct ast_channel *chan, const char *data)
 	}
 
 	ast_channel_lock(chan);
-	if (!(transferer = pbx_builtin_getvar_helper(chan, "ATTENDEDTRANSFER"))) {
-		transferer = pbx_builtin_getvar_helper(chan, "BLINDTRANSFER");
-	}
-	transferer = ast_strdupa(S_OR(transferer, ""));
+	blind_transfer = !ast_strlen_zero(pbx_builtin_getvar_helper(chan, "BLINDTRANSFER"));
 	ast_channel_unlock(chan);
 
 	/* Handle the common parking setup stuff */
 	if (!(parking_bridge = park_application_setup(chan, NULL, data, &silence_announcements))) {
-		if (!silence_announcements && !transferer) {
+		if (!silence_announcements && !blind_transfer) {
 			ast_stream_and_wait(chan, "pbx-parkingfailed", "");
 		}
 		publish_parked_call_failure(chan);
@@ -567,7 +611,7 @@ static int parked_call_app_exec(struct ast_channel *chan, const char *data)
 	int target_space = -1;
 	struct ast_bridge_features chan_features;
 	char *parse;
-	char *lot_name;
+	const char *lot_name;
 
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(lot_name);
@@ -593,7 +637,6 @@ static int parked_call_app_exec(struct ast_channel *chan, const char *data)
 	}
 
 	lot = parking_lot_find_by_name(lot_name);
-
 	if (!lot) {
 		ast_log(LOG_ERROR, "Could not find the requested parking lot\n");
 		ast_stream_and_wait(chan, "pbx-invalidpark", "");

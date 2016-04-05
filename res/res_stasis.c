@@ -1179,6 +1179,11 @@ int stasis_app_control_is_done(struct stasis_app_control *control)
 	return control_is_done(control);
 }
 
+void stasis_app_control_flush_queue(struct stasis_app_control *control)
+{
+	control_flush_queue(control);
+}
+
 struct ast_datastore_info set_end_published_info = {
 	.type = "stasis_end_published",
 };
@@ -1188,10 +1193,11 @@ void stasis_app_channel_set_stasis_end_published(struct ast_channel *chan)
 	struct ast_datastore *datastore;
 
 	datastore = ast_datastore_alloc(&set_end_published_info, NULL);
-
-	ast_channel_lock(chan);
-	ast_channel_datastore_add(chan, datastore);
-	ast_channel_unlock(chan);
+	if (datastore) {
+		ast_channel_lock(chan);
+		ast_channel_datastore_add(chan, datastore);
+		ast_channel_unlock(chan);
+	}
 }
 
 int stasis_app_channel_is_stasis_end_published(struct ast_channel *chan)
@@ -1211,12 +1217,11 @@ static void remove_stasis_end_published(struct ast_channel *chan)
 
 	ast_channel_lock(chan);
 	datastore = ast_channel_datastore_find(chan, &set_end_published_info, NULL);
-	ast_channel_unlock(chan);
-
 	if (datastore) {
 		ast_channel_datastore_remove(chan, datastore);
 		ast_datastore_free(datastore);
 	}
+	ast_channel_unlock(chan);
 }
 
 /*! /brief Stasis dialplan application callback */
@@ -1370,6 +1375,11 @@ int stasis_app_exec(struct ast_channel *chan, const char *app_name, int argc,
 	} else {
 		remove_stasis_end_published(chan);
 	}
+
+	control_flush_queue(control);
+
+	/* Stop any lingering silence generator */
+	control_silence_stop_now(control);
 
 	/* There's an off chance that app is ready for cleanup. Go ahead
 	 * and clean up, just in case
