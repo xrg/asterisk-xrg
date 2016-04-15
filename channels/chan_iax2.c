@@ -9773,7 +9773,7 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 			last_errtime = t;
 			ast_debug(1, "Out of idle IAX2 threads for I/O, pausing!\n");
 		}
-		usleep(10);
+		usleep(1);
 		return 1;
 	}
 
