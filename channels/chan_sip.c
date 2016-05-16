@@ -18823,7 +18823,7 @@ static void check_via(struct sip_pvt *p, const struct sip_request *req)
 		}
 
 		if (ast_sockaddr_resolve_first(&tmp, c, 0)) {
-			ast_log(LOG_WARNING, "Could not resolve socket address for '%s'\n", c);
+			ast_log(LOG_WARNING, "Could not resolve Via: address '%s' for '%s'\n", c, ast_sockaddr_stringify_addr(&p->recv));
 			port = STANDARD_SIP_PORT;
 		} else if (!(port = ast_sockaddr_port(&tmp))) {
 			port = STANDARD_SIP_PORT;

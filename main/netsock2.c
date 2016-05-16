@@ -302,7 +302,7 @@ int ast_sockaddr_resolve(struct ast_sockaddr **addrs, const char *str,
 	hints.ai_socktype = SOCK_DGRAM;
 
 	if ((e = getaddrinfo(host, port, &hints, &res))) {
-		ast_log(LOG_ERROR, "getaddrinfo(\"%s\", \"%s\", ...): %s\n",
+		ast_log(LOG_WARNING, "getaddrinfo(\"%s\", \"%s\", ...): %s\n",
 			host, S_OR(port, "(null)"), gai_strerror(e));
 		*addrs = NULL;
 		return 0;
