@@ -36,6 +36,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/paths.h"	/* use ast_config_AST_CONFIG_DIR */
 #include "asterisk/network.h"	/* we do some sockaddr manipulation here */
+
+#include <string.h>
+#include <libgen.h>
 #include <time.h>
 #include <sys/stat.h>
 
@@ -72,7 +75,8 @@ static char *extconfig_conf = "extconfig.conf";
 static struct ao2_container *cfg_hooks;
 static void config_hook_exec(const char *filename, const char *module, const struct ast_config *cfg);
 static inline struct ast_variable *variable_list_switch(struct ast_variable *l1, struct ast_variable *l2);
-static int does_category_match(struct ast_category *cat, const char *category_name, const char *match);
+static int does_category_match(struct ast_category *cat, const char *category_name,
+	const char *match, char sep);
 
 /*! \brief Structure to keep comments for rewriting configuration files */
 struct ast_comment {
@@ -871,7 +875,8 @@ static void move_variables(struct ast_category *old, struct ast_category *new)
 /*! \brief Returns true if ALL of the regex expressions and category name match.
  * Both can be NULL (I.E. no predicate) which results in a true return;
  */
-static int does_category_match(struct ast_category *cat, const char *category_name, const char *match)
+static int does_category_match(struct ast_category *cat, const char *category_name,
+	const char *match, char sep)
 {
 	char *dupmatch;
 	char *nvp = NULL;
@@ -890,7 +895,7 @@ static int does_category_match(struct ast_category *cat, const char *category_na
 
 	dupmatch = ast_strdupa(match);
 
-	while ((nvp = ast_strsep(&dupmatch, ',', AST_STRSEP_STRIP))) {
+	while ((nvp = ast_strsep(&dupmatch, sep, AST_STRSEP_STRIP))) {
 		struct ast_variable *v;
 		char *match_name;
 		char *match_value = NULL;
@@ -989,24 +994,30 @@ struct ast_category *ast_category_new_template(const char *name, const char *in_
 	return new_category(name, in_file, lineno, 1);
 }
 
-struct ast_category *ast_category_get(const struct ast_config *config,
-	const char *category_name, const char *filter)
+static struct ast_category *category_get_sep(const struct ast_config *config,
+	const char *category_name, const char *filter, char sep)
 {
 	struct ast_category *cat;
 
 	for (cat = config->root; cat; cat = cat->next) {
-		if (cat->name == category_name && does_category_match(cat, category_name, filter)) {
+		if (cat->name == category_name && does_category_match(cat, category_name, filter, sep)) {
 			return cat;
 		}
 	}
 
 	for (cat = config->root; cat; cat = cat->next) {
-		if (does_category_match(cat, category_name, filter)) {
+		if (does_category_match(cat, category_name, filter, sep)) {
 			return cat;
 		}
 	}
 
 	return NULL;
+}
+
+struct ast_category *ast_category_get(const struct ast_config *config,
+	const char *category_name, const char *filter)
+{
+	return category_get_sep(config, category_name, filter, ',');
 }
 
 const char *ast_category_get_name(const struct ast_category *category)
@@ -1132,7 +1143,7 @@ static void ast_includes_destroy(struct ast_config_include *incls)
 static struct ast_category *next_available_category(struct ast_category *cat,
 	const char *name, const char *filter)
 {
-	for (; cat && !does_category_match(cat, name, filter); cat = cat->next);
+	for (; cat && !does_category_match(cat, name, filter, ','); cat = cat->next);
 
 	return cat;
 }
@@ -1784,8 +1795,13 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 			while ((cur = strsep(&c, ","))) {
 				if (!strcasecmp(cur, "!")) {
 					(*cat)->ignored = 1;
-				} else if (!strcasecmp(cur, "+")) {
-					*cat = ast_category_get(cfg, catname, NULL);
+				} else if (cur[0] == '+') {
+					char *filter = NULL;
+
+					if (cur[1] != ',') {
+						filter = &cur[1];
+					}
+					*cat = category_get_sep(cfg, catname, filter, '&');
 					if (!(*cat)) {
 						if (newcat) {
 							ast_category_destroy(newcat);
@@ -2506,6 +2522,25 @@ int ast_config_text_file_save(const char *configfile, const struct ast_config *c
 	return ast_config_text_file_save2(configfile, cfg, generator, CONFIG_SAVE_FLAG_PRESERVE_EFFECTIVE_CONTEXT);
 }
 
+static int is_writable(const char *fn)
+{
+	if (access(fn, F_OK)) {
+		char *dn = dirname(ast_strdupa(fn));
+
+		if (access(dn, R_OK | W_OK)) {
+			ast_log(LOG_ERROR, "Unable to write to directory %s (%s)\n", dn, strerror(errno));
+			return 0;
+		}
+	} else {
+		if (access(fn, R_OK | W_OK)) {
+			ast_log(LOG_ERROR, "Unable to write %s (%s)\n", fn, strerror(errno));
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 int ast_config_text_file_save2(const char *configfile, const struct ast_config *cfg, const char *generator, uint32_t flags)
 {
 	FILE *f;
@@ -2528,20 +2563,20 @@ int ast_config_text_file_save2(const char *configfile, const struct ast_config *
 	for (incl = cfg->includes; incl; incl = incl->next) {
 		/* reset all the output flags in case this isn't our first time saving this data */
 		incl->output = 0;
-		/* now make sure we have write access */
+
 		if (!incl->exec) {
+			/* now make sure we have write access to the include file or its parent directory */
 			make_fn(fn, sizeof(fn), incl->included_file, configfile);
-			if (access(fn, R_OK | W_OK)) {
-				ast_log(LOG_ERROR, "Unable to write %s (%s)\n", fn, strerror(errno));
+			/* If the file itself doesn't exist, make sure we have write access to the directory */
+			if (!is_writable(fn)) {
 				return -1;
 			}
 		}
 	}
 
-	/* now make sure we have write access to the main config file */
+	/* now make sure we have write access to the main config file or its parent directory */
 	make_fn(fn, sizeof(fn), 0, configfile);
-	if (access(fn, R_OK | W_OK)) {
-		ast_log(LOG_ERROR, "Unable to write %s (%s)\n", fn, strerror(errno));
+	if (!is_writable(fn)) {
 		return -1;
 	}
 

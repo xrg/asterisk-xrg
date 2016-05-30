@@ -31,6 +31,10 @@
 	<support_level>core</support_level>
  ***/
 
+/* From the auth/realm realtime column size */
+#define MAX_REALM_LENGTH 40
+static char default_realm[MAX_REALM_LENGTH + 1];
+
 AO2_GLOBAL_OBJ_STATIC(entity_id);
 
 /*!
@@ -202,9 +206,12 @@ static int build_nonce(struct ast_str **nonce, const char *timestamp, const pjsi
 	RAII_VAR(char *, eid, ao2_global_obj_ref(entity_id), ao2_cleanup);
 	char hash[33];
 
+	/*
+	 * Note you may be tempted to think why not include the port. The reason
+	 * is that when using TCP the port can potentially differ from before.
+	 */
 	ast_str_append(&str, 0, "%s", timestamp);
 	ast_str_append(&str, 0, ":%s", rdata->pkt_info.src_name);
-	ast_str_append(&str, 0, ":%d", rdata->pkt_info.src_port);
 	ast_str_append(&str, 0, ":%s", eid);
 	ast_str_append(&str, 0, ":%s", realm);
 	ast_md5_hash(hash, ast_str_buffer(str));
@@ -409,7 +416,7 @@ static enum ast_sip_check_auth_result digest_check_auth(struct ast_sip_endpoint 
 
 	for (i = 0; i < auth_size; ++i) {
 		if (ast_strlen_zero(auths[i]->realm)) {
-			ast_string_field_set(auths[i], realm, "asterisk");
+			ast_string_field_set(auths[i], realm, default_realm);
 		}
 		verify_res[i] = verify(auths[i], rdata, tdata->pool);
 		if (verify_res[i] == AUTH_SUCCESS) {
@@ -456,6 +463,16 @@ static int build_entity_id(void)
 	return 0;
 }
 
+static void global_loaded(const char *object_type)
+{
+	ast_sip_get_default_realm(default_realm, sizeof(default_realm));
+}
+
+/*! \brief Observer which is used to update our default_realm when the global setting changes */
+static struct ast_sorcery_observer global_observer = {
+	.loaded = global_loaded,
+};
+
 static int reload_module(void)
 {
 	if (build_entity_id()) {
@@ -471,6 +488,10 @@ static int load_module(void)
 	if (build_entity_id()) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
+
+	ast_sorcery_observer_add(ast_sip_get_sorcery(), "global", &global_observer);
+	ast_sorcery_reload_object(ast_sip_get_sorcery(), "global");
+
 	if (ast_sip_register_authenticator(&digest_authenticator)) {
 		ao2_global_obj_release(entity_id);
 		return AST_MODULE_LOAD_DECLINE;
@@ -480,6 +501,7 @@ static int load_module(void)
 
 static int unload_module(void)
 {
+	ast_sorcery_observer_remove(ast_sip_get_sorcery(), "global", &global_observer);
 	ast_sip_unregister_authenticator(&digest_authenticator);
 	ao2_global_obj_release(entity_id);
 	return 0;
@@ -490,5 +512,5 @@ AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "PJSIP authentication 
 		.load = load_module,
 		.unload = unload_module,
 		.reload = reload_module,
-		.load_pri = AST_MODPRI_CHANNEL_DEPEND,
+		.load_pri = AST_MODPRI_CHANNEL_DEPEND - 5,
 );

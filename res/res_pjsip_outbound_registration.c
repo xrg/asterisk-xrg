@@ -1096,7 +1096,7 @@ static int sip_dialog_create_contact(pj_pool_t *pool, pj_str_t *contact, const c
 	contact->ptr = pj_pool_alloc(pool, PJSIP_MAX_URL_SIZE);
 	contact->slen = pj_ansi_snprintf(contact->ptr, PJSIP_MAX_URL_SIZE,
 		"<%s:%s@%s%.*s%s:%d%s%s%s%s>",
-		(pjsip_transport_get_flag_from_type(type) & PJSIP_TRANSPORT_SECURE) ? "sips" : "sip",
+		((pjsip_transport_get_flag_from_type(type) & PJSIP_TRANSPORT_SECURE) && PJSIP_URI_SCHEME_IS_SIPS(uri)) ? "sips" : "sip",
 		user,
 		(type & PJSIP_TRANSPORT_IPV6) ? "[" : "",
 		(int)local_addr.slen,
@@ -1290,10 +1290,18 @@ static int sip_outbound_registration_apply(const struct ast_sorcery *sorcery, vo
 		ast_log(LOG_ERROR, "No server URI specified on outbound registration '%s'\n",
 			ast_sorcery_object_get_id(applied));
 		return -1;
+	} else if (ast_sip_validate_uri_length(applied->server_uri)) {
+			ast_log(LOG_ERROR, "Server URI or hostname length exceeds pjpropject limit '%s'\n",
+				ast_sorcery_object_get_id(applied));
+			return -1;
 	} else if (ast_strlen_zero(applied->client_uri)) {
 		ast_log(LOG_ERROR, "No client URI specified on outbound registration '%s'\n",
 			ast_sorcery_object_get_id(applied));
 		return -1;
+	} else if (ast_sip_validate_uri_length(applied->client_uri)) {
+			ast_log(LOG_ERROR, "Client URI or hostname length exceeds pjpropject limit '%s'\n",
+				ast_sorcery_object_get_id(applied));
+			return -1;
 	} else if (applied->line && ast_strlen_zero(applied->endpoint)) {
 		ast_log(LOG_ERROR, "Line support has been enabled on outbound registration '%s' without providing an endpoint\n",
 			ast_sorcery_object_get_id(applied));
@@ -1904,6 +1912,26 @@ static const struct ast_sorcery_instance_observer observer_callbacks_registratio
 	.object_type_loaded = registration_loaded_observer,
 };
 
+static void registration_deleted_observer(const void *obj)
+{
+	const struct sip_outbound_registration *registration = obj;
+	struct ao2_container *states;
+
+	states = ao2_global_obj_ref(current_states);
+	if (!states) {
+		/* Global container has gone.  Likely shutting down. */
+		return;
+	}
+
+	ao2_find(states, ast_sorcery_object_get_id(registration), OBJ_UNLINK | OBJ_NODATA | OBJ_SEARCH_KEY);
+
+	ao2_ref(states, -1);
+}
+
+static const struct ast_sorcery_observer registration_observer = {
+	.deleted = registration_deleted_observer,
+};
+
 static int unload_module(void)
 {
 	int remaining;
@@ -2003,7 +2031,9 @@ static int load_module(void)
 	if (ast_sorcery_instance_observer_add(ast_sip_get_sorcery(),
 		&observer_callbacks_registrations)
 		|| ast_sorcery_observer_add(ast_sip_get_sorcery(), "auth",
-			&observer_callbacks_auth)) {
+			&observer_callbacks_auth)
+		|| ast_sorcery_observer_add(ast_sip_get_sorcery(), "registration",
+			&registration_observer)) {
 		ast_log(LOG_ERROR, "Unable to register observers.\n");
 		unload_module();
 		return AST_MODULE_LOAD_FAILURE;

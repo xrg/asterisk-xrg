@@ -566,6 +566,11 @@ int ast_unreal_indicate(struct ast_channel *ast, int condition, const void *data
 			res = -1;
 		}
 		break;
+	case AST_CONTROL_PVT_CAUSE_CODE:
+		/* Return -1 so that asterisk core will correctly set up hangupcauses. */
+		unreal_queue_indicate(p, ast, condition, data, datalen);
+		res = -1;
+		break;
 	default:
 		res = unreal_queue_indicate(p, ast, condition, data, datalen);
 		break;
@@ -803,7 +808,6 @@ int ast_unreal_channel_push_to_bridge(struct ast_channel *ast, struct ast_bridge
 	/* Impart the semi2 channel into the bridge */
 	if (ast_bridge_impart(bridge, chan, NULL, features,
 		AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
-		ast_bridge_features_destroy(features);
 		ast_channel_unref(chan);
 		return -1;
 	}

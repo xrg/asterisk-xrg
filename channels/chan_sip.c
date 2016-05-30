@@ -14524,10 +14524,12 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 		add_header(&req, "Require", "replaces");
 	}
 
-	/* Add Session-Timers related headers */
-	if (st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE
+	/* Add Session-Timers related headers if not already there */
+	if (ast_strlen_zero(sip_get_header(&req, "Session-Expires")) &&
+		(sipmethod == SIP_INVITE || sipmethod == SIP_UPDATE) &&
+		(st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE
 		|| (st_get_mode(p, 0) == SESSION_TIMER_MODE_ACCEPT
-			&& st_get_se(p, FALSE) != DEFAULT_MIN_SE)) {
+			&& st_get_se(p, FALSE) != DEFAULT_MIN_SE))) {
 		char i2astr[10];
 
 		if (!p->stimer->st_interval) {
@@ -17666,6 +17668,10 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 	if (!peer && sip_cfg.autocreatepeer != AUTOPEERS_DISABLED) {
 		/* Create peer if we have autocreate mode enabled */
 		peer = temp_peer(name);
+		if (peer && !(peer->endpoint = ast_endpoint_create("SIP", name))) {
+			ao2_t_ref(peer, -1, "failed to allocate Stasis endpoint, drop peer");
+			peer = NULL;
+		}
 		if (peer) {
 			ao2_t_link(peers, peer, "link peer into peer table");
 			if (!ast_sockaddr_isnull(&peer->addr)) {
@@ -35257,17 +35263,19 @@ static int load_module(void)
 	/* And start the monitor for the first time */
 	restart_monitor();
 
-	ast_realtime_require_field(ast_check_realtime("sipregs") ? "sipregs" : "sippeers",
-		"name", RQ_CHAR, 10,
-		"ipaddr", RQ_CHAR, INET6_ADDRSTRLEN - 1,
-		"port", RQ_UINTEGER2, 5,
-		"regseconds", RQ_INTEGER4, 11,
-		"defaultuser", RQ_CHAR, 10,
-		"fullcontact", RQ_CHAR, 35,
-		"regserver", RQ_CHAR, 20,
-		"useragent", RQ_CHAR, 20,
-		"lastms", RQ_INTEGER4, 11,
-		SENTINEL);
+	if (sip_cfg.peer_rtupdate) {
+		ast_realtime_require_field(ast_check_realtime("sipregs") ? "sipregs" : "sippeers",
+			"name", RQ_CHAR, 10,
+			"ipaddr", RQ_CHAR, INET6_ADDRSTRLEN - 1,
+			"port", RQ_UINTEGER2, 5,
+			"regseconds", RQ_INTEGER4, 11,
+			"defaultuser", RQ_CHAR, 10,
+			"fullcontact", RQ_CHAR, 35,
+			"regserver", RQ_CHAR, 20,
+			"useragent", RQ_CHAR, 20,
+			"lastms", RQ_INTEGER4, 11,
+			SENTINEL);
+	}
 
 
 	sip_register_tests();
@@ -35286,7 +35294,7 @@ static int unload_module(void)
 	struct sip_pvt *p;
 	struct sip_threadinfo *th;
 	struct ao2_iterator i;
-	int wait_count;
+	struct timeval start;
 
 	ast_sip_api_provider_unregister();
 
@@ -35436,11 +35444,11 @@ static int unload_module(void)
 	 * joinable.  They can die on their own and remove themselves
 	 * from the container thus resulting in a huge memory leak.
 	 */
-	wait_count = 1000;
-	while (ao2_container_count(threadt) && --wait_count) {
+	start = ast_tvnow();
+	while (ao2_container_count(threadt) && (ast_tvdiff_sec(ast_tvnow(), start) < 5)) {
 		sched_yield();
 	}
-	if (!wait_count) {
+	if (ao2_container_count(threadt)) {
 		ast_debug(2, "TCP/TLS thread container did not become empty :(\n");
 	}
 

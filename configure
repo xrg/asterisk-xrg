@@ -663,6 +663,10 @@ PWLIB_LIBDIR
 PWLIB_INCDIR
 PWLIBDIR
 PTLIB_CONFIG
+PYTHONDEV_LIBS
+PYTHONDEV_CFLAGS
+PYTHONDEV_INCLUDE
+PYTHONDEV_LIB
 PJPROJECT_LIBS
 PJPROJECT_CFLAGS
 PG_CONFIG
@@ -1416,6 +1420,8 @@ LIBEDIT_CFLAGS
 LIBEDIT_LIBS
 PJPROJECT_CFLAGS
 PJPROJECT_LIBS
+PYTHONDEV_CFLAGS
+PYTHONDEV_LIBS
 GMIME_CFLAGS
 GMIME_LIBS
 GTK2_CFLAGS
@@ -2158,6 +2164,10 @@ Some influential environment variables:
               C compiler flags for PJPROJECT, overriding pkg-config
   PJPROJECT_LIBS
               linker flags for PJPROJECT, overriding pkg-config
+  PYTHONDEV_CFLAGS
+              C compiler flags for PYTHONDEV, overriding pkg-config
+  PYTHONDEV_LIBS
+              linker flags for PYTHONDEV, overriding pkg-config
   GMIME_CFLAGS
               C compiler flags for GMIME, overriding pkg-config
   GMIME_LIBS  linker flags for GMIME, overriding pkg-config
@@ -13602,7 +13612,7 @@ else
     We can't simply define LARGE_OFF_T to be 9223372036854775807,
     since some C++ compilers masquerading as C compilers
     incorrectly reject 9223372036854775807.  */
-#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+#define LARGE_OFF_T ((((off_t) 1 << 31) << 31) - 1 + (((off_t) 1 << 31) << 31))
   int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
 		       && LARGE_OFF_T % 2147483647 == 1)
 		      ? 1 : -1];
@@ -13648,7 +13658,7 @@ else
     We can't simply define LARGE_OFF_T to be 9223372036854775807,
     since some C++ compilers masquerading as C compilers
     incorrectly reject 9223372036854775807.  */
-#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+#define LARGE_OFF_T ((((off_t) 1 << 31) << 31) - 1 + (((off_t) 1 << 31) << 31))
   int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
 		       && LARGE_OFF_T % 2147483647 == 1)
 		      ? 1 : -1];
@@ -13672,7 +13682,7 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
     We can't simply define LARGE_OFF_T to be 9223372036854775807,
     since some C++ compilers masquerading as C compilers
     incorrectly reject 9223372036854775807.  */
-#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+#define LARGE_OFF_T ((((off_t) 1 << 31) << 31) - 1 + (((off_t) 1 << 31) << 31))
   int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
 		       && LARGE_OFF_T % 2147483647 == 1)
 		      ? 1 : -1];
@@ -13717,7 +13727,7 @@ else
     We can't simply define LARGE_OFF_T to be 9223372036854775807,
     since some C++ compilers masquerading as C compilers
     incorrectly reject 9223372036854775807.  */
-#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+#define LARGE_OFF_T ((((off_t) 1 << 31) << 31) - 1 + (((off_t) 1 << 31) << 31))
   int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
 		       && LARGE_OFF_T % 2147483647 == 1)
 		      ? 1 : -1];
@@ -13741,7 +13751,7 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
     We can't simply define LARGE_OFF_T to be 9223372036854775807,
     since some C++ compilers masquerading as C compilers
     incorrectly reject 9223372036854775807.  */
-#define LARGE_OFF_T (((off_t) 1 << 62) - 1 + ((off_t) 1 << 62))
+#define LARGE_OFF_T ((((off_t) 1 << 31) << 31) - 1 + (((off_t) 1 << 31) << 31))
   int off_t_is_large[(LARGE_OFF_T % 2147483629 == 721
 		       && LARGE_OFF_T % 2147483647 == 1)
 		      ? 1 : -1];
@@ -17604,7 +17614,7 @@ if ac_fn_c_try_compile "$LINENO"; then :
 $as_echo "yes" >&6; }
 	AST_LEAK_SANITIZER=1
 else
-  AST_LEAK_SANITIZER=
+  AST_LEAK_SANITIZER=0
 	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
@@ -17636,7 +17646,7 @@ if ac_fn_c_try_compile "$LINENO"; then :
 $as_echo "yes" >&6; }
 	AST_UNDEFINED_SANITIZER=1
 else
-  AST_UNDEFINED_SANITIZER=
+  AST_UNDEFINED_SANITIZER=0
 	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
 
@@ -24222,16 +24232,16 @@ if test "$USE_PJPROJECT" != "no" ; then
 $as_echo_n "checking for embedded pjproject (may have to download)... " >&6; }
 	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: configuring" >&5
 $as_echo "configuring" >&6; }
-	make --quiet --no-print-directory -C $PJPROJECT_DIR configure
+	${GNU_MAKE} --quiet --no-print-directory -C $PJPROJECT_DIR configure
 	if test $? -ne 0 ; then
 		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: failed" >&5
 $as_echo "failed" >&6; }
 		{ $as_echo "$as_me:${as_lineno-$LINENO}: Unable to configure $PJPROJECT_DIR" >&5
 $as_echo "$as_me: Unable to configure $PJPROJECT_DIR" >&6;}
-		as_fn_error $? "Run \"make -C $PJPROJECT_DIR NOISY_BUILD=yes configure\" to see error details." "$LINENO" 5
+		as_fn_error $? "Run \"${GNU_MAKE} -C $PJPROJECT_DIR NOISY_BUILD=yes configure\" to see error details." "$LINENO" 5
 	fi
 
-	PJPROJECT_INCLUDE=$(make --quiet --no-print-directory -C $PJPROJECT_DIR echo_cflags)
+	PJPROJECT_INCLUDE=$(${GNU_MAKE} --quiet --no-print-directory -C $PJPROJECT_DIR echo_cflags)
 	PJPROJECT_CFLAGS="$PJPROJECT_INCLUDE"
 	PBX_PJPROJECT=1
 	PJPROJECT_BUNDLED=yes
@@ -25171,6 +25181,97 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
       CPPFLAGS="${saved_cppflags}"
    fi
 fi
+
+
+
+
+   if test "x${PBX_PYTHONDEV}" != "x1" -a "${USE_PYTHONDEV}" != "no"; then
+
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for PYTHONDEV" >&5
+$as_echo_n "checking for PYTHONDEV... " >&6; }
+
+if test -n "$PYTHONDEV_CFLAGS"; then
+    pkg_cv_PYTHONDEV_CFLAGS="$PYTHONDEV_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"python\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "python") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_PYTHONDEV_CFLAGS=`$PKG_CONFIG --cflags "python" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$PYTHONDEV_LIBS"; then
+    pkg_cv_PYTHONDEV_LIBS="$PYTHONDEV_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"python\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "python") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_PYTHONDEV_LIBS=`$PKG_CONFIG --libs "python" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+	        PYTHONDEV_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "python" 2>&1`
+        else
+	        PYTHONDEV_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "python" 2>&1`
+        fi
+	# Put the nasty error message in config.log where it belongs
+	echo "$PYTHONDEV_PKG_ERRORS" >&5
+
+
+            PBX_PYTHONDEV=0
+
+
+elif test $pkg_failed = untried; then
+     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+            PBX_PYTHONDEV=0
+
+
+else
+	PYTHONDEV_CFLAGS=$pkg_cv_PYTHONDEV_CFLAGS
+	PYTHONDEV_LIBS=$pkg_cv_PYTHONDEV_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+
+            PBX_PYTHONDEV=1
+            PYTHONDEV_INCLUDE="$PYTHONDEV_CFLAGS"
+            PYTHONDEV_LIB="$PYTHONDEV_LIBS"
+
+$as_echo "#define HAVE_PYTHONDEV 1" >>confdefs.h
+
+
+fi
+   fi
+
 
 
 if test "x${PBX_POPT}" != "x1" -a "${USE_POPT}" != "no"; then

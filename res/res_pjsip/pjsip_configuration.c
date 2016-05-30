@@ -265,6 +265,65 @@ static const struct ast_sorcery_observer endpoint_observers = {
 	.deleted = endpoint_deleted_observer,
 };
 
+static int endpoint_acl_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct ast_sip_endpoint *endpoint = obj;
+	int error = 0;
+	int ignore;
+
+	if (ast_strlen_zero(var->value)) return 0;
+
+	if (!strncmp(var->name, "contact_", 8)) {
+		ast_append_acl(var->name + 8, var->value, &endpoint->contact_acl, &error, &ignore);
+	} else {
+		ast_append_acl(var->name, var->value, &endpoint->acl, &error, &ignore);
+	}
+
+	return error;
+}
+
+static int acl_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_endpoint *endpoint = obj;
+	struct ast_acl_list *acl_list;
+	struct ast_acl *first_acl;
+
+	if (endpoint && !ast_acl_list_is_empty(acl_list=endpoint->acl)) {
+		AST_LIST_LOCK(acl_list);
+		first_acl = AST_LIST_FIRST(acl_list);
+		if (ast_strlen_zero(first_acl->name)) {
+			*buf = "deny/permit";
+		} else {
+			*buf = first_acl->name;
+		}
+		AST_LIST_UNLOCK(acl_list);
+	}
+
+	*buf = ast_strdup(*buf);
+	return 0;
+}
+
+static int contact_acl_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_endpoint *endpoint = obj;
+	struct ast_acl_list *acl_list;
+	struct ast_acl *first_acl;
+
+	if (endpoint && !ast_acl_list_is_empty(acl_list=endpoint->contact_acl)) {
+		AST_LIST_LOCK(acl_list);
+		first_acl = AST_LIST_FIRST(acl_list);
+		if (ast_strlen_zero(first_acl->name)) {
+			*buf = "deny/permit";
+		} else {
+			*buf = first_acl->name;
+		}
+		AST_LIST_UNLOCK(acl_list);
+	}
+
+	*buf = ast_strdup(*buf);
+	return 0;
+}
+
 static int dtmf_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
 	struct ast_sip_endpoint *endpoint = obj;
@@ -275,8 +334,8 @@ static int dtmf_handler(const struct aco_option *opt, struct ast_variable *var, 
 		endpoint->dtmf = AST_SIP_DTMF_INBAND;
 	} else if (!strcasecmp(var->value, "info")) {
 		endpoint->dtmf = AST_SIP_DTMF_INFO;
-        } else if (!strcasecmp(var->value, "auto")) {
-                endpoint->dtmf = AST_SIP_DTMF_AUTO;
+	} else if (!strcasecmp(var->value, "auto")) {
+		endpoint->dtmf = AST_SIP_DTMF_AUTO;
 	} else if (!strcasecmp(var->value, "none")) {
 		endpoint->dtmf = AST_SIP_DTMF_NONE;
 	} else {
@@ -298,7 +357,7 @@ static int dtmf_to_str(const void *obj, const intptr_t *args, char **buf)
 	case AST_SIP_DTMF_INFO :
 		*buf = "info"; break;
        case AST_SIP_DTMF_AUTO :
-                *buf = "auto"; break;
+		*buf = "auto"; break;
 	default:
 		*buf = "none";
 	}
@@ -479,6 +538,16 @@ static int ident_handler(const struct aco_option *opt, struct ast_variable *var,
 	struct ast_sip_endpoint *endpoint = obj;
 	char *idents = ast_strdupa(var->value);
 	char *val;
+	enum ast_sip_endpoint_identifier_type method;
+
+	/*
+	 * If there's already something in the vector when we get here,
+	 * it's the default value so we need to clean it out.
+	 */
+	if (AST_VECTOR_SIZE(&endpoint->ident_method_order)) {
+		AST_VECTOR_RESET(&endpoint->ident_method_order, AST_VECTOR_ELEM_CLEANUP_NOOP);
+		endpoint->ident_method = 0;
+	}
 
 	while ((val = ast_strip(strsep(&idents, ",")))) {
 		if (ast_strlen_zero(val)) {
@@ -486,27 +555,55 @@ static int ident_handler(const struct aco_option *opt, struct ast_variable *var,
 		}
 
 		if (!strcasecmp(val, "username")) {
-			endpoint->ident_method |= AST_SIP_ENDPOINT_IDENTIFY_BY_USERNAME;
+			method = AST_SIP_ENDPOINT_IDENTIFY_BY_USERNAME;
+		} else	if (!strcasecmp(val, "auth_username")) {
+			method = AST_SIP_ENDPOINT_IDENTIFY_BY_AUTH_USERNAME;
 		} else {
 			ast_log(LOG_ERROR, "Unrecognized identification method %s specified for endpoint %s\n",
 					val, ast_sorcery_object_get_id(endpoint));
+			AST_VECTOR_RESET(&endpoint->ident_method_order, AST_VECTOR_ELEM_CLEANUP_NOOP);
+			endpoint->ident_method = 0;
 			return -1;
 		}
+
+		endpoint->ident_method |= method;
+		AST_VECTOR_APPEND(&endpoint->ident_method_order, method);
 	}
+
 	return 0;
 }
 
 static int ident_to_str(const void *obj, const intptr_t *args, char **buf)
 {
 	const struct ast_sip_endpoint *endpoint = obj;
-	switch (endpoint->ident_method) {
-	case AST_SIP_ENDPOINT_IDENTIFY_BY_USERNAME :
-		*buf = "username"; break;
-	default:
+	int methods;
+	char *method;
+	int i;
+	int j = 0;
+
+	methods = AST_VECTOR_SIZE(&endpoint->ident_method_order);
+	if (!methods) {
 		return 0;
 	}
 
-	*buf = ast_strdup(*buf);
+	if (!(*buf = ast_calloc(MAX_OBJECT_FIELD, sizeof(char)))) {
+		return -1;
+	}
+
+	for (i = 0; i < methods; i++) {
+		switch (AST_VECTOR_GET(&endpoint->ident_method_order, i)) {
+		case AST_SIP_ENDPOINT_IDENTIFY_BY_USERNAME :
+			method = "username";
+			break;
+		case AST_SIP_ENDPOINT_IDENTIFY_BY_AUTH_USERNAME :
+			method = "auth_username";
+			break;
+		default:
+			continue;
+		}
+		j = sprintf(*buf + j, "%s%s", method, i < methods - 1 ? "," : "");
+	}
+
 	return 0;
 }
 
@@ -1724,6 +1821,12 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "set_var", "", set_var_handler, set_var_to_str, set_var_to_vl, 0, 0);
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "message_context", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_endpoint, message_context));
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "accountcode", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_endpoint, accountcode));
+	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "deny", "", endpoint_acl_handler, NULL, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "permit", "", endpoint_acl_handler, NULL, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "acl", "", endpoint_acl_handler, acl_to_str, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "contact_deny", "", endpoint_acl_handler, NULL, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "contact_permit", "", endpoint_acl_handler, NULL, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "contact_acl", "", endpoint_acl_handler, contact_acl_to_str, NULL, 0, 0);
 
 	if (ast_sip_initialize_sorcery_transport()) {
 		ast_log(LOG_ERROR, "Failed to register SIP transport support with sorcery\n");
@@ -1851,6 +1954,7 @@ static void endpoint_destructor(void* obj)
 	endpoint->pickup.named_pickupgroups = ast_unref_namedgroups(endpoint->pickup.named_pickupgroups);
 	ao2_cleanup(endpoint->persistent);
 	ast_variables_destroy(endpoint->channel_vars);
+	AST_VECTOR_FREE(&endpoint->ident_method_order);
 }
 
 static int init_subscription_configuration(struct ast_sip_endpoint_subscription_configuration *subscription)
@@ -1895,6 +1999,11 @@ void *ast_sip_endpoint_alloc(const char *name)
 		return NULL;
 	}
 	ast_party_id_init(&endpoint->id.self);
+
+	if (AST_VECTOR_INIT(&endpoint->ident_method_order, 1)) {
+		return NULL;
+	}
+
 	return endpoint;
 }
 

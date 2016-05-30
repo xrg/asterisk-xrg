@@ -2117,12 +2117,13 @@ int bridge_channel_internal_push_full(struct ast_bridge_channel *bridge_channel,
 	if (bridge->dissolved
 		|| bridge_channel->state != BRIDGE_CHANNEL_STATE_WAIT
 		|| (swap && swap->state != BRIDGE_CHANNEL_STATE_WAIT)
-		|| bridge->v_table->push(bridge, bridge_channel, swap)
-		|| ast_bridge_channel_establish_roles(bridge_channel)) {
+		|| bridge->v_table->push(bridge, bridge_channel, swap)) {
 		ast_debug(1, "Bridge %s: pushing %p(%s) into bridge failed\n",
 			bridge->uniqueid, bridge_channel, ast_channel_name(bridge_channel->chan));
 		return -1;
 	}
+
+	ast_bridge_channel_establish_roles(bridge_channel);
 
 	if (swap) {
 		int dissolve = ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_DISSOLVE_EMPTY);
@@ -2636,27 +2637,7 @@ static void bridge_channel_event_join_leave(struct ast_bridge_channel *bridge_ch
 	ao2_iterator_destroy(&iter);
 }
 
-void bridge_channel_internal_wait(struct bridge_channel_internal_cond *cond)
-{
-	ast_mutex_lock(&cond->lock);
-	while (!cond->done) {
-		ast_cond_wait(&cond->cond, &cond->lock);
-	}
-	ast_mutex_unlock(&cond->lock);
-}
-
-void bridge_channel_internal_signal(struct bridge_channel_internal_cond *cond)
-{
-	if (cond) {
-		ast_mutex_lock(&cond->lock);
-		cond->done = 1;
-		ast_cond_signal(&cond->cond);
-		ast_mutex_unlock(&cond->lock);
-	}
-}
-
-int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel,
-				 struct bridge_channel_internal_cond *cond)
+int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel)
 {
 	int res = 0;
 	struct ast_bridge_features *channel_features;
@@ -2686,7 +2667,6 @@ int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel,
 			bridge_channel->bridge->uniqueid,
 			bridge_channel,
 			ast_channel_name(bridge_channel->chan));
-		bridge_channel_internal_signal(cond);
 		return -1;
 	}
 	ast_channel_internal_bridge_set(bridge_channel->chan, bridge_channel->bridge);
@@ -2721,8 +2701,6 @@ int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel,
 	}
 	bridge_reconfigured(bridge_channel->bridge, !bridge_channel->inhibit_colp);
 
-	bridge_channel_internal_signal(cond);
-
 	if (bridge_channel->state == BRIDGE_CHANNEL_STATE_WAIT) {
 		/*
 		 * Indicate a source change since this channel is entering the
@@ -2734,6 +2712,7 @@ int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel,
 			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCCHANGE);
 		}
 
+		bridge_channel_impart_signal(bridge_channel->chan);
 		ast_bridge_unlock(bridge_channel->bridge);
 
 		/* Must release any swap ref after unlocking the bridge. */

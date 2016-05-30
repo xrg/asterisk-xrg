@@ -30,6 +30,7 @@
 
 #include "asterisk/res_pjsip.h"
 #include "asterisk/module.h"
+#include "asterisk/named_locks.h"
 
 /*! \brief Thread keeping things alive */
 static pthread_t check_thread = AST_PTHREADT_NULL;
@@ -41,8 +42,23 @@ static unsigned int check_interval;
 static int expire_contact(void *obj, void *arg, int flags)
 {
 	struct ast_sip_contact *contact = obj;
+	struct ast_named_lock *lock;
 
-	ast_sorcery_delete(ast_sip_get_sorcery(), contact);
+	lock = ast_named_lock_get(AST_NAMED_LOCK_TYPE_RWLOCK, "aor", contact->aor);
+	if (!lock) {
+		return 0;
+	}
+
+	/*
+	 * We need to check the expiration again with the aor lock held
+	 * in case another thread is attempting to renew the contact.
+	 */
+	ao2_wrlock(lock);
+	if (ast_tvdiff_ms(ast_tvnow(), contact->expiration_time) > 0) {
+		ast_sip_location_delete_contact(contact);
+	}
+	ao2_unlock(lock);
+	ast_named_lock_put(lock);
 
 	return 0;
 }
@@ -91,6 +107,7 @@ static void expiration_global_loaded(const char *object_type)
 	} else {
 		if (check_thread != AST_PTHREADT_NULL) {
 			pthread_kill(check_thread, SIGURG);
+			pthread_join(check_thread, NULL);
 			check_thread = AST_PTHREADT_NULL;
 			ast_debug(3, "Interval = 0, shutting thread down\n");
 		}
@@ -105,7 +122,10 @@ static struct ast_sorcery_observer expiration_global_observer = {
 static int unload_module(void)
 {
 	if (check_thread != AST_PTHREADT_NULL) {
+		check_interval = 0;
 		pthread_kill(check_thread, SIGURG);
+		pthread_join(check_thread, NULL);
+
 		check_thread = AST_PTHREADT_NULL;
 	}
 

@@ -862,6 +862,7 @@ static int load_module(void)
 	ast_sorcery_apply_default(ast_sip_get_sorcery(), "asterisk-publication", "config", "pjsip.conf,criteria=type=asterisk-publication");
 
 	if (ast_sorcery_object_register(ast_sip_get_sorcery(), "asterisk-publication", asterisk_publication_config_alloc, NULL, NULL)) {
+		ast_log(LOG_ERROR, "Unable to register 'asterisk-publication' type with sorcery\n");
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
@@ -919,12 +920,13 @@ static int unload_module(void)
 	ast_sip_unregister_publish_handler(&asterisk_mwi_publication_handler);
 	ast_sip_unregister_event_publisher_handler(&asterisk_devicestate_publisher_handler);
 	ast_sip_unregister_event_publisher_handler(&asterisk_mwi_publisher_handler);
+	ast_sorcery_object_unregister(ast_sip_get_sorcery(), "asterisk-publication");
 	return 0;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "PJSIP Asterisk Event PUBLISH Support",
-		.load = load_module,
-		.reload = reload_module,
-		.unload = unload_module,
-		.load_pri = AST_MODPRI_CHANNEL_DEPEND,
+	.load = load_module,
+	.reload = reload_module,
+	.unload = unload_module,
+	.load_pri = AST_MODPRI_CHANNEL_DEPEND + 5,
 );

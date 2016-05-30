@@ -23,10 +23,17 @@
 #include "asterisk/res_pjsip.h"
 #include "asterisk/logger.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/paths.h"
 #include "asterisk/sorcery.h"
 #include "include/res_pjsip_private.h"
 #include "asterisk/res_pjsip_cli.h"
 #include "asterisk/statsd.h"
+#include "asterisk/named_locks.h"
+
+#include "asterisk/res_pjproject.h"
+
+static int pj_max_hostname = PJ_MAX_HOSTNAME;
+static int pjsip_max_url_size = PJSIP_MAX_URL_SIZE;
 
 /*! \brief Destructor for AOR */
 static void aor_destroy(void *obj)
@@ -114,6 +121,8 @@ static void *contact_alloc(const char *name)
 		return NULL;
 	}
 
+	ast_string_field_init_extended(contact, reg_server);
+
 	/* Dynamic contacts are delimited with ";@" and static ones with "@@" */
 	if ((aor_separator = strstr(id, ";@")) || (aor_separator = strstr(id, "@@"))) {
 		*aor_separator = '\0';
@@ -173,7 +182,7 @@ struct ast_sip_contact *ast_sip_location_retrieve_first_aor_contact(const struct
 	return contact;
 }
 
-struct ao2_container *ast_sip_location_retrieve_aor_contacts(const struct ast_sip_aor *aor)
+struct ao2_container *ast_sip_location_retrieve_aor_contacts_nolock(const struct ast_sip_aor *aor)
 {
 	/* Give enough space for ^ at the beginning and ;@ at the end, since that is our object naming scheme */
 	char regex[strlen(ast_sorcery_object_get_id(aor)) + 4];
@@ -192,6 +201,24 @@ struct ao2_container *ast_sip_location_retrieve_aor_contacts(const struct ast_si
 	if (aor->permanent_contacts) {
 		ao2_callback(aor->permanent_contacts, OBJ_NODATA, contact_link_static, contacts);
 	}
+
+	return contacts;
+}
+
+struct ao2_container *ast_sip_location_retrieve_aor_contacts(const struct ast_sip_aor *aor)
+{
+	struct ao2_container *contacts;
+	struct ast_named_lock *lock;
+
+	lock = ast_named_lock_get(AST_NAMED_LOCK_TYPE_RWLOCK, "aor", ast_sorcery_object_get_id(aor));
+	if (!lock) {
+		return NULL;
+	}
+
+	ao2_wrlock(lock);
+	contacts = ast_sip_location_retrieve_aor_contacts_nolock(aor);
+	ao2_unlock(lock);
+	ast_named_lock_put(lock);
 
 	return contacts;
 }
@@ -279,7 +306,7 @@ struct ast_sip_contact *ast_sip_location_retrieve_contact(const char *contact_na
 	return ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "contact", contact_name);
 }
 
-int ast_sip_location_add_contact(struct ast_sip_aor *aor, const char *uri,
+int ast_sip_location_add_contact_nolock(struct ast_sip_aor *aor, const char *uri,
 		struct timeval expiration_time, const char *path_info, const char *user_agent,
 		struct ast_sip_endpoint *endpoint)
 {
@@ -311,9 +338,34 @@ int ast_sip_location_add_contact(struct ast_sip_aor *aor, const char *uri,
 		ast_string_field_set(contact, user_agent, user_agent);
 	}
 
+	if (!ast_strlen_zero(ast_config_AST_SYSTEM_NAME)) {
+		ast_string_field_set(contact, reg_server, ast_config_AST_SYSTEM_NAME);
+	}
+
 	contact->endpoint = ao2_bump(endpoint);
 
 	return ast_sorcery_create(ast_sip_get_sorcery(), contact);
+}
+
+int ast_sip_location_add_contact(struct ast_sip_aor *aor, const char *uri,
+		struct timeval expiration_time, const char *path_info, const char *user_agent,
+		struct ast_sip_endpoint *endpoint)
+{
+	int res;
+	struct ast_named_lock *lock;
+
+	lock = ast_named_lock_get(AST_NAMED_LOCK_TYPE_RWLOCK, "aor", ast_sorcery_object_get_id(aor));
+	if (!lock) {
+		return -1;
+	}
+
+	ao2_wrlock(lock);
+	res = ast_sip_location_add_contact_nolock(aor, uri, expiration_time, path_info, user_agent,
+		endpoint);
+	ao2_unlock(lock);
+	ast_named_lock_put(lock);
+
+	return res;
 }
 
 int ast_sip_location_update_contact(struct ast_sip_contact *contact)
@@ -370,6 +422,69 @@ static int permanent_uri_sort_fn(const void *obj_left, const void *obj_right, in
 	return cmp;
 }
 
+int ast_sip_validate_uri_length(const char *contact_uri)
+{
+	int max_length = pj_max_hostname - 1;
+	char *contact = ast_strdupa(contact_uri);
+	char *host;
+	char *at;
+	int theres_a_port = 0;
+
+	if (strlen(contact_uri) > pjsip_max_url_size - 1) {
+		return -1;
+	}
+
+	contact = ast_strip_quoted(contact, "<", ">");
+
+	if (!strncasecmp(contact, "sip:", 4)) {
+		host = contact + 4;
+	} else if (!strncasecmp(contact, "sips:", 5)) {
+		host = contact + 5;
+	} else {
+		/* Not a SIP URI */
+		return -1;
+	}
+
+	at = strchr(contact, '@');
+	if (at) {
+		/* sip[s]:user@host */
+		host = at + 1;
+	}
+
+	if (host[0] == '[') {
+		/* Host is an IPv6 address. Just get up to the matching bracket */
+		char *close_bracket;
+
+		close_bracket = strchr(host, ']');
+		if (!close_bracket) {
+			return -1;
+		}
+		close_bracket++;
+		if (*close_bracket == ':') {
+			theres_a_port = 1;
+		}
+		*close_bracket = '\0';
+	} else {
+		/* uri parameters could contain ';' so trim them off first */
+		host = strsep(&host, ";?");
+		/* Host is FQDN or IPv4 address. Need to find closing delimiter */
+		if (strchr(host, ':')) {
+			theres_a_port = 1;
+			host = strsep(&host, ":");
+		}
+	}
+
+	if (!theres_a_port) {
+		max_length -= strlen("_sips.tcp.");
+	}
+
+	if (strlen(host) > max_length) {
+		return -1;
+	}
+
+	return 0;
+}
+
 /*! \brief Custom handler for permanent URIs */
 static int permanent_uri_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
@@ -391,6 +506,11 @@ static int permanent_uri_handler(const struct aco_option *opt, struct ast_variab
 
 		if (ast_strlen_zero(contact_uri)) {
 			continue;
+		}
+
+		if (ast_sip_validate_uri_length(contact_uri)) {
+			ast_log(LOG_ERROR, "Contact uri or hostname length exceeds pjproject limit: %s\n", contact_uri);
+			return -1;
 		}
 
 		if (!aor->permanent_contacts) {
@@ -980,6 +1100,10 @@ int ast_sip_initialize_sorcery_location(void)
 	struct ast_sorcery *sorcery = ast_sip_get_sorcery();
 	int i;
 
+	ast_pjproject_get_buildopt("PJ_MAX_HOSTNAME", "%d", &pj_max_hostname);
+	/* As of pjproject 2.4.5, PJSIP_MAX_URL_SIZE isn't exposed yet but we try anyway. */
+	ast_pjproject_get_buildopt("PJSIP_MAX_URL_SIZE", "%d", &pjsip_max_url_size);
+
 	ast_sorcery_apply_default(sorcery, "contact", "astdb", "registrar");
 	ast_sorcery_apply_default(sorcery, "aor", "config", "pjsip.conf,criteria=type=aor");
 
@@ -997,8 +1121,10 @@ int ast_sip_initialize_sorcery_location(void)
 	ast_sorcery_object_field_register(sorcery, "contact", "qualify_frequency", 0, OPT_UINT_T,
 		PARSE_IN_RANGE, FLDSET(struct ast_sip_contact, qualify_frequency), 0, 86400);
 	ast_sorcery_object_field_register(sorcery, "contact", "qualify_timeout", "3.0", OPT_DOUBLE_T, 0, FLDSET(struct ast_sip_contact, qualify_timeout));
+	ast_sorcery_object_field_register(sorcery, "contact", "authenticate_qualify", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_contact, authenticate_qualify));
 	ast_sorcery_object_field_register(sorcery, "contact", "outbound_proxy", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_contact, outbound_proxy));
 	ast_sorcery_object_field_register(sorcery, "contact", "user_agent", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_contact, user_agent));
+	ast_sorcery_object_field_register(sorcery, "contact", "reg_server", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_contact, reg_server));
 
 	ast_sorcery_object_field_register(sorcery, "aor", "type", "", OPT_NOOP_T, 0, 0);
 	ast_sorcery_object_field_register(sorcery, "aor", "minimum_expiration", "60", OPT_UINT_T, 0, FLDSET(struct ast_sip_aor, minimum_expiration));

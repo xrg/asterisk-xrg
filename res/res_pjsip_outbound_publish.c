@@ -87,6 +87,13 @@
 				<configOption name="max_auth_attempts" default="5">
 					<synopsis>Maximum number of authentication attempts before stopping the publication.</synopsis>
 				</configOption>
+				<configOption name="transport">
+					<synopsis>Transport used for outbound publish</synopsis>
+					<description>
+						<note><para>A <replaceable>transport</replaceable> configured in
+						<literal>pjsip.conf</literal>. As with other <literal>res_pjsip</literal> modules, this will use the first available transport of the appropriate type if unconfigured.</para></note>
+					</description>
+				</configOption>
 				<configOption name="type">
 					<synopsis>Must be of type 'outbound-publish'.</synopsis>
 				</configOption>
@@ -117,6 +124,8 @@ struct ast_sip_outbound_publish {
 		AST_STRING_FIELD(from_uri);
 		/*! \brief URI for the To header */
 		AST_STRING_FIELD(to_uri);
+		/*! \brief Explicit transport to use for publish */
+		AST_STRING_FIELD(transport);
 		/*! \brief Outbound proxy to use */
 		AST_STRING_FIELD(outbound_proxy);
 		/*! \brief The event type to publish */
@@ -150,6 +159,8 @@ struct ast_sip_outbound_publish_client {
 	unsigned int destroy;
 	/*! \brief Outbound publish information */
 	struct ast_sip_outbound_publish *publish;
+	/*! \brief The name of the transport to be used for the publish */
+	char *transport_name;
 };
 
 /*! \brief Outbound publish state information (persists for lifetime of a publish) */
@@ -331,6 +342,12 @@ static int send_unpublish_task(void *data)
 	pjsip_tx_data *tdata;
 
 	if (pjsip_publishc_unpublish(client->client, &tdata) == PJ_SUCCESS) {
+		if (!ast_strlen_zero(client->transport_name)) {
+			pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
+			ast_sip_set_tpselector_from_transport_name(client->transport_name, &selector);
+			pjsip_tx_data_set_transport(tdata, &selector);
+		}
+
 		pjsip_publishc_send(client->client, tdata);
 	}
 
@@ -372,7 +389,7 @@ static void sip_outbound_publish_synchronize(struct ast_sip_event_publisher_hand
 			} else {
 				state->client->started = 1;
 			}
-		} else if (state->client->started && !handler && removed && !strcmp(publish->event, removed->event_name)) {
+		} else if (!handler && removed && !strcmp(publish->event, removed->event_name)) {
 			/* If the publisher client has been started but it is going away stop it */
 			removed->stop_publishing(state->client);
 			state->client->started = 0;
@@ -389,22 +406,30 @@ static void sip_outbound_publish_synchronize(struct ast_sip_event_publisher_hand
 	ao2_ref(states, -1);
 }
 
-struct ast_sip_outbound_publish_client *ast_sip_publish_client_get(const char *name)
+static struct ast_sip_outbound_publish_state *sip_publish_state_get(const char *id)
 {
-	RAII_VAR(struct ao2_container *, states,
-		 ao2_global_obj_ref(current_states), ao2_cleanup);
-	RAII_VAR(struct ast_sip_outbound_publish_state *, state, NULL, ao2_cleanup);
+	struct ao2_container *states = ao2_global_obj_ref(current_states);
+	struct ast_sip_outbound_publish_state *res;
 
 	if (!states) {
 		return NULL;
 	}
 
-	state = ao2_find(states, name, OBJ_SEARCH_KEY);
+	res = ao2_find(states, id, OBJ_SEARCH_KEY);
+	ao2_ref(states, -1);
+	return res;
+}
+
+struct ast_sip_outbound_publish_client *ast_sip_publish_client_get(const char *name)
+{
+	struct ast_sip_outbound_publish_state *state = sip_publish_state_get(name);
+
 	if (!state) {
 		return NULL;
 	}
 
 	ao2_ref(state->client, +1);
+	ao2_ref(state, -1);
 	return state->client;
 }
 
@@ -566,6 +591,12 @@ static int sip_publish_client_service_queue(void *data)
 		goto fatal;
 	}
 
+	if (!ast_strlen_zero(client->transport_name)) {
+		pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
+		ast_sip_set_tpselector_from_transport_name(client->transport_name, &selector);
+		pjsip_tx_data_set_transport(tdata, &selector);
+	}
+
 	status = pjsip_publishc_send(client->client, tdata);
 	if (status == PJ_EBUSY) {
 		/* We attempted to send the message but something else got there first */
@@ -647,6 +678,7 @@ static void sip_outbound_publish_client_destroy(void *obj)
 
 	ao2_cleanup(client->datastores);
 	ao2_cleanup(client->publish);
+	ast_free(client->transport_name);
 
 	/* if unloading the module and all objects have been unpublished
 	   send the signal to finish unloading */
@@ -663,8 +695,15 @@ static int explicit_publish_destroy(void *data)
 {
 	struct ast_sip_outbound_publish_client *client = data;
 
-	pjsip_publishc_destroy(client->client);
-	ao2_ref(client, -1);
+	/*
+	 * If there is no pjsip publishing client then we obviously don't need
+	 * to destroy it. Also, the ref for the Asterisk publishing client that
+	 * pjsip had would not exist or should already be gone as well.
+	 */
+	if (client->client) {
+		pjsip_publishc_destroy(client->client);
+		ao2_ref(client, -1);
+	}
 
 	return 0;
 }
@@ -844,6 +883,11 @@ static int sip_outbound_publish_client_alloc(void *data)
 /*! \brief Callback function for publish client responses */
 static void sip_outbound_publish_callback(struct pjsip_publishc_cbparam *param)
 {
+#define DESTROY_CLIENT() do {			   \
+	pjsip_publishc_destroy(client->client); \
+	client->client = NULL; \
+	ao2_ref(client, -1); } while (0)
+
 	RAII_VAR(struct ast_sip_outbound_publish_client *, client, ao2_bump(param->token), ao2_cleanup);
 	RAII_VAR(struct ast_sip_outbound_publish *, publish, ao2_bump(client->publish), ao2_cleanup);
 	SCOPED_AO2LOCK(lock, client);
@@ -861,22 +905,25 @@ static void sip_outbound_publish_callback(struct pjsip_publishc_cbparam *param)
 			ao2_ref(client, -1);
 		}
 		/* Once the destroy is called this callback will not get called any longer, so drop the client ref */
-		pjsip_publishc_destroy(client->client);
-		ao2_ref(client, -1);
+		DESTROY_CLIENT();
 		return;
 	}
 
 	if (param->code == 401 || param->code == 407) {
 		if (!ast_sip_create_request_with_auth(&publish->outbound_auths,
 				param->rdata, pjsip_rdata_get_tsx(param->rdata), &tdata)) {
+			if (!ast_strlen_zero(client->transport_name)) {
+				pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
+				ast_sip_set_tpselector_from_transport_name(client->transport_name, &selector);
+				pjsip_tx_data_set_transport(tdata, &selector);
+			}
+
 			pjsip_publishc_send(client->client, tdata);
 		}
 		client->auth_attempts++;
 
 		if (client->auth_attempts == publish->max_auth_attempts) {
-			pjsip_publishc_destroy(client->client);
-			client->client = NULL;
-
+			DESTROY_CLIENT();
 			ast_log(LOG_ERROR, "Reached maximum number of PUBLISH authentication attempts on outbound publish '%s'\n",
 				ast_sorcery_object_get_id(publish));
 
@@ -888,9 +935,7 @@ static void sip_outbound_publish_callback(struct pjsip_publishc_cbparam *param)
 	client->auth_attempts = 0;
 
 	if (param->code == 412) {
-		pjsip_publishc_destroy(client->client);
-		client->client = NULL;
-
+		DESTROY_CLIENT();
 		if (sip_outbound_publish_client_alloc(client)) {
 			ast_log(LOG_ERROR, "Failed to create a new outbound publish client for '%s' on 412 response\n",
 				ast_sorcery_object_get_id(publish));
@@ -905,10 +950,9 @@ static void sip_outbound_publish_callback(struct pjsip_publishc_cbparam *param)
 
 		expires = pjsip_msg_find_hdr(param->rdata->msg_info.msg, PJSIP_H_MIN_EXPIRES, NULL);
 		if (!expires || !expires->ivalue) {
+			DESTROY_CLIENT();
 			ast_log(LOG_ERROR, "Received 423 response on outbound publish '%s' without a Min-Expires header\n",
 				ast_sorcery_object_get_id(publish));
-			pjsip_publishc_destroy(client->client);
-			client->client = NULL;
 			goto end;
 		}
 
@@ -1028,31 +1072,96 @@ static struct ast_sip_outbound_publish_state *sip_outbound_publish_state_alloc(
 
 	state->client->timer.user_data = state->client;
 	state->client->timer.cb = sip_outbound_publish_timer_cb;
+	state->client->transport_name = ast_strdup(publish->transport);
 	state->client->publish = ao2_bump(publish);
 
 	strcpy(state->id, id);
 	return state;
 }
 
-/*! \brief Apply function which finds or allocates a state structure */
-static int sip_outbound_publish_apply(const struct ast_sorcery *sorcery, void *obj)
+static int initialize_publish_client(struct ast_sip_outbound_publish *publish,
+				     struct ast_sip_outbound_publish_state *state)
 {
-	RAII_VAR(struct ao2_container *, states, ao2_global_obj_ref(current_states), ao2_cleanup);
-	RAII_VAR(struct ast_sip_outbound_publish_state *, state, NULL, ao2_cleanup);
-	struct ast_sip_outbound_publish *applied = obj;
-
-	if (ast_strlen_zero(applied->server_uri)) {
-		ast_log(LOG_ERROR, "No server URI specified on outbound publish '%s'\n",
-			ast_sorcery_object_get_id(applied));
-		return -1;
-	} else if (ast_strlen_zero(applied->event)) {
-		ast_log(LOG_ERROR, "No event type specified for outbound publish '%s'\n",
-			ast_sorcery_object_get_id(applied));
+	if (ast_sip_push_task_synchronous(NULL, sip_outbound_publish_client_alloc, state->client)) {
+		ast_log(LOG_ERROR, "Unable to create client for outbound publish '%s'\n",
+			ast_sorcery_object_get_id(publish));
 		return -1;
 	}
 
+	return 0;
+}
+
+static int validate_publish_config(struct ast_sip_outbound_publish *publish)
+{
+	if (ast_strlen_zero(publish->server_uri)) {
+		ast_log(LOG_ERROR, "No server URI specified on outbound publish '%s'\n",
+			ast_sorcery_object_get_id(publish));
+		return -1;
+	} else if (ast_strlen_zero(publish->event)) {
+		ast_log(LOG_ERROR, "No event type specified for outbound publish '%s'\n",
+			ast_sorcery_object_get_id(publish));
+		return -1;
+	}
+	return 0;
+}
+
+static int current_state_reusable(struct ast_sip_outbound_publish *publish,
+				  struct ast_sip_outbound_publish_state *current_state)
+{
+	struct ast_sip_outbound_publish *old_publish;
+
+	if (!can_reuse_publish(current_state->client->publish, publish)) {
+		/*
+		 * Something significant has changed in the configuration, so we are
+		 * unable to use the old state object. The current state needs to go
+		 * away and a new one needs to be created.
+		 */
+		return 0;
+	}
+
+	/*
+	 * We can reuse the current state object so keep it, but swap out the
+	 * underlying publish object with the new one.
+	 */
+	old_publish = current_state->client->publish;
+	current_state->client->publish = publish;
+	if (initialize_publish_client(publish, current_state)) {
+		/*
+		 * If the state object fails to re-initialize then swap
+		 * the old publish info back in.
+		 */
+		current_state->client->publish = publish;
+		return -1;
+	}
+
+	/*
+	 * Since we swapped out the publish object the new one needs a ref
+	 * while the old one needs to go away.
+	 */
+	ao2_ref(current_state->client->publish, +1);
+	ao2_cleanup(old_publish);
+
+	/* Tell the caller that the current state object should be used */
+	return 1;
+}
+
+/*! \brief Apply function which finds or allocates a state structure */
+static int sip_outbound_publish_apply(const struct ast_sorcery *sorcery, void *obj)
+{
+#define ADD_TO_NEW_STATES(__obj) \
+	do { if (__obj) { \
+	     ao2_link(new_states, __obj); \
+	     ao2_ref(__obj, -1); } } while (0)
+
+	struct ast_sip_outbound_publish *applied = obj;
+	struct ast_sip_outbound_publish_state *current_state, *new_state;
+	int res;
+
+	/*
+	 * New states are being loaded or reloaded. We'll need to add the new
+	 * object if created/updated, or keep the old object if an error occurs.
+	 */
 	if (!new_states) {
-		/* make sure new_states has been allocated as we will be adding to it */
 		new_states = ao2_container_alloc_options(
 			AO2_ALLOC_OPT_LOCK_NOLOCK, DEFAULT_STATE_BUCKETS,
 			outbound_publish_state_hash, outbound_publish_state_cmp);
@@ -1063,35 +1172,44 @@ static int sip_outbound_publish_apply(const struct ast_sorcery *sorcery, void *o
 		}
 	}
 
-	if (states) {
-		state = ao2_find(states, ast_sorcery_object_get_id(obj), OBJ_SEARCH_KEY);
-		if (state) {
-			if (can_reuse_publish(state->client->publish, applied)) {
-				ao2_replace(state->client->publish, applied);
-			} else {
-				ao2_ref(state, -1);
-				state = NULL;
-			}
-		}
+	/* If there is current state we'll want to maintain it if any errors occur */
+	current_state = sip_publish_state_get(ast_sorcery_object_get_id(applied));
+
+	if ((res = validate_publish_config(applied))) {
+		ADD_TO_NEW_STATES(current_state);
+		return res;
 	}
 
-	if (!state) {
-		state = sip_outbound_publish_state_alloc(applied);
-		if (!state) {
-			ast_log(LOG_ERROR, "Unable to create state for outbound publish '%s'\n",
-				ast_sorcery_object_get_id(applied));
-			return -1;
-		};
+	if (current_state && (res = current_state_reusable(applied, current_state))) {
+		/*
+		 * The current state object was able to be reused, or an error
+		 * occurred. Either way we keep the current state and be done.
+		 */
+		ADD_TO_NEW_STATES(current_state);
+		return res == 1 ? 0 : -1;
 	}
 
-	if (ast_sip_push_task_synchronous(NULL, sip_outbound_publish_client_alloc, state->client)) {
-		ast_log(LOG_ERROR, "Unable to create client for outbound publish '%s'\n",
+	/*
+	 * No current state was found or it was unable to be reused. Either way
+	 * we'll need to create a new state object.
+	 */
+	new_state = sip_outbound_publish_state_alloc(applied);
+	if (!new_state) {
+		ast_log(LOG_ERROR, "Unable to create state for outbound publish '%s'\n",
 			ast_sorcery_object_get_id(applied));
+		ADD_TO_NEW_STATES(current_state);
+		return -1;
+	};
+
+	if (initialize_publish_client(applied, new_state)) {
+		ADD_TO_NEW_STATES(current_state);
+		ao2_ref(new_state, -1);
 		return -1;
 	}
 
-	ao2_link(new_states, state);
-	return 0;
+	ADD_TO_NEW_STATES(new_state);
+	ao2_cleanup(current_state);
+	return res;
 }
 
 static int outbound_auth_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
@@ -1110,6 +1228,7 @@ static int load_module(void)
 
 	if (ast_sorcery_object_register(ast_sip_get_sorcery(), "outbound-publish", sip_outbound_publish_alloc, NULL,
 		sip_outbound_publish_apply)) {
+		ast_log(LOG_ERROR, "Unable to register 'outbound-publish' type with sorcery\n");
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
@@ -1121,6 +1240,7 @@ static int load_module(void)
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "outbound-publish", "outbound_proxy", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_outbound_publish, outbound_proxy));
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "outbound-publish", "expiration", "3600", OPT_UINT_T, 0, FLDSET(struct ast_sip_outbound_publish, expiration));
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "outbound-publish", "max_auth_attempts", "5", OPT_UINT_T, 0, FLDSET(struct ast_sip_outbound_publish, max_auth_attempts));
+	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "outbound-publish", "transport", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_outbound_publish, transport));
 	ast_sorcery_object_field_register_custom(ast_sip_get_sorcery(), "outbound-publish", "outbound_auth", "", outbound_auth_handler, NULL, NULL, 0, 0);
 
 	ast_sorcery_reload_object(ast_sip_get_sorcery(), "outbound-publish");
@@ -1168,7 +1288,7 @@ static int unload_module(void)
 
 	/* wait for items to unpublish */
 	ast_verb(5, "Waiting to complete unpublishing task(s)\n");
-	while (unloading.count) {
+	while (unloading.count && !res) {
 		res = ast_cond_timedwait(&unloading.cond, &unloading.lock, &end);
 	}
 	ast_mutex_unlock(&unloading.lock);
@@ -1181,6 +1301,7 @@ static int unload_module(void)
 			"in the allowed time\n", unloading.count);
 	} else {
 		ast_verb(5, "All items successfully unpublished\n");
+		ast_sorcery_object_unregister(ast_sip_get_sorcery(), "outbound-publish");
 	}
 
 	return res;

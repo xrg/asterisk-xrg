@@ -626,6 +626,8 @@ static const struct ast_datastore_info fax_datastore = {
 static int fax_gateway_attach(struct ast_channel *chan, struct ast_fax_session_details *details);
 static int fax_detect_attach(struct ast_channel *chan, int timeout, int flags);
 static struct ast_fax_session_details *find_or_create_details(struct ast_channel *chan);
+static struct ast_fax_session *fax_v21_session_new (struct ast_channel *chan);
+
 
 /*! \brief Copies fax detection and gateway framehooks during masquerades
  *
@@ -1447,6 +1449,12 @@ static void set_channel_variables(struct ast_channel *chan, struct ast_fax_sessi
 	pbx_builtin_setvar_helper(chan, "FAXBITRATE", S_OR(details->transfer_rate, NULL));
 	pbx_builtin_setvar_helper(chan, "FAXRESOLUTION", S_OR(details->resolution, NULL));
 
+	if (ast_channel_get_t38_state(chan) == T38_STATE_NEGOTIATED) {
+		pbx_builtin_setvar_helper(chan, "FAXMODE", "T38");
+	} else {
+		pbx_builtin_setvar_helper(chan, "FAXMODE", "audio");
+	}
+
 	snprintf(buf, sizeof(buf), "%u", details->pages_transferred);
 	pbx_builtin_setvar_helper(chan, "FAXPAGES", buf);
 }
@@ -2071,6 +2079,7 @@ static int receivefax_exec(struct ast_channel *chan, const char *data)
 	pbx_builtin_setvar_helper(chan, "FAXPAGES", "0");
 	pbx_builtin_setvar_helper(chan, "FAXBITRATE", NULL);
 	pbx_builtin_setvar_helper(chan, "FAXRESOLUTION", NULL);
+	pbx_builtin_setvar_helper(chan, "FAXMODE", NULL);
 
 	/* Get a FAX session details structure from the channel's FAX datastore and create one if
 	 * it does not already exist. */
@@ -2578,6 +2587,7 @@ static int sendfax_exec(struct ast_channel *chan, const char *data)
 	pbx_builtin_setvar_helper(chan, "FAXPAGES", "0");
 	pbx_builtin_setvar_helper(chan, "FAXBITRATE", NULL);
 	pbx_builtin_setvar_helper(chan, "FAXRESOLUTION", NULL);
+	pbx_builtin_setvar_helper(chan, "FAXMODE", NULL);
 
 	/* Get a requirement structure and set it.  This structure is used
 	 * to tell the FAX technology module about the higher level FAX session */
@@ -2827,6 +2837,23 @@ static void destroy_gateway(void *data)
 	ao2_cleanup(gateway->peer_write_format);
 }
 
+static struct ast_fax_session *fax_v21_session_new (struct ast_channel *chan) {
+	struct ast_fax_session_details *v21_details;
+	struct ast_fax_session *v21_session;
+
+	if (!chan || !(v21_details = session_details_new())) {
+		return NULL;
+	}
+
+	v21_details->caps = AST_FAX_TECH_V21_DETECT;
+	if (!(v21_session = fax_session_new(v21_details, chan, NULL, NULL))) {
+		ao2_ref(v21_details, -1);
+		return NULL;
+	}
+
+	return v21_session;
+}
+
 /*! \brief Create a new fax gateway object.
  * \param chan the channel the gateway object will be attached to
  * \param details the fax session details
@@ -2835,29 +2862,15 @@ static void destroy_gateway(void *data)
 static struct fax_gateway *fax_gateway_new(struct ast_channel *chan, struct ast_fax_session_details *details)
 {
 	struct fax_gateway *gateway = ao2_alloc(sizeof(*gateway), destroy_gateway);
-	struct ast_fax_session_details *v21_details;
 	if (!gateway) {
 		return NULL;
 	}
 
-	if (!(v21_details = session_details_new())) {
+	if (!(gateway->chan_v21_session = fax_v21_session_new(chan))) {
+		ast_log(LOG_ERROR, "Can't create V21 session on chan %s for T.38 gateway session\n", ast_channel_name(chan));
 		ao2_ref(gateway, -1);
 		return NULL;
 	}
-
-	v21_details->caps = AST_FAX_TECH_V21_DETECT;
-	if (!(gateway->chan_v21_session = fax_session_new(v21_details, chan, NULL, NULL))) {
-		ao2_ref(v21_details, -1);
-		ao2_ref(gateway, -1);
-		return NULL;
-	}
-
-	if (!(gateway->peer_v21_session = fax_session_new(v21_details, chan, NULL, NULL))) {
-		ao2_ref(v21_details, -1);
-		ao2_ref(gateway, -1);
-		return NULL;
-	}
-	ao2_ref(v21_details, -1);
 
 	gateway->framehook = -1;
 
@@ -3352,6 +3365,11 @@ static struct ast_frame *fax_gateway_framehook(struct ast_channel *chan, struct 
 		ast_channel_unlock(peer);
 
 		gateway->bridged = 1;
+		if (!(gateway->peer_v21_session = fax_v21_session_new(peer))) {
+			ast_log(LOG_ERROR, "Can't create V21 session on chan %s for T.38 gateway session\n", ast_channel_name(peer));
+			ast_framehook_detach(chan, gateway->framehook);
+			return f;
+		}
 	}
 
 	if (gateway->bridged && !ast_tvzero(gateway->timeout_start)) {
@@ -3477,6 +3495,10 @@ static int fax_gateway_attach(struct ast_channel *chan, struct ast_fax_session_d
 		.destroy_cb = fax_gateway_framehook_destroy,
 		.disable_inheritance = 1, /* Masquerade inheritance is handled through the datastore fixup */
 	};
+
+    	if (global_fax_debug) {
+        	details->option.debug = AST_FAX_OPTFLAG_TRUE;
+    	}
 
 	ast_string_field_set(details, result, "SUCCESS");
 	ast_string_field_set(details, resultstr, "gateway operation started successfully");

@@ -9,12 +9,80 @@
 ==============================================================================
 
 ------------------------------------------------------------------------------
+--- Functionality changes from Asterisk 13.9.0 to Asterisk 13.10.0 -----------
+------------------------------------------------------------------------------
+
+func_odbc
+------------------
+ * Added new global option "single_db_connection".
+   Enabling this option func_odbc will use a single database connection per DSN.
+   This option is enabled by default.
+
+res_fax
+------------------
+ * Added FAXMODE variable to let dialplan know what fax transport was used.
+   FAXMODE variable is set to either "audio" or "T38".
+
+res_pjsip
+------------------
+ * Endpoint IP Access Controls
+   Added new configuration Endpoint options:
+    "acl" - list of IP ACL section names in acl.conf
+    "deny" - List of IP addresses to deny access from
+    "permit" - List of IP addresses to permit access from
+    "contact_acl" - List of Contact ACL section names in acl.conf
+    "contact_deny" - List of Contact header addresses to deny
+    "contact_permit" - List of Contact header addresses to permit
+
+ * Added new status Updated to AMI event ContactStatus on update registration
+
+ * Added "reg_server" to contacts.
+   If the Asterisk system name is set in asterisk.conf, it will be stored
+   into the "reg_server" field in the ps_contacts table to facilitate
+   multi-server setups.
+
+res_hep
+------------------
+ * Added a new option, 'uuid_type', that sets the preferred source of the Homer
+   correlation UUID. The valid options are:
+   - call-id: Use the PJSIP SIP Call-ID header value
+   - channel: Use the Asterisk channel name
+   The default value is 'call-id'. In the event that a HEP module cannot find a
+   valid value using the specified 'uuid_type', the module may fallback to a
+   more readily available source for the correlation UUID.
+
+res_pjsip_info_empty
+--------------------
+ * A new module that can respond to empty Content-Type INFO packets during call.
+   Some SBCs will terminate a call if their empty INFO packets are not responded
+   to within a predefined time.
+
+app_confbridge
+------------------
+ * Added a bridge profile option called regcontext that allows you to
+   dynamically register the conference bridge name as an extension into
+   the specified context.  This allows tracking down conferences on multi-
+   server installations via alternate means (DUNDI for example). By default
+   this feature is not used.
+
+------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 13.8.0 to Asterisk 13.9.0 ------------
 ------------------------------------------------------------------------------
+
+res_pjsip
+------------------
+ * Added new global option (disable_multi_domain) to pjsip.
+   Disabling Multi Domain can improve realtime performace by reducing
+   number of database requsts.
 
 chan_pjsip
 ------------------
  * Added 'pjsip show channelstats' CLI command.
+
+res_pjsip_outbound_publish
+------------------
+ * Added support for setting the transport used on outbound publish
+   using the transport configuration option.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 13.7.0 to Asterisk 13.8.0 ------------
@@ -118,6 +186,20 @@ res_pjsip
  * Added new global option (regcontext) to pjsip. When set, Asterisk will
    dynamically create and destroy a NoOp priority 1 extension
    for a given endpoint who registers or unregisters with us.
+
+ * Endpoints and aors can now be identified by the username and realm in an
+   incoming Authorization header.  To use this feature, add "auth_username"
+   to your endpoint's "identify_by" list.  You can combine "auth_username"
+   and the original "username" to test both the From/To and Authorization
+   headers.  For endpoints, the order is controlled by the global
+   "endpoint_identifier_order" setting.  For matching aors to an endpoint
+   for inbound registration, the order is controlled by this option.
+
+ * In conjunction with the "auth_username" change, 3 new options have been
+   added to the global configuration object that control how many unidentified
+   requests over a certain period from the same IP address can be received
+   before a security altert is generated.  A new CLI command
+   "pjsip show unidentified_requests" will list the current candidates.
 
 res_pjsip_history
 ------------------

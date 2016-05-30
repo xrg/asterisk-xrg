@@ -378,6 +378,10 @@ static struct ast_sip_transport_state *find_or_create_temporary_state(struct ast
 	new_state->type = transport->type;
 
 	pjsip_tls_setting_default(&new_state->tls);
+#ifdef HAVE_PJSIP_TLS_TRANSPORT_PROTO
+	/* proto must be forced to 0 to enable all protocols otherwise only TLS will work */
+	new_state->tls.proto = 0;
+#endif
 	new_state->tls.ciphers = new_state->ciphers;
 
 	ao2_ref(new_state, +1);
@@ -558,11 +562,17 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 		}
 	} else if (transport->type == AST_TRANSPORT_TCP) {
 		pjsip_tcp_transport_cfg cfg;
+		int option = 1;
 
 		pjsip_tcp_transport_cfg_default(&cfg, temp_state->state->host.addr.sa_family);
 		cfg.bind_addr = temp_state->state->host;
 		cfg.async_cnt = transport->async_operations;
 		set_qos(transport, &cfg.qos_params);
+		cfg.sockopt_params.options[0].level = pj_SOL_TCP();
+		cfg.sockopt_params.options[0].optname = pj_TCP_NODELAY();
+		cfg.sockopt_params.options[0].optval = &option;
+		cfg.sockopt_params.options[0].optlen = sizeof(option);
+		cfg.sockopt_params.cnt = 1;
 
 		for (i = 0; i < BIND_TRIES && res != PJ_SUCCESS; i++) {
 			if (perm_state && perm_state->state && perm_state->state->factory
