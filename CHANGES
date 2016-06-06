@@ -12,6 +12,11 @@
 --- Functionality changes from Asterisk 13.9.0 to Asterisk 13.10.0 -----------
 ------------------------------------------------------------------------------
 
+Core
+------------------
+ * A channel variable FORWARDERNAME is now set which indicates which channel
+   was responsible for a forwarding requests received on dial attempt.
+
 func_odbc
 ------------------
  * Added new global option "single_db_connection".
@@ -25,6 +30,12 @@ res_fax
 
 res_pjsip
 ------------------
+ * Added "via_addr", "via_port", "call_id" to contacts.
+   As res_pjsip_nat rewrites contact's address, only the last Via header
+   can contain the source address of registered endpoint.
+   Also Call-Id header may contain the source address of registered endpoint.
+   Added new fields ViaAddress,CallID to AMI event ContactStatus
+
  * Endpoint IP Access Controls
    Added new configuration Endpoint options:
     "acl" - list of IP ACL section names in acl.conf
