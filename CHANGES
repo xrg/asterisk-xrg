@@ -17,6 +17,36 @@ Core
  * A channel variable FORWARDERNAME is now set which indicates which channel
    was responsible for a forwarding requests received on dial attempt.
 
+chan_multicast_rtp
+------------------
+ * Deprecated in favor of chan_rtp which is basically chan_multicast_rtp
+   renamed to chan_rtp with UnicastRTP channels added and some internal code
+   improvements.
+
+chan_rtp
+------------------
+ * The format for dialing a unicast RTP channel is:
+   UnicastRTP/<destination-addr>[/[<options>]]
+   Where <destination-addr> is something like '127.0.0.1:5060'.
+   Where <options> are in standard Asterisk flag options format:
+   c(<codec>) - Specify which codec/format to use such as 'ulaw'.
+   e(<engine>) - Specify which RTP engine to use such as 'asterisk'.
+
+ * More options are available over what chan_multicast_rtp supports.
+   The format for dialing a multicast RTP channel is:
+   MulticastRTP/<type>/<destination-addr>[/[<control-addr>][/[<options>]]]
+   Where <type> can be either 'basic' or 'linksys'.
+   Where <destination-addr> is something like '224.0.0.3:5060'.
+   Where <control-addr> is something like '127.0.0.1:5060'.
+   Where <options> are in standard Asterisk flag options format:
+   c(<codec>) - Specify which codec/format to use such as 'ulaw'.
+   i(<address>) - Specify the interface address from which multicast RTP
+     is sent.
+   l(<enable>) - Set whether packets are looped back to the sender.  The
+     enable value can be 0 to set looping to off and non-zero to set
+     looping on.
+   t(<ttl>) - Set the time-to-live (TTL) value for multicast packets.
+
 func_odbc
 ------------------
  * Added new global option "single_db_connection".
@@ -52,6 +82,9 @@ res_pjsip
    into the "reg_server" field in the ps_contacts table to facilitate
    multi-server setups.
 
+ * When starting Asterisk, received traffic will now be ignored until Asterisk
+   has loaded all modules and is fully booted.
+
 res_hep
 ------------------
  * Added a new option, 'uuid_type', that sets the preferred source of the Homer
@@ -68,6 +101,12 @@ res_pjsip_info_empty
    Some SBCs will terminate a call if their empty INFO packets are not responded
    to within a predefined time.
 
+res_odbc
+------------------
+ * A new option has been added, 'max_connections', which sets the maximum number
+   of concurrent connections to the database. This option defaults to 1 which
+   returns the behavior to that of Asterisk 13.7 and prior.
+
 app_confbridge
 ------------------
  * Added a bridge profile option called regcontext that allows you to
@@ -75,6 +114,18 @@ app_confbridge
    the specified context.  This allows tracking down conferences on multi-
    server installations via alternate means (DUNDI for example). By default
    this feature is not used.
+
+Codecs
+------------------
+ * Added the associated format name to 'core show codecs'.
+
+res_ari_channels
+------------------
+ * Added 'formats' to channel create/originate to allow setting the allowed
+   formats for a channel when no originator channel is available.  Especially
+   useful for Local channel creation where no other format information is
+   available.  'core show codecs' can now be used to look up suitable format
+   names.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 13.8.0 to Asterisk 13.9.0 ------------
