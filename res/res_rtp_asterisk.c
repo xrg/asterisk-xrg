@@ -540,8 +540,8 @@ static int ice_candidate_cmp(void *obj, void *arg, int flags)
 
 	if (strcmp(candidate1->foundation, candidate2->foundation) ||
 			candidate1->id != candidate2->id ||
-			ast_sockaddr_cmp(&candidate1->address, &candidate2->address) ||
-			candidate1->type != candidate1->type) {
+			candidate1->type != candidate2->type ||
+			ast_sockaddr_cmp(&candidate1->address, &candidate2->address)) {
 		return 0;
 	}
 
@@ -1357,7 +1357,12 @@ static int ast_rtp_dtls_set_configuration(struct ast_rtp_instance *instance, con
 		return 0;
 	}
 
-	if (!(rtp->ssl_ctx = SSL_CTX_new(DTLSv1_method()))) {
+#if OPENSSL_VERSION_NUMBER < 0x10002000L
+	rtp->ssl_ctx = SSL_CTX_new(DTLSv1_method());
+#else
+	rtp->ssl_ctx = SSL_CTX_new(DTLS_method());
+#endif
+	if (!rtp->ssl_ctx) {
 		return -1;
 	}
 
@@ -1393,7 +1398,7 @@ static int ast_rtp_dtls_set_configuration(struct ast_rtp_instance *instance, con
 	if (!ast_strlen_zero(dtls_cfg->certfile)) {
 		char *private = ast_strlen_zero(dtls_cfg->pvtfile) ? dtls_cfg->certfile : dtls_cfg->pvtfile;
 		BIO *certbio;
-		X509 *cert;
+		X509 *cert = NULL;
 		const EVP_MD *type;
 		unsigned int size, i;
 		unsigned char fingerprint[EVP_MAX_MD_SIZE];
@@ -1435,6 +1440,9 @@ static int ast_rtp_dtls_set_configuration(struct ast_rtp_instance *instance, con
 			ast_log(LOG_ERROR, "Could not produce fingerprint from certificate '%s' for RTP instance '%p'\n",
 				dtls_cfg->certfile, instance);
 			BIO_free_all(certbio);
+			if (cert) {
+				X509_free(cert);
+			}
 			return -1;
 		}
 
@@ -1446,6 +1454,7 @@ static int ast_rtp_dtls_set_configuration(struct ast_rtp_instance *instance, con
 		*(local_fingerprint-1) = 0;
 
 		BIO_free_all(certbio);
+		X509_free(cert);
 	}
 
 	if (!ast_strlen_zero(dtls_cfg->cipher)) {
