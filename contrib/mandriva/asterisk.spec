@@ -1125,6 +1125,7 @@ fi
 %attr(0644,root,root) %config(noreplace)		%{_sysconfdir}/sysconfig/asterisk
 # TODO
 #attr(0750,root,asterisk) %dir				%{_sysconfdir}/ssl/asterisk
+%exclude                                                %{_sysconfdir}/asterisk/ari.conf
 
 # these are packaged as sub packages below
 %if %{build_misdn}
@@ -1686,6 +1687,7 @@ fi
 %attr(0755,root,root) %{modulesdir}/app_voicemail.so
 
 %files ari
+%attr(0644,asterisk,asterisk) %config(noreplace)        %{_sysconfdir}/asterisk/ari.conf
 %attr(0755,root,root) %{modulesdir}/res_ari.so
 %attr(0755,root,root) %{modulesdir}/res_ari_applications.so
 %attr(0755,root,root) %{modulesdir}/res_ari_asterisk.so
