@@ -2692,10 +2692,28 @@ void ast_hangup(struct ast_channel *chan)
 	ast_channel_unref(chan);
 }
 
+/*!
+ * \internal
+ * \brief Set channel answered time if not already set.
+ * \since 13.11.0
+ *
+ * \param chan Channel to set answered time.
+ *
+ * \return Nothing
+ */
+static void set_channel_answer_time(struct ast_channel *chan)
+{
+	if (ast_tvzero(ast_channel_answertime(chan))) {
+		struct timeval answertime;
+
+		answertime = ast_tvnow();
+		ast_channel_answertime_set(chan, &answertime);
+	}
+}
+
 int ast_raw_answer(struct ast_channel *chan)
 {
 	int res = 0;
-	struct timeval answertime;
 
 	ast_channel_lock(chan);
 
@@ -2711,8 +2729,11 @@ int ast_raw_answer(struct ast_channel *chan)
 		return -1;
 	}
 
-	answertime = ast_tvnow();
-	ast_channel_answertime_set(chan, &answertime);
+	/*
+	 * Mark when incoming channel answered so we can know how
+	 * long the channel has been up.
+	 */
+	set_channel_answer_time(chan);
 
 	ast_channel_unlock(chan);
 
@@ -3911,6 +3932,12 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 					ast_frfree(f);
 					f = &ast_null_frame;
 				} else {
+					/*
+					 * Mark when outgoing channel answered so we can know how
+					 * long the channel has been up.
+					 */
+					set_channel_answer_time(chan);
+
 					ast_setstate(chan, AST_STATE_UP);
 				}
 			} else if (f->subclass.integer == AST_CONTROL_READ_ACTION) {
@@ -7776,13 +7803,14 @@ static void channels_shutdown(void)
 	ast_channel_unregister(&surrogate_tech);
 }
 
-void ast_channels_init(void)
+int ast_channels_init(void)
 {
 	channels = ao2_container_alloc(NUM_CHANNEL_BUCKETS,
 			ast_channel_hash_cb, ast_channel_cmp_cb);
-	if (channels) {
-		ao2_container_register("channels", channels, prnt_channel_key);
+	if (!channels) {
+		return -1;
 	}
+	ao2_container_register("channels", channels, prnt_channel_key);
 
 	ast_channel_register(&surrogate_tech);
 
@@ -7796,6 +7824,7 @@ void ast_channels_init(void)
 
 	ast_register_cleanup(channels_shutdown);
 
+	return 0;
 }
 
 /*! \brief Print call group and pickup group ---*/

@@ -568,11 +568,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			for all of the sip peers will be retrieved.</para>
 		</description>
 	</manager>
-	<info name="SIPMessageFromInfo" language="en_US" tech="SIP">
+	<info name="MessageFromInfo" language="en_US" tech="SIP">
 		<para>The <literal>from</literal> parameter can be a configured peer name
 		or in the form of "display-name" &lt;URI&gt;.</para>
 	</info>
-	<info name="SIPMessageToInfo" language="en_US" tech="SIP">
+	<info name="MessageToInfo" language="en_US" tech="SIP">
 		<para>Specifying a prefix of <literal>sip:</literal> will send the
 		message as a SIP MESSAGE request.</para>
 	</info>
@@ -4206,19 +4206,6 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 		p->pendinginvite = seqno;
 	}
 
-	/* If the transport is something reliable (TCP or TLS) then don't really send this reliably */
-	/* I removed the code from retrans_pkt that does the same thing so it doesn't get loaded into the scheduler */
-	/*! \todo According to the RFC some packets need to be retransmitted even if its TCP, so this needs to get revisited */
-	if (!(p->socket.type & AST_TRANSPORT_UDP)) {
-		xmitres = __sip_xmit(p, data);	/* Send packet */
-		if (xmitres == XMIT_ERROR) {	/* Serious network trouble, no need to try again */
-			append_history(p, "XmitErr", "%s", fatal ? "(Critical)" : "(Non-critical)");
-			return AST_FAILURE;
-		} else {
-			return AST_SUCCESS;
-		}
-	}
-
 	pkt = ao2_alloc_options(sizeof(*pkt), sip_pkt_dtor, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!pkt) {
 		return AST_FAILURE;
@@ -4254,6 +4241,10 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 
 	pkt->time_sent = ast_tvnow(); /* time packet was sent */
 	pkt->retrans_stop_time = 64 * (pkt->timer_t1 ? pkt->timer_t1 : DEFAULT_TIMER_T1); /* time in ms after pkt->time_sent to stop retransmission */
+
+	if (!(p->socket.type & AST_TRANSPORT_UDP)) {
+		pkt->retrans_stop = 1;
+	}
 
 	/* Schedule retransmission */
 	ao2_t_ref(pkt, +1, "Schedule packet retransmission");
@@ -7659,7 +7650,8 @@ static int interpret_t38_parameters(struct sip_pvt *p, const struct ast_control_
 			ast_udptl_set_local_max_ifp(p->udptl, p->t38.our_parms.max_ifp);
 			change_t38_state(p, T38_ENABLED);
 			transmit_response_with_t38_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL);
-		} else if (p->t38.state != T38_ENABLED) {
+		} else if ((p->t38.state != T38_ENABLED) || ((p->t38.state == T38_ENABLED) &&
+				(parameters->request_response == AST_T38_REQUEST_NEGOTIATE))) {
 			p->t38.our_parms = *parameters;
 			ast_udptl_set_local_max_ifp(p->udptl, p->t38.our_parms.max_ifp);
 			change_t38_state(p, T38_LOCAL_REINVITE);
@@ -8592,35 +8584,39 @@ static struct ast_frame *sip_read(struct ast_channel *ast)
 
 	sip_pvt_lock(p);
 	fr = sip_rtp_read(ast, p, &faxdetected);
-	p->lastrtprx = time(NULL);
+	if (fr && fr->frametype != AST_FRAME_NULL) {
+		p->lastrtprx = time(NULL);
+	}
 
 	/* If we detect a CNG tone and fax detection is enabled then send us off to the fax extension */
 	if (faxdetected && ast_test_flag(&p->flags[1], SIP_PAGE2_FAX_DETECT_CNG)) {
 		if (strcmp(ast_channel_exten(ast), "fax")) {
 			const char *target_context = S_OR(ast_channel_macrocontext(ast), ast_channel_context(ast));
-			/* We need to unlock 'ast' here because
+			/*
+			 * We need to unlock 'ast' here because
 			 * ast_exists_extension has the potential to start and
 			 * stop an autoservice on the channel. Such action is
 			 * prone to deadlock if the channel is locked.
+			 *
+			 * ast_async_goto() has its own restriction on not holding
+			 * the channel lock.
 			 */
 			sip_pvt_unlock(p);
 			ast_channel_unlock(ast);
+			ast_frfree(fr);
+			fr = &ast_null_frame;
 			if (ast_exists_extension(ast, target_context, "fax", 1,
 				S_COR(ast_channel_caller(ast)->id.number.valid, ast_channel_caller(ast)->id.number.str, NULL))) {
-				ast_channel_lock(ast);
-				sip_pvt_lock(p);
 				ast_verb(2, "Redirecting '%s' to fax extension due to CNG detection\n", ast_channel_name(ast));
 				pbx_builtin_setvar_helper(ast, "FAXEXTEN", ast_channel_exten(ast));
 				if (ast_async_goto(ast, target_context, "fax", 1)) {
 					ast_log(LOG_NOTICE, "Failed to async goto '%s' into fax of '%s'\n", ast_channel_name(ast), target_context);
 				}
-				ast_frfree(fr);
-				fr = &ast_null_frame;
 			} else {
-				ast_channel_lock(ast);
-				sip_pvt_lock(p);
 				ast_log(LOG_NOTICE, "FAX CNG detected but no fax extension\n");
 			}
+			ast_channel_lock(ast);
+			sip_pvt_lock(p);
 		}
 	}
 
@@ -12981,10 +12977,7 @@ static void add_codec_to_sdp(const struct sip_pvt *p,
 
 	framing = ast_format_cap_get_format_framing(p->caps, format);
 
-	if (ast_format_cmp(format, ast_format_g729) == AST_FORMAT_CMP_EQUAL) {
-		/* Indicate that we don't support VAD (G.729 annex B) */
-		ast_str_append(a_buf, 0, "a=fmtp:%d annexb=no\r\n", rtp_code);
-	} else if (ast_format_cmp(format, ast_format_g723) == AST_FORMAT_CMP_EQUAL) {
+	if (ast_format_cmp(format, ast_format_g723) == AST_FORMAT_CMP_EQUAL) {
 		/* Indicate that we don't support VAD (G.723.1 annex A) */
 		ast_str_append(a_buf, 0, "a=fmtp:%d annexa=no\r\n", rtp_code);
 	} else if (ast_format_cmp(format, ast_format_g719) == AST_FORMAT_CMP_EQUAL) {
@@ -17182,10 +17175,8 @@ static void mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct
 	struct sip_peer *peer = sip_find_peer(peer_name, NULL, TRUE, FINDALLDEVICES, FALSE, 0);
 
 	if (stasis_subscription_final_message(sub, msg)) {
-		if (peer) {
-			/* configuration reloaded */
-			return;
-		}
+		/* peer can be non-NULL during reload. */
+		ao2_cleanup(peer);
 		ast_free(peer_name);
 		return;
 	}
@@ -18339,7 +18330,7 @@ static enum sip_get_dest_result get_destination(struct sip_pvt *p, struct sip_re
 static int get_sip_pvt_from_replaces(const char *callid, const char *totag,
 		const char *fromtag, struct sip_pvt **out_pvt, struct ast_channel **out_chan)
 {
-	struct sip_pvt *sip_pvt_ptr;
+	RAII_VAR(struct sip_pvt *, sip_pvt_ptr, NULL, ao2_cleanup);
 	struct sip_pvt tmp_dialog = {
 		.callid = callid,
 	};
@@ -18413,6 +18404,9 @@ static int get_sip_pvt_from_replaces(const char *callid, const char *totag,
 			*out_chan = sip_pvt_ptr->owner ? ast_channel_ref(sip_pvt_ptr->owner) : NULL;
 		}
 	}
+
+	/* If we're here sip_pvt_ptr has been copied to *out_pvt, prevent RAII_VAR cleanup */
+	sip_pvt_ptr = NULL;
 
 	return 0;
 }
@@ -21357,15 +21351,13 @@ static char *sip_unregister(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
 }
 
 /*! \brief Callback for show_chanstats */
-static int show_chanstats_cb(void *__cur, void *__arg, int flags)
+static int show_chanstats_cb(struct sip_pvt *cur, struct __show_chan_arg *arg)
 {
 #define FORMAT2 "%-15.15s  %-11.11s  %-8.8s %-10.10s  %-10.10s (     %%) %-6.6s %-10.10s  %-10.10s (     %%) %-6.6s\n"
 #define FORMAT  "%-15.15s  %-11.11s  %-8.8s %-10.10u%-1.1s %-10.10u (%5.2f%%) %-6.4lf %-10.10u%-1.1s %-10.10u (%5.2f%%) %-6.4lf\n"
-	struct sip_pvt *cur = __cur;
 	struct ast_rtp_instance_stats stats;
 	char durbuf[10];
 	struct ast_channel *c;
-	struct __show_chan_arg *arg = __arg;
 	int fd = arg->fd;
 
 	sip_pvt_lock(cur);
@@ -21425,6 +21417,8 @@ static int show_chanstats_cb(void *__cur, void *__arg, int flags)
 static char *sip_show_channelstats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct __show_chan_arg arg = { .fd = a->fd, .numchans = 0 };
+	struct sip_pvt *cur;
+	struct ao2_iterator i;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -21442,8 +21436,14 @@ static char *sip_show_channelstats(struct ast_cli_entry *e, int cmd, struct ast_
 		return CLI_SHOWUSAGE;
 
 	ast_cli(a->fd, FORMAT2, "Peer", "Call ID", "Duration", "Recv: Pack", "Lost", "Jitter", "Send: Pack", "Lost", "Jitter");
+
 	/* iterate on the container and invoke the callback on each item */
-	ao2_t_callback(dialogs, OBJ_NODATA, show_chanstats_cb, &arg, "callback to sip show chanstats");
+	i = ao2_iterator_init(dialogs, 0);
+	for (; (cur = ao2_iterator_next(&i)); ao2_ref(cur, -1)) {
+		show_chanstats_cb(cur, &arg);
+	}
+	ao2_iterator_destroy(&i);
+
 	ast_cli(a->fd, "%d active SIP channel%s\n", arg.numchans, (arg.numchans != 1) ? "s" : "");
 	return CLI_SUCCESS;
 }
@@ -21760,10 +21760,8 @@ static const struct cfsubscription_types *find_subscription_type(enum subscripti
 #define FORMAT  "%-15.15s  %-15.15s  %-15.15s  %-15.15s  %-3.3s %-3.3s  %-15.15s %-10.10s %-10.10s\n"
 
 /*! \brief callback for show channel|subscription */
-static int show_channels_cb(void *__cur, void *__arg, int flags)
+static int show_channels_cb(struct sip_pvt *cur, struct __show_chan_arg *arg)
 {
-	struct sip_pvt *cur = __cur;
-	struct __show_chan_arg *arg = __arg;
 	const struct ast_sockaddr *dst;
 
 	sip_pvt_lock(cur);
@@ -21815,7 +21813,8 @@ static int show_channels_cb(void *__cur, void *__arg, int flags)
 static char *sip_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct __show_chan_arg arg = { .fd = a->fd, .numchans = 0 };
-
+	struct sip_pvt *cur;
+	struct ao2_iterator i;
 
 	if (cmd == CLI_INIT) {
 		e->command = "sip show {channels|subscriptions}";
@@ -21837,7 +21836,11 @@ static char *sip_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(arg.fd, FORMAT3, "Peer", "User", "Call ID", "Extension", "Last state", "Type", "Mailbox", "Expiry");
 
 	/* iterate on the container and invoke the callback on each item */
-	ao2_t_callback(dialogs, OBJ_NODATA, show_channels_cb, &arg, "callback to show channels");
+	i = ao2_iterator_init(dialogs, 0);
+	for (; (cur = ao2_iterator_next(&i)); ao2_ref(cur, -1)) {
+		show_channels_cb(cur, &arg);
+	}
+	ao2_iterator_destroy(&i);
 
 	/* print summary information */
 	ast_cli(arg.fd, "%d active SIP %s%s\n", arg.numchans,
@@ -24661,6 +24664,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	char *c_copy = ast_strdupa(c);
 	/* Skip the Cseq and its subsequent spaces */
 	const char *msg = ast_skip_blanks(ast_skip_nonblanks(c_copy));
+	int ack_res = FALSE;
 
 	if (!msg)
 		msg = "";
@@ -24689,28 +24693,24 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 			ast_channel_hangupcause_set(owner, hangup_sip2cause(resp));
 	}
 
-	if (p->socket.type == AST_TRANSPORT_UDP) {
-		int ack_res = FALSE;
+	/* Acknowledge whatever it is destined for */
+	if ((resp >= 100) && (resp <= 199)) {
+		/* NON-INVITE messages do not ack a 1XX response. RFC 3261 section 17.1.2.2 */
+		if (sipmethod == SIP_INVITE) {
+			ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
+		}
+	} else {
+		ack_res = __sip_ack(p, seqno, 0, sipmethod);
+	}
 
-		/* Acknowledge whatever it is destined for */
-		if ((resp >= 100) && (resp <= 199)) {
-			/* NON-INVITE messages do not ack a 1XX response. RFC 3261 section 17.1.2.2 */
-			if (sipmethod == SIP_INVITE) {
-				ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
-			}
-		} else {
-			ack_res = __sip_ack(p, seqno, 0, sipmethod);
+	if (ack_res == FALSE) {
+		/* RFC 3261 13.2.2.4 and 17.1.1.2 - We must re-send ACKs to re-transmitted final responses */
+		if (sipmethod == SIP_INVITE && resp >= 200) {
+			transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, resp < 300 ? TRUE: FALSE);
 		}
 
-		if (ack_res == FALSE) {
-			/* RFC 3261 13.2.2.4 and 17.1.1.2 - We must re-send ACKs to re-transmitted final responses */
-			if (sipmethod == SIP_INVITE && resp >= 200) {
-				transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, resp < 300 ? TRUE: FALSE);
-			}
-
-			append_history(p, "Ignore", "Ignoring this retransmit\n");
-			return;
-		}
+		append_history(p, "Ignore", "Ignoring this retransmit\n");
+		return;
 	}
 
 	/* If this is a NOTIFY for a subscription clear the flag that indicates that we have a NOTIFY pending */
@@ -31112,6 +31112,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			return NULL;
 		}
 		if (!(peer->endpoint = ast_endpoint_create("SIP", name))) {
+			ao2_t_ref(peer, -1, "failed to allocate endpoint, drop peer");
 			return NULL;
 		}
 		if (!(peer->caps = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_DEFAULT))) {

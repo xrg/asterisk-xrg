@@ -180,6 +180,60 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>This application will Accept the R2 call either with charge or no charge.</para>
 		</description>
 	</application>
+	<info name="CHANNEL" language="en_US" tech="DAHDI">
+		<enumlist>
+			<enum name="dahdi_channel">
+				<para>R/O DAHDI channel related to this channel.</para>
+			</enum>
+			<enum name="dahdi_span">
+				<para>R/O DAHDI span related to this channel.</para>
+			</enum>
+			<enum name="dahdi_type">
+				<para>R/O DAHDI channel type, one of:</para>
+				<enumlist>
+					<enum name="analog" />
+					<enum name="mfc/r2" />
+					<enum name="pri" />
+					<enum name="pseudo" />
+					<enum name="ss7" />
+				</enumlist>
+			</enum>
+			<enum name="keypad_digits">
+				<para>R/O PRI Keypad digits that came in with the SETUP message.</para>
+			</enum>
+			<enum name="reversecharge">
+				<para>R/O PRI Reverse Charging Indication, one of:</para>
+				<enumlist>
+					<enum name="-1"> <para>None</para></enum>
+					<enum name=" 1"> <para>Reverse Charging Requested</para></enum>
+				</enumlist>
+			</enum>
+			<enum name="no_media_path">
+				<para>R/O PRI Nonzero if the channel has no B channel.
+				The channel is either on hold or a call waiting call.</para>
+			</enum>
+			<enum name="buffers">
+				<para>W/O Change the channel's buffer policy (for the current call only)</para>
+				<para>This option takes two arguments:</para>
+				<para>	Number of buffers,</para>
+				<para>	Buffer policy being one of:</para>
+				<para>	    <literal>full</literal></para>
+				<para>	    <literal>immediate</literal></para>
+				<para>	    <literal>half</literal></para>
+			</enum>
+			<enum name="echocan_mode">
+				<para>W/O Change the configuration of the active echo
+				canceller on the channel (if any), for the current call
+				only.</para>
+				<para>Possible values are:</para>
+				<para>	<literal>on</literal>	Normal mode (the echo canceller is actually reinitalized)</para>
+				<para>	<literal>off</literal>	Disabled</para>
+				<para>	<literal>fax</literal>	FAX/data mode (NLP disabled if possible, otherwise
+					completely disabled)</para>
+				<para>	<literal>voice</literal>	Voice mode (returns from FAX mode, reverting the changes that were made)</para>
+			</enum>
+		</enumlist>
+	</info>
 	<manager name="DAHDITransfer" language="en_US">
 		<synopsis>
 			Transfer DAHDI Channel.
@@ -1696,26 +1750,28 @@ static void my_handle_dtmf(void *pvt, struct ast_channel *ast, enum analog_sub a
 				if (strcmp(ast_channel_exten(ast), "fax")) {
 					const char *target_context = S_OR(ast_channel_macrocontext(ast), ast_channel_context(ast));
 
-					/* We need to unlock 'ast' here because ast_exists_extension has the
+					/*
+					 * We need to unlock 'ast' here because ast_exists_extension has the
 					 * potential to start autoservice on the channel. Such action is prone
-					 * to deadlock.
+					 * to deadlock if the channel is locked.
+					 *
+					 * ast_async_goto() has its own restriction on not holding the
+					 * channel lock.
 					 */
 					ast_mutex_unlock(&p->lock);
 					ast_channel_unlock(ast);
 					if (ast_exists_extension(ast, target_context, "fax", 1,
 						S_COR(ast_channel_caller(ast)->id.number.valid, ast_channel_caller(ast)->id.number.str, NULL))) {
-						ast_channel_lock(ast);
-						ast_mutex_lock(&p->lock);
 						ast_verb(3, "Redirecting %s to fax extension\n", ast_channel_name(ast));
 						/* Save the DID/DNIS when we transfer the fax call to a "fax" extension */
 						pbx_builtin_setvar_helper(ast, "FAXEXTEN", ast_channel_exten(ast));
 						if (ast_async_goto(ast, target_context, "fax", 1))
 							ast_log(LOG_WARNING, "Failed to async goto '%s' into fax of '%s'\n", ast_channel_name(ast), target_context);
 					} else {
-						ast_channel_lock(ast);
-						ast_mutex_lock(&p->lock);
 						ast_log(LOG_NOTICE, "Fax detected, but no fax extension\n");
 					}
+					ast_channel_lock(ast);
+					ast_mutex_lock(&p->lock);
 				} else {
 					ast_debug(1, "Already in a fax extension, not redirecting\n");
 				}
@@ -2348,7 +2404,6 @@ static void my_pri_ss7_open_media(void *p)
 
 	if (pvt->dsp_features && pvt->dsp) {
 		ast_dsp_set_features(pvt->dsp, pvt->dsp_features);
-		pvt->dsp_features = 0;
 	}
 }
 #endif	/* defined(HAVE_PRI) || defined(HAVE_SS7) */
@@ -7203,26 +7258,28 @@ static void dahdi_handle_dtmf(struct ast_channel *ast, int idx, struct ast_frame
 				if (strcmp(ast_channel_exten(ast), "fax")) {
 					const char *target_context = S_OR(ast_channel_macrocontext(ast), ast_channel_context(ast));
 
-					/* We need to unlock 'ast' here because ast_exists_extension has the
+					/*
+					 * We need to unlock 'ast' here because ast_exists_extension has the
 					 * potential to start autoservice on the channel. Such action is prone
-					 * to deadlock.
+					 * to deadlock if the channel is locked.
+					 *
+					 * ast_async_goto() has its own restriction on not holding the
+					 * channel lock.
 					 */
 					ast_mutex_unlock(&p->lock);
 					ast_channel_unlock(ast);
 					if (ast_exists_extension(ast, target_context, "fax", 1,
 						S_COR(ast_channel_caller(ast)->id.number.valid, ast_channel_caller(ast)->id.number.str, NULL))) {
-						ast_channel_lock(ast);
-						ast_mutex_lock(&p->lock);
 						ast_verb(3, "Redirecting %s to fax extension\n", ast_channel_name(ast));
 						/* Save the DID/DNIS when we transfer the fax call to a "fax" extension */
 						pbx_builtin_setvar_helper(ast, "FAXEXTEN", ast_channel_exten(ast));
 						if (ast_async_goto(ast, target_context, "fax", 1))
 							ast_log(LOG_WARNING, "Failed to async goto '%s' into fax of '%s'\n", ast_channel_name(ast), target_context);
 					} else {
-						ast_channel_lock(ast);
-						ast_mutex_lock(&p->lock);
 						ast_log(LOG_NOTICE, "Fax detected, but no fax extension\n");
 					}
+					ast_channel_lock(ast);
+					ast_mutex_lock(&p->lock);
 				} else {
 					ast_debug(1, "Already in a fax extension, not redirecting\n");
 				}
@@ -8642,6 +8699,15 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 	if (p->dsp && (!p->ignoredtmf || p->callwaitcas || p->busydetect || p->callprogress || p->waitingfordt.tv_sec || p->dialtone_detect) && !idx) {
 		/* Perform busy detection etc on the dahdi line */
 		int mute;
+
+		if ((p->dsp_features & DSP_FEATURE_FAX_DETECT)
+			&& p->faxdetect_timeout
+			&& p->faxdetect_timeout <= ast_channel_get_up_time(ast)) {
+			p->dsp_features &= ~DSP_FEATURE_FAX_DETECT;
+			ast_dsp_set_features(p->dsp, p->dsp_features);
+			ast_debug(1, "Channel driver fax CNG detection timeout on %s\n",
+				ast_channel_name(ast));
+		}
 
 		f = ast_dsp_process(ast, p->dsp, &p->subs[idx].f);
 
@@ -12542,6 +12608,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		tmp->callprogress = conf->chan.callprogress;
 		tmp->waitfordialtone = conf->chan.waitfordialtone;
 		tmp->dialtone_detect = conf->chan.dialtone_detect;
+		tmp->faxdetect_timeout = conf->chan.faxdetect_timeout;
 		tmp->cancallforward = conf->chan.cancallforward;
 		tmp->dtmfrelax = conf->chan.dtmfrelax;
 		tmp->callwaiting = tmp->permcallwaiting;
@@ -17793,6 +17860,10 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 				confp->chan.callprogress |= CALLPROGRESS_FAX_OUTGOING;
 			} else if (!strcasecmp(v->value, "both") || ast_true(v->value))
 				confp->chan.callprogress |= CALLPROGRESS_FAX_INCOMING | CALLPROGRESS_FAX_OUTGOING;
+		} else if (!strcasecmp(v->name, "faxdetect_timeout")) {
+			if (sscanf(v->value, "%30u", &confp->chan.faxdetect_timeout) != 1) {
+				confp->chan.faxdetect_timeout = 0;
+			}
 		} else if (!strcasecmp(v->name, "echocancel")) {
 			process_echocancel(confp, v->value, v->lineno);
 		} else if (!strcasecmp(v->name, "echotraining")) {

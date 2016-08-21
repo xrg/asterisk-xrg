@@ -278,11 +278,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Sends a message to a Jabber Client.</para>
 		</description>
 	</manager>
-	<info name="XMPPMessageToInfo" language="en_US" tech="XMPP">
+	<info name="MessageToInfo" language="en_US" tech="XMPP">
 		<para>Specifying a prefix of <literal>xmpp:</literal> will send the
 		message as an XMPP chat message.</para>
 	</info>
-	<info name="XMPPMessageFromInfo" language="en_US" tech="XMPP">
+	<info name="MessageFromInfo" language="en_US" tech="XMPP">
 		<para>Specifying a prefix of <literal>xmpp:</literal> will specify the
 		account defined in <literal>xmpp.conf</literal> to send the message from.
 		Note that this field is required for XMPP messages.</para>
@@ -4651,6 +4651,10 @@ static int load_module(void)
 
 	ast_mutex_init(&messagelock);
 	ast_cond_init(&message_received_condition, NULL);
+
+	if (ast_eid_is_empty(&ast_eid_default)) {
+		ast_log(LOG_WARNING, "Entity ID is not set. The distributing device state or MWI will not work.\n");
+	}
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

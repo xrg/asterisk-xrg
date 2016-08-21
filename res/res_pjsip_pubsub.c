@@ -2271,7 +2271,7 @@ static int send_notify(struct sip_subscription_tree *sub_tree, unsigned int forc
 	}
 
 	if (sip_subscription_send_request(sub_tree, tdata)) {
-		pjsip_tx_data_dec_ref(tdata);
+		/* do not call pjsip_tx_data_dec_ref(tdata). The pjsip_dlg_send_request deletes the message on error */
 		return -1;
 	}
 
@@ -3030,11 +3030,14 @@ static struct ast_sip_publication *publish_request_initial(struct ast_sip_endpoi
 
 	resource = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "inbound-publication", resource_name);
 	if (!resource) {
+		ast_debug(1, "No 'inbound-publication' defined for resource '%s'\n", resource_name);
 		pjsip_endpt_respond_stateless(ast_sip_get_pjsip_endpoint(), rdata, 404, NULL, NULL, NULL);
 		return NULL;
 	}
 
 	if (!ast_strlen_zero(resource->endpoint) && strcmp(resource->endpoint, ast_sorcery_object_get_id(endpoint))) {
+		ast_debug(1, "Resource %s has a defined endpoint '%s', but does not match endpoint '%s' that received the request\n",
+			resource_name, resource->endpoint, ast_sorcery_object_get_id(endpoint));
 		pjsip_endpt_respond_stateless(ast_sip_get_pjsip_endpoint(), rdata, 403, NULL, NULL, NULL);
 		return NULL;
 	}
@@ -3046,6 +3049,7 @@ static struct ast_sip_publication *publish_request_initial(struct ast_sip_endpoi
 	}
 
 	if (!event_configuration_name) {
+		ast_debug(1, "Event '%s' is not configured for '%s'\n", handler->event_name, resource_name);
 		pjsip_endpt_respond_stateless(ast_sip_get_pjsip_endpoint(), rdata, 404, NULL, NULL, NULL);
 		return NULL;
 	}

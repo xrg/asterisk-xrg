@@ -54,10 +54,11 @@ def set_value(key=None, val=None, section=None, pjsip=None,
 
 
 def merge_value(key=None, val=None, section=None, pjsip=None,
-                nmapped=None, type='endpoint', section_to=None):
+                nmapped=None, type='endpoint', section_to=None,
+                key_to=None):
     """Merge values from the given section with those from the default."""
     def _merge_value(k, v, s, r, n):
-        merge_value(key if key else k, v, s, r, n, type, section_to)
+        merge_value(key if key else k, v, s, r, n, type, section_to, key_to)
 
     # if no value or section return the merge_value
     # function with the enclosed key and type
@@ -71,7 +72,8 @@ def merge_value(key=None, val=None, section=None, pjsip=None,
         sect = sip.default(section)[0]
     # for each merged value add it to pjsip.conf
     for i in sect.get_merged(key):
-        set_value(key, i, section_to if section_to else section,
+        set_value(key_to if key_to else key, i,
+                  section_to if section_to else section,
                   pjsip, nmapped, type)
 
 
@@ -133,11 +135,14 @@ def set_timers(key, val, section, pjsip, nmapped):
     found in sip.conf.
     """
     # pjsip.conf values can be yes/no, required, always
+    # 'required' is a new feature of chan_pjsip, which rejects
+    #            all SIP clients not supporting Session Timers
+    # 'Accept' is the default value of chan_sip and maps to 'yes'
+    # chan_sip ignores the case, for example 'session-timers=Refuse'
+    val = val.lower()
     if val == 'originate':
         set_value('timers', 'always', section, pjsip, nmapped)
-    elif val == 'accept':
-        set_value('timers', 'required', section, pjsip, nmapped)
-    elif val == 'never':
+    elif val == 'refuse':
         set_value('timers', 'no', section, pjsip, nmapped)
     else:
         set_value('timers', 'yes', section, pjsip, nmapped)
@@ -383,8 +388,6 @@ peer_map = [
     ['session-timers',     set_timers],          # timers
     ['session-minse',      set_value('timers_min_se')],
     ['session-expires',    set_value('timers_sess_expires')],
-    ['externip',           set_value('external_media_address')],
-    ['externhost',         set_value('external_media_address')],
     # identify_by ?
     ['directmedia',        set_direct_media],    # direct_media
                                                  # direct_media_method
@@ -396,7 +399,7 @@ peer_map = [
     ['trustpid',           set_value('trust_id_inbound')],
     ['sendrpid',           from_sendrpid],       # send_pai, send_rpid
     ['send_diversion',     set_value],
-    ['encrpytion',         set_media_encryption],
+    ['encryption',         set_media_encryption],
     ['avpf',               set_value('use_avpf')],
     ['recordonfeature',    set_record_on_feature],  # automixon
     ['recordofffeature',   set_record_off_feature],  # automixon
@@ -440,6 +443,9 @@ peer_map = [
 
     ['host',               from_host],           # contact, max_contacts
     ['qualifyfreq',        set_value('qualify_frequency', type='aor')],
+    ['maxexpiry',          set_value('maximum_expiration', type='aor')],
+    ['minexpiry',          set_value('minimum_expiration', type='aor')],
+    ['defaultexpiry',      set_value('default_expiration', type='aor')],
 
 ############################# maps to auth#####################################
 #        type = auth
@@ -454,9 +460,9 @@ peer_map = [
     ['permit',             merge_value(type='acl', section_to='acl')],
     ['deny',               merge_value(type='acl', section_to='acl')],
     ['acl',                merge_value(type='acl', section_to='acl')],
-    ['contactpermit',      merge_value('contact_permit', type='acl', section_to='acl')],
-    ['contactdeny',        merge_value('contact_deny', type='acl', section_to='acl')],
-    ['contactacl',         merge_value('contact_acl', type='acl', section_to='acl')],
+    ['contactpermit',      merge_value(type='acl', section_to='acl', key_to='contact_permit')],
+    ['contactdeny',        merge_value(type='acl', section_to='acl', key_to='contact_deny')],
+    ['contactacl',         merge_value(type='acl', section_to='acl', key_to='contact_acl')],
 
 ########################### maps to transport #################################
 #        type = transport
@@ -464,6 +470,7 @@ peer_map = [
 #        bind
 #        async_operations
 #        ca_list_file
+#        ca_list_path
 #        cert_file
 #        privkey_file
 #        password
@@ -499,21 +506,6 @@ peer_map = [
 ]
 
 
-def add_localnet(section, pjsip, nmapped):
-    """
-    Adds localnet values from sip.conf's general section to a transport in
-    pjsip.conf. Ideally, we would have just created a template with the
-    localnet sections, but because this is a script, it's not hard to add
-    the same thing on to every transport.
-    """
-    try:
-        merge_value('local_net', sip.get('general', 'localnet')[0], 'general',
-                    pjsip, nmapped, 'transport', section)
-    except LookupError:
-        # No localnet options configured. No biggie!
-        pass
-
-
 def set_transport_common(section, pjsip, nmapped):
     """
     sip.conf has several global settings that in pjsip.conf apply to individual
@@ -527,21 +519,21 @@ def set_transport_common(section, pjsip, nmapped):
     """
 
     try:
-        merge_value('local_net', sip.get('general', 'localnet')[0], 'general',
-                    pjsip, nmapped, 'transport', section)
+        merge_value('localnet', sip.get('general', 'localnet')[0], 'general',
+                    pjsip, nmapped, 'transport', section, "local_net")
     except LookupError:
         # No localnet options configured. Move on.
         pass
 
     try:
-        set_value('tos', sip.get('general', 'sip_tos')[0], 'general', pjsip,
-                  nmapped, 'transport', section)
+        set_value('tos', sip.get('general', 'tos_sip')[0], section, pjsip,
+                  nmapped, 'transport')
     except LookupError:
         pass
 
     try:
-        set_value('cos', sip.get('general', 'sip_cos')[0], 'general', pjsip,
-                  nmapped, 'transport', section)
+        set_value('cos', sip.get('general', 'cos_sip')[0], section, pjsip,
+                  nmapped, 'transport')
     except LookupError:
         pass
 
@@ -598,6 +590,8 @@ def create_udp(sip, pjsip, nmapped):
         extern_addr = sip.multi_get('general', ['externaddr', 'externip',
                                     'externhost'])[0]
         host, port = split_hostport(extern_addr)
+        set_value('external_media_address', host, 'transport-udp', pjsip,
+                  nmapped, 'transport')
         set_value('external_signaling_address', host, 'transport-udp', pjsip,
                   nmapped, 'transport')
         if port:
@@ -645,6 +639,8 @@ def create_tcp(sip, pjsip, nmapped):
             tcpport = sip.get('general', 'externtcpport')[0]
         except:
             tcpport = port
+        set_value('external_media_address', host, 'transport-tcp', pjsip,
+                  nmapped, 'transport')
         set_value('external_signaling_address', host, 'transport-tcp', pjsip,
                   nmapped, 'transport')
         if tcpport:
@@ -697,6 +693,12 @@ def set_tls_bindaddr(val, pjsip, nmapped):
     set_value('bind', bind, 'transport-tls', pjsip, nmapped, 'transport')
 
 
+def set_tls_cert_file(val, pjsip, nmapped):
+    """Sets cert_file based on sip.conf tlscertfile"""
+    set_value('cert_file', val, 'transport-tls', pjsip, nmapped,
+              'transport')
+
+
 def set_tls_private_key(val, pjsip, nmapped):
     """Sets privkey_file based on sip.conf tlsprivatekey or sslprivatekey"""
     set_value('priv_key_file', val, 'transport-tls', pjsip, nmapped,
@@ -711,6 +713,12 @@ def set_tls_cipher(val, pjsip, nmapped):
 def set_tls_cafile(val, pjsip, nmapped):
     """Sets ca_list_file based on sip.conf tlscafile"""
     set_value('ca_list_file', val, 'transport-tls', pjsip, nmapped,
+              'transport')
+
+
+def set_tls_capath(val, pjsip, nmapped):
+    """Sets ca_list_path based on sip.conf tlscapath"""
+    set_value('ca_list_path', val, 'transport-tls', pjsip, nmapped,
               'transport')
 
 
@@ -729,11 +737,6 @@ def set_tls_verifyserver(val, pjsip, nmapped):
     else:
         set_value('verify_server', 'no', 'transport-tls', pjsip, nmapped,
                   'transport')
-
-
-def set_tls_method(val, pjsip, nmapped):
-    """Sets method based on sip.conf tlsclientmethod or sslclientmethod"""
-    set_value('method', val, 'transport-tls', pjsip, nmapped, 'transport')
 
 
 def create_tls(sip, pjsip, nmapped):
@@ -755,12 +758,13 @@ def create_tls(sip, pjsip, nmapped):
 
     tls_map = [
         (['tlsbindaddr', 'sslbindaddr'], set_tls_bindaddr),
+        (['tlscertfile', 'sslcert', 'tlscert'], set_tls_cert_file),
         (['tlsprivatekey', 'sslprivatekey'], set_tls_private_key),
         (['tlscipher', 'sslcipher'], set_tls_cipher),
         (['tlscafile'], set_tls_cafile),
+        (['tlscapath', 'tlscadir'], set_tls_capath),
         (['tlsverifyclient'], set_tls_verifyclient),
-        (['tlsdontverifyserver'], set_tls_verifyserver),
-        (['tlsclientmethod', 'sslclientmethod'], set_tls_method)
+        (['tlsdontverifyserver'], set_tls_verifyserver)
     ]
 
     try:
@@ -780,6 +784,23 @@ def create_tls(sip, pjsip, nmapped):
         except LookupError:
             pass
 
+    try:
+        method = sip.multi_get('general', ['tlsclientmethod', 'sslclientmethod'])[0]
+        print 'In chan_sip, you specified the TLS version. With chan_sip, this was just for outbound client connections. In chan_pjsip, this value is for client and server. Instead, consider not to specify \'tlsclientmethod\' for chan_sip and \'method = sslv23\' for chan_pjsip.'
+    except LookupError:
+        """
+        OpenSSL emerged during the 90s. SSLv2 and SSLv3 were the only
+        existing methods at that time. The OpenSSL project continued. And as
+        of today (OpenSSL 1.0.2) this does not start SSLv2 and SSLv3 anymore
+        but TLSv1.0 and v1.2. Or stated differently: This method should
+        have been called 'method = secure' or 'method = automatic' back in
+        the 90s. The PJProject did not realize this and uses 'tlsv1' as
+        default when unspecified, which disables TLSv1.2. chan_sip used
+        'sslv23' as default when unspecified, which gives TLSv1.0 and v1.2.
+        """
+        method = 'sslv23'
+    set_value('method', method, 'transport-tls', pjsip, nmapped, 'transport')
+
     set_transport_common('transport-tls', pjsip, nmapped)
     try:
         extern_addr = sip.multi_get('general', ['externaddr', 'externip',
@@ -789,6 +810,8 @@ def create_tls(sip, pjsip, nmapped):
             tlsport = sip.get('general', 'externtlsport')[0]
         except:
             tlsport = port
+        set_value('external_media_address', host, 'transport-tls', pjsip,
+                  nmapped, 'transport')
         set_value('external_signaling_address', host, 'transport-tls', pjsip,
                   nmapped, 'transport')
         if tlsport:
@@ -907,6 +930,17 @@ class Registration:
         the right of the user, then finish by using rpartition calls to remove
         everything to the left of the user.
         """
+        self.peer = ''
+        self.protocol = 'udp'
+        protocols = ['udp', 'tcp', 'tls']
+        for protocol in protocols:
+            position = user_part.find(protocol + '://')
+            if -1 < position:
+                post_transport = user_part[position + 6:]
+                self.peer, sep, self.protocol = user_part[:position + 3].rpartition('?')
+                user_part = post_transport
+                break
+
         colons = user_part.count(':')
         if (colons == 3):
             # :domainport:secret:authuser
@@ -927,11 +961,7 @@ class Registration:
             # Invalid setting
             raise
 
-        pre_domain, sep, self.domain = pre_auth.partition('@')
-        self.peer, sep, post_peer = pre_domain.rpartition('?')
-        transport, sep, self.user = post_peer.rpartition('://')
-
-        self.protocol = transport if transport else 'udp'
+        self.user, sep, self.domain = pre_auth.partition('@')
 
     def write(self, pjsip, nmapped):
         """
@@ -981,9 +1011,8 @@ class Registration:
         if hasattr(self, 'secret') and self.secret:
             set_value('password', self.secret, auth_section, pjsip, nmapped,
                       'auth')
-            if hasattr(self, 'authuser'):
-                set_value('username', self.authuser or self.user, auth_section,
-                          pjsip, nmapped, 'auth')
+            set_value('username', self.authuser if hasattr(self, 'authuser')
+                      else self.user, auth_section, pjsip, nmapped, 'auth')
             set_value('outbound_auth', auth_section, section, pjsip, nmapped,
                       'registration')
 
@@ -1080,6 +1109,35 @@ def find_non_mapped(sections, nmapped):
             pass
 
 
+def map_system(sip, pjsip, nmapped):
+    section = 'system' # Just a label; you as user can change that
+    type = 'system' # Not a label, therefore not the same as section
+
+    try:
+        user_agent = sip.get('general', 'useragent')[0]
+        set_value('user_agent', user_agent, 'global', pjsip, nmapped, 'global')
+    except LookupError:
+        pass
+
+    try:
+        timer_t1 = sip.get('general', 'timert1')[0]
+        set_value('timer_t1', timer_t1, section, pjsip, nmapped, type)
+    except LookupError:
+        pass
+
+    try:
+        timer_b = sip.get('general', 'timerb')[0]
+        set_value('timer_b', timer_b, section, pjsip, nmapped, type)
+    except LookupError:
+        pass
+
+    try:
+        compact_headers = sip.get('general', 'compactheaders')[0]
+        set_value('compact_headers', compact_headers, section, pjsip, nmapped, type)
+    except LookupError:
+        pass
+
+
 def convert(sip, filename, non_mappings, include):
     """
     Entry point for configuration file conversion. This
@@ -1092,6 +1150,7 @@ def convert(sip, filename, non_mappings, include):
     nmapped = non_mapped(non_mappings[filename])
     if not include:
         # Don't duplicate transport and registration configs
+        map_system(sip, pjsip, nmapped)
         map_transports(sip, pjsip, nmapped)
         map_registrations(sip, pjsip, nmapped)
     map_auth(sip, pjsip, nmapped)

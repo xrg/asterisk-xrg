@@ -2337,10 +2337,17 @@ static void pending_members_remove(struct member *mem)
 */
 static void update_status(struct call_queue *q, struct member *m, const int status)
 {
-	m->status = status;
+	if (m->status != status) {
+		m->status = status;
 
-	/* Whatever the status is clear the member from the pending members pool */
-	pending_members_remove(m);
+		/* Remove the member from the pending members pool only when the status changes.
+		 * This is not done unconditionally because we can occasionally see multiple
+		 * device state notifications of not in use after a previous call has ended,
+		 * including after we have initiated a new call. This is more likely to
+		 * happen when there is latency in the connection to the member.
+		 */
+		pending_members_remove(m);
+	}
 
 	queue_publish_member_blob(queue_member_status_type(), queue_member_blob_create(q, m));
 }
@@ -4854,6 +4861,7 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 					char tmpchan[256];
 					char *stuff;
 					char *tech;
+					int failed = 0;
 
 					ast_copy_string(tmpchan, ast_channel_call_forward(o->chan), sizeof(tmpchan));
 					ast_copy_string(forwarder, ast_channel_name(o->chan), sizeof(forwarder));
@@ -4966,14 +4974,20 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 						if (ast_call(o->chan, stuff, 0)) {
 							ast_log(LOG_NOTICE, "Forwarding failed to dial '%s/%s'\n",
 								tech, stuff);
-							do_hang(o);
-							numnochan++;
+							failed = 1;
 						}
 					}
 
-					ast_channel_publish_dial(qe->chan, o->chan, stuff, NULL);
 					ast_channel_publish_dial_forward(qe->chan, original, o->chan, NULL,
 						"CANCEL", ast_channel_call_forward(original));
+					if (o->chan) {
+						ast_channel_publish_dial(qe->chan, o->chan, stuff, NULL);
+					}
+
+					if (failed) {
+						do_hang(o);
+						numnochan++;
+					}
 
 					/* Hangup the original channel now, in case we needed it */
 					ast_hangup(winner);

@@ -612,10 +612,12 @@ static struct ast_frame *chan_pjsip_cng_tone_detected(struct ast_sip_session *se
 {
 	const char *target_context;
 	int exists;
+	int dsp_features;
 
-	/* If we only needed this DSP for fax detection purposes we can just drop it now */
-	if (session->endpoint->dtmf == AST_SIP_DTMF_INBAND || session->endpoint->dtmf == AST_SIP_DTMF_AUTO) {
-		ast_dsp_set_features(session->dsp, DSP_FEATURE_DIGIT_DETECT);
+	dsp_features = ast_dsp_get_features(session->dsp);
+	dsp_features &= ~DSP_FEATURE_FAX_DETECT;
+	if (dsp_features) {
+		ast_dsp_set_features(session->dsp, dsp_features);
 	} else {
 		ast_dsp_free(session->dsp);
 		session->dsp = NULL;
@@ -628,16 +630,19 @@ static struct ast_frame *chan_pjsip_cng_tone_detected(struct ast_sip_session *se
 
 	target_context = S_OR(ast_channel_macrocontext(session->channel), ast_channel_context(session->channel));
 
-	/* We need to unlock the channel here because ast_exists_extension has the
+	/*
+	 * We need to unlock the channel here because ast_exists_extension has the
 	 * potential to start and stop an autoservice on the channel. Such action
 	 * is prone to deadlock if the channel is locked.
+	 *
+	 * ast_async_goto() has its own restriction on not holding the channel lock.
 	 */
 	ast_channel_unlock(session->channel);
+	ast_frfree(f);
+	f = &ast_null_frame;
 	exists = ast_exists_extension(session->channel, target_context, "fax", 1,
 		S_COR(ast_channel_caller(session->channel)->id.number.valid,
 			ast_channel_caller(session->channel)->id.number.str, NULL));
-	ast_channel_lock(session->channel);
-
 	if (exists) {
 		ast_verb(2, "Redirecting '%s' to fax extension due to CNG detection\n",
 			ast_channel_name(session->channel));
@@ -646,12 +651,11 @@ static struct ast_frame *chan_pjsip_cng_tone_detected(struct ast_sip_session *se
 			ast_log(LOG_ERROR, "Failed to async goto '%s' into fax extension in '%s'\n",
 				ast_channel_name(session->channel), target_context);
 		}
-		ast_frfree(f);
-		f = &ast_null_frame;
 	} else {
 		ast_log(LOG_NOTICE, "FAX CNG detected on '%s' but no fax extension in '%s'\n",
 			ast_channel_name(session->channel), target_context);
 	}
+	ast_channel_lock(session->channel);
 
 	return f;
 }
@@ -660,6 +664,7 @@ static struct ast_frame *chan_pjsip_cng_tone_detected(struct ast_sip_session *se
 static struct ast_frame *chan_pjsip_read(struct ast_channel *ast)
 {
 	struct ast_sip_channel_pvt *channel = ast_channel_tech_pvt(ast);
+	struct ast_sip_session *session;
 	struct chan_pjsip_pvt *pvt = channel->pvt;
 	struct ast_frame *f;
 	struct ast_sip_session_media *media = NULL;
@@ -697,22 +702,42 @@ static struct ast_frame *chan_pjsip_read(struct ast_channel *ast)
 		return f;
 	}
 
-	if (ast_format_cap_iscompatible_format(channel->session->endpoint->media.codecs, f->subclass.format) == AST_FORMAT_CMP_NOT_EQUAL) {
+	session = channel->session;
+
+	if (ast_format_cap_iscompatible_format(session->endpoint->media.codecs, f->subclass.format) == AST_FORMAT_CMP_NOT_EQUAL) {
 		ast_debug(1, "Oooh, got a frame with format of %s on channel '%s' when endpoint '%s' is not configured for it\n",
 			ast_format_get_name(f->subclass.format), ast_channel_name(ast),
-			ast_sorcery_object_get_id(channel->session->endpoint));
+			ast_sorcery_object_get_id(session->endpoint));
 
 		ast_frfree(f);
 		return &ast_null_frame;
 	}
 
-	if (channel->session->dsp) {
-		f = ast_dsp_process(ast, channel->session->dsp, f);
+	if (session->dsp) {
+		int dsp_features;
 
+		dsp_features = ast_dsp_get_features(session->dsp);
+		if ((dsp_features & DSP_FEATURE_FAX_DETECT)
+			&& session->endpoint->faxdetect_timeout
+			&& session->endpoint->faxdetect_timeout <= ast_channel_get_up_time(ast)) {
+			dsp_features &= ~DSP_FEATURE_FAX_DETECT;
+			if (dsp_features) {
+				ast_dsp_set_features(session->dsp, dsp_features);
+			} else {
+				ast_dsp_free(session->dsp);
+				session->dsp = NULL;
+			}
+			ast_debug(3, "Channel driver fax CNG detection timeout on %s\n",
+				ast_channel_name(ast));
+		}
+	}
+	if (session->dsp) {
+		f = ast_dsp_process(ast, session->dsp, f);
 		if (f && (f->frametype == AST_FRAME_DTMF)) {
 			if (f->subclass.integer == 'f') {
-				ast_debug(3, "Fax CNG detected on %s\n", ast_channel_name(ast));
-				f = chan_pjsip_cng_tone_detected(channel->session, f);
+				ast_debug(3, "Channel driver fax CNG detected on %s\n",
+					ast_channel_name(ast));
+				f = chan_pjsip_cng_tone_detected(session, f);
 			} else {
 				ast_debug(3, "* Detected inband DTMF '%c' on '%s'\n", f->subclass.integer,
 					ast_channel_name(ast));
@@ -1417,7 +1442,8 @@ static void transfer_redirect(struct ast_sip_session *session, const char *targe
 	pjsip_contact_hdr *contact;
 	pj_str_t tmp;
 
-	if (pjsip_inv_end_session(session->inv_session, 302, NULL, &packet) != PJ_SUCCESS) {
+	if (pjsip_inv_end_session(session->inv_session, 302, NULL, &packet) != PJ_SUCCESS
+		|| !packet) {
 		ast_log(LOG_WARNING, "Failed to redirect PJSIP session for channel %s\n",
 			ast_channel_name(session->channel));
 		message = AST_TRANSFER_FAILED;
@@ -2182,7 +2208,8 @@ static int chan_pjsip_incoming_request(struct ast_sip_session *session, struct p
 	ast_sip_session_add_datastore(session, datastore);
 
 	if (!(session->channel = chan_pjsip_new(session, AST_STATE_RING, session->exten, NULL, NULL, NULL, NULL))) {
-		if (pjsip_inv_end_session(session->inv_session, 503, NULL, &packet) == PJ_SUCCESS) {
+		if (pjsip_inv_end_session(session->inv_session, 503, NULL, &packet) == PJ_SUCCESS
+			&& packet) {
 			ast_sip_session_send_response(session, packet);
 		}
 
@@ -2357,6 +2384,11 @@ static struct ast_custom_function media_offer_function = {
 	.write = pjsip_acf_media_offer_write
 };
 
+static struct ast_custom_function session_refresh_function = {
+	.name = "PJSIP_SEND_SESSION_REFRESH",
+	.write = pjsip_acf_session_refresh_write,
+};
+
 /*!
  * \brief Load the module
  *
@@ -2393,6 +2425,11 @@ static int load_module(void)
 
 	if (ast_custom_function_register(&media_offer_function)) {
 		ast_log(LOG_WARNING, "Unable to register PJSIP_MEDIA_OFFER dialplan function\n");
+		goto end;
+	}
+
+	if (ast_custom_function_register(&session_refresh_function)) {
+		ast_log(LOG_WARNING, "Unable to register PJSIP_SEND_SESSION_REFRESH dialplan function\n");
 		goto end;
 	}
 
@@ -2452,6 +2489,7 @@ end:
 	pjsip_uids_onhold = NULL;
 	ast_custom_function_unregister(&media_offer_function);
 	ast_custom_function_unregister(&chan_pjsip_dial_contacts_function);
+	ast_custom_function_unregister(&session_refresh_function);
 	ast_channel_unregister(&chan_pjsip_tech);
 	ast_rtp_glue_unregister(&chan_pjsip_rtp_glue);
 
@@ -2473,6 +2511,7 @@ static int unload_module(void)
 
 	ast_custom_function_unregister(&media_offer_function);
 	ast_custom_function_unregister(&chan_pjsip_dial_contacts_function);
+	ast_custom_function_unregister(&session_refresh_function);
 
 	ast_channel_unregister(&chan_pjsip_tech);
 	ao2_ref(chan_pjsip_tech.capabilities, -1);

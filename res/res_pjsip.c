@@ -24,6 +24,7 @@
 #include <pjsip/sip_transaction.h>
 #include <pj/timer.h>
 #include <pjlib.h>
+#include <pjmedia/errno.h>
 
 #include "asterisk/res_pjsip.h"
 #include "res_pjsip/include/res_pjsip_private.h"
@@ -216,10 +217,9 @@
 							<enum name="info">
 								<para>DTMF is sent as SIP INFO packets.</para>
 							</enum>
-                                                        <enum name="auto">
-                                                                <para>DTMF is sent as RFC 4733 if the other side supports it or as INBAND if not.</para>
-                                                        </enum>
-
+							<enum name="auto">
+								<para>DTMF is sent as RFC 4733 if the other side supports it or as INBAND if not.</para>
+							</enum>
 						</enumlist>
 					</description>
 				</configOption>
@@ -509,15 +509,15 @@
 				<configOption name="g726_non_standard" default="no">
 					<synopsis>Force g.726 to use AAL2 packing order when negotiating g.726 audio</synopsis>
 					<description><para>
-                                                When set to "yes" and an endpoint negotiates g.726 audio then use g.726 for AAL2
-                                                packing order instead of what is recommended by RFC3551. Since this essentially
-                                                replaces the underlying 'g726' codec with 'g726aal2' then 'g726aal2' needs to be
-                                                specified in the endpoint's allowed codec list.
+						When set to "yes" and an endpoint negotiates g.726 audio then use g.726 for AAL2
+						packing order instead of what is recommended by RFC3551. Since this essentially
+						replaces the underlying 'g726' codec with 'g726aal2' then 'g726aal2' needs to be
+						specified in the endpoint's allowed codec list.
 					</para></description>
 				</configOption>
 				<configOption name="inband_progress" default="no">
 					<synopsis>Determines whether chan_pjsip will indicate ringing using inband
-					    progress.</synopsis>
+						progress.</synopsis>
 					<description><para>
 						If set to <literal>yes</literal>, chan_pjsip will send a 183 Session Progress
 						when told to indicate ringing and will immediately start sending ringing
@@ -597,6 +597,14 @@
 					<description><para>
 						This option can be set to send the session to the fax extension when a CNG tone is
 						detected.
+					</para></description>
+				</configOption>
+				<configOption name="fax_detect_timeout">
+					<synopsis>How long into a call before fax_detect is disabled for the call</synopsis>
+					<description><para>
+						The option determines how many seconds into a call before the
+						fax_detect option is disabled for the call.  Setting the value
+						to zero disables the timeout.
 					</para></description>
 				</configOption>
 				<configOption name="t38_udptl_nat" default="no">
@@ -802,7 +810,7 @@
 				<configOption name="set_var">
 					<synopsis>Variable set on a channel involving the endpoint.</synopsis>
 					<description><para>
-					        When a new channel is created using the endpoint set the specified
+						When a new channel is created using the endpoint set the specified
 						variable(s) on that channel. For multiple channel variables specify
 						multiple 'set_var'(s).
 					</para></description>
@@ -894,6 +902,21 @@
 						have a subnet mask appended. The subnet mask may be written in either
 						CIDR or dotted-decimal notation. Separate the IP address and subnet
 						mask with a slash ('/')
+					</para></description>
+				</configOption>
+				<configOption name="subscribe_context">
+					<synopsis>Context for incoming MESSAGE requests.</synopsis>
+					<description><para>
+						If specified, incoming SUBSCRIBE requests will be searched for the matching
+						extension in the indicated context.
+						If no <replaceable>subscribe_context</replaceable> is specified,
+						then the <replaceable>context</replaceable> setting is used.
+					</para></description>
+				</configOption>
+				<configOption name="contact_user" default="">
+					<synopsis>Force the user on the outgoing Contact header to this value.</synopsis>
+					<description><para>
+						On outbound requests, force the user portion of the Contact header to this value.
 					</para></description>
 				</configOption>
 			</configObject>
@@ -1166,6 +1189,12 @@
 						REGISTER requests and is not intended to be configured manually.
 					</para></description>
 				</configOption>
+				<configOption name="endpoint">
+					<synopsis>Endpoint name</synopsis>
+					<description><para>
+						The name of the endpoint this contact belongs to
+					</para></description>
+				</configOption>
 				<configOption name="reg_server">
 					<synopsis>Asterisk Server name</synopsis>
 					<description><para>
@@ -1428,9 +1457,9 @@
 					<synopsis>Value used in User-Agent header for SIP requests and Server header for SIP responses.</synopsis>
 				</configOption>
 				<configOption name="regcontext" default="">
-                                        <synopsis>When set, Asterisk will dynamically create and destroy a NoOp priority 1 extension for a given
-					peer who registers or unregisters with us.</synopsis>
-                                </configOption>
+					<synopsis>When set, Asterisk will dynamically create and destroy a NoOp priority 1 extension for a given
+						peer who registers or unregisters with us.</synopsis>
+				</configOption>
 				<configOption name="default_outbound_endpoint" default="default_outbound_endpoint">
 					<synopsis>Endpoint to use when sending an outbound request to a URI without a specified endpoint.</synopsis>
 				</configOption>
@@ -1439,15 +1468,15 @@
 				</configOption>
 				<configOption name="debug" default="no">
 					<synopsis>Enable/Disable SIP debug logging.  Valid options include yes|no or
-                                        a host address</synopsis>
+						a host address</synopsis>
 				</configOption>
 				<configOption name="endpoint_identifier_order" default="ip,username,anonymous">
 					<synopsis>The order by which endpoint identifiers are processed and checked.
-                                        Identifier names are usually derived from and can be found in the endpoint
-                                        identifier module itself (res_pjsip_endpoint_identifier_*).
-                                        You can use the CLI command "pjsip show identifiers" to see the
-                                        identifiers currently available.</synopsis>
-                    <description>
+						Identifier names are usually derived from and can be found in the endpoint
+						identifier module itself (res_pjsip_endpoint_identifier_*).
+						You can use the CLI command "pjsip show identifiers" to see the
+						identifiers currently available.</synopsis>
+					<description>
 						<note><para>
 						One of the identifiers is "auth_username" which matches on the username in
 						an Authentication header.  This method has some security considerations because an
@@ -1461,17 +1490,59 @@
 						how many unmatched requests are received from a single ip address before a security
 						event is generated using the unidentified_request parameters.
 						</para></note>
-                    </description>
+					</description>
 				</configOption>
 				<configOption name="default_from_user" default="asterisk">
 					<synopsis>When Asterisk generates an outgoing SIP request, the From header username will be
-                                        set to this value if there is no better option (such as CallerID) to be
-                                        used.</synopsis>
+						set to this value if there is no better option (such as CallerID) to be
+						used.</synopsis>
 				</configOption>
 				<configOption name="default_realm" default="asterisk">
 					<synopsis>When Asterisk generates an challenge, the digest will be
-                                        set to this value if there is no better option (such as auth/realm) to be
-                                        used.</synopsis>
+						set to this value if there is no better option (such as auth/realm) to be
+						used.</synopsis>
+				</configOption>
+				<configOption name="mwi_tps_queue_high" default="500">
+					<synopsis>MWI taskprocessor high water alert trigger level.</synopsis>
+					<description>
+						<para>On a heavily loaded system you may need to adjust the
+						taskprocessor queue limits.  If any taskprocessor queue size
+						reaches its high water level then pjsip will stop processing
+						new requests until the alert is cleared.  The alert clears
+						when all alerting taskprocessor queues have dropped to their
+						low water clear level.
+						</para>
+					</description>
+				</configOption>
+				<configOption name="mwi_tps_queue_low" default="-1">
+					<synopsis>MWI taskprocessor low water clear alert level.</synopsis>
+					<description>
+						<para>On a heavily loaded system you may need to adjust the
+						taskprocessor queue limits.  If any taskprocessor queue size
+						reaches its high water level then pjsip will stop processing
+						new requests until the alert is cleared.  The alert clears
+						when all alerting taskprocessor queues have dropped to their
+						low water clear level.
+						</para>
+						<note><para>Set to -1 for the low water level to be 90% of
+						the high water level.</para></note>
+					</description>
+				</configOption>
+				<configOption name="mwi_disable_initial_unsolicited" default="no">
+					<synopsis>Enable/Disable sending unsolicited MWI to all endpoints on startup.</synopsis>
+					<description>
+						<para>When the initial unsolicited MWI notification are
+						enabled on startup then the initial notifications
+						get sent at startup.  If you have a lot of endpoints
+						(thousands) that use unsolicited MWI then you may
+						want to consider disabling the initial startup
+						notifications.
+						</para>
+						<para>When the initial unsolicited MWI notifications are
+						disabled on startup then the notifications will start
+						on the endpoint's next contact update.
+						</para>
+					</description>
 				</configOption>
 			</configObject>
 		</configFile>
@@ -1951,6 +2022,9 @@
 				<parameter name="ActiveChannels">
 					<para>The number of active channels associated with this endpoint.</para>
 				</parameter>
+				<parameter name="SubscribeContext">
+					<para><xi:include xpointer="xpointer(/docs/configInfo[@name='res_pjsip']/configFile[@name='pjsip.conf']/configObject[@name='endpoint']/configOption[@name='subscribe_context']/synopsis/node())"/></para>
+				</parameter>
 			</syntax>
 		</managerEventInstance>
 	</managerEvent>
@@ -2033,7 +2107,7 @@
 			Provides a listing of all endpoints.  For each endpoint an <literal>EndpointList</literal> event
 			is raised that contains relevant attributes and status information.  Once all
 			endpoints have been listed an <literal>EndpointListComplete</literal> event is issued.
-                        </para>
+			</para>
 		</description>
 		<responses>
 			<list-elements>
@@ -2069,7 +2143,7 @@
 			<literal>IdentifyDetail</literal>.  Some events may be listed multiple times if multiple objects are
 			associated (for instance AoRs).  Once all detail events have been raised a final
 			<literal>EndpointDetailComplete</literal> event is issued.
-                        </para>
+			</para>
 		</description>
 		<responses>
 			<list-elements>
@@ -2112,13 +2186,13 @@ static struct ast_threadpool *sip_threadpool;
 static pj_sockaddr host_ip_ipv4;
 
 /*! Local host address for IPv4 (string form) */
-static char host_ip_ipv4_string[PJ_INET6_ADDRSTRLEN + 2];
+static char host_ip_ipv4_string[PJ_INET6_ADDRSTRLEN];
 
 /*! Local host address for IPv6 */
 static pj_sockaddr host_ip_ipv6;
 
 /*! Local host address for IPv6 (string form) */
-static char host_ip_ipv6_string[PJ_INET6_ADDRSTRLEN + 2];
+static char host_ip_ipv6_string[PJ_INET6_ADDRSTRLEN];
 
 static int register_service_noref(void *data)
 {
@@ -2801,7 +2875,15 @@ pjsip_dialog *ast_sip_create_dialog_uac(const struct ast_sip_endpoint *endpoint,
 	/* Update the dialog with the new local URI, we do it afterwards so we can use the dialog pool for construction */
 	pj_strdup_with_null(dlg->pool, &dlg->local.info_str, &local_uri);
 	dlg->local.info->uri = pjsip_parse_uri(dlg->pool, dlg->local.info_str.ptr, dlg->local.info_str.slen, 0);
+
 	dlg->local.contact = pjsip_parse_hdr(dlg->pool, &HCONTACT, local_uri.ptr, local_uri.slen, NULL);
+
+	if (!ast_strlen_zero(endpoint->contact_user)) {
+		pjsip_sip_uri *sip_uri;
+
+		sip_uri = pjsip_uri_get_uri(dlg->local.contact->uri);
+		pj_strdup2(dlg->pool, &sip_uri->user, endpoint->contact_user);
+	}
 
 	/* If a request user has been specified and we are permitted to change it, do so */
 	if (!ast_strlen_zero(request_user)) {
@@ -3102,6 +3184,18 @@ static int create_out_of_dialog_request(const pjsip_method *method, struct ast_s
 				endpoint ? ast_sorcery_object_get_id(endpoint) : "<none>");
 		pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
 		return -1;
+	}
+
+	if (endpoint && !ast_strlen_zero(endpoint->contact_user)){
+		pjsip_contact_hdr *contact_hdr;
+		pjsip_sip_uri *contact_uri;
+		static const pj_str_t HCONTACT = { "Contact", 7 };
+
+		contact_hdr = pjsip_msg_find_hdr_by_name((*tdata)->msg, &HCONTACT, NULL);
+		if (contact_hdr) {
+			contact_uri = pjsip_uri_get_uri(contact_hdr->uri);
+			pj_strdup2(pool, &contact_uri->user, endpoint->contact_user);
+		}
 	}
 
 	/* Add the user=phone parameter if applicable */
@@ -4099,6 +4193,7 @@ long ast_sip_threadpool_queue_size(void)
 	return ast_threadpool_queue_size(sip_threadpool);
 }
 
+#ifdef TEST_FRAMEWORK
 AST_TEST_DEFINE(xml_sanitization_end_null)
 {
 	char sanitized[8];
@@ -4149,6 +4244,7 @@ AST_TEST_DEFINE(xml_sanitization_exceeds_buffer)
 
 	return AST_TEST_PASS;
 }
+#endif
 
 /*!
  * \internal
@@ -4201,6 +4297,7 @@ static int unload_pjsip(void *data)
 
 static int load_pjsip(void)
 {
+	const unsigned int flags = 0; /* no port, no brackets */
 	pj_status_t status;
 
 	/* The third parameter is just copied from
@@ -4225,12 +4322,12 @@ static int load_pjsip(void)
 	}
 
 	if (!pj_gethostip(pj_AF_INET(), &host_ip_ipv4)) {
-		pj_sockaddr_print(&host_ip_ipv4, host_ip_ipv4_string, sizeof(host_ip_ipv4_string), 2);
+		pj_sockaddr_print(&host_ip_ipv4, host_ip_ipv4_string, sizeof(host_ip_ipv4_string), flags);
 		ast_verb(3, "Local IPv4 address determined to be: %s\n", host_ip_ipv4_string);
 	}
 
 	if (!pj_gethostip(pj_AF_INET6(), &host_ip_ipv6)) {
-		pj_sockaddr_print(&host_ip_ipv6, host_ip_ipv6_string, sizeof(host_ip_ipv6_string), 2);
+		pj_sockaddr_print(&host_ip_ipv6, host_ip_ipv6_string, sizeof(host_ip_ipv6_string), flags);
 		ast_verb(3, "Local IPv6 address determined to be: %s\n", host_ip_ipv6_string);
 	}
 
@@ -4252,6 +4349,19 @@ error:
 	return AST_MODULE_LOAD_DECLINE;
 }
 
+/*
+ * This is a place holder function to ensure that pjmedia_strerr() is at
+ * least directly referenced by this module to ensure that the loader
+ * linker will link to the function.  If a module only indirectly
+ * references a function from another module, such as a callback parameter
+ * to a function, the loader linker has been known to miss the link.
+ */
+void never_called_res_pjsip(void);
+void never_called_res_pjsip(void)
+{
+	pjmedia_strerror(0, NULL, 0);
+}
+
 static int load_module(void)
 {
 	struct ast_threadpool_options options;
@@ -4265,6 +4375,12 @@ static int load_module(void)
 
 	if (pjlib_util_init() != PJ_SUCCESS) {
 		goto error;
+	}
+
+	/* Register PJMEDIA error codes for SDP parsing errors */
+	if (pj_register_strerror(PJMEDIA_ERRNO_START, PJ_ERRNO_SPACE_SIZE, pjmedia_strerror)
+		!= PJ_SUCCESS) {
+		ast_log(LOG_WARNING, "Failed to register pjmedia error codes.  Codes will not be decoded.\n");
 	}
 
 	if (ast_sip_initialize_system()) {

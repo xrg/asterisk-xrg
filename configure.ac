@@ -352,7 +352,7 @@ if test "${MD5}" = "digest" ; then
    MD5="${MD5} -a md5"
 fi
 
-ACX_PTHREAD
+AX_PTHREAD
 
 AC_LANG(C)
 
@@ -415,7 +415,6 @@ AST_EXT_LIB_SETUP([CRYPT], [password and data encryption], [crypt])
 AST_EXT_LIB_SETUP([CRYPTO], [OpenSSL Cryptography], [crypto])
 AST_EXT_LIB_SETUP_OPTIONAL([OPENSSL_SRTP], [OpenSSL SRTP Extension Support], [CRYPTO], [crypto])
 AST_EXT_LIB_SETUP_OPTIONAL([OPENSSL_EC], [OpenSSL Elliptic Curve Support], [CRYPTO], [crypto])
-AST_EXT_LIB_SETUP_OPTIONAL([OPENSSL_ECDH_AUTO], [OpenSSL Auto ECDH Support], [CRYPTO], [crypto])
 AST_EXT_LIB_SETUP([DAHDI], [DAHDI], [dahdi])
 AST_EXT_LIB_SETUP([FFMPEG], [Ffmpeg and avcodec], [avcodec])
 AST_EXT_LIB_SETUP([GSM], [External GSM], [gsm], [, use 'internal' GSM otherwise])
@@ -1073,6 +1072,7 @@ AST_GCC_ATTRIBUTE(warn_unused_result)
 AST_GCC_ATTRIBUTE(may_alias)
 AST_GCC_ATTRIBUTE(constructor)
 AST_GCC_ATTRIBUTE(destructor)
+AST_GCC_ATTRIBUTE(noreturn,noreturn)
 
 AC_MSG_CHECKING(for -fsanitize=address support)
 saved_sanitize_CFLAGS="${CFLAGS}"
@@ -1213,16 +1213,11 @@ AC_SUBST(AST_SHADOW_WARNINGS)
 
 AC_MSG_CHECKING(for -march=native support)
 if $(${CC} -march=native -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
-	if test "${CONFIG_CFLAGS}" = ""; then
-		AC_MSG_RESULT(yes)
-		AST_NATIVE_ARCH=1
-	else
-		AC_MSG_RESULT(user CFLAGS present)
-		AST_NATIVE_ARCH=
-	fi
+	AC_MSG_RESULT(yes)
+	AST_NATIVE_ARCH=1
 else
 	AC_MSG_RESULT(no)
-	AST_NATIVE_ARCH=
+	AST_NATIVE_ARCH=0
 fi
 AC_SUBST(AST_NATIVE_ARCH)
 
@@ -2184,7 +2179,7 @@ if test "$USE_PJPROJECT" != "no" ; then
       CPPFLAGS="${saved_cppflags}"
 
       AST_EXT_LIB_CHECK([PJSIP_GET_DEST_INFO], [pjsip], [pjsip_get_dest_info], [pjsip.h], [$PJPROJECT_LIB], [$PJPROJECT_CFLAGS])
-      AST_EXT_LIB_CHECK([PJ_SSL_CERT_LOAD_FROM_FILES2], [pj], [pjsip/include/pjsip/sip_util.h], [pjlib.h], [$PJPROJECT_LIB], [$PJPROJECT_CFLAGS])
+      AST_EXT_LIB_CHECK([PJ_SSL_CERT_LOAD_FROM_FILES2], [pj], [pj_ssl_cert_load_from_files2], [pjlib.h], [$PJPROJECT_LIB], [$PJPROJECT_CFLAGS])
       AST_EXT_LIB_CHECK([PJSIP_EXTERNAL_RESOLVER], [pjsip], [pjsip_endpt_set_ext_resolver], [pjsip.h], [$PJPROJECT_LIBS], [$PJPROJECT_CFLAGS])
 
       saved_cppflags="${CPPFLAGS}"
@@ -2195,7 +2190,7 @@ if test "$USE_PJPROJECT" != "no" ; then
       LIBS="${saved_libs}"
       CPPFLAGS="${saved_cppflags}"
 
-      AST_EXT_LIB_CHECK([PJSIP_EVSUB_GRP_LOCK], [pjsip], [pjsip_evsub_add_lock], [pjsip.h], [$PJPROJECT_LIB], [$PJPROJECT_CFLAGS])
+      AST_EXT_LIB_CHECK([PJSIP_EVSUB_GRP_LOCK], [pjsip], [pjsip_evsub_add_ref], [pjsip.h], [$PJPROJECT_LIB], [$PJPROJECT_CFLAGS])
    fi
 fi
 
@@ -2397,11 +2392,6 @@ fi
 if test "$PBX_OPENSSL" = "1";
 then
 	AST_EXT_LIB_CHECK([OPENSSL_EC], [ssl], [EC_KEY_new_by_curve_name], [openssl/ec.h], [-lcrypto])
-fi
-
-if test "$PBX_OPENSSL" = "1";
-then
-        AST_C_DECLARE_CHECK([OPENSSL_ECDH_AUTO], [SSL_CTX_set_ecdh_auto], [openssl/ssl.h])
 fi
 
 if test "$PBX_OPENSSL" = "1";

@@ -91,6 +91,8 @@ struct ast_taskprocessor {
 	unsigned int high_water_warned:1;
 	/*! Indicates that a high water alert is active on this taskprocessor */
 	unsigned int high_water_alert:1;
+	/*! Indicates if the taskprocessor is currently suspended */
+	unsigned int suspended:1;
 };
 
 /*!
@@ -606,7 +608,7 @@ int ast_taskprocessor_alert_set_levels(struct ast_taskprocessor *tps, long low_w
 			tps_alert_add(tps, -1);
 		}
 	} else {
-		if (high_water <= tps->tps_queue_size) {
+		if (high_water < tps->tps_queue_size) {
 			/* Update water mark alert immediately */
 			tps->high_water_alert = 1;
 			tps_alert_add(tps, +1);
@@ -881,11 +883,11 @@ static int taskprocessor_push(struct ast_taskprocessor *tps, struct tps_task *t)
 	AST_LIST_INSERT_TAIL(&tps->tps_queue, t, list);
 	previous_size = tps->tps_queue_size++;
 
-	if (previous_size >= tps->tps_queue_high) {
+	if (tps->tps_queue_high <= tps->tps_queue_size) {
 		if (!tps->high_water_warned) {
 			tps->high_water_warned = 1;
-			ast_log(LOG_WARNING, "The '%s' task processor queue reached %d scheduled tasks.\n",
-				tps->name, previous_size);
+			ast_log(LOG_WARNING, "The '%s' task processor queue reached %ld scheduled tasks.\n",
+				tps->name, tps->tps_queue_size);
 		}
 		if (!tps->high_water_alert) {
 			tps->high_water_alert = 1;
@@ -908,6 +910,33 @@ int ast_taskprocessor_push(struct ast_taskprocessor *tps, int (*task_exe)(void *
 int ast_taskprocessor_push_local(struct ast_taskprocessor *tps, int (*task_exe)(struct ast_taskprocessor_local *datap), void *datap)
 {
 	return taskprocessor_push(tps, tps_task_alloc_local(task_exe, datap));
+}
+
+int ast_taskprocessor_suspend(struct ast_taskprocessor *tps)
+{
+	if (tps) {
+		ao2_lock(tps);
+		tps->suspended = 1;
+		ao2_unlock(tps);
+		return 0;
+	}
+	return -1;
+}
+
+int ast_taskprocessor_unsuspend(struct ast_taskprocessor *tps)
+{
+	if (tps) {
+		ao2_lock(tps);
+		tps->suspended = 0;
+		ao2_unlock(tps);
+		return 0;
+	}
+	return -1;
+}
+
+int ast_taskprocessor_is_suspended(struct ast_taskprocessor *tps)
+{
+	return tps ? tps->suspended : -1;
 }
 
 int ast_taskprocessor_execute(struct ast_taskprocessor *tps)

@@ -492,7 +492,7 @@ doc/core-en_US.xml: makeopts .lastclean $(XML_core_en_US)
 	@printf "Building Documentation For: "
 	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
 	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
-	@echo "<?xml-stylesheet type=\"text/xsl\" href=\"appdocsxml.xslt\"?>" > $@
+	@echo "<?xml-stylesheet type=\"text/xsl\" href=\"appdocsxml.xslt\"?>" >> $@
 	@echo "<docs xmlns:xi=\"http://www.w3.org/2001/XInclude\">" >> $@
 	@for x in $(MOD_SUBDIRS); do \
 		printf "$$x " ; \
@@ -516,7 +516,7 @@ else
 	@printf "Building Documentation For: "
 	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
 	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
-	@echo "<?xml-stylesheet type=\"text/xsl\" href=\"appdocsxml.xslt\"?>" > $@
+	@echo "<?xml-stylesheet type=\"text/xsl\" href=\"appdocsxml.xslt\"?>" >> $@
 	@echo "<docs xmlns:xi=\"http://www.w3.org/2001/XInclude\">" >> $@
 	@for x in $(MOD_SUBDIRS); do \
 		printf "$$x " ; \
@@ -825,7 +825,7 @@ install-logrotate:
 	rm -f contrib/scripts/asterisk.logrotate.tmp
 
 config:
-	if [ -f /etc/redhat-release -o -f /etc/fedora-release ]; then \
+	@if [ -f /etc/redhat-release -o -f /etc/fedora-release ]; then \
 		./build_tools/install_subst contrib/init.d/rc.redhat.asterisk  "$(DESTDIR)/etc/rc.d/init.d/asterisk"; \
 		if [ ! -f "$(DESTDIR)/etc/sysconfig/asterisk" ] ; then \
 			$(INSTALL) -m 644 contrib/init.d/etc_default_asterisk "$(DESTDIR)/etc/sysconfig/asterisk" ; \

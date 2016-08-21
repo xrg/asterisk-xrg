@@ -256,6 +256,8 @@ struct ast_sip_contact {
 	int via_port;
 	/*! Content of the Call-ID header in REGISTER request */
 	AST_STRING_FIELD_EXTENDED(call_id);
+	/*! The name of the endpoint that added the contact */
+	AST_STRING_FIELD_EXTENDED(endpoint_name);
 };
 
 #define CONTACT_STATUS "contact_status"
@@ -269,7 +271,6 @@ enum ast_sip_contact_status_type {
 	UNKNOWN,
 	CREATED,
 	REMOVED,
-	UPDATED,
 };
 
 /*!
@@ -292,6 +293,8 @@ struct ast_sip_contact_status {
 	char *aor;
 	/*! The original contact's URI */
 	char *uri;
+	/*! TRUE if the contact was refreshed. e.g., re-registered */
+	unsigned int refresh:1;
 };
 
 /*!
@@ -501,6 +504,8 @@ struct ast_sip_endpoint_subscription_configuration {
 	unsigned int minexpiry;
 	/*! Message waiting configuration */
 	struct ast_sip_mwi_configuration mwi;
+	/* Context for SUBSCRIBE requests */
+	char context[AST_MAX_CONTEXT];
 };
 
 /*!
@@ -740,10 +745,14 @@ struct ast_sip_endpoint {
 	unsigned int usereqphone;
 	/*! Do we send messages for connected line updates for unanswered incoming calls immediately to this endpoint? */
 	unsigned int rpid_immediate;
-	/* Access control list */
+	/*! Access control list */
 	struct ast_acl_list *acl;
-	/* Restrict what IPs are allowed in the Contact header (for registration) */
+	/*! Restrict what IPs are allowed in the Contact header (for registration) */
 	struct ast_acl_list *contact_acl;
+	/*! The number of seconds into call to disable fax detection.  (0 = disabled) */
+	unsigned int faxdetect_timeout;
+	/*! Override the user on the outgoing Contact header with this value. */
+	char *contact_user;
 };
 
 /*!
@@ -984,6 +993,16 @@ void ast_sip_unregister_endpoint_identifier(struct ast_sip_endpoint_identifier *
  * \retval non-NULL The newly allocated endpoint
  */
 void *ast_sip_endpoint_alloc(const char *name);
+
+/*!
+ * \brief Change state of a persistent endpoint.
+ *
+ * \param endpoint The SIP endpoint name to change state.
+ * \param state The new state
+ * \retval 0 Success
+ * \retval -1 Endpoint not found
+ */
+int ast_sip_persistent_endpoint_update_state(const char *endpoint_name, enum ast_endpoint_state state);
 
 /*!
  * \brief Get a pointer to the PJSIP endpoint.
@@ -2444,6 +2463,32 @@ int ast_sip_register_supplement(struct ast_sip_supplement *supplement);
  * \param supplement The supplement to unregister
  */
 void ast_sip_unregister_supplement(struct ast_sip_supplement *supplement);
+
+/*!
+ * \brief Retrieve the global MWI taskprocessor high water alert trigger level.
+ *
+ * \since 13.12.0
+ *
+ * \retval the system MWI taskprocessor high water alert trigger level
+ */
+unsigned int ast_sip_get_mwi_tps_queue_high(void);
+
+/*!
+ * \brief Retrieve the global MWI taskprocessor low water clear alert level.
+ *
+ * \since 13.12.0
+ *
+ * \retval the system MWI taskprocessor low water clear alert level
+ */
+int ast_sip_get_mwi_tps_queue_low(void);
+
+/*!
+ * \brief Retrieve the global setting 'disable sending unsolicited mwi on startup'.
+ * \since 13.12.0
+ *
+ * \retval non zero if disable.
+ */
+unsigned int ast_sip_get_mwi_disable_initial_unsolicited(void);
 
 /*!
  * \brief Retrieve the system debug setting (yes|no|host).
