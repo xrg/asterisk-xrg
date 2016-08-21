@@ -1367,6 +1367,9 @@ fi
 %attr(0755,root,root) %{modulesdir}/res_format_attr_h264.so
 %attr(0755,root,root) %{modulesdir}/res_format_attr_opus.so
 %attr(0755,root,root) %{modulesdir}/res_format_attr_vp8.so
+%attr(0755,root,root) %{modulesdir}/res_format_attr_g729.so
+%attr(0755,root,root) %{modulesdir}/res_format_attr_siren7.so
+%attr(0755,root,root) %{modulesdir}/res_format_attr_siren14.so
 %attr(0755,root,root) %{modulesdir}/res_hep.so
 %attr(0755,root,root) %{modulesdir}/res_hep_rtcp.so
 %attr(0755,root,root) %{modulesdir}/res_http_websocket.so
