@@ -1351,7 +1351,7 @@ fi
 %attr(0755,root,root) %{modulesdir}/cel_custom.so
 %attr(0755,root,root) %{modulesdir}/cel_manager.so
 %attr(0755,root,root) %{modulesdir}/chan_mobile.so
-%attr(0755,root,root) %{modulesdir}/chan_multicast_rtp.so
+%attr(0755,root,root) %{modulesdir}/chan_rtp.so
 # %attr(0755,root,root) %{modulesdir}/format_mp3.so
 %attr(0755,root,root) %{modulesdir}/res_calendar.so
 %attr(0755,root,root) %{modulesdir}/res_calendar_caldav.so
